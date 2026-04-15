@@ -1,0 +1,31 @@
+[package]
+name = "termap"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = "0.28"
+ratatui = "0.30"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+flate2 = "1"
+prost = "0.13"
+rstar = "0.12"
+earcut = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+directories = "6"
+unicode-width = "0.2"
+log = { version = "0.4", features = ["std"] }
+toml = "1.1.2"
+
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false
+features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy"]
+
+[build-dependencies]
+prost-build = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+protox = "0.9"

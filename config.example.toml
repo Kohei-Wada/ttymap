@@ -1,0 +1,46 @@
+# termap configuration
+# Place this file at ~/.config/termap/config.toml
+
+# Tile source URL
+# source = "http://mapscii.me/"
+
+# Map label language (e.g. "en", "ja", "de")
+# language = "en"
+
+# Initial position (latitude, longitude)
+# lat = 35.6828
+# lon = 139.7595
+
+# Initial zoom level
+# zoom = 10.0
+
+# Zoom step per keypress (default: 0.2)
+# zoom_step = 0.3
+
+# Maximum zoom level (default: 18.0)
+# max_zoom = 18.0
+
+# Enable disk tile cache (default: true)
+# cache_tiles = true
+
+# Style file path (Mapbox GL JSON)
+# style = "/path/to/styles/bright.json"
+
+# Key bindings
+# Notation: "h" (character), "Left" (special key), "C-d" (Ctrl+d)
+# Special keys: Left, Right, Up, Down, Enter, Esc, Tab
+#
+# [keymap]
+# pan_left = ["h", "Left"]
+# pan_right = ["l", "Right"]
+# pan_up = ["k", "Up"]
+# pan_down = ["j", "Down"]
+# pan_left_fast = ["b"]
+# pan_right_fast = ["w"]
+# pan_up_half = ["C-u"]
+# pan_down_half = ["C-d"]
+# zoom_in = ["a", "+"]
+# zoom_out = ["z", "-"]
+# zoom_to_world = ["gg"]
+# reset_position = ["0"]
+# quit = ["q"]
