@@ -23,15 +23,20 @@ pub struct Geocoder {
 }
 
 impl Default for Geocoder {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Geocoder {
     pub fn new() -> Self {
-        let client = NominatimClient::new()
-            .expect("failed to create HTTP client");
+        let client = NominatimClient::new().expect("failed to create HTTP client");
         let (tx, rx) = mpsc::channel();
-        Self { client: Arc::new(client), tx, rx }
+        Self {
+            client: Arc::new(client),
+            tx,
+            rx,
+        }
     }
 
     /// Submit a forward search query (place name → coordinates).

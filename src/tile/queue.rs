@@ -47,7 +47,8 @@ impl<T: PartialEq> PriorityQueue<T> {
             self.entries.pop();
         }
 
-        let pos = self.entries
+        let pos = self
+            .entries
             .binary_search_by(|e| e.priority.partial_cmp(&priority).unwrap_or(Ordering::Equal))
             .unwrap_or_else(|i| i);
         self.entries.insert(pos, Entry { item, priority });
@@ -72,7 +73,11 @@ impl<T: PartialEq> PriorityQueue<T> {
         for entry in &mut self.entries {
             entry.priority = priority_fn.priority(&entry.item);
         }
-        self.entries.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(Ordering::Equal));
+        self.entries.sort_by(|a, b| {
+            a.priority
+                .partial_cmp(&b.priority)
+                .unwrap_or(Ordering::Equal)
+        });
     }
 
     pub fn len(&self) -> usize {

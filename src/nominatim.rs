@@ -43,7 +43,8 @@ impl NominatimClient {
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
         let url = format!(
             "{}/search?q={}&format=json&limit=5",
-            BASE_URL, urlencoded(query),
+            BASE_URL,
+            urlencoded(query),
         );
         debug!("nominatim: search {}", url);
 
@@ -89,7 +90,11 @@ impl NominatimClient {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        Some(PlaceInfo { display_name, city, country })
+        Some(PlaceInfo {
+            display_name,
+            city,
+            country,
+        })
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Option<T> {

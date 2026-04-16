@@ -10,12 +10,7 @@ use super::frame::{MapCell, MapFrame};
 /// [0x04] [0x20]
 /// [0x40] [0x80]
 /// ```
-const BRAILLE_MAP: [[u8; 2]; 4] = [
-    [0x01, 0x08],
-    [0x02, 0x10],
-    [0x04, 0x20],
-    [0x40, 0x80],
-];
+const BRAILLE_MAP: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 pub struct BrailleBuffer {
     width: usize,
@@ -128,31 +123,55 @@ impl BrailleBuffer {
                     (self.fg_buf[idx], self.bg_buf[idx])
                 };
 
-                let effective_bg = if bg != 0 { bg } else { self.global_bg.unwrap_or(0) };
+                let effective_bg = if bg != 0 {
+                    bg
+                } else {
+                    self.global_bg.unwrap_or(0)
+                };
 
                 if let Some(ch) = self.char_buf[idx] {
                     if skip > 0 {
                         skip -= 1;
-                        cells.push(MapCell { ch: ' ', fg: 0, bg: effective_bg });
+                        cells.push(MapCell {
+                            ch: ' ',
+                            fg: 0,
+                            bg: effective_bg,
+                        });
                     } else {
                         let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
                         if w > 1 {
                             skip = (w - 1) as u32;
                         }
-                        cells.push(MapCell { ch, fg, bg: effective_bg });
+                        cells.push(MapCell {
+                            ch,
+                            fg,
+                            bg: effective_bg,
+                        });
                     }
                 } else if skip > 0 {
                     skip -= 1;
-                    cells.push(MapCell { ch: ' ', fg: 0, bg: effective_bg });
+                    cells.push(MapCell {
+                        ch: ' ',
+                        fg: 0,
+                        bg: effective_bg,
+                    });
                 } else {
                     let codepoint = 0x2800u32 + self.pixel_buf[idx] as u32;
                     let ch = char::from_u32(codepoint).unwrap_or('?');
-                    cells.push(MapCell { ch, fg, bg: effective_bg });
+                    cells.push(MapCell {
+                        ch,
+                        fg,
+                        bg: effective_bg,
+                    });
                 }
             }
         }
 
-        MapFrame { cells, cols: cols as u16, rows: rows as u16 }
+        MapFrame {
+            cells,
+            cols: cols as u16,
+            rows: rows as u16,
+        }
     }
 }
 
@@ -179,7 +198,10 @@ mod tests {
         buf.set_pixel(0, 0, 7);
         let frame = buf.to_map_frame();
         // U+2801 is the braille char with dot 1 set (bit 0x01)
-        assert!(frame.cells.iter().any(|c| c.ch == '\u{2801}'), "frame should contain U+2801 (dot 1 set)");
+        assert!(
+            frame.cells.iter().any(|c| c.ch == '\u{2801}'),
+            "frame should contain U+2801 (dot 1 set)"
+        );
     }
 
     #[test]
@@ -214,8 +236,14 @@ mod tests {
         let mut buf = BrailleBuffer::new(8, 8);
         buf.write_text("AB", 0, 0, 15);
         let frame = buf.to_map_frame();
-        assert!(frame.cells.iter().any(|c| c.ch == 'A'), "frame should contain 'A'");
-        assert!(frame.cells.iter().any(|c| c.ch == 'B'), "frame should contain 'B'");
+        assert!(
+            frame.cells.iter().any(|c| c.ch == 'A'),
+            "frame should contain 'A'"
+        );
+        assert!(
+            frame.cells.iter().any(|c| c.ch == 'B'),
+            "frame should contain 'B'"
+        );
     }
 
     #[test]
@@ -247,5 +275,4 @@ mod tests {
         buf.set_global_background(9);
         assert_eq!(buf.global_bg, Some(9));
     }
-
 }

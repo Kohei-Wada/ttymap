@@ -7,11 +7,11 @@ use std::sync::atomic::AtomicUsize;
 
 use rstar::AABB;
 
+use super::frame::MapFrame;
+use super::renderer::{Renderer, TileData};
 use crate::core::RenderRequest;
 use crate::styler::Styler;
 use crate::tile::{Feature, TileCache, VisibleTile, visible_tiles};
-use super::frame::MapFrame;
-use super::renderer::{Renderer, TileData};
 
 pub struct RenderPipeline {
     tile_cache: TileCache,
@@ -29,21 +29,26 @@ impl RenderPipeline {
     ) -> Self {
         let tile_cache = TileCache::new(source_url, enable_disk_cache, styler.clone(), language);
         let renderer = Renderer::new(styler, width, height);
-        Self { tile_cache, renderer }
+        Self {
+            tile_cache,
+            renderer,
+        }
     }
 
     /// Process a RenderRequest into a MapFrame.
     /// Returns None if no tiles are available yet.
     pub fn render(&mut self, state: &RenderRequest) -> Option<MapFrame> {
         let z = crate::geo::base_zoom(state.zoom);
-        self.tile_cache.set_view(state.center.lon, state.center.lat, z);
+        self.tile_cache
+            .set_view(state.center.lon, state.center.lat, z);
         let visible = visible_tiles(
-            state.center.lon, state.center.lat, state.zoom,
-            self.renderer.width(), self.renderer.height(),
+            state.center.lon,
+            state.center.lat,
+            state.zoom,
+            self.renderer.width(),
+            self.renderer.height(),
         );
-        let tile_data = self.collect_tile_data(
-            &visible, state.zoom,
-        );
+        let tile_data = self.collect_tile_data(&visible, state.zoom);
         self.renderer.draw(&tile_data, state.zoom)
     }
 
@@ -54,7 +59,8 @@ impl RenderPipeline {
 
     /// Prefetch surrounding tiles (call when idle).
     pub fn prefetch(&mut self, state: &RenderRequest) {
-        self.tile_cache.prefetch(state.center.lon, state.center.lat, state.zoom);
+        self.tile_cache
+            .prefetch(state.center.lon, state.center.lat, state.zoom);
     }
 
     /// Resize the renderer canvas.
@@ -71,11 +77,7 @@ impl RenderPipeline {
 
     /// Collect features from tile cache for visible tiles.
     /// Bridge between tile subsystem and renderer.
-    fn collect_tile_data(
-        &mut self,
-        visible: &[VisibleTile],
-        zoom: f64,
-    ) -> Vec<TileData> {
+    fn collect_tile_data(&mut self, visible: &[VisibleTile], zoom: f64) -> Vec<TileData> {
         let draw_order = Renderer::draw_order(zoom);
         let width = self.renderer.width();
         let height = self.renderer.height();
@@ -85,7 +87,10 @@ impl RenderPipeline {
             let decoded = match self.tile_cache.get_tile(vis.z, vis.x, vis.y) {
                 Some(t) => t,
                 None => {
-                    result.push(TileData { vis: vis.clone(), layers: Vec::new() });
+                    result.push(TileData {
+                        vis: vis.clone(),
+                        layers: Vec::new(),
+                    });
                     continue;
                 }
             };
@@ -100,9 +105,13 @@ impl RenderPipeline {
                     let scale = extent / tile_size;
                     let envelope = AABB::from_corners(
                         [-vis.pos_x * scale, -vis.pos_y * scale],
-                        [(width as f64 - vis.pos_x) * scale, (height as f64 - vis.pos_y) * scale],
+                        [
+                            (width as f64 - vis.pos_x) * scale,
+                            (height as f64 - vis.pos_y) * scale,
+                        ],
                     );
-                    let features: Vec<Feature> = tile_layer.tree
+                    let features: Vec<Feature> = tile_layer
+                        .tree
                         .locate_in_envelope_intersecting(&envelope)
                         .cloned()
                         .collect();
@@ -112,7 +121,10 @@ impl RenderPipeline {
                 }
             }
 
-            result.push(TileData { vis: vis.clone(), layers });
+            result.push(TileData {
+                vis: vis.clone(),
+                layers,
+            });
         }
 
         result

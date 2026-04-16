@@ -27,10 +27,7 @@ pub struct TileClient {
 }
 
 impl TileClient {
-    pub fn new(
-        source_url: &str,
-        tx: mpsc::Sender<(TileKey, Vec<u8>)>,
-    ) -> Self {
+    pub fn new(source_url: &str, tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
         let source_url = source_url.trim_end_matches('/').to_string();
 
         let shared = Arc::new(SharedState {
@@ -50,7 +47,10 @@ impl TileClient {
             }));
         }
 
-        TileClient { shared, _workers: workers }
+        TileClient {
+            shared,
+            _workers: workers,
+        }
     }
 
     /// Enqueue a tile for fetching. Skips if already queued or in-flight.
@@ -104,11 +104,7 @@ impl Drop for TileClient {
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
-fn worker_loop(
-    shared: &SharedState,
-    source_url: &str,
-    tx: &mpsc::Sender<(TileKey, Vec<u8>)>,
-) {
+fn worker_loop(shared: &SharedState, source_url: &str, tx: &mpsc::Sender<(TileKey, Vec<u8>)>) {
     loop {
         let key = {
             let mut queue = shared.queue.lock().unwrap();

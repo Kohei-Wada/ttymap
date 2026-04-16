@@ -17,7 +17,5 @@ fn main() {
         prost_types::FileDescriptorSet::decode(fds_bytes.as_slice()).unwrap()
     };
 
-    prost_build::Config::new()
-        .compile_fds(fds_013)
-        .unwrap();
+    prost_build::Config::new().compile_fds(fds_013).unwrap();
 }

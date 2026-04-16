@@ -6,11 +6,10 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEve
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
-use crate::core::{Action, Config, Core};
 use crate::core::input::InputHandler;
+use crate::core::{Action, Config, Core};
 use crate::geocode::{GeoResponse, Geocoder};
 use crate::nominatim::SearchResult;
-use crate::wikipedia::{WikiArticle, WikipediaClient};
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
 use crate::styler::Styler;
@@ -18,6 +17,7 @@ use crate::ui::UiState;
 use crate::ui::layout;
 use crate::ui::widget::search::SearchAction;
 use crate::ui::widget::wiki::WikiAction;
+use crate::wikipedia::{WikiArticle, WikipediaClient};
 
 pub struct App {
     core: Core,
@@ -57,11 +57,18 @@ impl App {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::render::canvas_size(cols, rows);
 
-        info!("terminal size: {}x{}, canvas: {}x{}", cols, rows, width, height);
+        info!(
+            "terminal size: {}x{}, canvas: {}x{}",
+            cols, rows, width, height
+        );
 
         let pipeline = RenderPipeline::new(
-            &config.source, config.cache_tiles,
-            styler, language, width, height,
+            &config.source,
+            config.cache_tiles,
+            styler,
+            language,
+            width,
+            height,
         );
         let keymap = std::mem::take(&mut config.keymap);
         let input = InputHandler::new(keymap);
@@ -207,7 +214,10 @@ impl App {
                 }
                 SearchAction::Select(idx) => {
                     if let Some(result) = self.last_search_results.get(idx) {
-                        info!("geocode: jumping to '{}' ({}, {})", result.name, result.location.lat, result.location.lon);
+                        info!(
+                            "geocode: jumping to '{}' ({}, {})",
+                            result.name, result.location.lat, result.location.lon
+                        );
                         self.core.jump_to(result.location);
                         self.request_draw();
                     }
@@ -237,7 +247,14 @@ impl App {
             // Consume Ctrl-j/k/n/p and arrow keys when wiki is active
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
             if matches!(code, KeyCode::Up | KeyCode::Down)
-                || (ctrl && matches!(code, KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('n') | KeyCode::Char('p')))
+                || (ctrl
+                    && matches!(
+                        code,
+                        KeyCode::Char('j')
+                            | KeyCode::Char('k')
+                            | KeyCode::Char('n')
+                            | KeyCode::Char('p')
+                    ))
             {
                 return true;
             }
@@ -265,7 +282,9 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
-        if self.ui.search.is_active() { return false; }
+        if self.ui.search.is_active() {
+            return false;
+        }
 
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let dx = mouse.column as f64 - cols as f64 / 2.0;
@@ -305,7 +324,9 @@ impl App {
     }
 
     fn fetch_wiki(&mut self) {
-        if self.last_wiki_request.elapsed() < Duration::from_secs(2) { return; }
+        if self.last_wiki_request.elapsed() < Duration::from_secs(2) {
+            return;
+        }
         self.last_wiki_request = Instant::now();
         let req = self.core.render_request();
         let tx = self.wiki_tx.clone();

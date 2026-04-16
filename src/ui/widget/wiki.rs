@@ -25,15 +25,24 @@ pub struct WikiWidget {
 }
 
 impl Default for WikiWidget {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WikiWidget {
     pub fn new() -> Self {
-        Self { active: false, articles: Vec::new(), selected: 0, scroll: 0 }
+        Self {
+            active: false,
+            articles: Vec::new(),
+            selected: 0,
+            scroll: 0,
+        }
     }
 
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     pub fn toggle(&mut self) {
         self.active = !self.active;
@@ -47,7 +56,9 @@ impl WikiWidget {
     }
 
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> WikiAction {
-        if !self.active || self.articles.is_empty() { return WikiAction::None; }
+        if !self.active || self.articles.is_empty() {
+            return WikiAction::None;
+        }
 
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         let up = (ctrl && matches!(code, KeyCode::Char('k') | KeyCode::Char('p')))
@@ -57,7 +68,10 @@ impl WikiWidget {
 
         if code == KeyCode::Enter {
             if let Some(article) = self.articles.get(self.selected) {
-                return WikiAction::JumpTo(LonLat { lat: article.lat, lon: article.lon });
+                return WikiAction::JumpTo(LonLat {
+                    lat: article.lat,
+                    lon: article.lon,
+                });
             }
         } else if up && self.selected > 0 {
             self.selected -= 1;
@@ -69,13 +83,17 @@ impl WikiWidget {
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect) {
-        if !self.active || map_inner.width < 30 || map_inner.height < 6 { return; }
+        if !self.active || map_inner.width < 30 || map_inner.height < 6 {
+            return;
+        }
 
         let panel_width = (map_inner.width / 4).max(25).min(map_inner.width / 3);
         let y = map_inner.y + 3;
         let panel_height = map_inner.height.saturating_sub(6);
 
-        if panel_height < 4 { return; }
+        if panel_height < 4 {
+            return;
+        }
 
         let x = map_inner.right().saturating_sub(panel_width + 1);
         let area = Rect::new(x, y, panel_width, panel_height);
@@ -95,7 +113,10 @@ impl WikiWidget {
         let mut lines: Vec<Line> = Vec::new();
         for (i, article) in self.articles.iter().enumerate() {
             if i > 0 {
-                lines.push(Line::from(Span::styled(&sep, Style::default().fg(theme::MUTED))));
+                lines.push(Line::from(Span::styled(
+                    &sep,
+                    Style::default().fg(theme::MUTED),
+                )));
             }
             let is_selected = i == self.selected;
             let dist = crate::geo::format_distance(article.dist_m);

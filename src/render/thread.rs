@@ -1,17 +1,17 @@
 //! Render thread — runs a RenderPipeline on a background thread.
 //! Does not know about tiles, caching, or drawing internals.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use log::{debug, error, info};
 
-use crate::core::RenderRequest;
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
+use crate::core::RenderRequest;
 
 pub enum RenderCommand {
     Draw(RenderRequest),
@@ -66,7 +66,11 @@ impl RenderHandle {
     }
 
     pub fn request_resize(&self, width: usize, height: usize) {
-        if self.cmd_tx.send(RenderCommand::Resize { width, height }).is_err() {
+        if self
+            .cmd_tx
+            .send(RenderCommand::Resize { width, height })
+            .is_err()
+        {
             log::warn!("render thread channel closed on resize");
         }
     }
@@ -103,14 +107,12 @@ fn drain_commands(
     Ok(latest_draw)
 }
 
-fn send_frame(
-    result_tx: &mpsc::Sender<RenderResult>,
-    frame: Option<MapFrame>,
-) -> bool {
+fn send_frame(result_tx: &mpsc::Sender<RenderResult>, frame: Option<MapFrame>) -> bool {
     if let Some(frame) = frame
-        && result_tx.send(RenderResult::Frame(frame)).is_err() {
-            return false; // channel closed
-        }
+        && result_tx.send(RenderResult::Frame(frame)).is_err()
+    {
+        return false; // channel closed
+    }
     true
 }
 
@@ -124,14 +126,18 @@ fn run_loop(
     info!("render thread started");
 
     loop {
-        if should_quit.load(Ordering::Relaxed) { break; }
+        if should_quit.load(Ordering::Relaxed) {
+            break;
+        }
 
         // 1. Drain commands — newest state wins
         match drain_commands(&cmd_rx, &mut pipeline) {
             Err(()) => break,
             Ok(Some(state)) => {
                 debug!("render: drawing (zoom={:.1})", state.zoom);
-                if !send_frame(&result_tx, pipeline.render(&state)) { return; }
+                if !send_frame(&result_tx, pipeline.render(&state)) {
+                    return;
+                }
                 last_state = Some(state);
                 continue;
             }
@@ -142,7 +148,9 @@ fn run_loop(
         if let Some(ref state) = last_state
             && pipeline.poll_tiles()
         {
-            if !send_frame(&result_tx, pipeline.render(state)) { return; }
+            if !send_frame(&result_tx, pipeline.render(state)) {
+                return;
+            }
             continue;
         }
 
@@ -155,7 +163,9 @@ fn run_loop(
         const POLL_MS: u64 = 50;
         match cmd_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
             Ok(RenderCommand::Draw(state)) => {
-                if !send_frame(&result_tx, pipeline.render(&state)) { return; }
+                if !send_frame(&result_tx, pipeline.render(&state)) {
+                    return;
+                }
                 last_state = Some(state);
             }
             Ok(RenderCommand::Resize { width, height }) => pipeline.resize(width, height),

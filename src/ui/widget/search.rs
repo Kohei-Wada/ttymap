@@ -39,7 +39,9 @@ pub struct SearchWidget {
 }
 
 impl Default for SearchWidget {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SearchWidget {
@@ -55,7 +57,9 @@ impl SearchWidget {
         }
     }
 
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     pub fn open(&mut self) {
         self.query.clear();
@@ -107,10 +111,14 @@ impl SearchWidget {
                 self.candidates.clear();
                 SearchAction::Select(idx)
             } else if up {
-                if self.selected > 0 { self.selected -= 1; }
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
                 SearchAction::None
             } else if down {
-                if self.selected + 1 < self.candidates.len() { self.selected += 1; }
+                if self.selected + 1 < self.candidates.len() {
+                    self.selected += 1;
+                }
                 SearchAction::None
             } else {
                 SearchAction::None
@@ -188,7 +196,9 @@ impl SearchWidget {
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect) {
-        if !self.active || map_inner.width < 10 || map_inner.height < 3 { return; }
+        if !self.active || map_inner.width < 10 || map_inner.height < 3 {
+            return;
+        }
 
         let popup_width = (map_inner.width * 2 / 3).max(30).min(map_inner.width - 2);
 
@@ -254,7 +264,9 @@ impl SearchWidget {
         let title = format!("search: {}", self.query);
         let block = theme::panel(&title);
 
-        let items: Vec<ListItem> = self.candidates.iter()
+        let items: Vec<ListItem> = self
+            .candidates
+            .iter()
             .enumerate()
             .map(|(i, result)| {
                 let style = if i == self.selected {

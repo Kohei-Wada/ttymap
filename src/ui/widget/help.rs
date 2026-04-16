@@ -6,7 +6,6 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
-
 use crate::core::input::Action;
 use crate::core::keymap::KeyMap;
 use crate::ui::theme;
@@ -17,22 +16,31 @@ pub struct HelpWidget {
 }
 
 impl Default for HelpWidget {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HelpWidget {
     pub fn new() -> Self {
-        Self { active: false, text: String::new() }
+        Self {
+            active: false,
+            text: String::new(),
+        }
     }
 
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     pub fn build(&mut self, keymap: &KeyMap) {
         let mut action_keys: HashMap<&str, Vec<String>> = HashMap::new();
 
         for (binding, action) in &keymap.bindings {
             let label = action_label(action);
-            if label.is_empty() { continue; }
+            if label.is_empty() {
+                continue;
+            }
             let key = format_binding(binding);
             action_keys.entry(label).or_default().push(key);
         }
@@ -69,12 +77,18 @@ impl HelpWidget {
         self.text = lines.join("\n");
     }
 
-    pub fn toggle(&mut self) { self.active = !self.active; }
+    pub fn toggle(&mut self) {
+        self.active = !self.active;
+    }
 
-    pub fn close(&mut self) { self.active = false; }
+    pub fn close(&mut self) {
+        self.active = false;
+    }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect) {
-        if !self.active || map_inner.width < 20 || map_inner.height < 10 { return; }
+        if !self.active || map_inner.width < 20 || map_inner.height < 10 {
+            return;
+        }
 
         let lines: Vec<&str> = self.text.lines().collect();
         let content_height = lines.len() as u16 + 2;

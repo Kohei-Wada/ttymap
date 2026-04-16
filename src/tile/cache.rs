@@ -102,10 +102,10 @@ impl TileCache {
         let cy = self.center_y;
         let cz = self.current_z;
 
-        self.client.update_view(
-            |key| key.z.abs_diff(cz) <= 1,
-            &|key: &TileKey| tile_distance_sq(key, cx, cy),
-        );
+        self.client
+            .update_view(|key| key.z.abs_diff(cz) <= 1, &|key: &TileKey| {
+                tile_distance_sq(key, cx, cy)
+            });
         self.sync_pending_count();
     }
 
@@ -117,7 +117,9 @@ impl TileCache {
 
             if bytes.is_empty() {
                 debug!("poll_completed: negative cache for {}", key);
-                let empty = DecodedTile { layers: HashMap::new() };
+                let empty = DecodedTile {
+                    layers: HashMap::new(),
+                };
                 self.insert_memory(key, empty);
                 continue;
             }
@@ -126,7 +128,11 @@ impl TileCache {
             let decoded = decode::decode(&bytes, &self.styler, &self.language);
 
             if is_current {
-                debug!("poll_completed: decoded tile {} ({} layers)", key, decoded.layers.len());
+                debug!(
+                    "poll_completed: decoded tile {} ({} layers)",
+                    key,
+                    decoded.layers.len()
+                );
                 any_new = true;
             }
             self.insert_memory(key, decoded);
@@ -167,10 +173,16 @@ impl TileCache {
         // 1-tile border (no corners)
         for dy in -2i32..=2 {
             for dx in -2i32..=2 {
-                if (-1..=1).contains(&dx) && (-1..=1).contains(&dy) { continue; }
-                if dx.abs() == 2 && dy.abs() == 2 { continue; }
+                if (-1..=1).contains(&dx) && (-1..=1).contains(&dy) {
+                    continue;
+                }
+                if dx.abs() == 2 && dy.abs() == 2 {
+                    continue;
+                }
                 let ty = cy + dy;
-                if ty < 0 || ty >= grid_size { continue; }
+                if ty < 0 || ty >= grid_size {
+                    continue;
+                }
                 let tx = (cx + dx).rem_euclid(grid_size);
                 self.get_tile(z, tx, ty);
             }
@@ -182,7 +194,9 @@ impl TileCache {
             let g = (1u64 << (z + 1)) as i32;
             let tx = (c.x.floor() as i32).rem_euclid(g);
             let ty = c.y.floor() as i32;
-            if ty >= 0 && ty < g { self.get_tile(z + 1, tx, ty); }
+            if ty >= 0 && ty < g {
+                self.get_tile(z + 1, tx, ty);
+            }
         }
 
         // z-1 center
@@ -191,19 +205,26 @@ impl TileCache {
             let g = (1u64 << (z - 1)) as i32;
             let tx = (c.x.floor() as i32).rem_euclid(g);
             let ty = c.y.floor() as i32;
-            if ty >= 0 && ty < g { self.get_tile(z - 1, tx, ty); }
+            if ty >= 0 && ty < g {
+                self.get_tile(z - 1, tx, ty);
+            }
         }
     }
 
     // ── Private ───────────────────────────────────────────────────────────
 
     fn sync_pending_count(&self) {
-        self.pending_count.store(self.client.queue_len(), Ordering::Relaxed);
+        self.pending_count
+            .store(self.client.queue_len(), Ordering::Relaxed);
     }
 
     fn read_disk_cache(&self, key: &TileKey) -> Option<Vec<u8>> {
         let dir = self.cache_dir.as_ref()?;
-        fs::read(dir.join(key.z.to_string()).join(format!("{}-{}.pbf", key.x, key.y))).ok()
+        fs::read(
+            dir.join(key.z.to_string())
+                .join(format!("{}-{}.pbf", key.x, key.y)),
+        )
+        .ok()
     }
 
     fn write_disk_cache(&self, key: &TileKey, bytes: &[u8]) {

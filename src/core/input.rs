@@ -118,13 +118,22 @@ mod tests {
         let mut h = handler();
         assert_eq!(h.handle_key(KeyCode::Char('w'), NONE), Action::PanRightFast);
         assert_eq!(h.handle_key(KeyCode::Char('b'), NONE), Action::PanLeftFast);
-        assert_eq!(h.handle_key(KeyCode::Char('d'), KeyModifiers::CONTROL), Action::PanDownHalf);
-        assert_eq!(h.handle_key(KeyCode::Char('u'), KeyModifiers::CONTROL), Action::PanUpHalf);
+        assert_eq!(
+            h.handle_key(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Action::PanDownHalf
+        );
+        assert_eq!(
+            h.handle_key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            Action::PanUpHalf
+        );
     }
 
     #[test]
     fn test_reset_position() {
         let mut h = handler();
-        assert_eq!(h.handle_key(KeyCode::Char('0'), NONE), Action::ResetPosition);
+        assert_eq!(
+            h.handle_key(KeyCode::Char('0'), NONE),
+            Action::ResetPosition
+        );
     }
 }

@@ -13,7 +13,9 @@ use crate::render::frame::MapFrame;
 
 /// Holds all UI widget state. Passed to layout::draw().
 impl Default for UiState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct UiState {
@@ -39,8 +41,8 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyModifiers};
     use crate::render::frame::{MapCell, MapFrame};
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn test_ui_state_initial() {
@@ -68,7 +70,11 @@ mod tests {
         assert!(ui.map_frame.is_none());
 
         ui.map_frame = Some(MapFrame {
-            cells: vec![MapCell { ch: ' ', fg: 0, bg: 0 }],
+            cells: vec![MapCell {
+                ch: ' ',
+                fg: 0,
+                bg: 0,
+            }],
             cols: 1,
             rows: 1,
         });

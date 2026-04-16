@@ -51,10 +51,11 @@ fn log_path() -> Option<PathBuf> {
 /// Renames current log to termap.log.old, then starts fresh.
 fn rotate_if_needed(path: &PathBuf) {
     if let Ok(meta) = fs::metadata(path)
-        && meta.len() > MAX_LOG_SIZE {
-            let old = path.with_extension("log.old");
-            let _ = fs::rename(path, old);
-        }
+        && meta.len() > MAX_LOG_SIZE
+    {
+        let old = path.with_extension("log.old");
+        let _ = fs::rename(path, old);
+    }
 }
 
 /// Initialize file-based logging to `$XDG_STATE_HOME/termap/termap.log`.
@@ -67,10 +68,7 @@ pub fn init() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
     rotate_if_needed(&path);
 
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
     let logger = FileLogger(Mutex::new(file));
     log::set_boxed_logger(Box::new(logger))?;

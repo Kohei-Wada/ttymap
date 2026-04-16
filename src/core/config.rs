@@ -29,7 +29,7 @@ impl Default for Config {
         Self {
             source: "http://mapscii.me/".to_string(),
             style_file: String::new(),
-            initial_lat: 52.51298,     // Berlin
+            initial_lat: 52.51298, // Berlin
             initial_lon: 13.42012,
             initial_zoom: None,
             max_zoom: 18.0,
@@ -48,14 +48,15 @@ pub fn load_config() -> Config {
 
     let path = config_path();
     if let Some(path) = &path
-        && let Ok(contents) = fs::read_to_string(path) {
-            if let Ok(file_cfg) = toml::from_str::<FileConfig>(&contents) {
-                file_cfg.apply_to(&mut config);
-                log::info!("loaded config from {}", path.display());
-            } else {
-                log::warn!("failed to parse config file: {}", path.display());
-            }
+        && let Ok(contents) = fs::read_to_string(path)
+    {
+        if let Ok(file_cfg) = toml::from_str::<FileConfig>(&contents) {
+            file_cfg.apply_to(&mut config);
+            log::info!("loaded config from {}", path.display());
+        } else {
+            log::warn!("failed to parse config file: {}", path.display());
         }
+    }
 
     config
 }
@@ -84,17 +85,39 @@ struct FileConfig {
 
 impl FileConfig {
     fn apply_to(&self, config: &mut Config) {
-        if let Some(v) = &self.source { config.source = v.clone(); }
-        if let Some(v) = &self.language { config.language = v.clone(); }
-        if let Some(v) = self.lat { config.initial_lat = v; }
-        if let Some(v) = self.lon { config.initial_lon = v; }
-        if let Some(v) = self.zoom { config.initial_zoom = Some(v); }
-        if let Some(v) = self.zoom_step { config.zoom_step = v; }
-        if let Some(v) = self.max_zoom { config.max_zoom = v; }
-        if let Some(v) = &self.style { config.style_file = v.clone(); }
-        if let Some(v) = self.cache_tiles { config.cache_tiles = v; }
-        if let Some(v) = self.wiki_limit { config.wiki_limit = v; }
-        if let Some(km) = &self.keymap { km.apply_to(&mut config.keymap); }
+        if let Some(v) = &self.source {
+            config.source = v.clone();
+        }
+        if let Some(v) = &self.language {
+            config.language = v.clone();
+        }
+        if let Some(v) = self.lat {
+            config.initial_lat = v;
+        }
+        if let Some(v) = self.lon {
+            config.initial_lon = v;
+        }
+        if let Some(v) = self.zoom {
+            config.initial_zoom = Some(v);
+        }
+        if let Some(v) = self.zoom_step {
+            config.zoom_step = v;
+        }
+        if let Some(v) = self.max_zoom {
+            config.max_zoom = v;
+        }
+        if let Some(v) = &self.style {
+            config.style_file = v.clone();
+        }
+        if let Some(v) = self.cache_tiles {
+            config.cache_tiles = v;
+        }
+        if let Some(v) = self.wiki_limit {
+            config.wiki_limit = v;
+        }
+        if let Some(km) = &self.keymap {
+            km.apply_to(&mut config.keymap);
+        }
     }
 }
 

@@ -26,9 +26,10 @@ struct CompiledStyle {
 
 fn replace_constants(value: &Value, constants: &HashMap<String, Value>) -> Value {
     match value {
-        Value::String(s) if s.starts_with('@') => {
-            constants.get(s.as_str()).cloned().unwrap_or_else(|| value.clone())
-        }
+        Value::String(s) if s.starts_with('@') => constants
+            .get(s.as_str())
+            .cloned()
+            .unwrap_or_else(|| value.clone()),
         Value::Object(map) => {
             let new_map = map
                 .iter()
@@ -36,16 +37,16 @@ fn replace_constants(value: &Value, constants: &HashMap<String, Value>) -> Value
                 .collect();
             Value::Object(new_map)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| replace_constants(v, constants)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| replace_constants(v, constants))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }
 
-fn compile_filter(
-    filter: &Value,
-) -> Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync> {
+fn compile_filter(filter: &Value) -> Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync> {
     match filter {
         Value::Null => Box::new(|_| true),
         Value::Array(arr) if arr.is_empty() => Box::new(|_| true),
@@ -57,82 +58,129 @@ fn compile_filter(
 
             match op.as_str() {
                 "==" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).cloned().unwrap_or(Value::Null);
-                    Box::new(move |props| {
-                        props.get(&key) == Some(&val)
-                    })
+                    Box::new(move |props| props.get(&key) == Some(&val))
                 }
                 "!=" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).cloned().unwrap_or(Value::Null);
-                    Box::new(move |props| {
-                        props.get(&key) != Some(&val)
-                    })
+                    Box::new(move |props| props.get(&key) != Some(&val))
                 }
                 "in" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let values: Vec<Value> = arr[2..].to_vec();
-                    Box::new(move |props| {
-                        props.get(&key).is_some_and(|v| values.contains(v))
-                    })
+                    Box::new(move |props| props.get(&key).is_some_and(|v| values.contains(v)))
                 }
                 "!in" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let values: Vec<Value> = arr[2..].to_vec();
-                    Box::new(move |props| {
-                        props.get(&key).is_none_or(|v| !values.contains(v))
-                    })
+                    Box::new(move |props| props.get(&key).is_none_or(|v| !values.contains(v)))
                 }
                 "has" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     Box::new(move |props| props.contains_key(&key))
                 }
                 "!has" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     Box::new(move |props| !props.contains_key(&key))
                 }
                 ">" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     Box::new(move |props| {
-                        props.get(&key).and_then(|v| v.as_f64()).is_some_and(|n| n > val)
+                        props
+                            .get(&key)
+                            .and_then(|v| v.as_f64())
+                            .is_some_and(|n| n > val)
                     })
                 }
                 ">=" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     Box::new(move |props| {
-                        props.get(&key).and_then(|v| v.as_f64()).is_some_and(|n| n >= val)
+                        props
+                            .get(&key)
+                            .and_then(|v| v.as_f64())
+                            .is_some_and(|n| n >= val)
                     })
                 }
                 "<" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     Box::new(move |props| {
-                        props.get(&key).and_then(|v| v.as_f64()).is_some_and(|n| n < val)
+                        props
+                            .get(&key)
+                            .and_then(|v| v.as_f64())
+                            .is_some_and(|n| n < val)
                     })
                 }
                 "<=" => {
-                    let key = arr.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = arr
+                        .get(1)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let val = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0);
                     Box::new(move |props| {
-                        props.get(&key).and_then(|v| v.as_f64()).is_some_and(|n| n <= val)
+                        props
+                            .get(&key)
+                            .and_then(|v| v.as_f64())
+                            .is_some_and(|n| n <= val)
                     })
                 }
                 "all" => {
-                    let sub_filters: Vec<Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>> =
-                        arr[1..].iter().map(compile_filter).collect();
+                    let sub_filters: Vec<
+                        Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>,
+                    > = arr[1..].iter().map(compile_filter).collect();
                     Box::new(move |props| sub_filters.iter().all(|f| f(props)))
                 }
                 "any" => {
-                    let sub_filters: Vec<Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>> =
-                        arr[1..].iter().map(compile_filter).collect();
+                    let sub_filters: Vec<
+                        Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>,
+                    > = arr[1..].iter().map(compile_filter).collect();
                     Box::new(move |props| sub_filters.iter().any(|f| f(props)))
                 }
                 "none" => {
-                    let sub_filters: Vec<Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>> =
-                        arr[1..].iter().map(compile_filter).collect();
+                    let sub_filters: Vec<
+                        Box<dyn Fn(&HashMap<String, Value>) -> bool + Send + Sync>,
+                    > = arr[1..].iter().map(compile_filter).collect();
                     Box::new(move |props| !sub_filters.iter().any(|f| f(props)))
                 }
                 _ => Box::new(|_| true),
@@ -153,11 +201,12 @@ fn resolve_color(paint: &HashMap<String, Value>, keys: &[&str]) -> u8 {
                 Value::Object(obj) => {
                     if let Some(Value::Array(stops)) = obj.get("stops")
                         && let Some(first_stop) = stops.first()
-                            && let Some(Value::Array(stop_arr)) = Some(first_stop)
-                                && let Some(Value::String(color_str)) = stop_arr.get(1) {
-                                    let [r, g, b] = crate::color::hex2rgb(color_str);
-                                    return crate::color::rgb_to_x256(r, g, b);
-                                }
+                        && let Some(Value::Array(stop_arr)) = Some(first_stop)
+                        && let Some(Value::String(color_str)) = stop_arr.get(1)
+                    {
+                        let [r, g, b] = crate::color::hex2rgb(color_str);
+                        return crate::color::rgb_to_x256(r, g, b);
+                    }
                 }
                 _ => {}
             }
@@ -205,14 +254,16 @@ impl Styler {
             // Resolve `ref` field
             let mut layer_map = layer.clone();
             if let Some(ref_id) = layer.get("ref").and_then(|v| v.as_str())
-                && let Some(ref_layer) = layers_by_id.get(ref_id).and_then(|v| v.as_object()) {
-                    for field in &["type", "source-layer", "minzoom", "maxzoom", "filter"] {
-                        if !layer_map.contains_key(*field)
-                            && let Some(val) = ref_layer.get(*field) {
-                                layer_map.insert(field.to_string(), val.clone());
-                            }
+                && let Some(ref_layer) = layers_by_id.get(ref_id).and_then(|v| v.as_object())
+            {
+                for field in &["type", "source-layer", "minzoom", "maxzoom", "filter"] {
+                    if !layer_map.contains_key(*field)
+                        && let Some(val) = ref_layer.get(*field)
+                    {
+                        layer_map.insert(field.to_string(), val.clone());
                     }
                 }
+            }
 
             let id = layer_map
                 .get("id")
@@ -253,10 +304,7 @@ impl Styler {
 
             let color = resolve_color(&paint, &["line-color", "fill-color", "text-color"]);
 
-            let filter_val = layer_map
-                .get("filter")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let filter_val = layer_map.get("filter").cloned().unwrap_or(Value::Null);
             let filter = compile_filter(&filter_val);
 
             let feature_style = FeatureStyle {

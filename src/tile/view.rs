@@ -101,7 +101,12 @@ mod tests {
         let tiles = visible_tiles(0.0, 85.0, 2.0, 400, 400);
         for t in &tiles {
             let grid = (1u64 << t.z) as i32;
-            assert!(t.y >= 0 && t.y < grid, "tile y={} out of grid {}", t.y, grid);
+            assert!(
+                t.y >= 0 && t.y < grid,
+                "tile y={} out of grid {}",
+                t.y,
+                grid
+            );
         }
     }
 

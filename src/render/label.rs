@@ -1,4 +1,4 @@
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{AABB, RTree, RTreeObject};
 
 #[derive(Debug, Clone)]
 struct LabelEntry {
@@ -46,7 +46,10 @@ impl LabelBuffer {
     fn has_space(&self, text: &str, x: f64, y: f64, margin: Option<f64>) -> bool {
         let area = Self::calculate_area(text, x, y, margin.unwrap_or(self.default_margin));
         let envelope = area.envelope();
-        self.tree.locate_in_envelope_intersecting(&envelope).next().is_none()
+        self.tree
+            .locate_in_envelope_intersecting(&envelope)
+            .next()
+            .is_none()
     }
 
     fn calculate_area(text: &str, x: f64, y: f64, margin: f64) -> LabelEntry {

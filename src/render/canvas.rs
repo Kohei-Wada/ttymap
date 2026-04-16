@@ -174,7 +174,13 @@ impl Canvas {
     }
 
     /// Clip a line segment to the padded viewport. Returns None if entirely outside.
-    fn clip_line(&self, mut x0: i32, mut y0: i32, mut x1: i32, mut y1: i32) -> Option<(i32, i32, i32, i32)> {
+    fn clip_line(
+        &self,
+        mut x0: i32,
+        mut y0: i32,
+        mut x1: i32,
+        mut y1: i32,
+    ) -> Option<(i32, i32, i32, i32)> {
         let (xmin, ymin, xmax, ymax) = self.clip_bounds();
         let mut code0 = self.outcode(x0, y0, xmin, ymin, xmax, ymax);
         let mut code1 = self.outcode(x1, y1, xmin, ymin, xmax, ymax);
@@ -240,7 +246,9 @@ impl Canvas {
         let mut edge_pixels: Vec<(i32, i32)> = Vec::new();
 
         for pair in [(&a, &b), (&b, &c), (&c, &a)] {
-            if let Some((cx0, cy0, cx1, cy1)) = self.clip_line(pair.0[0], pair.0[1], pair.1[0], pair.1[1]) {
+            if let Some((cx0, cy0, cx1, cy1)) =
+                self.clip_line(pair.0[0], pair.0[1], pair.1[0], pair.1[1])
+            {
                 edge_pixels.extend(BresenhamIter::new(cx0, cy0, cx1, cy1));
             }
         }
@@ -303,10 +311,18 @@ fn sutherland_hodgman(
 
         let val = |p: (i32, i32)| if axis { p.0 } else { p.1 };
         let inside = |p: (i32, i32)| {
-            if keep_ge { val(p) >= bound } else { val(p) <= bound }
+            if keep_ge {
+                val(p) >= bound
+            } else {
+                val(p) <= bound
+            }
         };
         let intersect = |a: (i32, i32), b: (i32, i32)| {
-            if axis { intersect_x(a, b, bound) } else { intersect_y(a, b, bound) }
+            if axis {
+                intersect_x(a, b, bound)
+            } else {
+                intersect_y(a, b, bound)
+            }
         };
 
         let mut prev = input[input.len() - 1];
@@ -436,8 +452,14 @@ mod tests {
         let mut canvas = Canvas::new(80, 40);
         canvas.polyline(&[(0, 0), (10, 10)], 7);
         let frame = canvas.to_map_frame();
-        let has_braille = frame.cells.iter().any(|c| c.ch > '\u{2800}' && c.ch <= '\u{28FF}');
-        assert!(has_braille, "polyline should draw pixels visible as braille chars");
+        let has_braille = frame
+            .cells
+            .iter()
+            .any(|c| c.ch > '\u{2800}' && c.ch <= '\u{28FF}');
+        assert!(
+            has_braille,
+            "polyline should draw pixels visible as braille chars"
+        );
     }
 
     #[test]
@@ -446,8 +468,14 @@ mod tests {
         let ring = vec![(5, 5), (20, 5), (12, 20)];
         canvas.polygon(&[ring], 7);
         let frame = canvas.to_map_frame();
-        let has_braille = frame.cells.iter().any(|c| c.ch > '\u{2800}' && c.ch <= '\u{28FF}');
-        assert!(has_braille, "polygon should draw pixels visible as braille chars");
+        let has_braille = frame
+            .cells
+            .iter()
+            .any(|c| c.ch > '\u{2800}' && c.ch <= '\u{28FF}');
+        assert!(
+            has_braille,
+            "polygon should draw pixels visible as braille chars"
+        );
     }
 
     #[test]
@@ -455,7 +483,10 @@ mod tests {
         let mut canvas = Canvas::new(80, 40);
         canvas.text("Hi", 0, 0, 7);
         let frame = canvas.to_map_frame();
-        assert!(frame.cells.iter().any(|c| c.ch == 'H'), "frame should contain 'H'");
+        assert!(
+            frame.cells.iter().any(|c| c.ch == 'H'),
+            "frame should contain 'H'"
+        );
     }
 
     #[test]

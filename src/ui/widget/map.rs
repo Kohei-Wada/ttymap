@@ -53,8 +53,16 @@ mod tests {
     fn test_map_frame_widget_render() {
         let frame = MapFrame {
             cells: vec![
-                MapCell { ch: 'A', fg: 1, bg: 0 },
-                MapCell { ch: 'B', fg: 2, bg: 0 },
+                MapCell {
+                    ch: 'A',
+                    fg: 1,
+                    bg: 0,
+                },
+                MapCell {
+                    ch: 'B',
+                    fg: 2,
+                    bg: 0,
+                },
             ],
             cols: 2,
             rows: 1,

@@ -35,11 +35,21 @@ impl Core {
         }
     }
 
-    pub fn is_running(&self) -> bool { self.running }
-    pub fn width(&self) -> usize { self.width }
-    pub fn height(&self) -> usize { self.height }
-    pub fn stop(&mut self) { self.running = false; }
-    pub fn zoom_step(&self) -> f64 { self.config.zoom_step }
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+    pub fn width(&self) -> usize {
+        self.width
+    }
+    pub fn height(&self) -> usize {
+        self.height
+    }
+    pub fn stop(&mut self) {
+        self.running = false;
+    }
+    pub fn zoom_step(&self) -> f64 {
+        self.config.zoom_step
+    }
 
     /// Process a map action. Returns true if redraw needed.
     pub fn process_action(&mut self, action: &Action) -> bool {
@@ -54,14 +64,14 @@ impl Core {
                 self.running = false;
                 false
             }
-            Action::PanLeft      => self.pan(step, -1.0,  0.0),
-            Action::PanRight     => self.pan(step,  1.0,  0.0),
-            Action::PanUp        => self.pan(step,  0.0,  0.75),
-            Action::PanDown      => self.pan(step,  0.0, -0.75),
-            Action::PanLeftFast  => self.pan(step, -10.0,  0.0),
-            Action::PanRightFast => self.pan(step,  10.0,  0.0),
-            Action::PanUpHalf    => self.pan(step,  0.0,  7.5),
-            Action::PanDownHalf  => self.pan(step,  0.0, -7.5),
+            Action::PanLeft => self.pan(step, -1.0, 0.0),
+            Action::PanRight => self.pan(step, 1.0, 0.0),
+            Action::PanUp => self.pan(step, 0.0, 0.75),
+            Action::PanDown => self.pan(step, 0.0, -0.75),
+            Action::PanLeftFast => self.pan(step, -10.0, 0.0),
+            Action::PanRightFast => self.pan(step, 10.0, 0.0),
+            Action::PanUpHalf => self.pan(step, 0.0, 7.5),
+            Action::PanDownHalf => self.pan(step, 0.0, -7.5),
             Action::ZoomIn => {
                 self.zoom = (self.zoom + zoom_step).min(max_zoom);
                 true
@@ -105,7 +115,10 @@ impl Core {
     }
 
     pub fn status_bar(&self) -> String {
-        format!(" {:.3}, {:.3}  zoom: {:.1}", self.center.lat, self.center.lon, self.zoom)
+        format!(
+            " {:.3}, {:.3}  zoom: {:.1}",
+            self.center.lat, self.center.lon, self.zoom
+        )
     }
 
     fn pan(&mut self, step: f64, dlon: f64, dlat: f64) -> bool {
@@ -144,14 +157,13 @@ impl Core {
         let old_zoom = self.zoom;
         self.zoom_by(delta);
         let new_zoom = self.zoom;
-        if (new_zoom - old_zoom).abs() < 1e-10 { return; }
+        if (new_zoom - old_zoom).abs() < 1e-10 {
+            return;
+        }
 
         let ratio = 1.0 - 2.0_f64.powf(old_zoom - new_zoom);
         // pan_by_cells subtracts dx (drag convention), so negate for "move towards"
-        self.pan_by_cells(
-            -(dx_cells * ratio) as i16,
-            -(dy_cells * ratio) as i16,
-        );
+        self.pan_by_cells(-(dx_cells * ratio) as i16, -(dy_cells * ratio) as i16);
     }
 
     /// Move the map center to the given location.

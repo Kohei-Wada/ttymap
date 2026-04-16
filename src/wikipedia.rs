@@ -26,7 +26,10 @@ impl WikipediaClient {
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
             .build()
             .ok()?;
-        Some(Self { client, language: language.to_string() })
+        Some(Self {
+            client,
+            language: language.to_string(),
+        })
     }
 
     /// Find Wikipedia articles near a coordinate.
@@ -55,7 +58,8 @@ impl WikipediaClient {
             lon: f64,
         }
 
-        let page_infos: Vec<PageInfo> = pages.iter()
+        let page_infos: Vec<PageInfo> = pages
+            .iter()
             .filter_map(|p| {
                 Some(PageInfo {
                     title: p.get("title")?.as_str()?.to_string(),
@@ -66,15 +70,26 @@ impl WikipediaClient {
             })
             .collect();
 
-        if page_infos.is_empty() { return Vec::new(); }
+        if page_infos.is_empty() {
+            return Vec::new();
+        }
 
         let titles: Vec<String> = page_infos.iter().map(|p| p.title.clone()).collect();
         let extracts = self.fetch_extracts(&titles);
 
-        page_infos.into_iter().map(|p| {
-            let extract = extracts.get(&p.title).cloned().unwrap_or_default();
-            WikiArticle { title: p.title, extract, dist_m: p.dist_m, lat: p.lat, lon: p.lon }
-        }).collect()
+        page_infos
+            .into_iter()
+            .map(|p| {
+                let extract = extracts.get(&p.title).cloned().unwrap_or_default();
+                WikiArticle {
+                    title: p.title,
+                    extract,
+                    dist_m: p.dist_m,
+                    lat: p.lat,
+                    lon: p.lon,
+                }
+            })
+            .collect()
     }
 
     fn fetch_extracts(&self, titles: &[String]) -> std::collections::HashMap<String, String> {
@@ -82,7 +97,8 @@ impl WikipediaClient {
         let url = format!(
             "https://{}.wikipedia.org/w/api.php?action=query&prop=extracts\
              &exintro=1&explaintext=1&exsentences=2&titles={}&format=json",
-            self.language, urlencoded(&titles_param),
+            self.language,
+            urlencoded(&titles_param),
         );
         debug!("wikipedia: extracts {}", url);
 

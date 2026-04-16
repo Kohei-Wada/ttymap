@@ -39,8 +39,12 @@ impl Renderer {
         self.canvas = Canvas::new(width, height);
     }
 
-    pub fn width(&self) -> usize { self.width }
-    pub fn height(&self) -> usize { self.height }
+    pub fn width(&self) -> usize {
+        self.width
+    }
+    pub fn height(&self) -> usize {
+        self.height
+    }
 
     /// Render pre-fetched tile data into a MapFrame.
     /// Returns None if no tile data was provided.
@@ -56,7 +60,8 @@ impl Renderer {
             return None;
         }
 
-        let total_features: usize = tile_data.iter()
+        let total_features: usize = tile_data
+            .iter()
             .flat_map(|t| t.layers.iter())
             .map(|(_, f)| f.len())
             .sum();
@@ -64,7 +69,8 @@ impl Renderer {
 
         // Time-budget for drawing
         const RENDER_BUDGET_MS: u64 = 100;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(RENDER_BUDGET_MS);
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(RENDER_BUDGET_MS);
 
         // First pass: non-symbol features
         'outer: for td in tile_data {
@@ -122,12 +128,16 @@ impl Renderer {
             let sx = (vis.pos_x + p.x as f64 / scale) as i32;
             let sy = (vis.pos_y + p.y as f64 / scale) as i32;
 
-            if sx == last_x && sy == last_y { continue; }
+            if sx == last_x && sy == last_y {
+                continue;
+            }
             last_x = sx;
             last_y = sy;
 
             if sx < min_x || sx > max_x || sy < min_y || sy > max_y {
-                if outside { continue; }
+                if outside {
+                    continue;
+                }
                 outside = true;
             } else if outside {
                 outside = false;
@@ -156,9 +166,15 @@ impl Renderer {
 
     fn draw_feature(&mut self, vis: &VisibleTile, feature: &Feature, scale_denom: f64, zoom: f64) {
         if let Some(min_zoom) = feature.min_zoom
-            && zoom < min_zoom { return; }
+            && zoom < min_zoom
+        {
+            return;
+        }
         if let Some(max_zoom) = feature.max_zoom
-            && zoom > max_zoom { return; }
+            && zoom > max_zoom
+        {
+            return;
+        }
 
         let extent = 4096.0_f64;
         let scale = extent / scale_denom;
@@ -173,11 +189,15 @@ impl Renderer {
                 }
             }
             "fill" => {
-                let rings: Vec<Vec<(i32, i32)>> = feature.points.iter()
+                let rings: Vec<Vec<(i32, i32)>> = feature
+                    .points
+                    .iter()
                     .map(|ring| self.scale_points(vis, ring, scale))
                     .filter(|r| r.len() >= 3)
                     .collect();
-                if rings.is_empty() { return; }
+                if rings.is_empty() {
+                    return;
+                }
                 let clipped = self.canvas.clip_polygon(&rings);
                 if !clipped.is_empty() {
                     self.canvas.polygon(&clipped, feature.color);
@@ -191,7 +211,8 @@ impl Renderer {
                     let sx = vis.pos_x + pt.x as f64 / scale;
                     let sy = vis.pos_y + pt.y as f64 / scale;
                     if self.canvas.try_place_label(label, sx, sy) {
-                        self.canvas.text(label, sx as usize, sy as usize, feature.color);
+                        self.canvas
+                            .text(label, sx as usize, sy as usize, feature.color);
                     }
                 }
             }
@@ -204,14 +225,24 @@ impl Renderer {
             vec!["admin", "water", "country_label", "marine_label"]
         } else {
             vec![
-                "landuse", "water", "marine_label", "building", "road", "admin",
-                "country_label", "state_label", "water_label", "place_label",
-                "rail_station_label", "poi_label", "road_label", "housenum_label",
+                "landuse",
+                "water",
+                "marine_label",
+                "building",
+                "road",
+                "admin",
+                "country_label",
+                "state_label",
+                "water_label",
+                "place_label",
+                "rail_station_label",
+                "poi_label",
+                "road_label",
+                "housenum_label",
             ]
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -231,7 +262,9 @@ mod tests {
 
     #[test]
     fn test_draw_empty_returns_none() {
-        let styler = Arc::new(Styler::from_json(&serde_json::json!({"name":"t","layers":[]})));
+        let styler = Arc::new(Styler::from_json(
+            &serde_json::json!({"name":"t","layers":[]}),
+        ));
         let mut renderer = Renderer::new(styler, 80, 40);
         assert!(renderer.draw(&[], 1.0).is_none());
     }

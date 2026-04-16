@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 
 use prost::Message;
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{AABB, RTree, RTreeObject};
 use serde_json::Value;
 
 use crate::styler::Styler;
@@ -190,9 +190,10 @@ fn extract_label(props: &HashMap<String, Value>, language: &str) -> Option<Strin
     let lang_key = format!("name_{}", language);
     for key in &[lang_key.as_str(), "name_en", "name", "house_num"] {
         if let Some(Value::String(s)) = props.get(*key)
-            && !s.is_empty() {
-                return Some(s.clone());
-            }
+            && !s.is_empty()
+        {
+            return Some(s.clone());
+        }
     }
     None
 }
@@ -201,7 +202,10 @@ fn extract_label(props: &HashMap<String, Value>, language: &str) -> Option<Strin
 
 fn extract_sort(props: &HashMap<String, Value>) -> i64 {
     if let Some(v) = props.get("localrank").or_else(|| props.get("scalerank"))
-        && let Value::Number(n) = v { return n.as_i64().unwrap_or(0) }
+        && let Value::Number(n) = v
+    {
+        return n.as_i64().unwrap_or(0);
+    }
     0
 }
 
@@ -259,7 +263,11 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
 
     let tile = match proto::Tile::decode(data.as_slice()) {
         Ok(t) => t,
-        Err(_) => return DecodedTile { layers: HashMap::new() },
+        Err(_) => {
+            return DecodedTile {
+                layers: HashMap::new(),
+            };
+        }
     };
 
     let mut layers: HashMap<String, Vec<Feature>> = HashMap::new();
@@ -343,7 +351,9 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
         decoded_layers.insert(name, TileLayer { extent, tree });
     }
 
-    DecodedTile { layers: decoded_layers }
+    DecodedTile {
+        layers: decoded_layers,
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -397,13 +407,11 @@ mod tests {
 
     #[test]
     fn test_bounds_calculation() {
-        let points = vec![
-            vec![
-                Point { x: 10, y: 20 },
-                Point { x: 30, y: 5 },
-                Point { x: -5, y: 100 },
-            ],
-        ];
+        let points = vec![vec![
+            Point { x: 10, y: 20 },
+            Point { x: 30, y: 5 },
+            Point { x: -5, y: 100 },
+        ]];
         let (min_x, max_x, min_y, max_y) = calculate_bounds(&points);
         assert_eq!(min_x, -5.0);
         assert_eq!(max_x, 30.0);

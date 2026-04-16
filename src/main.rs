@@ -15,7 +15,7 @@ use termap::core::config;
         Config file: ~/.config/termap/config.toml\n\
         Log file:    ~/.local/state/termap/termap.log\n\
         Tile cache:  ~/.cache/termap/",
-    version,
+    version
 )]
 struct Cli {
     #[command(subcommand)]
@@ -85,7 +85,11 @@ fn main() {
         config.style_file = v;
     }
 
-    log::info!("starting termap: lat={}, lon={}", config.initial_lat, config.initial_lon);
+    log::info!(
+        "starting termap: lat={}, lon={}",
+        config.initial_lat,
+        config.initial_lon
+    );
 
     let mut app = App::new(config);
     if let Err(e) = app.run() {
@@ -94,16 +98,14 @@ fn main() {
 }
 
 fn clear_cache() {
-    let cache_dir = directories::ProjectDirs::from("", "", "termap")
-        .map(|dirs| dirs.cache_dir().to_path_buf());
+    let cache_dir =
+        directories::ProjectDirs::from("", "", "termap").map(|dirs| dirs.cache_dir().to_path_buf());
 
     match cache_dir {
-        Some(dir) if dir.exists() => {
-            match fs::remove_dir_all(&dir) {
-                Ok(()) => println!("Cleared tile cache: {}", dir.display()),
-                Err(e) => eprintln!("Failed to clear cache: {e}"),
-            }
-        }
+        Some(dir) if dir.exists() => match fs::remove_dir_all(&dir) {
+            Ok(()) => println!("Cleared tile cache: {}", dir.display()),
+            Err(e) => eprintln!("Failed to clear cache: {e}"),
+        },
         Some(dir) => println!("No cache to clear: {}", dir.display()),
         None => eprintln!("Could not determine cache directory"),
     }

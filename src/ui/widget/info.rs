@@ -15,7 +15,9 @@ pub struct InfoWidget {
 }
 
 impl Default for InfoWidget {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InfoWidget {
@@ -28,26 +30,42 @@ impl InfoWidget {
         }
     }
 
-    pub fn set_coords(&mut self, coords: String) { self.coords = coords; }
-    pub fn set_place(&mut self, place: Option<String>) { self.place = place; }
+    pub fn set_coords(&mut self, coords: String) {
+        self.coords = coords;
+    }
+    pub fn set_place(&mut self, place: Option<String>) {
+        self.place = place;
+    }
     pub fn set_scale(&mut self, label: String, width: u16) {
         self.scale_label = label;
         self.scale_width = width;
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect) {
-        if map_inner.width < 4 || map_inner.height < 1 { return; }
+        if map_inner.width < 4 || map_inner.height < 1 {
+            return;
+        }
         self.render_top_right(f, map_inner);
         self.render_scale_bar(f, map_inner);
     }
 
     fn render_top_right(&self, f: &mut Frame, area: Rect) {
         let mut lines = Vec::new();
-        if !self.coords.is_empty() { lines.push(self.coords.clone()); }
-        if let Some(ref place) = self.place { lines.push(place.clone()); }
-        if lines.is_empty() { return; }
+        if !self.coords.is_empty() {
+            lines.push(self.coords.clone());
+        }
+        if let Some(ref place) = self.place {
+            lines.push(place.clone());
+        }
+        if lines.is_empty() {
+            return;
+        }
 
-        let max_width = lines.iter().map(|l| display_width(l) as u16 + 2).max().unwrap_or(0);
+        let max_width = lines
+            .iter()
+            .map(|l| display_width(l) as u16 + 2)
+            .max()
+            .unwrap_or(0);
         let width = max_width.min(area.width);
         let height = (lines.len() as u16).min(area.height);
 
@@ -60,9 +78,12 @@ impl InfoWidget {
     }
 
     fn render_scale_bar(&self, f: &mut Frame, area: Rect) {
-        if self.scale_width == 0 || area.height < 2 { return; }
+        if self.scale_width == 0 || area.height < 2 {
+            return;
+        }
 
-        let bar = format!("├{}┤ {}",
+        let bar = format!(
+            "├{}┤ {}",
             "─".repeat((self.scale_width as usize).saturating_sub(2)),
             self.scale_label,
         );

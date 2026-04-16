@@ -64,13 +64,22 @@ impl Default for KeyMap {
 pub fn parse_key_binding(s: &str) -> Option<KeyBinding> {
     if let Some(ch) = s.strip_prefix("C-") {
         let code = parse_key_code(ch)?;
-        Some(KeyBinding { code, modifiers: KeyModifiers::CONTROL })
+        Some(KeyBinding {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+        })
     } else if let Some(ch) = s.strip_prefix("S-") {
         let code = parse_key_code(ch)?;
-        Some(KeyBinding { code, modifiers: KeyModifiers::SHIFT })
+        Some(KeyBinding {
+            code,
+            modifiers: KeyModifiers::SHIFT,
+        })
     } else {
         let code = parse_key_code(s)?;
-        Some(KeyBinding { code, modifiers: KeyModifiers::NONE })
+        Some(KeyBinding {
+            code,
+            modifiers: KeyModifiers::NONE,
+        })
     }
 }
 
@@ -110,7 +119,10 @@ mod tests {
     #[test]
     fn test_parse_special() {
         assert_eq!(parse_key_binding("Left").unwrap().code, KeyCode::Left);
-        assert_eq!(parse_key_binding("Backspace").unwrap().code, KeyCode::Backspace);
+        assert_eq!(
+            parse_key_binding("Backspace").unwrap().code,
+            KeyCode::Backspace
+        );
         assert_eq!(parse_key_binding("Enter").unwrap().code, KeyCode::Enter);
         assert_eq!(parse_key_binding("Esc").unwrap().code, KeyCode::Esc);
         assert_eq!(parse_key_binding("Tab").unwrap().code, KeyCode::Tab);
@@ -125,8 +137,14 @@ mod tests {
     #[test]
     fn test_lookup() {
         let km = KeyMap::default();
-        assert_eq!(km.lookup(KeyCode::Char('h'), KeyModifiers::NONE), Some(&Action::PanLeft));
-        assert_eq!(km.lookup(KeyCode::Char('d'), KeyModifiers::CONTROL), Some(&Action::PanDownHalf));
+        assert_eq!(
+            km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
+            Some(&Action::PanLeft)
+        );
+        assert_eq!(
+            km.lookup(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Some(&Action::PanDownHalf)
+        );
         assert_eq!(km.lookup(KeyCode::Char('x'), KeyModifiers::NONE), None);
     }
 }

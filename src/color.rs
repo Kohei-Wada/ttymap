@@ -49,9 +49,8 @@ pub fn rgb_to_x256(r: u8, g: u8, b: u8) -> u8 {
     let cube_g = CUBE_LEVELS[gi] as i32;
     let cube_b = CUBE_LEVELS[bi] as i32;
 
-    let cube_dist = (r as i32 - cube_r).pow(2)
-        + (g as i32 - cube_g).pow(2)
-        + (b as i32 - cube_b).pow(2);
+    let cube_dist =
+        (r as i32 - cube_r).pow(2) + (g as i32 - cube_g).pow(2) + (b as i32 - cube_b).pow(2);
     let cube_idx = 16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8;
 
     // Grayscale ramp: indices 232..=255, values 8, 18, 28, ..., 238

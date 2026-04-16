@@ -24,8 +24,12 @@ pub struct TileCoord {
 /// Wrap longitude to (-180, 180] and clamp latitude to -85.0511..=85.0511.
 pub fn normalize(ll: LonLat) -> LonLat {
     let mut lon = ll.lon % 360.0;
-    if lon > 180.0 { lon -= 360.0; }
-    if lon <= -180.0 { lon += 360.0; }
+    if lon > 180.0 {
+        lon -= 360.0;
+    }
+    if lon <= -180.0 {
+        lon += 360.0;
+    }
     LonLat {
         lon,
         lat: ll.lat.clamp(-MAX_LAT, MAX_LAT),
@@ -96,8 +100,8 @@ pub fn scale_bar(lat: f64, zoom: f64, screen_width: u16) -> (String, u16) {
     // Metres per pixel at this latitude and zoom.
     // At zoom 0, one tile (256px) covers the full equator circumference.
     // At higher zooms, each tile covers 1/2^z of that.
-    let meters_per_pixel = (EARTH_RADIUS_M * 2.0 * PI * lat.to_radians().cos())
-        / (256.0 * 2.0_f64.powf(zoom));
+    let meters_per_pixel =
+        (EARTH_RADIUS_M * 2.0 * PI * lat.to_radians().cos()) / (256.0 * 2.0_f64.powf(zoom));
     // Each terminal cell = 2 braille pixels wide
     let meters_per_cell = meters_per_pixel * 2.0;
 
@@ -107,11 +111,25 @@ pub fn scale_bar(lat: f64, zoom: f64, screen_width: u16) -> (String, u16) {
 
     // Round to a nice number
     let nice_distances = [
-        50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0,
-        10_000.0, 20_000.0, 50_000.0, 100_000.0, 200_000.0, 500_000.0,
-        1_000_000.0, 2_000_000.0, 5_000_000.0,
+        50.0,
+        100.0,
+        200.0,
+        500.0,
+        1_000.0,
+        2_000.0,
+        5_000.0,
+        10_000.0,
+        20_000.0,
+        50_000.0,
+        100_000.0,
+        200_000.0,
+        500_000.0,
+        1_000_000.0,
+        2_000_000.0,
+        5_000_000.0,
     ];
-    let distance = nice_distances.iter()
+    let distance = nice_distances
+        .iter()
         .copied()
         .min_by_key(|d| ((d - target_meters).abs() * 1000.0) as i64)
         .unwrap_or(1000.0);
@@ -136,7 +154,10 @@ mod tests {
 
     #[test]
     fn normalize_identity() {
-        let ll = LonLat { lon: 10.0, lat: 50.0 };
+        let ll = LonLat {
+            lon: 10.0,
+            lat: 50.0,
+        };
         let n = normalize(ll);
         assert!((n.lon - 10.0).abs() < EPS);
         assert!((n.lat - 50.0).abs() < EPS);
@@ -144,19 +165,34 @@ mod tests {
 
     #[test]
     fn normalize_wraps_lon() {
-        let n = normalize(LonLat { lon: 200.0, lat: 0.0 });
+        let n = normalize(LonLat {
+            lon: 200.0,
+            lat: 0.0,
+        });
         assert!((n.lon - (-160.0)).abs() < 1e-10);
-        let n2 = normalize(LonLat { lon: -200.0, lat: 0.0 });
+        let n2 = normalize(LonLat {
+            lon: -200.0,
+            lat: 0.0,
+        });
         assert!((n2.lon - 160.0).abs() < 1e-10);
-        let n3 = normalize(LonLat { lon: 540.0, lat: 0.0 });
+        let n3 = normalize(LonLat {
+            lon: 540.0,
+            lat: 0.0,
+        });
         assert!((n3.lon - 180.0).abs() < 1e-10);
     }
 
     #[test]
     fn normalize_clamps_lat() {
-        let n = normalize(LonLat { lon: 0.0, lat: 90.0 });
+        let n = normalize(LonLat {
+            lon: 0.0,
+            lat: 90.0,
+        });
         assert!((n.lat - MAX_LAT).abs() < EPS);
-        let n2 = normalize(LonLat { lon: 0.0, lat: -90.0 });
+        let n2 = normalize(LonLat {
+            lon: 0.0,
+            lat: -90.0,
+        });
         assert!((n2.lat + MAX_LAT).abs() < EPS);
     }
 
@@ -253,8 +289,14 @@ mod tests {
     #[test]
     fn haversine_known_distance() {
         // Berlin ↔ Paris: roughly 878 km.
-        let berlin = LonLat { lon: 13.404954, lat: 52.520008 };
-        let paris = LonLat { lon: 2.349014, lat: 48.864716 };
+        let berlin = LonLat {
+            lon: 13.404954,
+            lat: 52.520008,
+        };
+        let paris = LonLat {
+            lon: 2.349014,
+            lat: 48.864716,
+        };
         let d = haversine(berlin, paris);
         assert!((d - 878_000.0).abs() < 5_000.0, "distance was {d}");
     }
@@ -298,7 +340,10 @@ mod tests {
     fn scale_bar_returns_nice_distance() {
         let (label, width) = scale_bar(0.0, 10.0, 80);
         // Should return a recognizable distance label
-        assert!(label.ends_with('m') || label.ends_with("km"), "label={label}");
+        assert!(
+            label.ends_with('m') || label.ends_with("km"),
+            "label={label}"
+        );
         assert!(width >= 2, "width={width}");
     }
 
