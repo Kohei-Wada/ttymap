@@ -51,8 +51,9 @@ impl WikiWidget {
 
     pub fn set_articles(&mut self, articles: Vec<WikiArticle>) {
         self.articles = articles;
-        self.selected = 0;
-        self.scroll = 0;
+        if self.selected >= self.articles.len() {
+            self.selected = self.articles.len().saturating_sub(1);
+        }
     }
 
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> WikiAction {

@@ -12,7 +12,6 @@ use crate::nominatim::{NominatimClient, PlaceInfo, SearchResult};
 /// Async geocoding results.
 pub enum GeoResponse {
     Search(Vec<SearchResult>),
-    Completion(Vec<SearchResult>),
     Reverse(Option<PlaceInfo>),
 }
 
@@ -47,17 +46,6 @@ impl Geocoder {
         thread::spawn(move || {
             let results = client.search(&query);
             let _ = tx.send(GeoResponse::Search(results));
-        });
-    }
-
-    /// Submit a completion query (same as search, tagged differently).
-    pub fn complete(&self, query: &str) {
-        let query = query.to_string();
-        let tx = self.tx.clone();
-        let client = self.client.clone();
-        thread::spawn(move || {
-            let results = client.search(&query);
-            let _ = tx.send(GeoResponse::Completion(results));
         });
     }
 

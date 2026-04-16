@@ -6,7 +6,7 @@ use log::debug;
 use crate::geo::LonLat;
 
 const BASE_URL: &str = "https://nominatim.openstreetmap.org";
-const USER_AGENT: &str = "termap/0.1.0";
+const USER_AGENT: &str = "termap/0.1.0 (https://github.com/Kohei-Wada/termap)";
 const TIMEOUT_SECS: u64 = 5;
 
 /// Forward geocoding result.

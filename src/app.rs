@@ -27,7 +27,6 @@ pub struct App {
     ui: UiState,
     last_search_results: Vec<SearchResult>,
     last_reverse_request: Instant,
-    last_completion_request: Instant,
     drag_from: Option<(u16, u16)>,
     wiki_rx: std::sync::mpsc::Receiver<Vec<WikiArticle>>,
     wiki_tx: std::sync::mpsc::Sender<Vec<WikiArticle>>,
@@ -87,8 +86,7 @@ impl App {
             geocoder: Geocoder::new(),
             ui,
             last_search_results: Vec::new(),
-            last_reverse_request: Instant::now(),
-            last_completion_request: Instant::now(),
+            last_reverse_request: Instant::now() - Duration::from_secs(10),
             drag_from: None,
             wiki_rx,
             wiki_tx,
@@ -122,12 +120,6 @@ impl App {
                             info!("geocode: {} results", results.len());
                             self.last_search_results = results.clone();
                             self.ui.search.set_candidates(results);
-                        }
-                    }
-                    GeoResponse::Completion(results) => {
-                        if self.ui.search.is_active() {
-                            debug!("completion: {} results", results.len());
-                            self.ui.search.set_completions(results);
                         }
                     }
                     GeoResponse::Reverse(place) => {
@@ -201,13 +193,6 @@ impl App {
     fn handle_key(&mut self, code: crossterm::event::KeyCode, modifiers: KeyModifiers) -> bool {
         if self.ui.search.is_active() {
             match self.ui.search.handle_key(code, modifiers) {
-                SearchAction::QueryChanged(query) => {
-                    if self.last_completion_request.elapsed() > Duration::from_millis(500) {
-                        self.last_completion_request = Instant::now();
-                        debug!("completion: querying '{}'", query);
-                        self.geocoder.complete(&query);
-                    }
-                }
                 SearchAction::Submit(query) => {
                     info!("geocode: searching '{}'", query);
                     self.geocoder.search(&query);
@@ -344,8 +329,10 @@ impl App {
         let state = self.core.render_request();
         self.render_handle.request_draw(state);
 
-        // Debounced reverse geocoding (1 second)
-        if self.last_reverse_request.elapsed() > Duration::from_secs(1) {
+        // Debounced reverse geocoding (5 seconds, skip during search)
+        if !self.ui.search.is_active()
+            && self.last_reverse_request.elapsed() > Duration::from_secs(5)
+        {
             self.last_reverse_request = Instant::now();
             let req = self.core.render_request();
             self.geocoder.reverse(req.center);
