@@ -49,8 +49,22 @@ impl WikiWidget {
         self.selected = 0;
     }
 
-    pub fn set_articles(&mut self, articles: Vec<WikiArticle>) {
-        self.articles = articles;
+    pub fn set_articles(&mut self, new_articles: Vec<WikiArticle>) {
+        let new_titles: std::collections::HashSet<String> =
+            new_articles.iter().map(|a| a.title.clone()).collect();
+
+        // Keep existing that are still in new set
+        self.articles.retain(|a| new_titles.contains(&a.title));
+
+        // Add new ones not already present
+        let existing_titles: std::collections::HashSet<String> =
+            self.articles.iter().map(|a| a.title.clone()).collect();
+        for article in new_articles {
+            if !existing_titles.contains(&article.title) {
+                self.articles.push(article);
+            }
+        }
+
         if self.selected >= self.articles.len() {
             self.selected = self.articles.len().saturating_sub(1);
         }
