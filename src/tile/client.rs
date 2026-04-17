@@ -37,13 +37,22 @@ impl TileClient {
             shutdown: AtomicBool::new(false),
         });
 
+        // Build one reqwest Client and share it across workers. Client holds
+        // the connection pool (HTTP keep-alive) and TLS context internally
+        // via Arc, so Clone is cheap and the pool is shared.
+        let http = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("reqwest client build");
+
         let mut workers = Vec::with_capacity(NUM_WORKERS);
         for _ in 0..NUM_WORKERS {
             let shared = shared.clone();
             let source_url = source_url.clone();
             let tx = tx.clone();
+            let http = http.clone();
             workers.push(thread::spawn(move || {
-                worker_loop(&shared, &source_url, &tx);
+                worker_loop(&shared, &source_url, &tx, &http);
             }));
         }
 
@@ -104,7 +113,12 @@ impl Drop for TileClient {
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
-fn worker_loop(shared: &SharedState, source_url: &str, tx: &mpsc::Sender<(TileKey, Vec<u8>)>) {
+fn worker_loop(
+    shared: &SharedState,
+    source_url: &str,
+    tx: &mpsc::Sender<(TileKey, Vec<u8>)>,
+    http: &reqwest::blocking::Client,
+) {
     loop {
         let key = {
             let mut queue = shared.queue.lock().unwrap();
@@ -128,7 +142,7 @@ fn worker_loop(shared: &SharedState, source_url: &str, tx: &mpsc::Sender<(TileKe
         // HTTP fetch
         let url = format!("{}/{}.pbf", source_url, key);
         debug!("worker: fetching {}", url);
-        let bytes = fetch_http(&url);
+        let bytes = fetch_http(http, &url);
 
         // Remove from in-flight
         shared.in_flight.lock().unwrap().remove(&key);
@@ -143,11 +157,7 @@ fn worker_loop(shared: &SharedState, source_url: &str, tx: &mpsc::Sender<(TileKe
     }
 }
 
-fn fetch_http(url: &str) -> Option<Vec<u8>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .ok()?;
+fn fetch_http(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
     let response = match client.get(url).send() {
         Ok(r) => r,
         Err(e) => {
