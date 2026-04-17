@@ -9,6 +9,13 @@ pub struct Canvas {
     height: usize,
     buffer: BrailleBuffer,
     labels: LabelBuffer,
+    // Scratch buffers reused across polygon() / filled_triangle() calls
+    // to avoid per-triangle / per-polygon heap allocations.
+    scratch_edge_pixels: Vec<(i32, i32)>,
+    scratch_vertices: Vec<[f64; 2]>,
+    scratch_hole_indices: Vec<usize>,
+    scratch_indices: Vec<usize>,
+    earcut: earcut::Earcut<f64>,
 }
 
 impl Canvas {
@@ -18,6 +25,11 @@ impl Canvas {
             height,
             buffer: BrailleBuffer::new(width, height),
             labels: LabelBuffer::new(),
+            scratch_edge_pixels: Vec::new(),
+            scratch_vertices: Vec::new(),
+            scratch_hole_indices: Vec::new(),
+            scratch_indices: Vec::new(),
+            earcut: earcut::Earcut::new(),
         }
     }
 
@@ -69,21 +81,21 @@ impl Canvas {
             return;
         }
 
-        // Collect vertices as [f64; 2] and hole indices
-        let mut vertices: Vec<[f64; 2]> = Vec::new();
-        let mut hole_indices: Vec<usize> = Vec::new();
+        self.scratch_vertices.clear();
+        self.scratch_hole_indices.clear();
+        self.scratch_indices.clear();
 
         for &(x, y) in &rings[0] {
-            vertices.push([x as f64, y as f64]);
+            self.scratch_vertices.push([x as f64, y as f64]);
         }
 
         for ring in &rings[1..] {
             if ring.len() < 3 {
                 continue;
             }
-            hole_indices.push(vertices.len());
+            self.scratch_hole_indices.push(self.scratch_vertices.len());
             for &(x, y) in ring {
-                vertices.push([x as f64, y as f64]);
+                self.scratch_vertices.push([x as f64, y as f64]);
             }
         }
 
@@ -92,30 +104,39 @@ impl Canvas {
         // Suppress panic hook output to avoid noise on stderr.
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(|| {
-            let mut earcut = earcut::Earcut::new();
-            let mut indices: Vec<usize> = Vec::new();
-            earcut.earcut(vertices.iter().copied(), &hole_indices, &mut indices);
-            indices
-        });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.earcut.earcut(
+                self.scratch_vertices.iter().copied(),
+                &self.scratch_hole_indices,
+                &mut self.scratch_indices,
+            );
+        }));
         std::panic::set_hook(prev_hook);
-        let indices = match result {
-            Ok(idx) => idx,
-            Err(_) => return, // skip polygon on earcut panic
-        };
+        if result.is_err() {
+            return;
+        }
 
-        if indices.is_empty() {
+        if self.scratch_indices.is_empty() {
             return;
         }
 
         let mut i = 0;
-        while i + 2 < indices.len() {
-            let ia = indices[i];
-            let ib = indices[i + 1];
-            let ic = indices[i + 2];
-            let a = [vertices[ia][0] as i32, vertices[ia][1] as i32];
-            let b = [vertices[ib][0] as i32, vertices[ib][1] as i32];
-            let c = [vertices[ic][0] as i32, vertices[ic][1] as i32];
+        while i + 2 < self.scratch_indices.len() {
+            let ia = self.scratch_indices[i];
+            let ib = self.scratch_indices[i + 1];
+            let ic = self.scratch_indices[i + 2];
+            let a = [
+                self.scratch_vertices[ia][0] as i32,
+                self.scratch_vertices[ia][1] as i32,
+            ];
+            let b = [
+                self.scratch_vertices[ib][0] as i32,
+                self.scratch_vertices[ib][1] as i32,
+            ];
+            let c = [
+                self.scratch_vertices[ic][0] as i32,
+                self.scratch_vertices[ic][1] as i32,
+            ];
             self.filled_triangle(a, b, c, color);
             i += 3;
         }
@@ -243,35 +264,38 @@ impl Canvas {
     }
 
     fn filled_triangle(&mut self, a: [i32; 2], b: [i32; 2], c: [i32; 2], color: u8) {
-        let mut edge_pixels: Vec<(i32, i32)> = Vec::new();
+        self.scratch_edge_pixels.clear();
 
         for pair in [(&a, &b), (&b, &c), (&c, &a)] {
             if let Some((cx0, cy0, cx1, cy1)) =
                 self.clip_line(pair.0[0], pair.0[1], pair.1[0], pair.1[1])
             {
-                edge_pixels.extend(BresenhamIter::new(cx0, cy0, cx1, cy1));
+                self.scratch_edge_pixels
+                    .extend(BresenhamIter::new(cx0, cy0, cx1, cy1));
             }
         }
 
-        if edge_pixels.is_empty() {
+        if self.scratch_edge_pixels.is_empty() {
             return;
         }
 
         let h = self.height as i32;
         let w = self.width as i32;
-        edge_pixels.retain(|p| p.1 >= 0 && p.1 < h);
-        edge_pixels.sort_by(|p1, p2| p1.1.cmp(&p2.1).then(p1.0.cmp(&p2.0)));
+        self.scratch_edge_pixels.retain(|p| p.1 >= 0 && p.1 < h);
+        self.scratch_edge_pixels
+            .sort_by(|p1, p2| p1.1.cmp(&p2.1).then(p1.0.cmp(&p2.0)));
 
+        // scratch_edge_pixels is sorted by (y asc, x asc) above, so within each
+        // same-y run the first and last entries are already the min/max x.
         let mut i = 0;
-        while i < edge_pixels.len() {
-            let y = edge_pixels[i].1;
+        while i < self.scratch_edge_pixels.len() {
+            let y = self.scratch_edge_pixels[i].1;
             let start = i;
-            while i < edge_pixels.len() && edge_pixels[i].1 == y {
+            while i < self.scratch_edge_pixels.len() && self.scratch_edge_pixels[i].1 == y {
                 i += 1;
             }
-            let row = &edge_pixels[start..i];
-            let min_x = row.iter().map(|p| p.0).min().unwrap().max(0);
-            let max_x = row.iter().map(|p| p.0).max().unwrap().min(w - 1);
+            let min_x = self.scratch_edge_pixels[start].0.max(0);
+            let max_x = self.scratch_edge_pixels[i - 1].0.min(w - 1);
             for x in min_x..=max_x {
                 self.buffer.set_pixel(x as usize, y as usize, color);
             }

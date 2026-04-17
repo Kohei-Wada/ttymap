@@ -176,7 +176,7 @@ impl Renderer {
 
         match feature.style_type {
             StyleType::Line => {
-                for ring in &feature.points {
+                for ring in feature.points.iter() {
                     let pts = self.scale_ring(vis, ring, scale, true);
                     if pts.len() >= 2 {
                         self.canvas.polyline(&pts, feature.color);

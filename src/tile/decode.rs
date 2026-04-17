@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::Arc;
 
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
@@ -24,11 +25,10 @@ pub struct Point {
 
 #[derive(Debug, Clone)]
 pub struct Feature {
-    pub layer: String,
     pub style_type: StyleType,
     pub label: Option<String>,
     pub sort: i64,
-    pub points: Vec<Vec<Point>>,
+    pub points: Arc<Vec<Vec<Point>>>,
     pub color: u8,
     pub min_zoom: Option<f64>,
     pub max_zoom: Option<f64>,
@@ -268,24 +268,16 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
         }
     };
 
-    let mut layers: HashMap<String, Vec<Feature>> = HashMap::new();
-    let mut extents: HashMap<String, u32> = HashMap::new();
+    let mut decoded_layers: HashMap<String, TileLayer> = HashMap::new();
 
     for layer in &tile.layers {
-        let layer_name = layer.name.clone();
         let extent = layer.extent.unwrap_or(4096);
-        extents.insert(layer_name.clone(), extent);
-
-        let keys: Vec<String> = layer.keys.clone();
-        let values: Vec<proto::tile::Value> = layer.values.clone();
+        let mut feats: Vec<Feature> = Vec::new();
 
         for feature in &layer.features {
-            // Decode tags
-            let mut props = decode_tags(&feature.tags, &keys, &values);
+            let mut props = decode_tags(&feature.tags, &layer.keys, &layer.values);
 
-            // Add $type pseudo-property
-            let geom_type_int = feature.r#type.unwrap_or(0);
-            let type_str = match geom_type_int {
+            let type_str = match feature.r#type.unwrap_or(0) {
                 1 => "Point",
                 2 => "LineString",
                 3 => "Polygon",
@@ -296,60 +288,43 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
                 PropertyValue::String(type_str.to_string()),
             );
 
-            // Get style
-            let style = match styler.get_style_for(&layer_name, &props) {
+            let style = match styler.get_style_for(&layer.name, &props) {
                 Some(s) => s,
                 None => continue,
             };
 
-            let style_type = style.style_type;
-            let color = style.color;
-            let min_zoom = style.min_zoom;
-            let max_zoom = style.max_zoom;
-
-            // Decode geometry
             let points = decode_geometry(&feature.geometry);
             if points.is_empty() {
                 continue;
             }
 
-            // Extract label for symbols
-            let label = if style_type == StyleType::Symbol {
+            let label = if style.style_type == StyleType::Symbol {
                 extract_label(&props, language)
             } else {
                 None
             };
-
-            // Extract sort
             let sort = extract_sort(&props);
-
-            // Calculate bounds
             let (min_x, max_x, min_y, max_y) = calculate_bounds(&points);
 
-            let feat = Feature {
-                layer: layer_name.clone(),
-                style_type,
+            feats.push(Feature {
+                style_type: style.style_type,
                 label,
                 sort,
-                points,
-                color,
-                min_zoom,
-                max_zoom,
+                points: Arc::new(points),
+                color: style.color,
+                min_zoom: style.min_zoom,
+                max_zoom: style.max_zoom,
                 min_x,
                 max_x,
                 min_y,
                 max_y,
-            };
-
-            layers.entry(layer_name.clone()).or_default().push(feat);
+            });
         }
-    }
 
-    let mut decoded_layers: HashMap<String, TileLayer> = HashMap::new();
-    for (name, feats) in layers {
-        let extent = *extents.get(&name).unwrap_or(&4096);
-        let tree = RTree::bulk_load(feats);
-        decoded_layers.insert(name, TileLayer { extent, tree });
+        if !feats.is_empty() {
+            let tree = RTree::bulk_load(feats);
+            decoded_layers.insert(layer.name.clone(), TileLayer { extent, tree });
+        }
     }
 
     DecodedTile {
