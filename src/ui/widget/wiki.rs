@@ -24,6 +24,10 @@ pub struct WikiWidget {
     active: bool,
     articles: Vec<WikiArticle>,
     selected: usize,
+    /// `Some` while a detail view is open. Holds a snapshot of the article
+    /// being viewed so it survives even if the candidate list is refreshed
+    /// (e.g. after the map panned and new nearby articles loaded).
+    detail: Option<WikiArticle>,
 }
 
 impl Default for WikiWidget {
@@ -38,6 +42,7 @@ impl WikiWidget {
             active: false,
             articles: Vec::new(),
             selected: 0,
+            detail: None,
         }
     }
 
@@ -45,9 +50,14 @@ impl WikiWidget {
         self.active
     }
 
+    pub fn is_detail_open(&self) -> bool {
+        self.detail.is_some()
+    }
+
     pub fn toggle(&mut self) {
         self.active = !self.active;
         self.selected = 0;
+        self.detail = None;
     }
 
     pub fn set_articles(&mut self, new_articles: Vec<WikiArticle>) {
@@ -82,23 +92,60 @@ impl WikiWidget {
         let down = (ctrl && matches!(code, KeyCode::Char('j') | KeyCode::Char('n')))
             || code == KeyCode::Down;
 
-        if code == KeyCode::Enter {
-            if let Some(article) = self.articles.get(self.selected) {
-                return WikiAction::JumpTo(LonLat {
+        // ── Detail mode ─────────────────────────────────────────────────
+        if self.detail.is_some() {
+            if matches!(code, KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter) {
+                self.detail = None;
+                return WikiAction::None;
+            }
+            if up || down {
+                if up {
+                    self.selected = if self.selected == 0 {
+                        self.articles.len() - 1
+                    } else {
+                        self.selected - 1
+                    };
+                } else {
+                    self.selected = (self.selected + 1) % self.articles.len();
+                }
+                let article = self.articles[self.selected].clone();
+                let loc = LonLat {
                     lat: article.lat,
                     lon: article.lon,
-                });
+                };
+                self.detail = Some(article);
+                return WikiAction::JumpTo(loc);
             }
-        } else if up {
-            // Wrap around: top → bottom.
-            self.selected = if self.selected == 0 {
-                self.articles.len() - 1
+            return WikiAction::None;
+        }
+
+        // ── List mode ───────────────────────────────────────────────────
+        if code == KeyCode::Enter {
+            if let Some(article) = self.articles.get(self.selected) {
+                let loc = LonLat {
+                    lat: article.lat,
+                    lon: article.lon,
+                };
+                self.detail = Some(article.clone());
+                return WikiAction::JumpTo(loc);
+            }
+        } else if up || down {
+            if up {
+                // Wrap around: top → bottom.
+                self.selected = if self.selected == 0 {
+                    self.articles.len() - 1
+                } else {
+                    self.selected - 1
+                };
             } else {
-                self.selected - 1
-            };
-        } else if down {
-            // Wrap around: bottom → top.
-            self.selected = (self.selected + 1) % self.articles.len();
+                // Wrap around: bottom → top.
+                self.selected = (self.selected + 1) % self.articles.len();
+            }
+            let article = &self.articles[self.selected];
+            return WikiAction::JumpTo(LonLat {
+                lat: article.lat,
+                lon: article.lon,
+            });
         }
 
         WikiAction::None
@@ -121,7 +168,24 @@ impl WikiWidget {
         let area = Rect::new(x, y, panel_width, panel_height);
         f.render_widget(Clear, area);
 
-        let block = theme.panel("wiki (Enter: jump)");
+        let content_width = (panel_width as usize).saturating_sub(4).max(10);
+
+        if let Some(ref article) = self.detail {
+            self.render_detail(f, area, content_width, article, theme);
+        } else {
+            self.render_list(f, area, panel_height, content_width, theme);
+        }
+    }
+
+    fn render_list(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        panel_height: u16,
+        content_width: usize,
+        theme: &Theme,
+    ) {
+        let block = theme.panel("wiki (Enter: open)");
 
         if self.articles.is_empty() {
             let widget = Paragraph::new("  Loading...")
@@ -131,9 +195,7 @@ impl WikiWidget {
             return;
         }
 
-        let content_width = (panel_width as usize).saturating_sub(4).max(10);
         let sep = "─".repeat(content_width);
-
         let mut lines: Vec<Line> = Vec::new();
         let mut selected_top: u16 = 0;
         let mut selected_height: u16 = 1;
@@ -192,6 +254,48 @@ impl WikiWidget {
             .style(theme.text())
             .block(block)
             .scroll((scroll, 0));
+        f.render_widget(widget, area);
+    }
+
+    fn render_detail(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        content_width: usize,
+        article: &WikiArticle,
+        theme: &Theme,
+    ) {
+        let block = theme.panel("wiki (Esc: back)");
+        let dist = crate::geo::format_distance(article.dist_m);
+        let coords = format!("{:.3}, {:.3}", article.lat, article.lon);
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(Span::styled(
+            &article.title,
+            Style::default().fg(theme.accent_alt),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(dist, theme.muted()),
+            Span::styled("  ", theme.muted()),
+            Span::styled(coords, theme.muted()),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(content_width),
+            Style::default().fg(theme.muted_color),
+        )));
+
+        if article.extract.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "(no summary available)",
+                theme.muted(),
+            )));
+        } else {
+            for wrapped in wrap_to_width(&article.extract, content_width) {
+                lines.push(Line::from(Span::styled(wrapped, theme.text())));
+            }
+        }
+
+        let widget = Paragraph::new(lines).style(theme.text()).block(block);
         f.render_widget(widget, area);
     }
 

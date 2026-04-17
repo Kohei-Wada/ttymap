@@ -96,7 +96,7 @@ impl WikipediaClient {
         let titles_param = titles.join("|");
         let url = format!(
             "https://{}.wikipedia.org/w/api.php?action=query&prop=extracts\
-             &exintro=1&explaintext=1&exsentences=2&titles={}&format=json",
+             &exintro=1&explaintext=1&exsentences=5&titles={}&format=json",
             self.language,
             urlencoded(&titles_param),
         );

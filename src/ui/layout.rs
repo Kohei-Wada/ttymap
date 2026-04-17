@@ -80,13 +80,22 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     } else if ui.help.is_active() {
         vec![("any key", "close")]
     } else if ui.wiki.is_active() {
-        vec![
-            ("C-n/C-p", "select"),
-            ("Enter", "jump"),
-            ("i", "close wiki"),
-            ("/", "search"),
-            ("?", "help"),
-        ]
+        if ui.wiki.is_detail_open() {
+            vec![
+                ("C-n/C-p", "prev/next"),
+                ("Enter/Esc", "back"),
+                ("i", "close wiki"),
+                ("?", "help"),
+            ]
+        } else {
+            vec![
+                ("C-n/C-p", "select"),
+                ("Enter", "open"),
+                ("i", "close wiki"),
+                ("/", "search"),
+                ("?", "help"),
+            ]
+        }
     } else {
         vec![
             ("hjkl", "pan"),
