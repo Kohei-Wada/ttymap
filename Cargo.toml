@@ -9,7 +9,7 @@ ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 flate2 = "1"
-prost = "0.13"
+prost = "0.14"
 rstar = "0.12"
 earcut = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -25,7 +25,5 @@ default-features = false
 features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy"]
 
 [build-dependencies]
-prost-build = "0.13"
-prost = "0.13"
-prost-types = "0.13"
+prost-build = "0.14"
 protox = "0.9"
