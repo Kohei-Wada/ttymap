@@ -37,7 +37,7 @@ impl Default for Config {
             zoom_step: 0.2,
             cache_tiles: true,
             language: "en".to_string(),
-            wiki_limit: 10,
+            wiki_limit: 50,
             keymap: KeyMap::default(),
         }
     }
