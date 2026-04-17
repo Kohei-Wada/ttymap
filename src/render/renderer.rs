@@ -115,54 +115,46 @@ impl Renderer {
 
     // ── Feature drawing ───────────────────────────────────────────────────
 
-    fn scale_and_clip(&self, vis: &VisibleTile, ring: &[Point], scale: f64) -> Vec<(i32, i32)> {
+    fn scale_ring(
+        &self,
+        vis: &VisibleTile,
+        ring: &[Point],
+        scale: f64,
+        clip: bool,
+    ) -> Vec<(i32, i32)> {
         let pad = super::VIEWPORT_PADDING;
         let min_x = -pad;
         let min_y = -pad;
         let max_x = self.width as i32 + pad;
         let max_y = self.height as i32 + pad;
 
-        let mut result = Vec::new();
-        let mut last_x = i32::MIN;
-        let mut last_y = i32::MIN;
-        let mut outside = false;
-
-        for p in ring {
-            let sx = (vis.pos_x + p.x as f64 / scale) as i32;
-            let sy = (vis.pos_y + p.y as f64 / scale) as i32;
-
-            if sx == last_x && sy == last_y {
-                continue;
-            }
-            last_x = sx;
-            last_y = sy;
-
-            if sx < min_x || sx > max_x || sy < min_y || sy > max_y {
-                if outside {
-                    continue;
-                }
-                outside = true;
-            } else if outside {
-                outside = false;
-                result.push((last_x, last_y));
-            }
-            result.push((sx, sy));
-        }
-        result
-    }
-
-    fn scale_points(&self, vis: &VisibleTile, ring: &[Point], scale: f64) -> Vec<(i32, i32)> {
         let mut result = Vec::with_capacity(ring.len());
         let mut last = (i32::MIN, i32::MIN);
+        let mut outside = false;
+
         for p in ring {
             let pt = (
                 (vis.pos_x + p.x as f64 / scale) as i32,
                 (vis.pos_y + p.y as f64 / scale) as i32,
             );
-            if pt != last {
-                result.push(pt);
-                last = pt;
+            if pt == last {
+                continue;
             }
+            last = pt;
+
+            if clip {
+                let is_out = pt.0 < min_x || pt.0 > max_x || pt.1 < min_y || pt.1 > max_y;
+                if is_out {
+                    if outside {
+                        continue;
+                    }
+                    outside = true;
+                } else if outside {
+                    outside = false;
+                    result.push(last);
+                }
+            }
+            result.push(pt);
         }
         result
     }
@@ -185,7 +177,7 @@ impl Renderer {
         match feature.style_type {
             StyleType::Line => {
                 for ring in &feature.points {
-                    let pts = self.scale_and_clip(vis, ring, scale);
+                    let pts = self.scale_ring(vis, ring, scale, true);
                     if pts.len() >= 2 {
                         self.canvas.polyline(&pts, feature.color);
                     }
@@ -195,7 +187,7 @@ impl Renderer {
                 let rings: Vec<Vec<(i32, i32)>> = feature
                     .points
                     .iter()
-                    .map(|ring| self.scale_points(vis, ring, scale))
+                    .map(|ring| self.scale_ring(vis, ring, scale, false))
                     .filter(|r| r.len() >= 3)
                     .collect();
                 if rings.is_empty() {
