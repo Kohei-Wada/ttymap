@@ -266,17 +266,31 @@ impl App {
                 }
                 WikiAction::None => {}
             }
-            // Consume Ctrl-j/k/n/p and arrow keys when wiki is active
+            // Manual refresh at the current map center.
+            if code == KeyCode::Char('r') {
+                self.fetch_wiki();
+                return true;
+            }
+            // Consume navigation / widget-control keys so they don't fall
+            // through to the global keymap. Enter/Esc/Backspace may have
+            // toggled the detail view inside the widget — they need to
+            // return `true` here so the main loop redraws.
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-            if matches!(code, KeyCode::Up | KeyCode::Down)
-                || (ctrl
-                    && matches!(
-                        code,
-                        KeyCode::Char('j')
-                            | KeyCode::Char('k')
-                            | KeyCode::Char('n')
-                            | KeyCode::Char('p')
-                    ))
+            if matches!(
+                code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Enter
+                    | KeyCode::Esc
+                    | KeyCode::Backspace
+            ) || (ctrl
+                && matches!(
+                    code,
+                    KeyCode::Char('j')
+                        | KeyCode::Char('k')
+                        | KeyCode::Char('n')
+                        | KeyCode::Char('p')
+                ))
             {
                 return true;
             }
@@ -371,10 +385,9 @@ impl App {
             self.geocoder.reverse(req.center);
         }
 
-        // Refresh wiki if panel is open
-        if self.ui.wiki.is_active() {
-            self.fetch_wiki();
-        }
+        // NOTE: wiki is intentionally NOT refreshed here. Google-Maps-style,
+        // the list stays pinned to the query that produced it; use `r` to
+        // re-fetch at the current map center.
     }
 
     fn draw_terminal(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {

@@ -84,6 +84,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
             vec![
                 ("C-n/C-p", "prev/next"),
                 ("Enter/Esc", "back"),
+                ("r", "refresh"),
                 ("i", "close wiki"),
                 ("?", "help"),
             ]
@@ -91,6 +92,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
             vec![
                 ("C-n/C-p", "select"),
                 ("Enter", "open"),
+                ("r", "refresh"),
                 ("i", "close wiki"),
                 ("/", "search"),
                 ("?", "help"),
