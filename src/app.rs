@@ -194,10 +194,8 @@ impl App {
                             .request_resize(self.core.width(), self.core.height());
                         self.request_draw();
                     }
-                    Event::Mouse(mouse) => {
-                        if self.handle_mouse(mouse) {
-                            self.request_draw();
-                        }
+                    Event::Mouse(mouse) if self.handle_mouse(mouse) => {
+                        self.request_draw();
                     }
                     _ => {}
                 }
