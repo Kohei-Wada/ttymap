@@ -33,7 +33,7 @@ struct Cli {
     #[arg(long, short)]
     zoom: Option<f64>,
 
-    /// Mapbox GL style JSON file path
+    /// Style preset (dark, bright)
     #[arg(long)]
     style: Option<String>,
 
@@ -82,7 +82,10 @@ fn main() {
         config.source = v;
     }
     if let Some(v) = cli.style {
-        config.style_file = v;
+        config.style_preset = match v.as_str() {
+            "bright" => termap::styler::StylePreset::Bright,
+            _ => termap::styler::StylePreset::Dark,
+        };
     }
 
     log::info!(

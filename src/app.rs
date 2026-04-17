@@ -10,9 +10,10 @@ use crate::core::input::InputHandler;
 use crate::core::{Action, Config, Core};
 use crate::geocode::{GeoResponse, Geocoder};
 use crate::nominatim::SearchResult;
+use crate::palette;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
-use crate::styler::Styler;
+use crate::styler::{StylePreset, Styler};
 use crate::ui::UiState;
 use crate::ui::layout;
 use crate::ui::widget::search::SearchAction;
@@ -37,18 +38,7 @@ pub struct App {
 
 impl App {
     pub fn new(mut config: Config) -> Self {
-        let style_json: serde_json::Value = if config.style_file.is_empty() {
-            let default_style = include_str!("../styles/dark.json");
-            serde_json::from_str(default_style)
-                .unwrap_or(serde_json::json!({ "name": "dark", "layers": [] }))
-        } else {
-            let content = std::fs::read_to_string(&config.style_file)
-                .unwrap_or_else(|_| include_str!("../styles/dark.json").to_string());
-            serde_json::from_str(&content)
-                .unwrap_or(serde_json::json!({ "name": "dark", "layers": [] }))
-        };
-
-        let styler = Arc::new(Styler::from_json(&style_json));
+        let styler = Arc::new(Styler::new(config.style_preset));
         let language = config.language.clone();
         let wiki_language = language.clone();
         let wiki_limit = config.wiki_limit;
@@ -69,12 +59,16 @@ impl App {
             width,
             height,
         );
+        let p = match config.style_preset {
+            StylePreset::Dark => &palette::DARK,
+            StylePreset::Bright => &palette::BRIGHT,
+        };
+        let mut ui = UiState::new(p);
+
         let keymap = std::mem::take(&mut config.keymap);
         let input = InputHandler::new(keymap);
         let core = Core::new(config, width, height);
         let render_handle = RenderHandle::spawn(pipeline);
-
-        let mut ui = UiState::new();
         ui.help.build(input.keymap());
 
         let (wiki_tx, wiki_rx) = std::sync::mpsc::channel();

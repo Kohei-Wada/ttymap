@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::geo::LonLat;
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 use crate::wikipedia::WikiArticle;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +97,7 @@ impl WikiWidget {
         WikiAction::None
     }
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect) {
+    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if !self.active || map_inner.width < 30 || map_inner.height < 6 {
             return;
         }
@@ -114,11 +114,11 @@ impl WikiWidget {
         let area = Rect::new(x, y, panel_width, panel_height);
         f.render_widget(Clear, area);
 
-        let block = theme::panel("wiki (Enter: jump)");
+        let block = theme.panel("wiki (Enter: jump)");
 
         if self.articles.is_empty() {
             let widget = Paragraph::new("  Loading...")
-                .style(theme::muted())
+                .style(theme.muted())
                 .block(block);
             f.render_widget(widget, area);
             return;
@@ -130,19 +130,19 @@ impl WikiWidget {
             if i > 0 {
                 lines.push(Line::from(Span::styled(
                     &sep,
-                    Style::default().fg(theme::MUTED),
+                    Style::default().fg(theme.muted_color),
                 )));
             }
             let is_selected = i == self.selected;
             let dist = crate::geo::format_distance(article.dist_m);
             let title_style = if is_selected {
-                Style::default().fg(theme::ACCENT_ALT)
+                Style::default().fg(theme.accent_alt)
             } else {
-                theme::accent()
+                theme.accent_style()
             };
             lines.push(Line::from(vec![
                 Span::styled(&article.title, title_style),
-                Span::styled(format!("  {}", dist), theme::muted()),
+                Span::styled(format!("  {}", dist), theme.muted()),
             ]));
             if !article.extract.is_empty() {
                 let max_chars = (panel_width as usize - 4) * 2;
@@ -152,7 +152,7 @@ impl WikiWidget {
                 } else {
                     text
                 };
-                lines.push(Line::from(Span::styled(text, theme::text())));
+                lines.push(Line::from(Span::styled(text, theme.text())));
             }
         }
 
@@ -169,7 +169,7 @@ impl WikiWidget {
         };
 
         let widget = Paragraph::new(lines)
-            .style(theme::text())
+            .style(theme.text())
             .block(block)
             .wrap(Wrap { trim: true })
             .scroll((scroll, 0));

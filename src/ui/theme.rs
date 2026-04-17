@@ -1,39 +1,51 @@
-//! UI color constants and widget helpers — matched to the map's dark style.
+//! UI theme — converts palette u8 values to ratatui styles.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 
-pub const ACCENT: Color = Color::Yellow;
-pub const ACCENT_ALT: Color = Color::Cyan;
-pub const FG: Color = Color::White;
-pub const MUTED: Color = Color::DarkGray;
-pub const BG: Color = Color::Indexed(16); // #000 — same as map background
+use crate::palette::Palette;
 
-/// Standard panel block with border and title.
-pub fn panel(title: &str) -> Block<'_> {
-    Block::new()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT).bg(BG))
-        .title(format!(" {} ", title))
-        .style(Style::default().bg(BG))
+/// Computed UI theme from a Palette.
+pub struct Theme {
+    pub accent: Color,
+    pub accent_alt: Color,
+    pub fg: Color,
+    pub muted_color: Color,
+    pub bg: Color,
 }
 
-/// Primary text style (fg on bg).
-pub fn text() -> Style {
-    Style::default().fg(FG).bg(BG)
-}
+impl Theme {
+    pub fn from_palette(p: &Palette) -> Self {
+        Self {
+            accent: Color::Indexed(p.accent),
+            accent_alt: Color::Indexed(p.accent_alt),
+            fg: Color::Indexed(p.fg),
+            muted_color: Color::Indexed(p.muted),
+            bg: Color::Indexed(p.background),
+        }
+    }
 
-/// Muted text style.
-pub fn muted() -> Style {
-    Style::default().fg(MUTED).bg(BG)
-}
+    pub fn panel<'a>(&self, title: &'a str) -> Block<'a> {
+        Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(self.accent).bg(self.bg))
+            .title(format!(" {} ", title))
+            .style(Style::default().bg(self.bg))
+    }
 
-/// Accent text style.
-pub fn accent() -> Style {
-    Style::default().fg(ACCENT)
-}
+    pub fn text(&self) -> Style {
+        Style::default().fg(self.fg).bg(self.bg)
+    }
 
-/// Highlighted/selected text style.
-pub fn selected() -> Style {
-    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    pub fn muted(&self) -> Style {
+        Style::default().fg(self.muted_color).bg(self.bg)
+    }
+
+    pub fn accent_style(&self) -> Style {
+        Style::default().fg(self.accent)
+    }
+
+    pub fn selected(&self) -> Style {
+        Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
+    }
 }

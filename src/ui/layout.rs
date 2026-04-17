@@ -8,7 +8,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
-use super::theme;
 
 /// Draw the full screen.
 pub fn draw(f: &mut Frame, ui: &UiState) {
@@ -20,9 +19,9 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     // Map area with border
     let map_focused = !ui.search.is_active();
     let border_color = if map_focused {
-        theme::ACCENT
+        ui.theme.accent
     } else {
-        theme::MUTED
+        ui.theme.muted_color
     };
     let map_block = Block::new()
         .borders(Borders::ALL)
@@ -35,20 +34,20 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     }
 
     // Info overlay
-    ui.info.render(f, map_inner);
+    ui.info.render(f, map_inner, &ui.theme);
 
     // Wiki panel
-    ui.wiki.render(f, map_inner);
+    ui.wiki.render(f, map_inner, &ui.theme);
 
     // Search overlay
-    ui.search.render(f, map_inner);
+    ui.search.render(f, map_inner, &ui.theme);
 
     // Help overlay
-    ui.help.render(f, map_inner);
+    ui.help.render(f, map_inner, &ui.theme);
 
     // Footer: context-sensitive key hints
     let hints = build_hints(ui);
-    let sep = Span::styled("  ", Style::default().fg(theme::MUTED));
+    let sep = Span::styled("  ", Style::default().fg(ui.theme.muted_color));
     let mut spans: Vec<Span> = Vec::new();
     for (i, (key, desc)) in hints.iter().enumerate() {
         if i > 0 {
@@ -56,11 +55,11 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         }
         spans.push(Span::styled(
             format!(" {} ", key),
-            Style::default().fg(theme::BG).bg(theme::ACCENT),
+            Style::default().fg(ui.theme.bg).bg(ui.theme.accent),
         ));
         spans.push(Span::styled(
             format!(" {}", desc),
-            Style::default().fg(theme::MUTED),
+            Style::default().fg(ui.theme.muted_color),
         ));
     }
     let footer = Paragraph::new(Line::from(spans));

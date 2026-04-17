@@ -5,7 +5,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 
 pub struct InfoWidget {
     coords: String,
@@ -41,15 +41,15 @@ impl InfoWidget {
         self.scale_width = width;
     }
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect) {
+    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if map_inner.width < 4 || map_inner.height < 1 {
             return;
         }
-        self.render_top_right(f, map_inner);
-        self.render_scale_bar(f, map_inner);
+        self.render_top_right(f, map_inner, theme);
+        self.render_scale_bar(f, map_inner, theme);
     }
 
-    fn render_top_right(&self, f: &mut Frame, area: Rect) {
+    fn render_top_right(&self, f: &mut Frame, area: Rect, theme: &Theme) {
         let mut lines = Vec::new();
         if !self.coords.is_empty() {
             lines.push(self.coords.clone());
@@ -72,12 +72,12 @@ impl InfoWidget {
         let overlay = Rect::new(area.right().saturating_sub(width), area.y, width, height);
         f.render_widget(Clear, overlay);
         let widget = Paragraph::new(lines.join("\n"))
-            .style(Style::default().fg(theme::ACCENT).bg(theme::BG))
+            .style(Style::default().fg(theme.accent).bg(theme.bg))
             .alignment(Alignment::Right);
         f.render_widget(widget, overlay);
     }
 
-    fn render_scale_bar(&self, f: &mut Frame, area: Rect) {
+    fn render_scale_bar(&self, f: &mut Frame, area: Rect, theme: &Theme) {
         if self.scale_width == 0 || area.height < 2 {
             return;
         }
@@ -97,7 +97,7 @@ impl InfoWidget {
         );
         f.render_widget(Clear, overlay);
         let widget = Paragraph::new(bar)
-            .style(Style::default().fg(theme::ACCENT).bg(theme::BG))
+            .style(Style::default().fg(theme.accent).bg(theme.bg))
             .alignment(Alignment::Right);
         f.render_widget(widget, overlay);
     }

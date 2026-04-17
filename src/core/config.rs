@@ -9,10 +9,11 @@ use serde::Deserialize;
 
 use super::input::Action;
 use super::keymap::{KeyMap, parse_key_binding};
+use crate::styler::StylePreset;
 
 pub struct Config {
     pub source: String,
-    pub style_file: String,
+    pub style_preset: StylePreset,
     pub initial_lat: f64,
     pub initial_lon: f64,
     pub initial_zoom: Option<f64>,
@@ -28,7 +29,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             source: "http://mapscii.me/".to_string(),
-            style_file: String::new(),
+            style_preset: StylePreset::Dark,
             initial_lat: 52.51298, // Berlin
             initial_lon: 13.42012,
             initial_zoom: None,
@@ -107,7 +108,10 @@ impl FileConfig {
             config.max_zoom = v;
         }
         if let Some(v) = &self.style {
-            config.style_file = v.clone();
+            config.style_preset = match v.as_str() {
+                "bright" => StylePreset::Bright,
+                _ => StylePreset::Dark,
+            };
         }
         if let Some(v) = self.cache_tiles {
             config.cache_tiles = v;

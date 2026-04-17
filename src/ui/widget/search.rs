@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 
 use crate::nominatim::SearchResult;
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchAction {
@@ -91,7 +91,7 @@ impl SearchWidget {
         }
     }
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect) {
+    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if !self.active || map_inner.width < 10 || map_inner.height < 3 { return; }
 
         let popup_width = (map_inner.width * 2 / 3).max(30).min(map_inner.width - 2);
@@ -108,31 +108,31 @@ impl SearchWidget {
         f.render_widget(Clear, popup_area);
 
         if self.has_candidates() {
-            self.render_candidates(f, popup_area);
+            self.render_candidates(f, popup_area, theme);
         } else {
-            self.render_input(f, popup_area);
+            self.render_input(f, popup_area, theme);
         }
     }
 
-    fn render_input(&self, f: &mut Frame, area: Rect) {
-        let block = theme::panel("search");
+    fn render_input(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+        let block = theme.panel("search");
         let widget = Paragraph::new(format!("/{}", self.query))
-            .style(theme::text())
+            .style(theme.text())
             .block(block);
         f.render_widget(widget, area);
     }
 
-    fn render_candidates(&self, f: &mut Frame, area: Rect) {
+    fn render_candidates(&self, f: &mut Frame, area: Rect, theme: &Theme) {
         let title = format!("search: {}", self.query);
-        let block = theme::panel(&title);
+        let block = theme.panel(&title);
 
         let items: Vec<ListItem> = self.candidates.iter()
             .enumerate()
             .map(|(i, result)| {
                 let style = if i == self.selected {
-                    theme::selected()
+                    theme.selected()
                 } else {
-                    theme::text()
+                    theme.text()
                 };
                 let prefix = if i == self.selected { "> " } else { "  " };
                 ListItem::new(format!("{}{}", prefix, result.name)).style(style)

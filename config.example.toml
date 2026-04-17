@@ -23,8 +23,8 @@
 # Enable disk tile cache (default: true)
 # cache_tiles = true
 
-# Style file path (Mapbox GL JSON)
-# style = "/path/to/styles/bright.json"
+# Style preset ("dark" or "bright")
+# style = "dark"
 
 # Key bindings
 # Notation: "h" (character), "Left" (special key), "C-d" (Ctrl+d)

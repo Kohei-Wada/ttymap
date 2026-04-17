@@ -8,7 +8,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::input::Action;
 use crate::core::keymap::KeyMap;
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 
 pub struct HelpWidget {
     active: bool,
@@ -85,7 +85,7 @@ impl HelpWidget {
         self.active = false;
     }
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect) {
+    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if !self.active || map_inner.width < 20 || map_inner.height < 10 {
             return;
         }
@@ -103,9 +103,9 @@ impl HelpWidget {
         let area = Rect::new(x, y, popup_width, popup_height);
         f.render_widget(Clear, area);
 
-        let block = theme::panel("help").title_alignment(Alignment::Center);
+        let block = theme.panel("help").title_alignment(Alignment::Center);
         let widget = Paragraph::new(self.text.as_str())
-            .style(theme::text())
+            .style(theme.text())
             .block(block);
         f.render_widget(widget, area);
     }

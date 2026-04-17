@@ -3,9 +3,10 @@ use std::io::Read;
 
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
-use serde_json::Value;
 
 use crate::styler::Styler;
+use crate::styler::StyleType;
+use crate::styler::filter::PropertyValue;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/vector_tile.rs"));
@@ -24,7 +25,7 @@ pub struct Point {
 #[derive(Debug, Clone)]
 pub struct Feature {
     pub layer: String,
-    pub style_type: String,
+    pub style_type: StyleType,
     pub label: Option<String>,
     pub sort: i64,
     pub points: Vec<Vec<Point>>,
@@ -132,7 +133,7 @@ fn decode_tags(
     tags: &[u32],
     keys: &[String],
     values: &[proto::tile::Value],
-) -> HashMap<String, Value> {
+) -> HashMap<String, PropertyValue> {
     let mut props = HashMap::new();
     let mut j = 0;
     while j + 1 < tags.len() {
@@ -149,47 +150,44 @@ fn decode_tags(
             None => continue,
         };
 
-        let json_val = proto_value_to_json(proto_val);
-        props.insert(key, json_val);
+        if let Some(pv) = proto_value_to_pv(proto_val) {
+            props.insert(key, pv);
+        }
     }
     props
 }
 
-fn proto_value_to_json(v: &proto::tile::Value) -> Value {
+fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
     if let Some(s) = &v.string_value {
-        return Value::String(s.clone());
+        return Some(PropertyValue::String(s.clone()));
     }
     if let Some(f) = v.float_value {
-        return Value::Number(
-            serde_json::Number::from_f64(f as f64).unwrap_or(serde_json::Number::from(0)),
-        );
+        return Some(PropertyValue::Number(f as f64));
     }
     if let Some(d) = v.double_value {
-        return Value::Number(
-            serde_json::Number::from_f64(d).unwrap_or(serde_json::Number::from(0)),
-        );
+        return Some(PropertyValue::Number(d));
     }
     if let Some(i) = v.int_value {
-        return Value::Number(serde_json::Number::from(i));
+        return Some(PropertyValue::Number(i as f64));
     }
     if let Some(u) = v.uint_value {
-        return Value::Number(serde_json::Number::from(u));
+        return Some(PropertyValue::Number(u as f64));
     }
     if let Some(s) = v.sint_value {
-        return Value::Number(serde_json::Number::from(s));
+        return Some(PropertyValue::Number(s as f64));
     }
     if let Some(b) = v.bool_value {
-        return Value::Bool(b);
+        return Some(PropertyValue::Bool(b));
     }
-    Value::Null
+    None
 }
 
 // ── Label extractor ────────────────────────────────────────────────────────────
 
-fn extract_label(props: &HashMap<String, Value>, language: &str) -> Option<String> {
+fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> Option<String> {
     let lang_key = format!("name_{}", language);
     for key in &[lang_key.as_str(), "name_en", "name", "house_num"] {
-        if let Some(Value::String(s)) = props.get(*key)
+        if let Some(PropertyValue::String(s)) = props.get(*key)
             && !s.is_empty()
         {
             return Some(s.clone());
@@ -200,11 +198,11 @@ fn extract_label(props: &HashMap<String, Value>, language: &str) -> Option<Strin
 
 // ── Sort value extractor ───────────────────────────────────────────────────────
 
-fn extract_sort(props: &HashMap<String, Value>) -> i64 {
+fn extract_sort(props: &HashMap<String, PropertyValue>) -> i64 {
     if let Some(v) = props.get("localrank").or_else(|| props.get("scalerank"))
-        && let Value::Number(n) = v
+        && let Some(n) = v.as_f64()
     {
-        return n.as_i64().unwrap_or(0);
+        return n as i64;
     }
     0
 }
@@ -293,7 +291,7 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
                 3 => "Polygon",
                 _ => "Unknown",
             };
-            props.insert("$type".to_string(), Value::String(type_str.to_string()));
+            props.insert("$type".to_string(), PropertyValue::String(type_str.to_string()));
 
             // Get style
             let style = match styler.get_style_for(&layer_name, &props) {
@@ -301,7 +299,7 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
                 None => continue,
             };
 
-            let style_type = style.style_type.clone();
+            let style_type = style.style_type;
             let color = style.color;
             let min_zoom = style.min_zoom;
             let max_zoom = style.max_zoom;
@@ -313,7 +311,7 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
             }
 
             // Extract label for symbols
-            let label = if style_type == "symbol" {
+            let label = if style_type == StyleType::Symbol {
                 extract_label(&props, language)
             } else {
                 None

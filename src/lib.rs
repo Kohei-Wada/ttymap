@@ -24,6 +24,9 @@ pub mod geo;
 /// File-based logging to XDG state directory.
 pub mod logging;
 
+/// Centralized color palette — xterm-256 indices for all themes.
+pub mod palette;
+
 /// Rendering pipeline — Braille buffer, canvas, clipping, render thread.
 pub mod render;
 

@@ -7,7 +7,7 @@ use log::debug;
 
 use super::canvas::Canvas;
 use super::frame::MapFrame;
-use crate::styler::Styler;
+use crate::styler::{StyleType, Styler};
 use crate::tile::{Feature, Point, VisibleTile};
 
 /// Pre-collected tile data ready for rendering.
@@ -76,7 +76,7 @@ impl Renderer {
         'outer: for td in tile_data {
             let tile_size = td.vis.size;
             for (_, features) in &td.layers {
-                for feature in features.iter().filter(|f| f.style_type != "symbol") {
+                for feature in features.iter().filter(|f| f.style_type != StyleType::Symbol) {
                     if std::time::Instant::now() > deadline {
                         debug!("draw: time budget exceeded");
                         break 'outer;
@@ -91,7 +91,7 @@ impl Renderer {
         for td in tile_data {
             for (_, features) in &td.layers {
                 for f in features {
-                    if f.style_type == "symbol" {
+                    if f.style_type == StyleType::Symbol {
                         symbols.push((&td.vis, f));
                     }
                 }
@@ -179,8 +179,8 @@ impl Renderer {
         let extent = 4096.0_f64;
         let scale = extent / scale_denom;
 
-        match feature.style_type.as_str() {
-            "line" => {
+        match feature.style_type {
+            StyleType::Line => {
                 for ring in &feature.points {
                     let pts = self.scale_and_clip(vis, ring, scale);
                     if pts.len() >= 2 {
@@ -188,7 +188,7 @@ impl Renderer {
                     }
                 }
             }
-            "fill" => {
+            StyleType::Fill => {
                 let rings: Vec<Vec<(i32, i32)>> = feature
                     .points
                     .iter()
@@ -203,7 +203,7 @@ impl Renderer {
                     self.canvas.polygon(&clipped, feature.color);
                 }
             }
-            "symbol" => {
+            StyleType::Symbol => {
                 if let Some(label) = &feature.label
                     && let Some(ring) = feature.points.first()
                     && let Some(pt) = ring.first()
@@ -216,7 +216,6 @@ impl Renderer {
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -226,8 +225,11 @@ impl Renderer {
         } else {
             vec![
                 "landuse",
+                "landuse_overlay",
                 "water",
+                "waterway",
                 "marine_label",
+                "aeroway",
                 "building",
                 "road",
                 "admin",
@@ -236,6 +238,7 @@ impl Renderer {
                 "water_label",
                 "place_label",
                 "rail_station_label",
+                "airport_label",
                 "poi_label",
                 "road_label",
                 "housenum_label",
@@ -257,14 +260,12 @@ mod tests {
     #[test]
     fn test_draw_order_high_zoom() {
         let order = Renderer::draw_order(5.0);
-        assert!(order.len() >= 14);
+        assert!(order.len() >= 18);
     }
 
     #[test]
     fn test_draw_empty_returns_none() {
-        let styler = Arc::new(Styler::from_json(
-            &serde_json::json!({"name":"t","layers":[]}),
-        ));
+        let styler = Arc::new(Styler::new(crate::styler::StylePreset::Dark));
         let mut renderer = Renderer::new(styler, 80, 40);
         assert!(renderer.draw(&[], 1.0).is_none());
     }
