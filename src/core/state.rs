@@ -110,7 +110,6 @@ impl Core {
             zoom: self.zoom,
             width: self.width,
             height: self.height,
-            language: self.config.language.clone(),
         }
     }
 

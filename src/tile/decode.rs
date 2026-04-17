@@ -129,12 +129,12 @@ fn decode_geometry(geometry: &[u32]) -> Vec<Vec<Point>> {
 
 // ── Tag decoder ────────────────────────────────────────────────────────────────
 
-fn decode_tags(
+fn decode_tags_into(
     tags: &[u32],
     keys: &[String],
     values: &[proto::tile::Value],
-) -> HashMap<String, PropertyValue> {
-    let mut props = HashMap::new();
+    props: &mut HashMap<String, PropertyValue>,
+) {
     let mut j = 0;
     while j + 1 < tags.len() {
         let key_idx = tags[j] as usize;
@@ -142,7 +142,7 @@ fn decode_tags(
         j += 2;
 
         let key = match keys.get(key_idx) {
-            Some(k) => k.clone(),
+            Some(k) => k,
             None => continue,
         };
         let proto_val = match values.get(val_idx) {
@@ -151,10 +151,9 @@ fn decode_tags(
         };
 
         if let Some(pv) = proto_value_to_pv(proto_val) {
-            props.insert(key, pv);
+            props.insert(key.clone(), pv);
         }
     }
-    props
 }
 
 fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
@@ -269,13 +268,17 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
     };
 
     let mut decoded_layers: HashMap<String, TileLayer> = HashMap::new();
+    // Reused across every feature in every layer to avoid per-feature
+    // HashMap allocations. Cleared at the top of each iteration.
+    let mut props: HashMap<String, PropertyValue> = HashMap::new();
 
     for layer in &tile.layers {
         let extent = layer.extent.unwrap_or(4096);
         let mut feats: Vec<Feature> = Vec::new();
 
         for feature in &layer.features {
-            let mut props = decode_tags(&feature.tags, &layer.keys, &layer.values);
+            props.clear();
+            decode_tags_into(&feature.tags, &layer.keys, &layer.values, &mut props);
 
             let type_str = match feature.r#type.unwrap_or(0) {
                 1 => "Point",
