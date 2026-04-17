@@ -2,7 +2,7 @@
 
 use log::debug;
 
-const USER_AGENT: &str = "termap/0.1.0";
+const USER_AGENT: &str = "ttymap/0.1.0";
 const TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]

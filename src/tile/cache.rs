@@ -58,7 +58,7 @@ impl TileCache {
         language: String,
     ) -> Self {
         let cache_dir = if enable_disk_cache {
-            ProjectDirs::from("", "", "termap").map(|proj_dirs| {
+            ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
                 let dir = proj_dirs.cache_dir().to_path_buf();
                 let _ = fs::create_dir_all(&dir);
                 dir

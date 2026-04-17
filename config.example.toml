@@ -1,5 +1,5 @@
-# termap configuration
-# Place this file at ~/.config/termap/config.toml
+# ttymap configuration
+# Place this file at ~/.config/ttymap/config.toml
 
 # Tile source URL
 # source = "http://mapscii.me/"

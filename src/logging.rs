@@ -39,16 +39,16 @@ impl Log for FileLogger {
 }
 
 fn log_path() -> Option<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "termap")?;
+    let dirs = ProjectDirs::from("", "", "ttymap")?;
     let state_dir = dirs
         .state_dir()
         .unwrap_or_else(|| dirs.data_local_dir())
         .to_path_buf();
-    Some(state_dir.join("termap.log"))
+    Some(state_dir.join("ttymap.log"))
 }
 
 /// Rotate the log file if it exceeds MAX_LOG_SIZE.
-/// Renames current log to termap.log.old, then starts fresh.
+/// Renames current log to ttymap.log.old, then starts fresh.
 fn rotate_if_needed(path: &PathBuf) {
     if let Ok(meta) = fs::metadata(path)
         && meta.len() > MAX_LOG_SIZE
@@ -58,7 +58,7 @@ fn rotate_if_needed(path: &PathBuf) {
     }
 }
 
-/// Initialize file-based logging to `$XDG_STATE_HOME/termap/termap.log`.
+/// Initialize file-based logging to `$XDG_STATE_HOME/ttymap/ttymap.log`.
 /// Rotates the log file if it exceeds 1 MB.
 pub fn init() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = log_path().ok_or("could not determine log directory")?;

@@ -1,4 +1,4 @@
-# termap — Rust Terminal Map Viewer
+# ttymap — Rust Terminal Map Viewer
 
 ## Overview
 
@@ -8,7 +8,7 @@ A terminal-based map viewer written in Rust that renders OpenStreetMap vector ti
 
 - Render OSM vector tiles in the terminal using Braille characters (2x4 pixel grid per character)
 - Vim-style keyboard navigation with number prefixes, `gg`, `/` search, command mode
-- Standalone CLI binary (no runtime dependencies), usable from vim via `:terminal termap`
+- Standalone CLI binary (no runtime dependencies), usable from vim via `:terminal ttymap`
 - Library/binary split (`lib.rs` + `main.rs`) for future Neovim plugin potential
 - Extensible layer architecture for overlaying additional data sources
 - Mark mode for pinning points and measuring straight-line distance
@@ -57,7 +57,7 @@ Mercator projection utilities:
 
 - Default source: `http://mapscii.me/{z}/{x}/{y}.pbf`
 - Uses `reqwest::blocking` for HTTP requests
-- Disk cache in platform cache dir (`directories` crate) at `~/.cache/termap/{z}/{x}-{y}.pbf`
+- Disk cache in platform cache dir (`directories` crate) at `~/.cache/ttymap/{z}/{x}-{y}.pbf`
 - In-memory LRU cache (16 tiles)
 - Gzip decompression via `flate2` when needed
 

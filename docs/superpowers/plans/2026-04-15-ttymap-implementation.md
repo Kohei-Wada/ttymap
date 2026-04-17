@@ -1,4 +1,4 @@
-# termap Implementation Plan
+# ttymap Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -50,7 +50,7 @@ Replace the contents of `Cargo.toml`:
 
 ```toml
 [package]
-name = "termap"
+name = "ttymap"
 version = "0.1.0"
 edition = "2024"
 
@@ -203,7 +203,7 @@ mod tests {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib geo`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib geo`
 Expected: All tests FAIL with `not yet implemented`
 
 - [ ] **Step 4: Implement geo functions**
@@ -283,19 +283,19 @@ Replace `src/main.rs`:
 
 ```rust
 fn main() {
-    println!("termap - terminal map viewer");
+    println!("ttymap - terminal map viewer");
 }
 ```
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib geo`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib geo`
 Expected: All 9 tests PASS
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/geo.rs src/lib.rs src/main.rs Cargo.toml
 git commit -m "feat: add geo module with coordinate transforms and haversine"
 ```
@@ -376,7 +376,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib color`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib color`
 Expected: FAIL with `not yet implemented`
 
 - [ ] **Step 3: Implement color functions**
@@ -462,13 +462,13 @@ pub mod color;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib color`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib color`
 Expected: All 7 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/color.rs src/lib.rs
 git commit -m "feat: add color module for hex-to-rgb and 256-color matching"
 ```
@@ -626,7 +626,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib braille`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib braille`
 Expected: FAIL with `not yet implemented`
 
 - [ ] **Step 3: Implement BrailleBuffer**
@@ -760,13 +760,13 @@ pub mod braille;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib braille`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib braille`
 Expected: All 6 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/braille.rs src/lib.rs
 git commit -m "feat: add Braille pixel buffer with ANSI color output"
 ```
@@ -881,7 +881,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib label`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib label`
 Expected: FAIL with `not yet implemented`
 
 - [ ] **Step 3: Implement LabelBuffer**
@@ -946,13 +946,13 @@ pub mod label;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib label`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib label`
 Expected: All 5 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/label.rs src/lib.rs
 git commit -m "feat: add label collision detection with R-tree"
 ```
@@ -1074,7 +1074,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib canvas`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib canvas`
 Expected: FAIL with `not yet implemented`
 
 - [ ] **Step 3: Implement Canvas**
@@ -1241,13 +1241,13 @@ pub mod canvas;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib canvas`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib canvas`
 Expected: All 5 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/canvas.rs src/lib.rs
 git commit -m "feat: add canvas with polyline, polygon, and text drawing"
 ```
@@ -1320,12 +1320,12 @@ mod tests {
 
 - [ ] **Step 2: Copy style files from MapSCII**
 
-Copy `styles/dark.json` and `styles/bright.json` from the MapSCII project at `/home/kohei/ghq/github.com/rastapasta/mapscii/styles/` to `/home/kohei/ghq/github.com/Kohei-Wada/termap/styles/`.
+Copy `styles/dark.json` and `styles/bright.json` from the MapSCII project at `/home/kohei/ghq/github.com/rastapasta/mapscii/styles/` to `/home/kohei/ghq/github.com/Kohei-Wada/ttymap/styles/`.
 
 ```bash
-mkdir -p /home/kohei/ghq/github.com/Kohei-Wada/termap/styles
-cp /home/kohei/ghq/github.com/rastapasta/mapscii/styles/dark.json /home/kohei/ghq/github.com/Kohei-Wada/termap/styles/
-cp /home/kohei/ghq/github.com/rastapasta/mapscii/styles/bright.json /home/kohei/ghq/github.com/Kohei-Wada/termap/styles/
+mkdir -p /home/kohei/ghq/github.com/Kohei-Wada/ttymap/styles
+cp /home/kohei/ghq/github.com/rastapasta/mapscii/styles/dark.json /home/kohei/ghq/github.com/Kohei-Wada/ttymap/styles/
+cp /home/kohei/ghq/github.com/rastapasta/mapscii/styles/bright.json /home/kohei/ghq/github.com/Kohei-Wada/ttymap/styles/
 ```
 
 - [ ] **Step 3: Add to lib.rs**
@@ -1338,13 +1338,13 @@ pub mod config;
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib config`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib config`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/config.rs src/lib.rs styles/
 git commit -m "feat: add config defaults and copy style files from MapSCII"
 ```
@@ -1503,7 +1503,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib styler`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib styler`
 Expected: FAIL with `not yet implemented`
 
 - [ ] **Step 3: Implement Styler**
@@ -1760,13 +1760,13 @@ pub mod styler;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib styler`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib styler`
 Expected: All 5 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/styler.rs src/lib.rs
 git commit -m "feat: add style engine with Mapbox GL filter compilation"
 ```
@@ -2197,13 +2197,13 @@ pub mod tile;
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib tile`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib tile`
 Expected: All 5 tests PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add proto/ build.rs src/tile.rs src/lib.rs
 git commit -m "feat: add vector tile protobuf decoding with spatial index"
 ```
@@ -2244,7 +2244,7 @@ pub struct TileSource {
 impl TileSource {
     pub fn new(source_url: &str, enable_disk_cache: bool) -> Self {
         let cache_dir = if enable_disk_cache {
-            ProjectDirs::from("", "", "termap").map(|dirs| {
+            ProjectDirs::from("", "", "ttymap").map(|dirs| {
                 let p = dirs.cache_dir().to_path_buf();
                 fs::create_dir_all(&p).ok();
                 p
@@ -2360,13 +2360,13 @@ pub mod tile_source;
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib tile_source`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib tile_source`
 Expected: All 2 tests PASS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/tile_source.rs src/lib.rs
 git commit -m "feat: add HTTP tile fetching with disk and memory cache"
 ```
@@ -2654,13 +2654,13 @@ pub mod renderer;
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib renderer`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib renderer`
 Expected: All 2 tests PASS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/renderer.rs src/lib.rs
 git commit -m "feat: add rendering pipeline with tile composition and layer ordering"
 ```
@@ -2959,13 +2959,13 @@ pub mod input;
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib input`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib input`
 Expected: All 8 tests PASS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/input.rs src/lib.rs
 git commit -m "feat: add vim-style key handling with number prefix and gg"
 ```
@@ -3151,13 +3151,13 @@ pub mod layer;
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test --lib layer`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test --lib layer`
 Expected: All 4 tests PASS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/layer.rs src/lib.rs
 git commit -m "feat: add Layer trait and MarkerLayer with distance measurement"
 ```
@@ -3481,11 +3481,11 @@ Replace `src/main.rs`:
 
 ```rust
 use clap::Parser;
-use termap::app::App;
-use termap::config::Config;
+use ttymap::app::App;
+use ttymap::config::Config;
 
 #[derive(Parser)]
-#[command(name = "termap", about = "Terminal map viewer")]
+#[command(name = "ttymap", about = "Terminal map viewer")]
 struct Cli {
     /// Latitude of initial center
     #[arg(long, default_value_t = 52.51298)]
@@ -3529,13 +3529,13 @@ fn main() {
 
 - [ ] **Step 4: Verify it compiles**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo build`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo build`
 Expected: Compiles successfully
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add src/app.rs src/lib.rs src/main.rs
 git commit -m "feat: add main event loop with terminal UI and status bar"
 ```
@@ -3549,12 +3549,12 @@ git commit -m "feat: add main event loop with terminal UI and status bar"
 
 - [ ] **Step 1: Run all tests**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo test`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo test`
 Expected: All tests PASS
 
 - [ ] **Step 2: Run clippy**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo clippy -- -D warnings 2>&1 | head -50`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo clippy -- -D warnings 2>&1 | head -50`
 Expected: No errors (warnings may need fixing)
 
 - [ ] **Step 3: Fix any clippy warnings**
@@ -3563,18 +3563,18 @@ Address any warnings found in Step 2.
 
 - [ ] **Step 4: Build release binary**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo build --release`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo build --release`
 Expected: Compiles successfully
 
 - [ ] **Step 5: Manual smoke test**
 
-Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/termap && cargo run`
+Run: `cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap && cargo run`
 Expected: Map renders in terminal. Test: `h/j/k/l` to move, `a/z` to zoom, `gg` for world view, `:q` to quit.
 
 - [ ] **Step 6: Commit any fixes**
 
 ```bash
-cd /home/kohei/ghq/github.com/Kohei-Wada/termap
+cd /home/kohei/ghq/github.com/Kohei-Wada/ttymap
 git add -A
 git commit -m "chore: fix clippy warnings and verify end-to-end"
 ```

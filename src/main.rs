@@ -1,20 +1,20 @@
 use std::fs;
 
 use clap::{Parser, Subcommand};
-use termap::app::App;
-use termap::core::config;
+use ttymap::app::App;
+use ttymap::core::config;
 
 #[derive(Parser)]
 #[command(
-    name = "termap",
+    name = "ttymap",
     about = "Terminal map viewer — renders Mapbox Vector Tiles as Braille characters",
-    long_about = "termap is a terminal-based map viewer written in Rust.\n\
+    long_about = "ttymap is a terminal-based map viewer written in Rust.\n\
         It renders Mapbox Vector Tiles (MVT/protobuf) as Unicode Braille characters\n\
         with ANSI 256-color in your terminal.\n\n\
         Inspired by and based on mapscii (https://github.com/rastapasta/mapscii).\n\n\
-        Config file: ~/.config/termap/config.toml\n\
-        Log file:    ~/.local/state/termap/termap.log\n\
-        Tile cache:  ~/.cache/termap/",
+        Config file: ~/.config/ttymap/config.toml\n\
+        Log file:    ~/.local/state/ttymap/ttymap.log\n\
+        Tile cache:  ~/.cache/ttymap/",
     version
 )]
 struct Cli {
@@ -44,7 +44,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Clear the disk tile cache (~/.cache/termap/)
+    /// Clear the disk tile cache (~/.cache/ttymap/)
     ClearCache,
 }
 
@@ -61,7 +61,7 @@ fn main() {
         }
     }
 
-    match termap::logging::init() {
+    match ttymap::logging::init() {
         Ok(path) => eprintln!("logging to {}", path.display()),
         Err(e) => eprintln!("warning: could not initialize logging: {e}"),
     }
@@ -83,13 +83,13 @@ fn main() {
     }
     if let Some(v) = cli.style {
         config.style_preset = match v.as_str() {
-            "bright" => termap::styler::StylePreset::Bright,
-            _ => termap::styler::StylePreset::Dark,
+            "bright" => ttymap::styler::StylePreset::Bright,
+            _ => ttymap::styler::StylePreset::Dark,
         };
     }
 
     log::info!(
-        "starting termap: lat={}, lon={}",
+        "starting ttymap: lat={}, lon={}",
         config.initial_lat,
         config.initial_lon
     );
@@ -102,7 +102,7 @@ fn main() {
 
 fn clear_cache() {
     let cache_dir =
-        directories::ProjectDirs::from("", "", "termap").map(|dirs| dirs.cache_dir().to_path_buf());
+        directories::ProjectDirs::from("", "", "ttymap").map(|dirs| dirs.cache_dir().to_path_buf());
 
     match cache_dir {
         Some(dir) if dir.exists() => match fs::remove_dir_all(&dir) {

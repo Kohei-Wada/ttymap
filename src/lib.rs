@@ -1,4 +1,4 @@
-//! termap — terminal map viewer.
+//! ttymap — terminal map viewer.
 //!
 //! Renders Mapbox Vector Tiles as Unicode Braille characters in the terminal.
 //! Inspired by [mapscii](https://github.com/rastapasta/mapscii).

@@ -1,4 +1,4 @@
-# termap
+# ttymap
 
 Terminal-based map viewer. Renders [Mapbox Vector Tiles](https://github.com/mapbox/vector-tile-spec) as Unicode Braille characters with ANSI 256-color in your terminal.
 
@@ -23,7 +23,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 cargo run                                         # default position
 cargo run -- --lat 35.68 --lon 139.76 --zoom 10   # Tokyo
 cargo run -- --style styles/bright.json            # bright theme
-termap clear-cache                                 # clear disk tile cache
+ttymap clear-cache                                 # clear disk tile cache
 ```
 
 ### Keybindings
@@ -65,7 +65,7 @@ termap clear-cache                                 # clear disk tile cache
 | `Enter` | Jump to article location |
 | `i` | Close panel |
 
-Keybindings are customizable via `~/.config/termap/config.toml`.
+Keybindings are customizable via `~/.config/ttymap/config.toml`.
 
 ## Architecture
 
@@ -115,7 +115,7 @@ src/
   styler.rs           Mapbox GL style JSON → color/filter rules
   geo.rs              Web Mercator math, distance, scale bar
   color.rs            Hex → RGB → xterm-256 conversion
-  logging.rs          File logger (~/.local/state/termap/)
+  logging.rs          File logger (~/.local/state/ttymap/)
 ```
 
 ### Data flow
@@ -157,7 +157,7 @@ core → geo (no render, tile, or UI dependency)
 
 ## Configuration
 
-Config file: `~/.config/termap/config.toml`
+Config file: `~/.config/ttymap/config.toml`
 
 ```toml
 language = "ja"
@@ -185,6 +185,6 @@ cargo clippy      # lint
 
 | Path | Content |
 |------|---------|
-| `~/.config/termap/config.toml` | Configuration |
-| `~/.cache/termap/` | Disk tile cache |
-| `~/.local/state/termap/termap.log` | Log file (auto-rotated at 1MB) |
+| `~/.config/ttymap/config.toml` | Configuration |
+| `~/.cache/ttymap/` | Disk tile cache |
+| `~/.local/state/ttymap/ttymap.log` | Log file (auto-rotated at 1MB) |

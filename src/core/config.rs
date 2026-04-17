@@ -43,7 +43,7 @@ impl Default for Config {
     }
 }
 
-/// Load config from `~/.config/termap/config.toml`, merging with defaults.
+/// Load config from `~/.config/ttymap/config.toml`, merging with defaults.
 pub fn load_config() -> Config {
     let mut config = Config::default();
 
@@ -63,7 +63,7 @@ pub fn load_config() -> Config {
 }
 
 fn config_path() -> Option<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "termap")?;
+    let dirs = ProjectDirs::from("", "", "ttymap")?;
     Some(dirs.config_dir().join("config.toml"))
 }
 
