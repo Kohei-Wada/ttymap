@@ -4,6 +4,7 @@ pub mod braille;
 pub mod canvas;
 pub mod frame;
 pub mod label;
+pub mod panic_silence;
 pub mod pipeline;
 pub mod renderer;
 pub mod thread;

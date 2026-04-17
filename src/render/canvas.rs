@@ -104,19 +104,17 @@ impl Canvas {
             }
         }
 
-        // Triangulate using earcut (ciscorn/earcut-rs, based on earcut 3.0.1)
-        // catch_unwind: earcut can panic on degenerate geometry (e.g. unwrap on None)
-        // Suppress panic hook output to avoid noise on stderr.
-        let prev_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Triangulate using earcut (ciscorn/earcut-rs, based on earcut 3.0.1).
+        // earcut can panic on degenerate geometry (e.g. unwrap on None), so
+        // contain it per-thread via silence_panics — this thread's panic hook
+        // output is suppressed without affecting other threads.
+        let result = super::panic_silence::silence_panics(|| {
             self.earcut.earcut(
                 self.scratch_vertices.iter().copied(),
                 &self.scratch_hole_indices,
                 &mut self.scratch_indices,
             );
-        }));
-        std::panic::set_hook(prev_hook);
+        });
         if result.is_err() {
             return;
         }
