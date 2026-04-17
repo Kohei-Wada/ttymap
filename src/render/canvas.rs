@@ -16,6 +16,9 @@ pub struct Canvas {
     scratch_hole_indices: Vec<usize>,
     scratch_indices: Vec<usize>,
     earcut: earcut::Earcut<f64>,
+    // Ping-pong buffers used by sutherland_hodgman_into.
+    sh_buf_a: Vec<(i32, i32)>,
+    sh_buf_b: Vec<(i32, i32)>,
 }
 
 impl Canvas {
@@ -30,6 +33,8 @@ impl Canvas {
             scratch_hole_indices: Vec::new(),
             scratch_indices: Vec::new(),
             earcut: earcut::Earcut::new(),
+            sh_buf_a: Vec::new(),
+            sh_buf_b: Vec::new(),
         }
     }
 
@@ -145,21 +150,43 @@ impl Canvas {
     // ── Sutherland-Hodgman polygon clipping ─────────────────────────────────
 
     /// Clip a polygon to the padded viewport using Sutherland-Hodgman algorithm.
-    /// Each ring is clipped independently. Returns clipped rings (may be empty
-    /// if entirely outside).
-    pub(super) fn clip_polygon(&self, rings: &[Vec<(i32, i32)>]) -> Vec<Vec<(i32, i32)>> {
-        let (xmin, ymin, xmax, ymax) = self.clip_bounds();
-        rings
-            .iter()
-            .filter_map(|ring| {
-                let clipped = sutherland_hodgman(ring, xmin, ymin, xmax, ymax);
-                if clipped.len() >= 3 {
-                    Some(clipped)
-                } else {
-                    None
-                }
-            })
-            .collect()
+    /// Each ring is clipped independently. Writes surviving rings (len >= 3)
+    /// into `output` (reusing existing inner Vec capacities) and returns the
+    /// number of rings written. Entries past the returned count are left in
+    /// place so their capacities can be reused on subsequent calls.
+    pub(super) fn clip_polygon_into(
+        &mut self,
+        rings: &[Vec<(i32, i32)>],
+        output: &mut Vec<Vec<(i32, i32)>>,
+    ) -> usize {
+        let bounds = self.clip_bounds();
+        while output.len() < rings.len() {
+            output.push(Vec::new());
+        }
+        let mut kept = 0;
+        for ring in rings {
+            sutherland_hodgman_into(
+                ring,
+                bounds,
+                &mut self.sh_buf_a,
+                &mut self.sh_buf_b,
+                &mut output[kept],
+            );
+            if output[kept].len() >= 3 {
+                kept += 1;
+            }
+        }
+        kept
+    }
+
+    /// Owned-result variant used by tests. Production code should use
+    /// [`Self::clip_polygon_into`] with a reusable output Vec.
+    #[cfg(test)]
+    pub(super) fn clip_polygon(&mut self, rings: &[Vec<(i32, i32)>]) -> Vec<Vec<(i32, i32)>> {
+        let mut output = Vec::new();
+        let kept = self.clip_polygon_into(rings, &mut output);
+        output.truncate(kept);
+        output
     }
 
     // ── Cohen-Sutherland line clipping ────────────────────────────────────────
@@ -306,7 +333,95 @@ impl Canvas {
 // ── Sutherland-Hodgman polygon clipping ───────────────────────────────────────
 
 /// Clip a polygon ring to a rectangle using the Sutherland-Hodgman algorithm.
-/// Clips against each of the 4 edges (left, right, bottom, top) in sequence.
+/// Writes the clipped ring into `output`. `buf_a` and `buf_b` are scratch
+/// ping-pong buffers used between the 4 edge-clipping stages; their contents
+/// are overwritten. `bounds` is (xmin, ymin, xmax, ymax).
+fn sutherland_hodgman_into(
+    polygon: &[(i32, i32)],
+    bounds: (i32, i32, i32, i32),
+    buf_a: &mut Vec<(i32, i32)>,
+    buf_b: &mut Vec<(i32, i32)>,
+    output: &mut Vec<(i32, i32)>,
+) {
+    output.clear();
+    if polygon.is_empty() {
+        return;
+    }
+
+    let (xmin, ymin, xmax, ymax) = bounds;
+
+    // Stage the polygon in buf_a, then pipe through 4 edges. The final edge
+    // (bottom) writes directly into `output`.
+    buf_a.clear();
+    buf_a.extend_from_slice(polygon);
+
+    buf_b.clear();
+    clip_against_edge(buf_a, buf_b, true, true, xmin); // left
+    if buf_b.is_empty() {
+        return;
+    }
+
+    buf_a.clear();
+    clip_against_edge(buf_b, buf_a, true, false, xmax); // right
+    if buf_a.is_empty() {
+        return;
+    }
+
+    buf_b.clear();
+    clip_against_edge(buf_a, buf_b, false, true, ymin); // top
+    if buf_b.is_empty() {
+        return;
+    }
+
+    clip_against_edge(buf_b, output, false, false, ymax); // bottom
+}
+
+/// Clip `input` against a single axis-aligned edge and append the result to
+/// `output`. `axis == true` selects the x coordinate; `keep_ge == true` keeps
+/// points with coord >= `bound`, otherwise <= `bound`.
+fn clip_against_edge(
+    input: &[(i32, i32)],
+    output: &mut Vec<(i32, i32)>,
+    axis: bool,
+    keep_ge: bool,
+    bound: i32,
+) {
+    let val = |p: (i32, i32)| if axis { p.0 } else { p.1 };
+    let inside = |p: (i32, i32)| {
+        if keep_ge {
+            val(p) >= bound
+        } else {
+            val(p) <= bound
+        }
+    };
+    let intersect = |a: (i32, i32), b: (i32, i32)| {
+        if axis {
+            intersect_x(a, b, bound)
+        } else {
+            intersect_y(a, b, bound)
+        }
+    };
+
+    let mut prev = input[input.len() - 1];
+    let mut prev_inside = inside(prev);
+
+    for &curr in input {
+        let curr_inside = inside(curr);
+        if curr_inside {
+            if !prev_inside {
+                output.push(intersect(prev, curr));
+            }
+            output.push(curr);
+        } else if prev_inside {
+            output.push(intersect(prev, curr));
+        }
+        prev = curr;
+        prev_inside = curr_inside;
+    }
+}
+
+/// Owned-result variant used by tests.
+#[cfg(test)]
 fn sutherland_hodgman(
     polygon: &[(i32, i32)],
     xmin: i32,
@@ -314,61 +429,16 @@ fn sutherland_hodgman(
     xmax: i32,
     ymax: i32,
 ) -> Vec<(i32, i32)> {
-    if polygon.is_empty() {
-        return Vec::new();
-    }
-
-    let mut output = polygon.to_vec();
-
-    // Clip against each of the 4 rectangle edges
-    for &(axis, keep_ge, bound) in &[
-        (true, true, xmin),   // left:   keep x >= xmin
-        (true, false, xmax),  // right:  keep x <= xmax
-        (false, true, ymin),  // top:    keep y >= ymin
-        (false, false, ymax), // bottom: keep y <= ymax
-    ] {
-        if output.is_empty() {
-            break;
-        }
-        let input = output;
-        output = Vec::with_capacity(input.len());
-
-        let val = |p: (i32, i32)| if axis { p.0 } else { p.1 };
-        let inside = |p: (i32, i32)| {
-            if keep_ge {
-                val(p) >= bound
-            } else {
-                val(p) <= bound
-            }
-        };
-        let intersect = |a: (i32, i32), b: (i32, i32)| {
-            if axis {
-                intersect_x(a, b, bound)
-            } else {
-                intersect_y(a, b, bound)
-            }
-        };
-
-        let mut prev = input[input.len() - 1];
-        let mut prev_inside = inside(prev);
-
-        for &curr in &input {
-            let curr_inside = inside(curr);
-
-            if curr_inside {
-                if !prev_inside {
-                    output.push(intersect(prev, curr));
-                }
-                output.push(curr);
-            } else if prev_inside {
-                output.push(intersect(prev, curr));
-            }
-
-            prev = curr;
-            prev_inside = curr_inside;
-        }
-    }
-
+    let mut buf_a = Vec::new();
+    let mut buf_b = Vec::new();
+    let mut output = Vec::new();
+    sutherland_hodgman_into(
+        polygon,
+        (xmin, ymin, xmax, ymax),
+        &mut buf_a,
+        &mut buf_b,
+        &mut output,
+    );
     output
 }
 
@@ -587,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_clip_polygon_method() {
-        let canvas = Canvas::new(100, 100);
+        let mut canvas = Canvas::new(100, 100);
         // Polygon that extends beyond viewport + padding
         let ring = vec![(-200, -200), (200, -200), (200, 200), (-200, 200)];
         let clipped = canvas.clip_polygon(&[ring]);

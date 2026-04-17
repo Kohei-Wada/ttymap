@@ -21,6 +21,13 @@ pub struct Renderer {
     styler: Arc<Styler>,
     width: usize,
     height: usize,
+    // Scratch buffers reused across scale_ring calls to avoid per-ring
+    // heap allocations. `scratch_line` holds a single scaled ring for the
+    // polyline path; `scratch_rings` is a pool of inner Vecs for the fill
+    // path (each feature may contain multiple rings).
+    scratch_line: Vec<(i32, i32)>,
+    scratch_rings: Vec<Vec<(i32, i32)>>,
+    scratch_clipped: Vec<Vec<(i32, i32)>>,
 }
 
 impl Renderer {
@@ -30,6 +37,9 @@ impl Renderer {
             styler,
             width,
             height,
+            scratch_line: Vec::new(),
+            scratch_rings: Vec::new(),
+            scratch_clipped: Vec::new(),
         }
     }
 
@@ -115,20 +125,22 @@ impl Renderer {
 
     // ── Feature drawing ───────────────────────────────────────────────────
 
-    fn scale_ring(
-        &self,
+    fn scale_ring_into(
+        out: &mut Vec<(i32, i32)>,
         vis: &VisibleTile,
         ring: &[Point],
         scale: f64,
+        width: usize,
+        height: usize,
         clip: bool,
-    ) -> Vec<(i32, i32)> {
+    ) {
+        out.clear();
         let pad = super::VIEWPORT_PADDING;
         let min_x = -pad;
         let min_y = -pad;
-        let max_x = self.width as i32 + pad;
-        let max_y = self.height as i32 + pad;
+        let max_x = width as i32 + pad;
+        let max_y = height as i32 + pad;
 
-        let mut result = Vec::with_capacity(ring.len());
         let mut last = (i32::MIN, i32::MIN);
         let mut outside = false;
 
@@ -151,12 +163,11 @@ impl Renderer {
                     outside = true;
                 } else if outside {
                     outside = false;
-                    result.push(last);
+                    out.push(last);
                 }
             }
-            result.push(pt);
+            out.push(pt);
         }
-        result
     }
 
     fn draw_feature(&mut self, vis: &VisibleTile, feature: &Feature, scale_denom: f64, zoom: f64) {
@@ -177,25 +188,54 @@ impl Renderer {
         match feature.style_type {
             StyleType::Line => {
                 for ring in feature.points.iter() {
-                    let pts = self.scale_ring(vis, ring, scale, true);
-                    if pts.len() >= 2 {
-                        self.canvas.polyline(&pts, feature.color);
+                    Self::scale_ring_into(
+                        &mut self.scratch_line,
+                        vis,
+                        ring,
+                        scale,
+                        self.width,
+                        self.height,
+                        true,
+                    );
+                    if self.scratch_line.len() >= 2 {
+                        self.canvas.polyline(&self.scratch_line, feature.color);
                     }
                 }
             }
             StyleType::Fill => {
-                let rings: Vec<Vec<(i32, i32)>> = feature
-                    .points
-                    .iter()
-                    .map(|ring| self.scale_ring(vis, ring, scale, false))
-                    .filter(|r| r.len() >= 3)
-                    .collect();
-                if rings.is_empty() {
+                // Reuse scratch_rings as a pool: ensure enough inner Vecs,
+                // scale each ring into a slot, then compact surviving rings
+                // (len >= 3) to the front.
+                while self.scratch_rings.len() < feature.points.len() {
+                    self.scratch_rings.push(Vec::new());
+                }
+                let mut kept = 0;
+                for (i, ring) in feature.points.iter().enumerate() {
+                    Self::scale_ring_into(
+                        &mut self.scratch_rings[i],
+                        vis,
+                        ring,
+                        scale,
+                        self.width,
+                        self.height,
+                        false,
+                    );
+                    if self.scratch_rings[i].len() >= 3 {
+                        if kept != i {
+                            self.scratch_rings.swap(kept, i);
+                        }
+                        kept += 1;
+                    }
+                }
+                if kept == 0 {
                     return;
                 }
-                let clipped = self.canvas.clip_polygon(&rings);
-                if !clipped.is_empty() {
-                    self.canvas.polygon(&clipped, feature.color);
+                let clipped_count = self
+                    .canvas
+                    .clip_polygon_into(&self.scratch_rings[..kept], &mut self.scratch_clipped);
+                if clipped_count > 0 {
+                    self.canvas
+                        .polygon(&self.scratch_clipped[..clipped_count], feature.color);
                 }
             }
             StyleType::Symbol => {
