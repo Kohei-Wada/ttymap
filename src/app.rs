@@ -126,11 +126,17 @@ impl App {
         info!("event loop started");
         self.request_draw();
 
+        // Only redraw the terminal when something has changed. Without this
+        // the main loop redraws on every poll tick (~60 Hz) even when the
+        // app is idle, which makes the CPU fan spin up.
+        let mut dirty = true;
+
         while self.core.is_running() {
             // 1. Receive completed frames
             while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
                 debug!("frame received");
                 self.ui.map_frame = Some(frame);
+                dirty = true;
             }
 
             // 2. Poll geocode results
@@ -158,18 +164,23 @@ impl App {
                         }
                     }
                 }
+                dirty = true;
             }
 
             // 3. Poll wiki results
             if let Ok(articles) = self.wiki_rx.try_recv() {
                 debug!("wiki: received {} articles", articles.len());
                 self.ui.wiki.set_articles(articles);
+                dirty = true;
             }
 
-            // 4. Draw
-            self.draw_terminal(&mut terminal)?;
+            // 4. Draw (only when something changed)
+            if dirty {
+                self.draw_terminal(&mut terminal)?;
+                dirty = false;
+            }
 
-            // 4. Process input events
+            // 5. Process input events
             if event::poll(Duration::from_millis(16))? {
                 match event::read()? {
                     Event::Key(key_event) => {
@@ -183,8 +194,11 @@ impl App {
 
                         debug!("key event: {:?}", key_event.code);
                         let should_redraw = self.handle_key(key_event.code, key_event.modifiers);
-                        if should_redraw && self.core.is_running() {
-                            self.request_draw();
+                        if should_redraw {
+                            dirty = true;
+                            if self.core.is_running() {
+                                self.request_draw();
+                            }
                         }
                     }
                     Event::Resize(cols, rows) => {
@@ -193,9 +207,11 @@ impl App {
                         self.render_handle
                             .request_resize(self.core.width(), self.core.height());
                         self.request_draw();
+                        dirty = true;
                     }
                     Event::Mouse(mouse) if self.handle_mouse(mouse) => {
                         self.request_draw();
+                        dirty = true;
                     }
                     _ => {}
                 }
