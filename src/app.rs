@@ -2,6 +2,35 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+struct Throttle {
+    last: Option<Instant>,
+    interval: Duration,
+}
+
+impl Throttle {
+    fn ready(interval: Duration) -> Self {
+        Self {
+            last: None,
+            interval,
+        }
+    }
+
+    fn with_cooldown(interval: Duration) -> Self {
+        Self {
+            last: Some(Instant::now()),
+            interval,
+        }
+    }
+
+    fn check(&mut self) -> bool {
+        let ready = self.last.is_none_or(|t| t.elapsed() >= self.interval);
+        if ready {
+            self.last = Some(Instant::now());
+        }
+        ready
+    }
+}
+
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
@@ -27,13 +56,13 @@ pub struct App {
     geocoder: Geocoder,
     ui: UiState,
     last_search_results: Vec<SearchResult>,
-    last_reverse_request: Instant,
+    reverse_throttle: Throttle,
     drag_from: Option<(u16, u16)>,
     wiki_rx: std::sync::mpsc::Receiver<Vec<WikiArticle>>,
     wiki_tx: std::sync::mpsc::Sender<Vec<WikiArticle>>,
     wiki_language: String,
     wiki_limit: u32,
-    last_wiki_request: Instant,
+    wiki_throttle: Throttle,
 }
 
 impl App {
@@ -80,13 +109,13 @@ impl App {
             geocoder: Geocoder::new(),
             ui,
             last_search_results: Vec::new(),
-            last_reverse_request: Instant::now() - Duration::from_secs(10),
+            reverse_throttle: Throttle::ready(Duration::from_secs(5)),
             drag_from: None,
             wiki_rx,
             wiki_tx,
             wiki_language,
             wiki_limit,
-            last_wiki_request: Instant::now(),
+            wiki_throttle: Throttle::with_cooldown(Duration::from_secs(2)),
         }
     }
 
@@ -303,10 +332,9 @@ impl App {
     }
 
     fn fetch_wiki(&mut self) {
-        if self.last_wiki_request.elapsed() < Duration::from_secs(2) {
+        if !self.wiki_throttle.check() {
             return;
         }
-        self.last_wiki_request = Instant::now();
         let req = self.core.render_request();
         let tx = self.wiki_tx.clone();
         let lang = self.wiki_language.clone();
@@ -324,10 +352,7 @@ impl App {
         self.render_handle.request_draw(state);
 
         // Debounced reverse geocoding (5 seconds, skip during search)
-        if !self.ui.search.is_active()
-            && self.last_reverse_request.elapsed() > Duration::from_secs(5)
-        {
-            self.last_reverse_request = Instant::now();
+        if !self.ui.search.is_active() && self.reverse_throttle.check() {
             let req = self.core.render_request();
             self.geocoder.reverse(req.center);
         }
