@@ -76,7 +76,10 @@ impl Renderer {
         'outer: for td in tile_data {
             let tile_size = td.vis.size;
             for (_, features) in &td.layers {
-                for feature in features.iter().filter(|f| f.style_type != StyleType::Symbol) {
+                for feature in features
+                    .iter()
+                    .filter(|f| f.style_type != StyleType::Symbol)
+                {
                     if std::time::Instant::now() > deadline {
                         debug!("draw: time budget exceeded");
                         break 'outer;

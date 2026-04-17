@@ -24,15 +24,24 @@ pub struct SearchWidget {
 }
 
 impl Default for SearchWidget {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SearchWidget {
     pub fn new() -> Self {
-        Self { query: String::new(), active: false, candidates: Vec::new(), selected: 0 }
+        Self {
+            query: String::new(),
+            active: false,
+            candidates: Vec::new(),
+            selected: 0,
+        }
     }
 
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     pub fn open(&mut self) {
         self.query.clear();
@@ -46,7 +55,9 @@ impl SearchWidget {
         self.selected = 0;
     }
 
-    pub fn has_candidates(&self) -> bool { !self.candidates.is_empty() }
+    pub fn has_candidates(&self) -> bool {
+        !self.candidates.is_empty()
+    }
 
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> SearchAction {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
@@ -67,10 +78,14 @@ impl SearchWidget {
                 self.candidates.clear();
                 SearchAction::Select(idx)
             } else if up {
-                if self.selected > 0 { self.selected -= 1; }
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
                 SearchAction::None
             } else if down {
-                if self.selected + 1 < self.candidates.len() { self.selected += 1; }
+                if self.selected + 1 < self.candidates.len() {
+                    self.selected += 1;
+                }
                 SearchAction::None
             } else {
                 SearchAction::None
@@ -78,21 +93,42 @@ impl SearchWidget {
         }
 
         match code {
-            KeyCode::Esc => { self.active = false; SearchAction::Cancel }
-            KeyCode::Enter => {
-                if self.query.is_empty() { self.active = false; SearchAction::Cancel }
-                else { SearchAction::Submit(self.query.clone()) }
+            KeyCode::Esc => {
+                self.active = false;
+                SearchAction::Cancel
             }
-            KeyCode::Backspace => { self.query.pop(); SearchAction::None }
-            KeyCode::Char('h') if ctrl => { self.query.pop(); SearchAction::None }
-            KeyCode::Char('u') if ctrl => { self.query.clear(); SearchAction::None }
-            KeyCode::Char(c) => { self.query.push(c); SearchAction::None }
+            KeyCode::Enter => {
+                if self.query.is_empty() {
+                    self.active = false;
+                    SearchAction::Cancel
+                } else {
+                    SearchAction::Submit(self.query.clone())
+                }
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                SearchAction::None
+            }
+            KeyCode::Char('h') if ctrl => {
+                self.query.pop();
+                SearchAction::None
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.query.clear();
+                SearchAction::None
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                SearchAction::None
+            }
             _ => SearchAction::None,
         }
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
-        if !self.active || map_inner.width < 10 || map_inner.height < 3 { return; }
+        if !self.active || map_inner.width < 10 || map_inner.height < 3 {
+            return;
+        }
 
         let popup_width = (map_inner.width * 2 / 3).max(30).min(map_inner.width - 2);
         let popup_height = if self.has_candidates() {
@@ -126,7 +162,9 @@ impl SearchWidget {
         let title = format!("search: {}", self.query);
         let block = theme.panel(&title);
 
-        let items: Vec<ListItem> = self.candidates.iter()
+        let items: Vec<ListItem> = self
+            .candidates
+            .iter()
             .enumerate()
             .map(|(i, result)| {
                 let style = if i == self.selected {

@@ -44,10 +44,22 @@ impl Filter {
             Filter::NotIn(key, vals) => props.get(key).is_none_or(|v| !vals.contains(v)),
             Filter::Has(key) => props.contains_key(key),
             Filter::NotHas(key) => !props.contains_key(key),
-            Filter::Gt(key, val) => props.get(key).and_then(|v| v.as_f64()).is_some_and(|n| n > *val),
-            Filter::Gte(key, val) => props.get(key).and_then(|v| v.as_f64()).is_some_and(|n| n >= *val),
-            Filter::Lt(key, val) => props.get(key).and_then(|v| v.as_f64()).is_some_and(|n| n < *val),
-            Filter::Lte(key, val) => props.get(key).and_then(|v| v.as_f64()).is_some_and(|n| n <= *val),
+            Filter::Gt(key, val) => props
+                .get(key)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|n| n > *val),
+            Filter::Gte(key, val) => props
+                .get(key)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|n| n >= *val),
+            Filter::Lt(key, val) => props
+                .get(key)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|n| n < *val),
+            Filter::Lte(key, val) => props
+                .get(key)
+                .and_then(|v| v.as_f64())
+                .is_some_and(|n| n <= *val),
             Filter::All(filters) => filters.iter().all(|f| f.eval(props)),
             Filter::Any(filters) => filters.iter().any(|f| f.eval(props)),
             Filter::None(filters) => !filters.iter().any(|f| f.eval(props)),
@@ -60,11 +72,18 @@ mod tests {
     use super::*;
 
     fn props(pairs: &[(&str, PropertyValue)]) -> HashMap<String, PropertyValue> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
-    fn s(v: &str) -> PropertyValue { PropertyValue::String(v.to_string()) }
-    fn n(v: f64) -> PropertyValue { PropertyValue::Number(v) }
+    fn s(v: &str) -> PropertyValue {
+        PropertyValue::String(v.to_string())
+    }
+    fn n(v: f64) -> PropertyValue {
+        PropertyValue::Number(v)
+    }
 
     #[test]
     fn test_always() {

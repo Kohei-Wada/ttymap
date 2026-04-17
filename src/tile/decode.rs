@@ -4,8 +4,8 @@ use std::io::Read;
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::styler::Styler;
 use crate::styler::StyleType;
+use crate::styler::Styler;
 use crate::styler::filter::PropertyValue;
 
 pub mod proto {
@@ -291,7 +291,10 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
                 3 => "Polygon",
                 _ => "Unknown",
             };
-            props.insert("$type".to_string(), PropertyValue::String(type_str.to_string()));
+            props.insert(
+                "$type".to_string(),
+                PropertyValue::String(type_str.to_string()),
+            );
 
             // Get style
             let style = match styler.get_style_for(&layer_name, &props) {

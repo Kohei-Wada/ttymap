@@ -46,6 +46,8 @@ impl Theme {
     }
 
     pub fn selected(&self) -> Style {
-        Style::default().fg(self.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
     }
 }
