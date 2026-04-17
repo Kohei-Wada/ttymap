@@ -202,35 +202,20 @@ fn extract_sort(props: &HashMap<String, PropertyValue>) -> i64 {
 // ── Bounds calculator ──────────────────────────────────────────────────────────
 
 fn calculate_bounds(points: &[Vec<Point>]) -> (f64, f64, f64, f64) {
-    let mut min_x = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut min_y = f64::MAX;
-    let mut max_y = f64::MIN;
-
-    for ring in points {
-        for p in ring {
+    points
+        .iter()
+        .flatten()
+        .fold(None, |acc: Option<(f64, f64, f64, f64)>, p| {
             let x = p.x as f64;
             let y = p.y as f64;
-            if x < min_x {
-                min_x = x;
-            }
-            if x > max_x {
-                max_x = x;
-            }
-            if y < min_y {
-                min_y = y;
-            }
-            if y > max_y {
-                max_y = y;
-            }
-        }
-    }
-
-    if min_x == f64::MAX {
-        (0.0, 0.0, 0.0, 0.0)
-    } else {
-        (min_x, max_x, min_y, max_y)
-    }
+            Some(match acc {
+                None => (x, x, y, y),
+                Some((min_x, max_x, min_y, max_y)) => {
+                    (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
+                }
+            })
+        })
+        .unwrap_or((0.0, 0.0, 0.0, 0.0))
 }
 
 // ── Decompression ──────────────────────────────────────────────────────────────
