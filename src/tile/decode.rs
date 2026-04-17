@@ -160,25 +160,18 @@ fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
     if let Some(s) = &v.string_value {
         return Some(PropertyValue::String(s.clone()));
     }
-    if let Some(f) = v.float_value {
-        return Some(PropertyValue::Number(f as f64));
-    }
-    if let Some(d) = v.double_value {
-        return Some(PropertyValue::Number(d));
-    }
-    if let Some(i) = v.int_value {
-        return Some(PropertyValue::Number(i as f64));
-    }
-    if let Some(u) = v.uint_value {
-        return Some(PropertyValue::Number(u as f64));
-    }
-    if let Some(s) = v.sint_value {
-        return Some(PropertyValue::Number(s as f64));
-    }
     if let Some(b) = v.bool_value {
         return Some(PropertyValue::Bool(b));
     }
-    None
+    // All numeric proto types collapse to Number(f64).
+    let num = v
+        .float_value
+        .map(|n| n as f64)
+        .or(v.double_value)
+        .or(v.int_value.map(|n| n as f64))
+        .or(v.uint_value.map(|n| n as f64))
+        .or(v.sint_value.map(|n| n as f64))?;
+    Some(PropertyValue::Number(num))
 }
 
 // ── Label extractor ────────────────────────────────────────────────────────────
