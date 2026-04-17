@@ -2,12 +2,15 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
-use crate::geo::LonLat;
+use crate::geo::{self, LonLat};
+use crate::render::frame::MapFrame;
 use crate::ui::theme::Theme;
 use crate::wikipedia::WikiArticle;
 
@@ -21,7 +24,6 @@ pub struct WikiWidget {
     active: bool,
     articles: Vec<WikiArticle>,
     selected: usize,
-    scroll: u16,
 }
 
 impl Default for WikiWidget {
@@ -36,7 +38,6 @@ impl WikiWidget {
             active: false,
             articles: Vec::new(),
             selected: 0,
-            scroll: 0,
         }
     }
 
@@ -88,10 +89,16 @@ impl WikiWidget {
                     lon: article.lon,
                 });
             }
-        } else if up && self.selected > 0 {
-            self.selected -= 1;
-        } else if down && self.selected + 1 < self.articles.len() {
-            self.selected += 1;
+        } else if up {
+            // Wrap around: top → bottom.
+            self.selected = if self.selected == 0 {
+                self.articles.len() - 1
+            } else {
+                self.selected - 1
+            };
+        } else if down {
+            // Wrap around: bottom → top.
+            self.selected = (self.selected + 1) % self.articles.len();
         }
 
         WikiAction::None
@@ -124,15 +131,23 @@ impl WikiWidget {
             return;
         }
 
-        let sep = "─".repeat((panel_width as usize).saturating_sub(4));
+        let content_width = (panel_width as usize).saturating_sub(4).max(10);
+        let sep = "─".repeat(content_width);
+
         let mut lines: Vec<Line> = Vec::new();
+        let mut selected_top: u16 = 0;
+        let mut selected_height: u16 = 1;
+
         for (i, article) in self.articles.iter().enumerate() {
+            let article_start = lines.len() as u16;
+
             if i > 0 {
                 lines.push(Line::from(Span::styled(
                     &sep,
                     Style::default().fg(theme.muted_color),
                 )));
             }
+
             let is_selected = i == self.selected;
             let dist = crate::geo::format_distance(article.dist_m);
             let title_style = if is_selected {
@@ -144,35 +159,139 @@ impl WikiWidget {
                 Span::styled(&article.title, title_style),
                 Span::styled(format!("  {}", dist), theme.muted()),
             ]));
+
             if !article.extract.is_empty() {
-                let max_chars = (panel_width as usize - 4) * 2;
-                let text: String = article.extract.chars().take(max_chars).collect();
-                let text = if article.extract.chars().count() > max_chars {
-                    format!("{}...", text)
+                // Cap the extract at roughly two lines of content, then wrap
+                // manually so scroll math below can treat each pushed Line as
+                // one output row (Paragraph::wrap is not used any more).
+                let max_chars = content_width * 2;
+                let raw: String = article.extract.chars().take(max_chars).collect();
+                let truncated = if article.extract.chars().count() > max_chars {
+                    format!("{}...", raw)
                 } else {
-                    text
+                    raw
                 };
-                lines.push(Line::from(Span::styled(text, theme.text())));
+                for wrapped in wrap_to_width(&truncated, content_width) {
+                    lines.push(Line::from(Span::styled(wrapped, theme.text())));
+                }
+            }
+
+            if is_selected {
+                selected_top = article_start;
+                selected_height = (lines.len() as u16).saturating_sub(article_start).max(1);
             }
         }
 
-        // Scroll to keep selected visible
+        // Scroll to keep the selected article visible. With wrap disabled on
+        // Paragraph, each Line above corresponds exactly to one output row,
+        // so this math is precise.
         let visible_lines = panel_height.saturating_sub(2);
-        let lines_per_article = 3u16;
-        let selected_top = self.selected as u16 * lines_per_article;
-        let scroll = if selected_top + lines_per_article > self.scroll + visible_lines {
-            selected_top + lines_per_article - visible_lines
-        } else if selected_top < self.scroll {
-            selected_top
-        } else {
-            self.scroll
-        };
+        let scroll = (selected_top + selected_height).saturating_sub(visible_lines);
 
         let widget = Paragraph::new(lines)
             .style(theme.text())
             .block(block)
-            .wrap(Wrap { trim: true })
             .scroll((scroll, 0));
         f.render_widget(widget, area);
     }
+
+    /// Overlay numbered markers on the map for each wiki article.
+    /// `map_area` is the terminal cell rect occupied by the rendered map.
+    /// `frame` carries the center/zoom/dimensions that it was rendered at,
+    /// so markers align with the displayed map regardless of any newer
+    /// panning the user has done since.
+    pub fn render_markers(
+        &self,
+        buf: &mut Buffer,
+        map_area: Rect,
+        frame: &MapFrame,
+        theme: &Theme,
+    ) {
+        if !self.active || self.articles.is_empty() {
+            return;
+        }
+
+        // Canvas size (pixels) that the frame was rendered at. Each terminal
+        // cell is 2 pixels wide × 4 pixels tall under braille.
+        let canvas_w = frame.cols as f64 * 2.0;
+        let canvas_h = frame.rows as f64 * 4.0;
+
+        let z = geo::base_zoom(frame.zoom);
+        let tile_size = geo::tile_size_at_zoom(frame.zoom);
+        let center_tile = geo::ll2tile(frame.center.lon, frame.center.lat, z);
+
+        // Maximum cell coordinates within the map area we're allowed to
+        // write into. Clamp to the frame size so we never draw beyond where
+        // the map widget actually rendered.
+        let max_col = frame.cols.min(map_area.width);
+        let max_row = frame.rows.min(map_area.height);
+
+        for (i, article) in self.articles.iter().enumerate() {
+            let pt = geo::ll2tile(article.lon, article.lat, z);
+            let px = canvas_w / 2.0 + (pt.x - center_tile.x) * tile_size;
+            let py = canvas_h / 2.0 + (pt.y - center_tile.y) * tile_size;
+            if !px.is_finite() || !py.is_finite() || px < 0.0 || py < 0.0 {
+                continue;
+            }
+
+            let cell_col = (px / 2.0) as u16;
+            let cell_row = (py / 4.0) as u16;
+            if cell_col >= max_col || cell_row >= max_row {
+                continue;
+            }
+
+            // Filled circle; the selected one gets the accent_alt colour
+            // so it stands out from the rest.
+            let fg = if i == self.selected {
+                theme.accent_alt
+            } else {
+                theme.accent
+            };
+            let ch = '●';
+
+            let x = map_area.x + cell_col;
+            let y = map_area.y + cell_row;
+            buf[(x, y)]
+                .set_char(ch)
+                .set_style(Style::default().fg(fg).bg(Color::Reset));
+        }
+    }
+}
+
+/// Word-wrap `text` to visual cell `width` using `unicode-width` so CJK
+/// characters (full-width) count correctly. Words that exceed `width` on
+/// their own are placed on a line as-is rather than mid-word split.
+fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for word in text.split_whitespace() {
+        let word_width = word.width();
+        let sep = if current.is_empty() { 0 } else { 1 };
+
+        if current_width + sep + word_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+
+        if !current.is_empty() {
+            current.push(' ');
+            current_width += 1;
+        }
+        current.push_str(word);
+        current_width += word_width;
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }

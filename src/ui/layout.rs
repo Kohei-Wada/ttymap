@@ -31,6 +31,10 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     f.render_widget(map_block, map_area);
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
+
+        // Wiki markers overlay (only drawn when wiki panel is active)
+        ui.wiki
+            .render_markers(f.buffer_mut(), map_inner, map_frame, &ui.theme);
     }
 
     // Info overlay

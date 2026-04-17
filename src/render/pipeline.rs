@@ -49,7 +49,11 @@ impl RenderPipeline {
             self.renderer.height(),
         );
         let tile_data = self.collect_tile_data(&visible, state.zoom);
-        self.renderer.draw(&tile_data, state.zoom)
+        self.renderer.draw(&tile_data, state.zoom).map(|mut f| {
+            f.center = state.center;
+            f.zoom = state.zoom;
+            f
+        })
     }
 
     /// Poll for completed tile fetches. Returns true if new tiles arrived.

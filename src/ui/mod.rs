@@ -75,6 +75,11 @@ mod tests {
             }],
             cols: 1,
             rows: 1,
+            center: crate::geo::LonLat {
+                lon: 0.0,
+                lat: 0.0,
+            },
+            zoom: 0.0,
         });
         assert!(ui.map_frame.is_some());
     }

@@ -171,6 +171,11 @@ impl BrailleBuffer {
             cells,
             cols: cols as u16,
             rows: rows as u16,
+            center: crate::geo::LonLat {
+                lon: 0.0,
+                lat: 0.0,
+            },
+            zoom: 0.0,
         }
     }
 }
