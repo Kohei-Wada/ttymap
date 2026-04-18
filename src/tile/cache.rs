@@ -7,7 +7,6 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use directories::ProjectDirs;
@@ -37,7 +36,6 @@ impl std::fmt::Display for TileKey {
 
 pub struct TileCache {
     client: HttpTileClient,
-    pending_count: Arc<AtomicUsize>,
     cache_dir: Option<PathBuf>,
     styler: Arc<crate::styler::Styler>,
     language: String,
@@ -69,11 +67,9 @@ impl TileCache {
 
         let (tx, rx) = mpsc::channel();
         let client = HttpTileClient::new(source_url, tx);
-        let pending_count = Arc::new(AtomicUsize::new(0));
 
         TileCache {
             client,
-            pending_count,
             cache_dir,
             styler,
             language,
@@ -85,10 +81,6 @@ impl TileCache {
             center_y: 0.0,
             rx,
         }
-    }
-
-    pub fn pending_count(&self) -> Arc<AtomicUsize> {
-        self.pending_count.clone()
     }
 
     /// Update view state. Purges stale queue entries and re-sorts by distance.
@@ -106,7 +98,6 @@ impl TileCache {
             zoom_diff: key.z.abs_diff(cz),
             distance_sq: tile_distance_sq(key, cx, cy),
         });
-        self.sync_pending_count();
     }
 
     /// Drain completed HTTP fetches: decode, save to disk, insert to memory.
@@ -137,7 +128,6 @@ impl TileCache {
             }
             self.insert_memory(key, decoded);
         }
-        self.sync_pending_count();
         any_new
     }
 
@@ -161,7 +151,6 @@ impl TileCache {
             distance_sq: tile_distance_sq(&key, self.center_x, self.center_y),
         };
         self.client.enqueue(&key, priority);
-        self.sync_pending_count();
         None
     }
 
@@ -215,11 +204,6 @@ impl TileCache {
     }
 
     // ── Private ───────────────────────────────────────────────────────────
-
-    fn sync_pending_count(&self) {
-        self.pending_count
-            .store(self.client.queue_len(), Ordering::Relaxed);
-    }
 
     fn read_disk_cache(&self, key: &TileKey) -> Option<Vec<u8>> {
         let dir = self.cache_dir.as_ref()?;

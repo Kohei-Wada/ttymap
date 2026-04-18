@@ -88,23 +88,6 @@ impl HttpTileClient {
         let mut queue = self.shared.queue.lock().unwrap();
         queue.reprioritize(priority_fn);
     }
-
-    /// Number of tiles in queue + in-flight.
-    pub fn pending_count(&self) -> usize {
-        let queue = self.shared.queue.lock().unwrap();
-        let in_flight = self.shared.in_flight.lock().unwrap();
-        queue.len() + in_flight.len()
-    }
-
-    /// Number of tiles in queue only.
-    pub fn queue_len(&self) -> usize {
-        self.shared.queue.lock().unwrap().len()
-    }
-
-    /// Check if a key is currently being fetched.
-    pub fn is_in_flight(&self, key: &TileKey) -> bool {
-        self.shared.in_flight.lock().unwrap().contains(key)
-    }
 }
 
 impl Drop for HttpTileClient {
@@ -196,6 +179,6 @@ mod tests {
                 distance_sq: 0.0,
             },
         );
-        assert_eq!(client.queue_len(), 0);
+        assert_eq!(client.shared.queue.lock().unwrap().len(), 0);
     }
 }

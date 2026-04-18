@@ -46,17 +46,6 @@ pub fn ll2tile(lon: f64, lat: f64, zoom: u32) -> TileCoord {
     TileCoord { x, y, z: zoom }
 }
 
-/// Convert a (fractional) tile coordinate back to a geographic coordinate.
-pub fn tile2ll(x: f64, y: f64, zoom: u32) -> LonLat {
-    let n = (1u64 << zoom) as f64;
-    let lon = x / n * 360.0 - 180.0;
-    let lat_rad = (PI * (1.0 - 2.0 * y / n)).sinh().atan();
-    LonLat {
-        lon,
-        lat: lat_rad.to_degrees(),
-    }
-}
-
 /// Floor a zoom level and clamp to 0..=14.
 pub fn base_zoom(zoom: f64) -> u32 {
     zoom.floor().clamp(0.0, 14.0) as u32
@@ -68,17 +57,6 @@ pub fn base_zoom(zoom: f64) -> u32 {
 pub fn tile_size_at_zoom(zoom: f64) -> f64 {
     let bz = base_zoom(zoom) as f64;
     256.0 * (zoom - bz).exp2()
-}
-
-/// Haversine distance between two points, in metres.
-pub fn haversine(a: LonLat, b: LonLat) -> f64 {
-    let r = EARTH_RADIUS_M;
-    let dlat = (b.lat - a.lat).to_radians();
-    let dlon = (b.lon - a.lon).to_radians();
-    let alat = a.lat.to_radians();
-    let blat = b.lat.to_radians();
-    let h = (dlat / 2.0).sin().powi(2) + alat.cos() * blat.cos() * (dlon / 2.0).sin().powi(2);
-    2.0 * r * h.sqrt().asin()
 }
 
 /// Format a distance in metres as a human-readable string.
@@ -216,24 +194,6 @@ mod tests {
         assert_eq!(t.z, 1);
     }
 
-    #[test]
-    fn tile2ll_roundtrip() {
-        let lon = 13.404954;
-        let lat = 52.520008;
-        let zoom = 10;
-        let t = ll2tile(lon, lat, zoom);
-        let ll = tile2ll(t.x, t.y, zoom);
-        assert!((ll.lon - lon).abs() < EPS);
-        assert!((ll.lat - lat).abs() < EPS);
-    }
-
-    #[test]
-    fn tile2ll_zoom0_centre() {
-        let ll = tile2ll(0.5, 0.5, 0);
-        assert!(ll.lon.abs() < EPS);
-        assert!(ll.lat.abs() < EPS);
-    }
-
     // --- base_zoom -----------------------------------------------------------
 
     #[test]
@@ -276,39 +236,6 @@ mod tests {
         // zoom = 15 → base_zoom clamps to 14, scale = 2^1 = 2
         let expected = 256.0 * 2f64.powf(1.0);
         assert!((tile_size_at_zoom(15.0) - expected).abs() < EPS);
-    }
-
-    // --- haversine -----------------------------------------------------------
-
-    #[test]
-    fn haversine_same_point_is_zero() {
-        let p = LonLat { lon: 0.0, lat: 0.0 };
-        assert!(haversine(p, p).abs() < EPS);
-    }
-
-    #[test]
-    fn haversine_known_distance() {
-        // Berlin ↔ Paris: roughly 878 km.
-        let berlin = LonLat {
-            lon: 13.404954,
-            lat: 52.520008,
-        };
-        let paris = LonLat {
-            lon: 2.349014,
-            lat: 48.864716,
-        };
-        let d = haversine(berlin, paris);
-        assert!((d - 878_000.0).abs() < 5_000.0, "distance was {d}");
-    }
-
-    #[test]
-    fn haversine_equator() {
-        // Along the equator, 1° ≈ 111 195 m (using R = 6 371 000 m).
-        // The exact value depends on the Earth-radius constant; we accept ±200 m.
-        let a = LonLat { lon: 0.0, lat: 0.0 };
-        let b = LonLat { lon: 1.0, lat: 0.0 };
-        let d = haversine(a, b);
-        assert!((d - 111_195.0).abs() < 200.0, "distance was {d}");
     }
 
     // --- format_distance -----------------------------------------------------

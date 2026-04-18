@@ -9,6 +9,5 @@ pub mod cache;
 pub mod decode;
 pub mod fetch;
 
-pub use cache::{TileCache, TileKey};
-pub use decode::{DecodedTile, Feature, Point, TileLayer};
-pub use fetch::{HttpTileClient, TilePriority};
+pub use cache::TileCache;
+pub use decode::{Feature, Point};

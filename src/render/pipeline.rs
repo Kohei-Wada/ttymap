@@ -3,7 +3,6 @@
 //! thread.rs calls pipeline methods without knowing the internals.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use rstar::AABB;
 
@@ -71,11 +70,6 @@ impl RenderPipeline {
     /// Resize the renderer canvas.
     pub fn resize(&mut self, width: usize, height: usize) {
         self.renderer.set_size(width, height);
-    }
-
-    /// Shared pending tile count for status bar display.
-    pub fn pending_count(&self) -> Arc<AtomicUsize> {
-        self.tile_cache.pending_count()
     }
 
     // ── Private ──────────────────────────────────────────────────────────

@@ -46,12 +46,6 @@ impl BrailleBuffer {
         }
     }
 
-    /// Returns the number of character cells.
-    #[inline]
-    pub fn cell_count(&self) -> usize {
-        (self.width / 2) * (self.height / 4)
-    }
-
     /// Project pixel (x, y) to cell index.
     #[inline]
     fn cell_index(&self, x: usize, y: usize) -> usize {

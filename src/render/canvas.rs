@@ -61,10 +61,6 @@ impl Canvas {
         self.labels.write_if_possible(text, x, y, None)
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: u8) {
-        self.buffer.set_pixel(x, y, color);
-    }
-
     pub fn polyline(&mut self, points: &[(i32, i32)], color: u8) {
         if points.len() < 2 {
             return;
@@ -533,7 +529,6 @@ mod tests {
     #[test]
     fn test_clear_and_frame() {
         let mut canvas = Canvas::new(80, 40);
-        canvas.set_pixel(0, 0, 7);
         canvas.clear();
         let frame = canvas.to_map_frame();
         assert!(!frame.cells.is_empty());
