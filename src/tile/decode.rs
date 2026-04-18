@@ -14,7 +14,13 @@ pub mod proto {
 // ── Geometry types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct Point {
+/// A point in the MVT **tile-local** coordinate space.
+///
+/// Coordinates are integers in the layer's `extent` (typically 0..4096).
+/// They are distinct from *screen pixels* and from *world Mercator*
+/// coordinates (see `geo::TileCoord`); converting between them happens
+/// at render time in [`crate::render::renderer`].
+pub struct TilePoint {
     pub x: i32,
     pub y: i32,
 }
@@ -29,7 +35,7 @@ pub struct Point {
 pub struct Feature {
     pub layer_name: Arc<str>,
     pub properties: Arc<HashMap<Arc<str>, PropertyValue>>,
-    pub points: Arc<Vec<Vec<Point>>>,
+    pub points: Arc<Vec<Vec<TilePoint>>>,
     pub min_x: f64,
     pub max_x: f64,
     pub min_y: f64,
@@ -67,9 +73,9 @@ fn zigzag(n: u32) -> i32 {
 /// Decode MVT geometry into rings of Points.
 /// For POLYGON (geom_type 3), all rings (outer + holes) are flattened into a
 /// single ring list.  For other types each ring is separate.
-fn decode_geometry(geometry: &[u32]) -> Vec<Vec<Point>> {
-    let mut rings: Vec<Vec<Point>> = Vec::new();
-    let mut current: Vec<Point> = Vec::new();
+fn decode_geometry(geometry: &[u32]) -> Vec<Vec<TilePoint>> {
+    let mut rings: Vec<Vec<TilePoint>> = Vec::new();
+    let mut current: Vec<TilePoint> = Vec::new();
     let mut cx: i32 = 0;
     let mut cy: i32 = 0;
 
@@ -93,7 +99,7 @@ fn decode_geometry(geometry: &[u32]) -> Vec<Vec<Point>> {
                     i += 2;
                     cx += dx;
                     cy += dy;
-                    current.push(Point { x: cx, y: cy });
+                    current.push(TilePoint { x: cx, y: cy });
                 }
             }
             2 => {
@@ -104,7 +110,7 @@ fn decode_geometry(geometry: &[u32]) -> Vec<Vec<Point>> {
                     i += 2;
                     cx += dx;
                     cy += dy;
-                    current.push(Point { x: cx, y: cy });
+                    current.push(TilePoint { x: cx, y: cy });
                 }
             }
             7 => {
@@ -201,7 +207,7 @@ pub fn extract_sort(props: &HashMap<Arc<str>, PropertyValue>) -> i64 {
 
 // ── Bounds calculator ──────────────────────────────────────────────────────────
 
-fn calculate_bounds(points: &[Vec<Point>]) -> (f64, f64, f64, f64) {
+fn calculate_bounds(points: &[Vec<TilePoint>]) -> (f64, f64, f64, f64) {
     points
         .iter()
         .flatten()
@@ -364,9 +370,9 @@ mod tests {
     #[test]
     fn test_bounds_calculation() {
         let points = vec![vec![
-            Point { x: 10, y: 20 },
-            Point { x: 30, y: 5 },
-            Point { x: -5, y: 100 },
+            TilePoint { x: 10, y: 20 },
+            TilePoint { x: 30, y: 5 },
+            TilePoint { x: -5, y: 100 },
         ]];
         let (min_x, max_x, min_y, max_y) = calculate_bounds(&points);
         assert_eq!(min_x, -5.0);

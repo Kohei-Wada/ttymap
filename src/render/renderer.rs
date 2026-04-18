@@ -15,7 +15,7 @@ use super::canvas::Canvas;
 use super::frame::MapFrame;
 use super::view::VisibleTile;
 use crate::styler::{StyleRule, StyleType, Styler};
-use crate::tile::decode::{Feature, Point, extract_label, extract_sort};
+use crate::tile::decode::{Feature, TilePoint, extract_label, extract_sort};
 
 /// Pre-collected tile data ready for rendering.
 pub struct TileData {
@@ -172,10 +172,20 @@ impl Renderer {
 
     // ── Feature drawing ───────────────────────────────────────────────────
 
+    /// Project tile-local points into integer screen pixels and append
+    /// them to `out`, optionally clipping against the padded viewport.
+    ///
+    /// Coordinate pipeline for each point: `TilePoint` (i32, 0..extent)
+    /// → f64 screen offset relative to `vis.pos_{x,y}` → final screen
+    /// pixel (i32). The f64 step is where we spend precision for the
+    /// divide; the final `as i32` rounds toward zero, matching the
+    /// tolerance of the braille pixel grid. `inv_scale = 1.0 / scale`
+    /// is precomputed so each point needs a multiply rather than a
+    /// divide.
     fn scale_ring_into(
         out: &mut Vec<(i32, i32)>,
         vis: &VisibleTile,
-        ring: &[Point],
+        ring: &[TilePoint],
         scale: f64,
         width: usize,
         height: usize,
@@ -187,14 +197,15 @@ impl Renderer {
         let min_y = -pad;
         let max_x = width as i32 + pad;
         let max_y = height as i32 + pad;
+        let inv_scale = 1.0 / scale;
 
         let mut last = (i32::MIN, i32::MIN);
         let mut outside = false;
 
         for p in ring {
             let pt = (
-                (vis.pos_x + p.x as f64 / scale) as i32,
-                (vis.pos_y + p.y as f64 / scale) as i32,
+                (vis.pos_x + p.x as f64 * inv_scale) as i32,
+                (vis.pos_y + p.y as f64 * inv_scale) as i32,
             );
             if pt == last {
                 continue;
