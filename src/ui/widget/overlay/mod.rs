@@ -24,7 +24,7 @@ pub mod scale_bar;
 
 pub use coords::CoordsOverlay;
 pub use markers::{MarkerPoint, MarkersOverlay};
-pub use place::{PlaceOverlay, PlaceState};
+pub use place::PlaceWidget;
 pub use scale_bar::ScaleBarOverlay;
 
 /// A drawable layer stamped on top of the rendered map.

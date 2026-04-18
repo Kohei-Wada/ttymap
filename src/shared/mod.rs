@@ -6,3 +6,5 @@
 //! or shared middleware.
 
 pub mod http;
+pub mod nominatim;
+pub mod throttle;

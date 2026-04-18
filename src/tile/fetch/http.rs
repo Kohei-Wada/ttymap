@@ -11,6 +11,7 @@ use log::debug;
 
 use super::priority::TilePriority;
 use super::queue::PriorityQueue;
+use crate::shared::http::HttpClient;
 use crate::tile::cache::TileKey;
 
 const NUM_WORKERS: usize = 6;
@@ -38,14 +39,10 @@ impl HttpTileClient {
             shutdown: AtomicBool::new(false),
         });
 
-        // Build one reqwest Client and share it across workers. Client holds
-        // the connection pool (HTTP keep-alive) and TLS context internally
-        // via Arc, so Clone is cheap and the pool is shared. Tiles want a
-        // longer timeout than the default (slow tile servers), so override.
-        let http = crate::shared::http::client_builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("reqwest client build");
+        // One HttpClient shared across workers. Clone is cheap (reqwest's
+        // internal Client is Arc-backed), so all workers reuse the same
+        // connection pool. Tile servers are slow, hence the longer timeout.
+        let http = HttpClient::with_timeout("tile", std::time::Duration::from_secs(10));
 
         let mut workers = Vec::with_capacity(NUM_WORKERS);
         for _ in 0..NUM_WORKERS {
@@ -103,7 +100,7 @@ fn worker_loop(
     shared: &SharedState,
     source_url: &str,
     tx: &mpsc::Sender<(TileKey, Vec<u8>)>,
-    http: &reqwest::blocking::Client,
+    http: &HttpClient,
 ) {
     loop {
         let key = {
@@ -128,7 +125,7 @@ fn worker_loop(
         // HTTP fetch
         let url = format!("{}/{}.pbf", source_url, key);
         debug!("worker: fetching {}", url);
-        let bytes = fetch_http(http, &url);
+        let bytes = http.get_bytes(&url);
 
         // Remove from in-flight
         shared.in_flight.lock().unwrap().remove(&key);
@@ -141,21 +138,6 @@ fn worker_loop(
             return;
         }
     }
-}
-
-fn fetch_http(client: &reqwest::blocking::Client, url: &str) -> Option<Vec<u8>> {
-    let response = match client.get(url).send() {
-        Ok(r) => r,
-        Err(e) => {
-            debug!("fetch error: {} - {}", url, e);
-            return None;
-        }
-    };
-    if !response.status().is_success() {
-        debug!("fetch failed: {} - status {}", url, response.status());
-        return None;
-    }
-    Some(response.bytes().ok()?.to_vec())
 }
 
 #[cfg(test)]

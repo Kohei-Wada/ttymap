@@ -63,6 +63,9 @@ impl Core {
     pub fn height(&self) -> usize {
         self.height
     }
+    pub fn center(&self) -> LonLat {
+        self.center
+    }
     pub fn stop(&mut self) {
         self.running = false;
     }

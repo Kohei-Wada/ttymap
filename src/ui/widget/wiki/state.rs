@@ -5,19 +5,24 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
+use super::wikipedia::WikiArticle;
 use crate::geo::LonLat;
-use crate::wikipedia::WikiArticle;
 
+/// Outcome of feeding a key to [`WikiState::handle_key`].
+/// `Refresh` is absorbed by the widget (it triggers a fetch) and
+/// never surfaces to `app.rs` — that's why this enum is internal.
 #[derive(Debug, Clone, PartialEq)]
-pub enum WikiAction {
+pub(super) enum KeyOutcome {
     None,
+    Consumed,
     JumpTo(LonLat),
+    Refresh,
 }
 
-/// Shared wiki state — article list, current selection, detail view,
-/// panel visibility. Lives on `UiState`; both the side panel renderer
-/// and the map marker overlay borrow it.
-pub struct WikiState {
+/// Wiki panel state — article list, current selection, detail view,
+/// visibility flag. Owned by `WikiWidget`; read by the side panel
+/// renderer and the map marker overlay.
+pub(super) struct WikiState {
     pub(super) active: bool,
     pub(super) articles: Vec<WikiArticle>,
     pub(super) selected: usize,
@@ -78,9 +83,15 @@ impl WikiState {
         }
     }
 
-    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> WikiAction {
-        if !self.active || self.articles.is_empty() {
-            return WikiAction::None;
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
+        if !self.active {
+            return KeyOutcome::None;
+        }
+
+        // Refresh is available even when the list is empty (e.g. initial load
+        // returned nothing and the user wants to retry).
+        if code == KeyCode::Char('r') {
+            return KeyOutcome::Refresh;
         }
 
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
@@ -88,12 +99,22 @@ impl WikiState {
             || code == KeyCode::Up;
         let down = (ctrl && matches!(code, KeyCode::Char('j') | KeyCode::Char('n')))
             || code == KeyCode::Down;
+        let exit_detail = matches!(code, KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter);
+
+        if self.articles.is_empty() {
+            // Panel is open but has nothing yet — still swallow widget-control
+            // keys so they don't fall through to the global keymap.
+            if up || down || exit_detail {
+                return KeyOutcome::Consumed;
+            }
+            return KeyOutcome::None;
+        }
 
         // ── Detail mode ─────────────────────────────────────────────────
         if self.detail.is_some() {
-            if matches!(code, KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter) {
+            if exit_detail {
                 self.detail = None;
-                return WikiAction::None;
+                return KeyOutcome::Consumed;
             }
             if up || down {
                 if up {
@@ -111,9 +132,9 @@ impl WikiState {
                     lon: article.lon,
                 };
                 self.detail = Some(article);
-                return WikiAction::JumpTo(loc);
+                return KeyOutcome::JumpTo(loc);
             }
-            return WikiAction::None;
+            return KeyOutcome::Consumed;
         }
 
         // ── List mode ───────────────────────────────────────────────────
@@ -124,9 +145,11 @@ impl WikiState {
                     lon: article.lon,
                 };
                 self.detail = Some(article.clone());
-                return WikiAction::JumpTo(loc);
+                return KeyOutcome::JumpTo(loc);
             }
-        } else if up || down {
+            return KeyOutcome::Consumed;
+        }
+        if up || down {
             if up {
                 // Wrap around: top → bottom.
                 self.selected = if self.selected == 0 {
@@ -139,12 +162,15 @@ impl WikiState {
                 self.selected = (self.selected + 1) % self.articles.len();
             }
             let article = &self.articles[self.selected];
-            return WikiAction::JumpTo(LonLat {
+            return KeyOutcome::JumpTo(LonLat {
                 lat: article.lat,
                 lon: article.lon,
             });
         }
+        if matches!(code, KeyCode::Esc | KeyCode::Backspace) {
+            return KeyOutcome::Consumed;
+        }
 
-        WikiAction::None
+        KeyOutcome::None
     }
 }

@@ -25,11 +25,8 @@ pub mod styler;
 // ── Internal modules (not part of the external surface) ──────────────────
 
 pub(crate) mod geo;
-pub(crate) mod geocode;
-pub(crate) mod nominatim;
 pub(crate) mod palette;
 pub(crate) mod render;
 pub(crate) mod shared;
 pub(crate) mod tile;
 pub(crate) mod ui;
-pub(crate) mod wikipedia;

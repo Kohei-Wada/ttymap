@@ -1,21 +1,23 @@
 //! Search state — input buffer, candidate list, selection.
 //!
-//! `app.rs` drives lifecycle (open, set_candidates) and forwards keys
-//! through `handle_key`. The panel renderer only reads.
+//! All key dispatch happens in [`SearchState::handle_key`]. `Submit` is
+//! absorbed by the widget (triggers a forward geocode) and never
+//! surfaces to `app.rs`; that's why [`Outcome`] is internal.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::nominatim::SearchResult;
+use crate::geo::LonLat;
+use crate::shared::nominatim::SearchResult;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SearchAction {
+pub(super) enum Outcome {
     None,
+    Consumed,
     Submit(String),
-    Select(usize),
-    Cancel,
+    Jump(LonLat),
 }
 
-pub struct SearchState {
+pub(super) struct SearchState {
     pub(super) query: String,
     pub(super) active: bool,
     pub(super) candidates: Vec<SearchResult>,
@@ -29,7 +31,7 @@ impl Default for SearchState {
 }
 
 impl SearchState {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             query: String::new(),
             active: false,
@@ -38,27 +40,27 @@ impl SearchState {
         }
     }
 
-    pub fn is_active(&self) -> bool {
+    pub(super) fn is_active(&self) -> bool {
         self.active
     }
 
-    pub fn has_candidates(&self) -> bool {
+    pub(super) fn has_candidates(&self) -> bool {
         !self.candidates.is_empty()
     }
 
-    pub fn open(&mut self) {
+    pub(super) fn open(&mut self) {
         self.query.clear();
         self.candidates.clear();
         self.selected = 0;
         self.active = true;
     }
 
-    pub fn set_candidates(&mut self, candidates: Vec<SearchResult>) {
+    pub(super) fn set_candidates(&mut self, candidates: Vec<SearchResult>) {
         self.candidates = candidates;
         self.selected = 0;
     }
 
-    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> SearchAction {
+    pub(super) fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
 
         if self.has_candidates() {
@@ -70,57 +72,57 @@ impl SearchState {
             return if code == KeyCode::Esc {
                 self.active = false;
                 self.candidates.clear();
-                SearchAction::Cancel
+                Outcome::Consumed
             } else if code == KeyCode::Enter {
                 self.active = false;
-                let idx = self.selected;
+                let loc = self.candidates[self.selected].location;
                 self.candidates.clear();
-                SearchAction::Select(idx)
+                Outcome::Jump(loc)
             } else if up {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                SearchAction::None
+                Outcome::Consumed
             } else if down {
                 if self.selected + 1 < self.candidates.len() {
                     self.selected += 1;
                 }
-                SearchAction::None
+                Outcome::Consumed
             } else {
-                SearchAction::None
+                Outcome::Consumed
             };
         }
 
         match code {
             KeyCode::Esc => {
                 self.active = false;
-                SearchAction::Cancel
+                Outcome::Consumed
             }
             KeyCode::Enter => {
                 if self.query.is_empty() {
                     self.active = false;
-                    SearchAction::Cancel
+                    Outcome::Consumed
                 } else {
-                    SearchAction::Submit(self.query.clone())
+                    Outcome::Submit(self.query.clone())
                 }
             }
             KeyCode::Backspace => {
                 self.query.pop();
-                SearchAction::None
+                Outcome::Consumed
             }
             KeyCode::Char('h') if ctrl => {
                 self.query.pop();
-                SearchAction::None
+                Outcome::Consumed
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
-                SearchAction::None
+                Outcome::Consumed
             }
             KeyCode::Char(c) => {
                 self.query.push(c);
-                SearchAction::None
+                Outcome::Consumed
             }
-            _ => SearchAction::None,
+            _ => Outcome::None,
         }
     }
 }

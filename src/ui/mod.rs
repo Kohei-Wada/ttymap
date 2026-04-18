@@ -4,32 +4,40 @@ pub mod layout;
 pub mod theme;
 pub mod widget;
 
+use std::sync::Arc;
+
 use theme::Theme;
 use widget::help::HelpWidget;
-use widget::overlay::PlaceState;
-use widget::search::SearchState;
-use widget::wiki::WikiState;
+use widget::overlay::PlaceWidget;
+use widget::search::SearchWidget;
+use widget::wiki::WikiWidget;
 
 use crate::palette::Palette;
 use crate::render::frame::MapFrame;
+use crate::shared::nominatim::NominatimClient;
 
 /// Holds all UI widget state. Passed to layout::draw().
 pub struct UiState {
-    pub search: SearchState,
-    pub place: PlaceState,
+    pub search: SearchWidget,
+    pub place: PlaceWidget,
     pub help: HelpWidget,
-    pub wiki: WikiState,
+    pub wiki: WikiWidget,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
 }
 
 impl UiState {
-    pub fn new(palette: &Palette) -> Self {
+    pub fn new(
+        palette: &Palette,
+        language: &str,
+        wiki_limit: u32,
+        nominatim: Arc<NominatimClient>,
+    ) -> Self {
         Self {
-            search: SearchState::new(),
-            place: PlaceState::new(),
+            search: SearchWidget::new(nominatim.clone()),
+            place: PlaceWidget::new(nominatim),
             help: HelpWidget::new(),
-            wiki: WikiState::new(),
+            wiki: WikiWidget::new(language, wiki_limit),
             map_frame: None,
             theme: Theme::from_palette(palette),
         }
@@ -44,14 +52,24 @@ mod tests {
 
     #[test]
     fn test_ui_state_initial() {
-        let ui = UiState::new(&crate::palette::DARK);
+        let ui = UiState::new(
+            &crate::palette::DARK,
+            "en",
+            5,
+            Arc::new(NominatimClient::new()),
+        );
         assert!(!ui.search.is_active());
         assert!(ui.map_frame.is_none());
     }
 
     #[test]
     fn test_ui_state_search_lifecycle() {
-        let ui = &mut UiState::new(&crate::palette::DARK);
+        let ui = &mut UiState::new(
+            &crate::palette::DARK,
+            "en",
+            5,
+            Arc::new(NominatimClient::new()),
+        );
         assert!(!ui.search.is_active());
 
         ui.search.open();
@@ -64,7 +82,12 @@ mod tests {
 
     #[test]
     fn test_ui_state_map_frame() {
-        let mut ui = UiState::new(&crate::palette::DARK);
+        let mut ui = UiState::new(
+            &crate::palette::DARK,
+            "en",
+            5,
+            Arc::new(NominatimClient::new()),
+        );
         assert!(ui.map_frame.is_none());
 
         ui.map_frame = Some(MapFrame {

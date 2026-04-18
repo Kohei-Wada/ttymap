@@ -10,12 +10,14 @@ use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::theme::Theme;
-use crate::wikipedia::WikiArticle;
 
+use super::WikiWidget;
 use super::state::WikiState;
+use super::wikipedia::WikiArticle;
 
 /// Render the wiki side panel (list or detail view) if active.
-pub fn render_panel(state: &WikiState, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+pub fn render_panel(widget: &WikiWidget, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+    let state = &widget.state;
     if !state.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
     }

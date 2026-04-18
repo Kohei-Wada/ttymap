@@ -1,9 +1,13 @@
-//! Wikipedia API client — geosearch and page summaries.
+//! Wikipedia HTTP client — geosearch and page summaries.
+//! Internal to the wiki widget.
 
 use log::debug;
 
+use crate::shared::http::HttpClient;
+use crate::shared::http::url::urlencoded;
+
 #[derive(Debug, Clone)]
-pub struct WikiArticle {
+pub(super) struct WikiArticle {
     pub title: String,
     pub extract: String,
     pub dist_m: f64,
@@ -11,32 +15,30 @@ pub struct WikiArticle {
     pub lon: f64,
 }
 
-pub struct WikipediaClient {
-    client: reqwest::blocking::Client,
+pub(super) struct WikipediaClient {
+    http: HttpClient,
     language: String,
 }
 
 impl WikipediaClient {
-    pub fn new(language: &str) -> Option<Self> {
-        let client = crate::shared::http::client_builder().build().ok()?;
-        Some(Self {
-            client,
+    pub(super) fn new(language: &str) -> Self {
+        Self {
+            http: HttpClient::new("wiki"),
             language: language.to_string(),
-        })
+        }
     }
 
     /// Find Wikipedia articles near a coordinate.
-    pub fn geosearch(&self, lat: f64, lon: f64, limit: u32) -> Vec<WikiArticle> {
+    pub(super) fn geosearch(&self, lat: f64, lon: f64, limit: u32) -> Vec<WikiArticle> {
         let url = format!(
             "https://{}.wikipedia.org/w/api.php?action=query&list=geosearch\
              &gscoord={}|{}&gsradius=10000&gslimit={}&format=json",
             self.language, lat, lon, limit,
         );
-        debug!("wikipedia: geosearch {}", url);
+        debug!("wiki: geosearch {}", url);
 
-        let json: serde_json::Value = match self.get_json(&url) {
-            Some(v) => v,
-            None => return Vec::new(),
+        let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
+            return Vec::new();
         };
 
         let pages = match json.pointer("/query/geosearch") {
@@ -93,11 +95,10 @@ impl WikipediaClient {
             self.language,
             urlencoded(&titles_param),
         );
-        debug!("wikipedia: extracts {}", url);
+        debug!("wiki: extracts {}", url);
 
-        let json: serde_json::Value = match self.get_json(&url) {
-            Some(v) => v,
-            None => return std::collections::HashMap::new(),
+        let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
+            return std::collections::HashMap::new();
         };
 
         let mut result = std::collections::HashMap::new();
@@ -115,42 +116,4 @@ impl WikipediaClient {
 
         result
     }
-
-    fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Option<T> {
-        let response = match self.client.get(url).send() {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("wikipedia: request error: {}", e);
-                return None;
-            }
-        };
-        if !response.status().is_success() {
-            debug!("wikipedia: status {}", response.status());
-            return None;
-        }
-        match response.json() {
-            Ok(j) => Some(j),
-            Err(e) => {
-                debug!("wikipedia: parse error: {}", e);
-                None
-            }
-        }
-    }
-}
-
-fn urlencoded(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
-            }
-        }
-    }
-    out
 }

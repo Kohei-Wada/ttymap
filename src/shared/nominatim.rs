@@ -4,6 +4,8 @@
 use log::debug;
 
 use crate::geo::LonLat;
+use crate::shared::http::HttpClient;
+use crate::shared::http::url::urlencoded;
 
 const BASE_URL: &str = "https://nominatim.openstreetmap.org";
 
@@ -22,15 +24,21 @@ pub struct PlaceInfo {
     pub country: Option<String>,
 }
 
-/// Nominatim HTTP client.
 pub struct NominatimClient {
-    client: reqwest::blocking::Client,
+    http: HttpClient,
+}
+
+impl Default for NominatimClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NominatimClient {
-    pub fn new() -> Option<Self> {
-        let client = crate::shared::http::client_builder().build().ok()?;
-        Some(Self { client })
+    pub fn new() -> Self {
+        Self {
+            http: HttpClient::new("nominatim"),
+        }
     }
 
     /// Forward geocoding: place name → coordinates.
@@ -42,9 +50,8 @@ impl NominatimClient {
         );
         debug!("nominatim: search {}", url);
 
-        let json: Vec<serde_json::Value> = match self.get_json(&url) {
-            Some(v) => v,
-            None => return Vec::new(),
+        let Some(json) = self.http.get_json::<Vec<serde_json::Value>>(&url) else {
+            return Vec::new();
         };
 
         json.iter()
@@ -68,7 +75,7 @@ impl NominatimClient {
         );
         debug!("nominatim: reverse {}", url);
 
-        let json: serde_json::Value = self.get_json(&url)?;
+        let json: serde_json::Value = self.http.get_json(&url)?;
         let display_name = json.get("display_name")?.as_str()?.to_string();
         let address = json.get("address");
         let city = address
@@ -90,43 +97,4 @@ impl NominatimClient {
             country,
         })
     }
-
-    fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Option<T> {
-        let response = match self.client.get(url).send() {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("nominatim: request error: {}", e);
-                return None;
-            }
-        };
-        if !response.status().is_success() {
-            debug!("nominatim: status {}", response.status());
-            return None;
-        }
-        match response.json() {
-            Ok(j) => Some(j),
-            Err(e) => {
-                debug!("nominatim: parse error: {}", e);
-                None
-            }
-        }
-    }
-}
-
-/// Simple percent-encoding for query strings.
-fn urlencoded(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
-            }
-        }
-    }
-    out
 }

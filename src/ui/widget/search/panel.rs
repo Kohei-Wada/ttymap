@@ -1,5 +1,5 @@
 //! Search side panel — center popup showing the input line or the
-//! candidate list. Stateless; reads `SearchState`.
+//! candidate list. Stateless; reads the widget's internal state.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -7,9 +7,10 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 
 use crate::ui::theme::Theme;
 
-use super::state::SearchState;
+use super::SearchWidget;
 
-pub fn render_panel(state: &SearchState, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+pub fn render_panel(widget: &SearchWidget, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+    let state = &widget.state;
     if !state.active || map_inner.width < 10 || map_inner.height < 3 {
         return;
     }
@@ -28,21 +29,23 @@ pub fn render_panel(state: &SearchState, f: &mut Frame, map_inner: Rect, theme: 
     f.render_widget(Clear, popup_area);
 
     if state.has_candidates() {
-        render_candidates(state, f, popup_area, theme);
+        render_candidates(widget, f, popup_area, theme);
     } else {
-        render_input(state, f, popup_area, theme);
+        render_input(widget, f, popup_area, theme);
     }
 }
 
-fn render_input(state: &SearchState, f: &mut Frame, area: Rect, theme: &Theme) {
+fn render_input(widget: &SearchWidget, f: &mut Frame, area: Rect, theme: &Theme) {
+    let state = &widget.state;
     let block = theme.panel("search");
-    let widget = Paragraph::new(format!("/{}", state.query))
+    let w = Paragraph::new(format!("/{}", state.query))
         .style(theme.text())
         .block(block);
-    f.render_widget(widget, area);
+    f.render_widget(w, area);
 }
 
-fn render_candidates(state: &SearchState, f: &mut Frame, area: Rect, theme: &Theme) {
+fn render_candidates(widget: &SearchWidget, f: &mut Frame, area: Rect, theme: &Theme) {
+    let state = &widget.state;
     let title = format!("search: {}", state.query);
     let block = theme.panel(&title);
 
