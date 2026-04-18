@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc;
 
 use directories::ProjectDirs;
@@ -37,8 +36,6 @@ impl std::fmt::Display for TileKey {
 pub struct TileCache {
     client: HttpTileClient,
     cache_dir: Option<PathBuf>,
-    styler: Arc<crate::styler::Styler>,
-    language: String,
     memory_cache: HashMap<TileKey, DecodedTile>,
     cache_order: VecDeque<TileKey>,
     cache_size: usize,
@@ -49,12 +46,7 @@ pub struct TileCache {
 }
 
 impl TileCache {
-    pub fn new(
-        source_url: &str,
-        enable_disk_cache: bool,
-        styler: Arc<crate::styler::Styler>,
-        language: String,
-    ) -> Self {
+    pub fn new(source_url: &str, enable_disk_cache: bool) -> Self {
         let cache_dir = if enable_disk_cache {
             ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
                 let dir = proj_dirs.cache_dir().to_path_buf();
@@ -71,8 +63,6 @@ impl TileCache {
         TileCache {
             client,
             cache_dir,
-            styler,
-            language,
             memory_cache: HashMap::new(),
             cache_order: VecDeque::new(),
             cache_size: 64,
@@ -116,7 +106,7 @@ impl TileCache {
             }
 
             self.write_disk_cache(&key, &bytes);
-            let decoded = decode::decode(&bytes, &self.styler, &self.language);
+            let decoded = decode::decode(&bytes);
 
             if is_current {
                 debug!(
@@ -141,7 +131,7 @@ impl TileCache {
 
         if let Some(bytes) = self.read_disk_cache(&key) {
             debug!("disk cache hit: {} ({} bytes)", key, bytes.len());
-            let decoded = decode::decode(&bytes, &self.styler, &self.language);
+            let decoded = decode::decode(&bytes);
             self.insert_memory(key.clone(), decoded);
             return self.memory_cache.get(&key);
         }

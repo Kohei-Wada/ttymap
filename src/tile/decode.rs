@@ -5,8 +5,6 @@ use std::sync::Arc;
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::styler::StyleType;
-use crate::styler::Styler;
 use crate::styler::filter::PropertyValue;
 
 pub mod proto {
@@ -22,16 +20,16 @@ pub struct Point {
 }
 
 // ── Feature ────────────────────────────────────────────────────────────────────
+//
+// Carries raw MVT data only. Style resolution (color, style_type, min/max_zoom)
+// and label extraction live in the render layer; this keeps tile decode a pure
+// protobuf → geometry transform with no UI-layer dependencies.
 
 #[derive(Debug, Clone)]
 pub struct Feature {
-    pub style_type: StyleType,
-    pub label: Option<String>,
-    pub sort: i64,
+    pub layer_name: Arc<str>,
+    pub properties: Arc<HashMap<String, PropertyValue>>,
     pub points: Arc<Vec<Vec<Point>>>,
-    pub color: u8,
-    pub min_zoom: Option<f64>,
-    pub max_zoom: Option<f64>,
     pub min_x: f64,
     pub max_x: f64,
     pub min_y: f64,
@@ -176,7 +174,9 @@ fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
 
 // ── Label extractor ────────────────────────────────────────────────────────────
 
-fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> Option<String> {
+/// Pick a display label from a feature's properties using the requested
+/// language (falling back to `name_en`, then `name`, then `house_num`).
+pub fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> Option<String> {
     let lang_key = format!("name_{}", language);
     for key in &[lang_key.as_str(), "name_en", "name", "house_num"] {
         if let Some(PropertyValue::String(s)) = props.get(*key)
@@ -190,7 +190,8 @@ fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> Opti
 
 // ── Sort value extractor ───────────────────────────────────────────────────────
 
-fn extract_sort(props: &HashMap<String, PropertyValue>) -> i64 {
+/// Sort key used to order labels (smaller = drawn first, so higher priority).
+pub fn extract_sort(props: &HashMap<String, PropertyValue>) -> i64 {
     if let Some(v) = props.get("localrank").or_else(|| props.get("scalerank"))
         && let Some(n) = v.as_f64()
     {
@@ -233,7 +234,10 @@ fn maybe_decompress(buffer: &[u8]) -> Vec<u8> {
 
 // ── Main decode ────────────────────────────────────────────────────────────────
 
-pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
+/// Pure MVT decode: parse protobuf and build an R-tree per layer. Does not
+/// consult any styler — styling, min/max-zoom filtering, and label extraction
+/// all happen at render time.
+pub fn decode(buffer: &[u8]) -> DecodedTile {
     let data = maybe_decompress(buffer);
 
     let tile = match proto::Tile::decode(data.as_slice()) {
@@ -246,16 +250,14 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
     };
 
     let mut decoded_layers: HashMap<String, TileLayer> = HashMap::new();
-    // Reused across every feature in every layer to avoid per-feature
-    // HashMap allocations. Cleared at the top of each iteration.
-    let mut props: HashMap<String, PropertyValue> = HashMap::new();
 
     for layer in &tile.layers {
         let extent = layer.extent.unwrap_or(4096);
+        let layer_name: Arc<str> = Arc::from(layer.name.as_str());
         let mut feats: Vec<Feature> = Vec::new();
 
         for feature in &layer.features {
-            props.clear();
+            let mut props: HashMap<String, PropertyValue> = HashMap::new();
             decode_tags_into(&feature.tags, &layer.keys, &layer.values, &mut props);
 
             let type_str = match feature.r#type.unwrap_or(0) {
@@ -269,32 +271,16 @@ pub fn decode(buffer: &[u8], styler: &Styler, language: &str) -> DecodedTile {
                 PropertyValue::String(type_str.to_string()),
             );
 
-            let style = match styler.get_style_for(&layer.name, &props) {
-                Some(s) => s,
-                None => continue,
-            };
-
             let points = decode_geometry(&feature.geometry);
             if points.is_empty() {
                 continue;
             }
-
-            let label = if style.style_type == StyleType::Symbol {
-                extract_label(&props, language)
-            } else {
-                None
-            };
-            let sort = extract_sort(&props);
             let (min_x, max_x, min_y, max_y) = calculate_bounds(&points);
 
             feats.push(Feature {
-                style_type: style.style_type,
-                label,
-                sort,
+                layer_name: layer_name.clone(),
+                properties: Arc::new(props),
                 points: Arc::new(points),
-                color: style.color,
-                min_zoom: style.min_zoom,
-                max_zoom: style.max_zoom,
                 min_x,
                 max_x,
                 min_y,

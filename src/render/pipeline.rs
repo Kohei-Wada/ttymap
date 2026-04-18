@@ -27,8 +27,8 @@ impl RenderPipeline {
         width: usize,
         height: usize,
     ) -> Self {
-        let tile_cache = TileCache::new(source_url, enable_disk_cache, styler.clone(), language);
-        let renderer = Renderer::new(styler, width, height);
+        let tile_cache = TileCache::new(source_url, enable_disk_cache);
+        let renderer = Renderer::new(styler, language, width, height);
         Self {
             tile_cache,
             renderer,

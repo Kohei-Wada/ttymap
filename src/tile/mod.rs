@@ -10,4 +10,4 @@ pub mod decode;
 pub mod fetch;
 
 pub use cache::TileCache;
-pub use decode::{Feature, Point};
+pub use decode::Feature;
