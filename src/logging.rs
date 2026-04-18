@@ -22,7 +22,7 @@ impl Log for FileLogger {
     }
 
     fn log(&self, record: &Record) {
-        let t = Local::now().format("%H:%M:%S%.3f");
+        let t = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         if let Ok(mut f) = self.file.lock() {
             let _ = writeln!(
                 f,
