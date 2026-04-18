@@ -3,6 +3,7 @@
 pub mod braille;
 pub mod canvas;
 pub mod frame;
+mod geom;
 pub mod label;
 pub mod panic_silence;
 pub mod pipeline;

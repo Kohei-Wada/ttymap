@@ -1,5 +1,6 @@
 use super::braille::BrailleBuffer;
 use super::frame::MapFrame;
+use super::geom::{BresenhamIter, clip_line, sutherland_hodgman_into};
 use super::label::LabelBuffer;
 
 use super::VIEWPORT_PADDING;
@@ -141,10 +142,8 @@ impl Canvas {
         }
     }
 
-    // ── Sutherland-Hodgman polygon clipping ─────────────────────────────────
-
-    /// Clip a polygon to the padded viewport using Sutherland-Hodgman algorithm.
-    /// Each ring is clipped independently. Writes surviving rings (len >= 3)
+    /// Clip a polygon to the padded viewport using Sutherland-Hodgman. Each
+    /// ring is clipped independently. Writes surviving rings (len >= 3)
     /// into `output` (reusing existing inner Vec capacities) and returns the
     /// number of rings written. Entries past the returned count are left in
     /// place so their capacities can be reused on subsequent calls.
@@ -183,8 +182,6 @@ impl Canvas {
         output
     }
 
-    // ── Cohen-Sutherland line clipping ────────────────────────────────────────
-
     fn clip_bounds(&self) -> (i32, i32, i32, i32) {
         (
             -VIEWPORT_PADDING,
@@ -194,84 +191,8 @@ impl Canvas {
         )
     }
 
-    const INSIDE: u8 = 0b0000;
-    const LEFT: u8 = 0b0001;
-    const RIGHT: u8 = 0b0010;
-    const BOTTOM: u8 = 0b0100;
-    const TOP: u8 = 0b1000;
-
-    fn outcode(&self, x: i32, y: i32, xmin: i32, ymin: i32, xmax: i32, ymax: i32) -> u8 {
-        let mut code = Self::INSIDE;
-        if x < xmin {
-            code |= Self::LEFT;
-        } else if x > xmax {
-            code |= Self::RIGHT;
-        }
-        if y < ymin {
-            code |= Self::TOP;
-        } else if y > ymax {
-            code |= Self::BOTTOM;
-        }
-        code
-    }
-
-    /// Clip a line segment to the padded viewport. Returns None if entirely outside.
-    fn clip_line(
-        &self,
-        mut x0: i32,
-        mut y0: i32,
-        mut x1: i32,
-        mut y1: i32,
-    ) -> Option<(i32, i32, i32, i32)> {
-        let (xmin, ymin, xmax, ymax) = self.clip_bounds();
-        let mut code0 = self.outcode(x0, y0, xmin, ymin, xmax, ymax);
-        let mut code1 = self.outcode(x1, y1, xmin, ymin, xmax, ymax);
-
-        for _ in 0..20 {
-            if (code0 | code1) == 0 {
-                // Both inside
-                return Some((x0, y0, x1, y1));
-            }
-            if (code0 & code1) != 0 {
-                // Both on same outside side
-                return None;
-            }
-
-            let code_out = if code0 != 0 { code0 } else { code1 };
-            let (x, y);
-
-            if code_out & Self::BOTTOM != 0 {
-                x = x0 + ((x1 - x0) as i64 * (ymax - y0) as i64 / (y1 - y0) as i64) as i32;
-                y = ymax;
-            } else if code_out & Self::TOP != 0 {
-                x = x0 + ((x1 - x0) as i64 * (ymin - y0) as i64 / (y1 - y0) as i64) as i32;
-                y = ymin;
-            } else if code_out & Self::RIGHT != 0 {
-                y = y0 + ((y1 - y0) as i64 * (xmax - x0) as i64 / (x1 - x0) as i64) as i32;
-                x = xmax;
-            } else {
-                y = y0 + ((y1 - y0) as i64 * (xmin - x0) as i64 / (x1 - x0) as i64) as i32;
-                x = xmin;
-            }
-
-            if code_out == code0 {
-                x0 = x;
-                y0 = y;
-                code0 = self.outcode(x0, y0, xmin, ymin, xmax, ymax);
-            } else {
-                x1 = x;
-                y1 = y;
-                code1 = self.outcode(x1, y1, xmin, ymin, xmax, ymax);
-            }
-        }
-
-        None
-    }
-
-    // ── Drawing with clipping ─────────────────────────────────────────────────
-
     fn draw_line_clipped(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u8) {
-        if let Some((cx0, cy0, cx1, cy1)) = self.clip_line(x0, y0, x1, y1) {
+        if let Some((cx0, cy0, cx1, cy1)) = clip_line(self.clip_bounds(), x0, y0, x1, y1) {
             self.line_bresenham(cx0, cy0, cx1, cy1, color);
         }
     }
@@ -287,9 +208,10 @@ impl Canvas {
     fn filled_triangle(&mut self, a: [i32; 2], b: [i32; 2], c: [i32; 2], color: u8) {
         self.scratch_edge_pixels.clear();
 
+        let bounds = self.clip_bounds();
         for pair in [(&a, &b), (&b, &c), (&c, &a)] {
             if let Some((cx0, cy0, cx1, cy1)) =
-                self.clip_line(pair.0[0], pair.0[1], pair.1[0], pair.1[1])
+                clip_line(bounds, pair.0[0], pair.0[1], pair.1[0], pair.1[1])
             {
                 self.scratch_edge_pixels
                     .extend(BresenhamIter::new(cx0, cy0, cx1, cy1));
@@ -321,197 +243,6 @@ impl Canvas {
                 self.buffer.set_pixel(x as usize, y as usize, color);
             }
         }
-    }
-}
-
-// ── Sutherland-Hodgman polygon clipping ───────────────────────────────────────
-
-/// Clip a polygon ring to a rectangle using the Sutherland-Hodgman algorithm.
-/// Writes the clipped ring into `output`. `buf_a` and `buf_b` are scratch
-/// ping-pong buffers used between the 4 edge-clipping stages; their contents
-/// are overwritten. `bounds` is (xmin, ymin, xmax, ymax).
-fn sutherland_hodgman_into(
-    polygon: &[(i32, i32)],
-    bounds: (i32, i32, i32, i32),
-    buf_a: &mut Vec<(i32, i32)>,
-    buf_b: &mut Vec<(i32, i32)>,
-    output: &mut Vec<(i32, i32)>,
-) {
-    output.clear();
-    if polygon.is_empty() {
-        return;
-    }
-
-    let (xmin, ymin, xmax, ymax) = bounds;
-
-    // Stage the polygon in buf_a, then pipe through 4 edges. The final edge
-    // (bottom) writes directly into `output`.
-    buf_a.clear();
-    buf_a.extend_from_slice(polygon);
-
-    buf_b.clear();
-    clip_against_edge(buf_a, buf_b, true, true, xmin); // left
-    if buf_b.is_empty() {
-        return;
-    }
-
-    buf_a.clear();
-    clip_against_edge(buf_b, buf_a, true, false, xmax); // right
-    if buf_a.is_empty() {
-        return;
-    }
-
-    buf_b.clear();
-    clip_against_edge(buf_a, buf_b, false, true, ymin); // top
-    if buf_b.is_empty() {
-        return;
-    }
-
-    clip_against_edge(buf_b, output, false, false, ymax); // bottom
-}
-
-/// Clip `input` against a single axis-aligned edge and append the result to
-/// `output`. `axis == true` selects the x coordinate; `keep_ge == true` keeps
-/// points with coord >= `bound`, otherwise <= `bound`.
-fn clip_against_edge(
-    input: &[(i32, i32)],
-    output: &mut Vec<(i32, i32)>,
-    axis: bool,
-    keep_ge: bool,
-    bound: i32,
-) {
-    let val = |p: (i32, i32)| if axis { p.0 } else { p.1 };
-    let inside = |p: (i32, i32)| {
-        if keep_ge {
-            val(p) >= bound
-        } else {
-            val(p) <= bound
-        }
-    };
-    let intersect = |a: (i32, i32), b: (i32, i32)| {
-        if axis {
-            intersect_x(a, b, bound)
-        } else {
-            intersect_y(a, b, bound)
-        }
-    };
-
-    let mut prev = input[input.len() - 1];
-    let mut prev_inside = inside(prev);
-
-    for &curr in input {
-        let curr_inside = inside(curr);
-        if curr_inside {
-            if !prev_inside {
-                output.push(intersect(prev, curr));
-            }
-            output.push(curr);
-        } else if prev_inside {
-            output.push(intersect(prev, curr));
-        }
-        prev = curr;
-        prev_inside = curr_inside;
-    }
-}
-
-/// Owned-result variant used by tests.
-#[cfg(test)]
-fn sutherland_hodgman(
-    polygon: &[(i32, i32)],
-    xmin: i32,
-    ymin: i32,
-    xmax: i32,
-    ymax: i32,
-) -> Vec<(i32, i32)> {
-    let mut buf_a = Vec::new();
-    let mut buf_b = Vec::new();
-    let mut output = Vec::new();
-    sutherland_hodgman_into(
-        polygon,
-        (xmin, ymin, xmax, ymax),
-        &mut buf_a,
-        &mut buf_b,
-        &mut output,
-    );
-    output
-}
-
-fn intersect_x(a: (i32, i32), b: (i32, i32), x: i32) -> (i32, i32) {
-    let dx = b.0 as i64 - a.0 as i64;
-    if dx == 0 {
-        return (x, a.1);
-    }
-    let t = (x as i64 - a.0 as i64) as f64 / dx as f64;
-    let y = a.1 as f64 + t * (b.1 as f64 - a.1 as f64);
-    (x, y as i32)
-}
-
-fn intersect_y(a: (i32, i32), b: (i32, i32), y: i32) -> (i32, i32) {
-    let dy = b.1 as i64 - a.1 as i64;
-    if dy == 0 {
-        return (a.0, y);
-    }
-    let t = (y as i64 - a.1 as i64) as f64 / dy as f64;
-    let x = a.0 as f64 + t * (b.0 as f64 - a.0 as f64);
-    (x as i32, y)
-}
-
-// ── Bresenham line iterator ───────────────────────────────────────────────────
-
-struct BresenhamIter {
-    x: i32,
-    y: i32,
-    x1: i32,
-    y1: i32,
-    dx: i32,
-    dy: i32,
-    sx: i32,
-    sy: i32,
-    err: i32,
-    done: bool,
-}
-
-impl BresenhamIter {
-    fn new(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
-        let dx = (x1 - x0).abs();
-        let dy = (y1 - y0).abs();
-        Self {
-            x: x0,
-            y: y0,
-            x1,
-            y1,
-            dx,
-            dy,
-            sx: if x0 < x1 { 1 } else { -1 },
-            sy: if y0 < y1 { 1 } else { -1 },
-            err: dx - dy,
-            done: false,
-        }
-    }
-}
-
-impl Iterator for BresenhamIter {
-    type Item = (i32, i32);
-
-    fn next(&mut self) -> Option<(i32, i32)> {
-        if self.done {
-            return None;
-        }
-        let point = (self.x, self.y);
-        if self.x == self.x1 && self.y == self.y1 {
-            self.done = true;
-            return Some(point);
-        }
-        let e2 = 2 * self.err;
-        if e2 > -self.dy {
-            self.err -= self.dy;
-            self.x += self.sx;
-        }
-        if e2 < self.dx {
-            self.err += self.dx;
-            self.y += self.sy;
-        }
-        Some(point)
     }
 }
 
@@ -577,75 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn test_clip_line_fully_inside() {
-        let canvas = Canvas::new(100, 100);
-        assert!(canvas.clip_line(10, 10, 50, 50).is_some());
-    }
-
-    #[test]
-    fn test_clip_line_fully_outside() {
-        let canvas = Canvas::new(100, 100);
-        // Both points far to the right
-        assert!(canvas.clip_line(10000, 0, 20000, 50).is_none());
-    }
-
-    #[test]
-    fn test_clip_line_crosses_viewport() {
-        let canvas = Canvas::new(100, 100);
-        let result = canvas.clip_line(-1000, 50, 1000, 50);
-        assert!(result.is_some());
-        let (cx0, _, cx1, _) = result.unwrap();
-        // Should be clipped to viewport + padding
-        assert!(cx0 >= -VIEWPORT_PADDING);
-        assert!(cx1 <= 100 + VIEWPORT_PADDING);
-    }
-
-    #[test]
     fn test_huge_offscreen_line_no_hang() {
         let mut canvas = Canvas::new(100, 100);
         canvas.polyline(&[(50, 50), (1000000, 1000000)], 7);
-    }
-
-    // ── Sutherland-Hodgman tests ─────────────────────────────────────────
-
-    #[test]
-    fn test_sh_polygon_fully_inside() {
-        let poly = vec![(10, 10), (50, 10), (50, 50), (10, 50)];
-        let clipped = sutherland_hodgman(&poly, 0, 0, 100, 100);
-        assert_eq!(clipped.len(), 4);
-    }
-
-    #[test]
-    fn test_sh_polygon_fully_outside() {
-        let poly = vec![(200, 200), (300, 200), (300, 300), (200, 300)];
-        let clipped = sutherland_hodgman(&poly, 0, 0, 100, 100);
-        assert!(clipped.is_empty());
-    }
-
-    #[test]
-    fn test_sh_polygon_partially_inside() {
-        // Square from (-50,-50) to (50,50), clipped to (0,0)-(100,100)
-        let poly = vec![(-50, -50), (50, -50), (50, 50), (-50, 50)];
-        let clipped = sutherland_hodgman(&poly, 0, 0, 100, 100);
-        // Should produce a polygon covering (0,0)-(50,50) area
-        assert!(clipped.len() >= 3);
-        for &(x, y) in &clipped {
-            assert!(x >= 0 && x <= 100, "x={} out of bounds", x);
-            assert!(y >= 0 && y <= 100, "y={} out of bounds", y);
-        }
-    }
-
-    #[test]
-    fn test_sh_large_polygon_covering_viewport() {
-        // Huge square that fully covers the viewport
-        let poly = vec![(-1000, -1000), (2000, -1000), (2000, 2000), (-1000, 2000)];
-        let clipped = sutherland_hodgman(&poly, 0, 0, 100, 100);
-        // Should be clipped to the viewport rectangle
-        assert_eq!(clipped.len(), 4);
-        assert!(clipped.contains(&(0, 0)));
-        assert!(clipped.contains(&(100, 0)));
-        assert!(clipped.contains(&(100, 100)));
-        assert!(clipped.contains(&(0, 100)));
     }
 
     #[test]
