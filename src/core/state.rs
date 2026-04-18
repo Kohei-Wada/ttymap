@@ -95,24 +95,29 @@ impl Core {
             Action::PanUpHalf => self.pan(step, 0.0, 7.5),
             Action::PanDownHalf => self.pan(step, 0.0, -7.5),
             Action::ZoomIn => {
+                let old = self.zoom;
                 self.zoom = (self.zoom + zoom_step).min(max_zoom);
-                true
+                self.zoom != old
             }
             Action::ZoomOut => {
+                let old = self.zoom;
                 self.zoom = (self.zoom - zoom_step).max(self.min_zoom);
-                true
+                self.zoom != old
             }
             Action::ZoomToWorld => {
+                let old = self.zoom;
                 self.zoom = self.min_zoom;
-                true
+                self.zoom != old
             }
             Action::ResetPosition => {
+                let old_center = self.center;
+                let old_zoom = self.zoom;
                 self.center = LonLat {
                     lon: self.initial_lon,
                     lat: self.initial_lat,
                 };
                 self.zoom = self.initial_zoom.unwrap_or(self.min_zoom);
-                true
+                self.center != old_center || self.zoom != old_zoom
             }
             Action::Redraw => true,
         }
@@ -136,10 +141,11 @@ impl Core {
     }
 
     fn pan(&mut self, step: f64, dlon: f64, dlat: f64) -> bool {
+        let old = self.center;
         self.center.lon += step * dlon;
         self.center.lat += step * dlat;
         self.center = geo::normalize(self.center);
-        true
+        self.center != old
     }
 
     /// Pan the map by terminal cell offsets (for mouse drag).

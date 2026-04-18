@@ -5,13 +5,16 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use chrono::Local;
 use directories::ProjectDirs;
 use log::{LevelFilter, Log, Metadata, Record};
 
 /// Maximum log file size before rotation (1 MB).
 const MAX_LOG_SIZE: u64 = 1_024 * 1_024;
 
-struct FileLogger(Mutex<File>);
+struct FileLogger {
+    file: Mutex<File>,
+}
 
 impl Log for FileLogger {
     fn enabled(&self, _metadata: &Metadata) -> bool {
@@ -19,10 +22,12 @@ impl Log for FileLogger {
     }
 
     fn log(&self, record: &Record) {
-        if let Ok(mut f) = self.0.lock() {
+        let t = Local::now().format("%H:%M:%S%.3f");
+        if let Ok(mut f) = self.file.lock() {
             let _ = writeln!(
                 f,
-                "[{} {}:{}] {}",
+                "[{} {} {}:{}] {}",
+                t,
                 record.level(),
                 record.target(),
                 record.line().unwrap_or(0),
@@ -32,7 +37,7 @@ impl Log for FileLogger {
     }
 
     fn flush(&self) {
-        if let Ok(mut f) = self.0.lock() {
+        if let Ok(mut f) = self.file.lock() {
             let _ = f.flush();
         }
     }
@@ -70,7 +75,9 @@ pub fn init() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
     let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
-    let logger = FileLogger(Mutex::new(file));
+    let logger = FileLogger {
+        file: Mutex::new(file),
+    };
     log::set_boxed_logger(Box::new(logger))?;
     log::set_max_level(LevelFilter::Debug);
     Ok(path)
