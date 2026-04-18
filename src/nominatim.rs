@@ -6,8 +6,6 @@ use log::debug;
 use crate::geo::LonLat;
 
 const BASE_URL: &str = "https://nominatim.openstreetmap.org";
-const USER_AGENT: &str = "ttymap/0.1.0 (https://github.com/Kohei-Wada/ttymap)";
-const TIMEOUT_SECS: u64 = 5;
 
 /// Forward geocoding result.
 #[derive(Debug, Clone)]
@@ -31,11 +29,7 @@ pub struct NominatimClient {
 
 impl NominatimClient {
     pub fn new() -> Option<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .build()
-            .ok()?;
+        let client = crate::shared::http::client_builder().build().ok()?;
         Some(Self { client })
     }
 

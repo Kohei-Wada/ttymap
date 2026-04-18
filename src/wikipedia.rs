@@ -2,9 +2,6 @@
 
 use log::debug;
 
-const USER_AGENT: &str = "ttymap/0.1.0";
-const TIMEOUT_SECS: u64 = 5;
-
 #[derive(Debug, Clone)]
 pub struct WikiArticle {
     pub title: String,
@@ -21,11 +18,7 @@ pub struct WikipediaClient {
 
 impl WikipediaClient {
     pub fn new(language: &str) -> Option<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .build()
-            .ok()?;
+        let client = crate::shared::http::client_builder().build().ok()?;
         Some(Self {
             client,
             language: language.to_string(),

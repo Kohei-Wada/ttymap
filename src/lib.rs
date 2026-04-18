@@ -27,6 +27,9 @@ pub mod palette;
 /// Rendering pipeline — Braille buffer, canvas, clipping, render thread.
 pub mod render;
 
+/// Cross-cutting infrastructure shared across domains (HTTP, …).
+pub mod shared;
+
 /// Mapbox GL style JSON parser — filter compilation, color resolution.
 pub mod styler;
 

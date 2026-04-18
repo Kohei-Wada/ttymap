@@ -40,8 +40,9 @@ impl HttpTileClient {
 
         // Build one reqwest Client and share it across workers. Client holds
         // the connection pool (HTTP keep-alive) and TLS context internally
-        // via Arc, so Clone is cheap and the pool is shared.
-        let http = reqwest::blocking::Client::builder()
+        // via Arc, so Clone is cheap and the pool is shared. Tiles want a
+        // longer timeout than the default (slow tile servers), so override.
+        let http = crate::shared::http::client_builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("reqwest client build");
