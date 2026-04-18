@@ -7,8 +7,8 @@ use ratatui::style::Style;
 
 use crate::geo;
 use crate::render::frame::MapFrame;
-use crate::ui::overlay::MapOverlay;
 use crate::ui::theme::Theme;
+use crate::ui::widget::overlay::MapOverlay;
 
 use super::state::WikiState;
 

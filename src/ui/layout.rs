@@ -8,10 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
-use super::overlay::MapOverlay;
-use super::widget::coords::CoordsOverlay;
-use super::widget::place::PlaceOverlay;
-use super::widget::scale_bar::ScaleBarOverlay;
+use super::widget::overlay::{CoordsOverlay, MapOverlay, PlaceOverlay, ScaleBarOverlay};
 use super::widget::search;
 use super::widget::wiki::{self, WikiMarkersOverlay};
 

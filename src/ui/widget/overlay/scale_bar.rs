@@ -11,8 +11,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::geo;
 use crate::render::frame::MapFrame;
-use crate::ui::overlay::MapOverlay;
 use crate::ui::theme::Theme;
+
+use super::MapOverlay;
 
 pub struct ScaleBarOverlay;
 

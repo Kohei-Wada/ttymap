@@ -1,13 +1,12 @@
 //! UI layer — ratatui layout and widgets.
 
 pub mod layout;
-pub mod overlay;
 pub mod theme;
 pub mod widget;
 
 use theme::Theme;
 use widget::help::HelpWidget;
-use widget::place::PlaceState;
+use widget::overlay::PlaceState;
 use widget::search::SearchState;
 use widget::wiki::WikiState;
 
