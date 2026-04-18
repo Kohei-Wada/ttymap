@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
 use super::overlay::MapOverlay;
+use super::widget::info::{CoordsOverlay, ScaleBarOverlay};
 use super::widget::wiki::{self, WikiMarkersOverlay};
 
 /// Draw the full screen.
@@ -37,14 +38,13 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         // Map overlays — each stamps on top of the rendered map. Adding
         // a new overlay means implementing MapOverlay and appending here.
         let wiki_markers = WikiMarkersOverlay { state: &ui.wiki };
-        let overlays: [&dyn MapOverlay; 1] = [&wiki_markers];
+        let coords = CoordsOverlay { state: &ui.info };
+        let scale_bar = ScaleBarOverlay { state: &ui.info };
+        let overlays: [&dyn MapOverlay; 3] = [&wiki_markers, &coords, &scale_bar];
         for overlay in overlays {
             overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
         }
     }
-
-    // Info overlay
-    ui.info.render(f, map_inner, &ui.theme);
 
     // Wiki panel
     wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
