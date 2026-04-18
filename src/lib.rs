@@ -6,9 +6,6 @@
 /// Application event loop and terminal I/O orchestration.
 pub mod app;
 
-/// Color conversion utilities (hex → RGB → xterm-256).
-pub mod color;
-
 /// Core state management — config, input, markers, map state snapshots.
 pub mod core;
 
