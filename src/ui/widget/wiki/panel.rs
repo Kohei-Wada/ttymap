@@ -110,11 +110,30 @@ fn render_list(
         }
     }
 
-    // Scroll to keep the selected article visible. With wrap disabled on
-    // Paragraph, each Line above corresponds exactly to one output row,
-    // so this math is precise.
+    // Scroll to keep the selected article visible, with "top-anchored on
+    // overflow" behavior:
+    //
+    //   - If the selection fits into the viewport starting from the top
+    //     of the list (scroll=0), don't scroll. Pressing down through
+    //     the first few articles keeps the viewport stable.
+    //   - Once the selection would go off the bottom (or the selection
+    //     itself is taller than the viewport), put the selection's top
+    //     at the viewport top. Next press-down jumps to the next article
+    //     at the top.
+    //   - Clamp against the end of the content so the viewport never
+    //     shows empty space below the last article; consecutive
+    //     selections near the end share the same viewport.
+    //
+    // With Paragraph's wrap disabled, each pushed `Line` maps to exactly
+    // one output row, so the math is in output rows throughout.
     let visible_lines = panel_height.saturating_sub(2);
-    let scroll = (selected_top + selected_height).saturating_sub(visible_lines);
+    let total_lines = lines.len() as u16;
+    let max_scroll = total_lines.saturating_sub(visible_lines);
+    let scroll = if selected_top + selected_height > visible_lines {
+        selected_top.min(max_scroll)
+    } else {
+        0
+    };
 
     let widget = Paragraph::new(lines)
         .style(theme.text())
