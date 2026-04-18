@@ -24,6 +24,21 @@ impl KeyMap {
             .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
             .map(|(_, a)| a)
     }
+
+    /// Replace every existing binding for `action` with the supplied
+    /// list of key strings (e.g. `["h", "Left"]`). Invalid key strings
+    /// are logged and skipped. Used by the app layer when applying
+    /// `[keymap]` overrides from config.
+    pub fn set_bindings(&mut self, action: Action, keys: &[String]) {
+        self.bindings.retain(|(_, a)| a != &action);
+        for key_str in keys {
+            if let Some(binding) = parse_key_binding(key_str) {
+                self.bindings.push((binding, action.clone()));
+            } else {
+                log::warn!("invalid key binding: {:?}", key_str);
+            }
+        }
+    }
 }
 
 impl Default for KeyMap {

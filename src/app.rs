@@ -35,14 +35,15 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEve
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
+use crate::config::{Config, KeybindingOverrides};
 use crate::core::input::InputHandler;
-use crate::core::{Action, Config, Core};
+use crate::core::keymap::KeyMap;
+use crate::core::{Action, Core, CoreOptions};
 use crate::geocode::{GeoResponse, Geocoder};
 use crate::nominatim::SearchResult;
-use crate::palette;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
-use crate::styler::{StylePreset, Styler};
+use crate::styler::Styler;
 use crate::ui::UiState;
 use crate::ui::layout;
 use crate::ui::widget::search::SearchAction;
@@ -66,8 +67,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(mut config: Config) -> Self {
-        let styler = Arc::new(Styler::new(config.style_preset));
+    pub fn new(config: Config) -> Self {
+        let styler = Arc::new(Styler::new(&config.style));
         let language = config.language.clone();
         let wiki_language = language.clone();
         let wiki_limit = config.wiki_limit;
@@ -80,6 +81,7 @@ impl App {
             cols, rows, width, height
         );
 
+        let palette = styler.palette();
         let pipeline = RenderPipeline::new(
             &config.source,
             config.cache_tiles,
@@ -88,15 +90,21 @@ impl App {
             width,
             height,
         );
-        let p = match config.style_preset {
-            StylePreset::Dark => &palette::DARK,
-            StylePreset::Bright => &palette::BRIGHT,
-        };
-        let mut ui = UiState::new(p);
+        let mut ui = UiState::new(palette);
 
-        let keymap = std::mem::take(&mut config.keymap);
+        let keymap = build_keymap(&config.keymap);
         let input = InputHandler::new(keymap);
-        let core = Core::new(config, width, height);
+        let core = Core::new(
+            CoreOptions {
+                initial_lon: config.initial_lon,
+                initial_lat: config.initial_lat,
+                initial_zoom: config.initial_zoom,
+                zoom_step: config.zoom_step,
+                max_zoom: config.max_zoom,
+            },
+            width,
+            height,
+        );
         let render_handle = RenderHandle::spawn(pipeline);
         ui.help.build(input.keymap());
 
@@ -393,5 +401,75 @@ impl App {
             layout::draw(f, &self.ui);
         })?;
         Ok(())
+    }
+}
+
+/// Apply `[keymap]` overrides from config onto the default `KeyMap`.
+/// Each field in `KeybindingOverrides` names an `Action`; the listed key strings
+/// replace any default bindings for that action. Invalid key strings
+/// are skipped (logged at warn level by `KeyMap::set_bindings`).
+fn build_keymap(overrides: &KeybindingOverrides) -> KeyMap {
+    let mut km = KeyMap::default();
+
+    macro_rules! rebind {
+        ($field:ident, $action:expr) => {
+            if let Some(keys) = &overrides.$field {
+                km.set_bindings($action, keys);
+            }
+        };
+    }
+
+    rebind!(pan_left, Action::PanLeft);
+    rebind!(pan_right, Action::PanRight);
+    rebind!(pan_up, Action::PanUp);
+    rebind!(pan_down, Action::PanDown);
+    rebind!(pan_left_fast, Action::PanLeftFast);
+    rebind!(pan_right_fast, Action::PanRightFast);
+    rebind!(pan_up_half, Action::PanUpHalf);
+    rebind!(pan_down_half, Action::PanDownHalf);
+    rebind!(zoom_in, Action::ZoomIn);
+    rebind!(zoom_out, Action::ZoomOut);
+    rebind!(zoom_to_world, Action::ZoomToWorld);
+    rebind!(reset_position, Action::ResetPosition);
+    rebind!(quit, Action::Quit);
+
+    km
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn build_keymap_applies_overrides() {
+        let mut overrides = KeybindingOverrides::default();
+        overrides.zoom_in = Some(vec!["i".to_string()]);
+        overrides.quit = Some(vec!["Q".to_string(), "C-q".to_string()]);
+
+        let km = build_keymap(&overrides);
+
+        assert_eq!(
+            km.lookup(KeyCode::Char('i'), KeyModifiers::NONE),
+            Some(&Action::ZoomIn)
+        );
+        assert_eq!(
+            km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
+            Some(&Action::Quit)
+        );
+        assert_eq!(
+            km.lookup(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            Some(&Action::Quit)
+        );
+    }
+
+    #[test]
+    fn build_keymap_keeps_unoverridden_defaults() {
+        let km = build_keymap(&KeybindingOverrides::default());
+        // 'h' is a default PanLeft binding.
+        assert_eq!(
+            km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
+            Some(&Action::PanLeft)
+        );
     }
 }

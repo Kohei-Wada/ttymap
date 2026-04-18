@@ -10,7 +10,10 @@
 /// Application event loop and terminal I/O orchestration.
 pub mod app;
 
-/// Core state management — config, input, markers, map state snapshots.
+/// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
+pub mod config;
+
+/// Core state management — input, keymap, map state snapshots.
 pub mod core;
 
 /// File-based logging to XDG state directory.

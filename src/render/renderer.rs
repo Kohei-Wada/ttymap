@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_draw_empty_returns_none() {
-        let styler = Arc::new(Styler::new(crate::styler::StylePreset::Dark));
+        let styler = Arc::new(Styler::new("dark"));
         let mut renderer = Renderer::new(styler, 80, 40);
         assert!(renderer.draw(&[], 1.0).is_none());
     }

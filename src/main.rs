@@ -2,7 +2,7 @@ use std::fs;
 
 use clap::{Parser, Subcommand};
 use ttymap::app::App;
-use ttymap::core::config;
+use ttymap::config;
 
 #[derive(Parser)]
 #[command(
@@ -82,10 +82,9 @@ fn main() {
         config.source = v;
     }
     if let Some(v) = cli.style {
-        config.style_preset = match v.as_str() {
-            "bright" => ttymap::styler::StylePreset::Bright,
-            _ => ttymap::styler::StylePreset::Dark,
-        };
+        // Unknown values get normalised to "dark" by the styler's
+        // fallback at construction time; just hand the raw string in.
+        config.style = v;
     }
 
     log::info!(
