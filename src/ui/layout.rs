@@ -8,9 +8,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
-use super::widget::overlay::{CoordsOverlay, MapOverlay, PlaceOverlay, ScaleBarOverlay};
+use super::widget::overlay::{
+    CoordsOverlay, MapOverlay, MarkersOverlay, PlaceOverlay, ScaleBarOverlay,
+};
 use super::widget::search;
-use super::widget::wiki::{self, WikiMarkersOverlay};
+use super::widget::wiki;
 
 /// Draw the full screen.
 pub fn draw(f: &mut Frame, ui: &UiState) {
@@ -37,7 +39,10 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 
         // Map overlays — each stamps on top of the rendered map. Adding
         // a new overlay means implementing MapOverlay and appending here.
-        let wiki_markers = WikiMarkersOverlay { state: &ui.wiki };
+        let wiki_points = wiki::marker_points(&ui.wiki, &ui.theme);
+        let wiki_markers = MarkersOverlay {
+            points: &wiki_points,
+        };
         let place = PlaceOverlay { state: &ui.place };
         let overlays: [&dyn MapOverlay; 4] =
             [&wiki_markers, &CoordsOverlay, &place, &ScaleBarOverlay];

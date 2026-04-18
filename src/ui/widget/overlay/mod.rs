@@ -7,9 +7,9 @@
 //! not touching the map widget. Designed like Google Maps' layer stack:
 //! base map + independently toggle-able overlays.
 //!
-//! Hybrid widgets that also expose a panel (e.g. `wiki`) keep their
-//! overlay impl in their own directory since it shares state with the
-//! panel; only *pure* overlays live here.
+//! Domain widgets with per-point markers (wiki, future POI types)
+//! adapt their state into `Vec<MarkerPoint>` and plug it into the
+//! shared [`MarkersOverlay`]; no per-domain overlay impl needed.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -18,10 +18,12 @@ use crate::render::frame::MapFrame;
 use crate::ui::theme::Theme;
 
 pub mod coords;
+pub mod markers;
 pub mod place;
 pub mod scale_bar;
 
 pub use coords::CoordsOverlay;
+pub use markers::{MarkerPoint, MarkersOverlay};
 pub use place::{PlaceOverlay, PlaceState};
 pub use scale_bar::ScaleBarOverlay;
 
