@@ -278,11 +278,7 @@ impl App {
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
             if matches!(
                 code,
-                KeyCode::Up
-                    | KeyCode::Down
-                    | KeyCode::Enter
-                    | KeyCode::Esc
-                    | KeyCode::Backspace
+                KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Esc | KeyCode::Backspace
             ) || (ctrl
                 && matches!(
                     code,

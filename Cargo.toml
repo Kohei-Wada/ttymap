@@ -22,7 +22,7 @@ toml = "1.1.2"
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
-features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy"]
+features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy", "run-cargo-fmt"]
 
 [build-dependencies]
 prost-build = "0.14"

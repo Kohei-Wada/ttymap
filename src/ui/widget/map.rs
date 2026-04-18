@@ -66,10 +66,7 @@ mod tests {
             ],
             cols: 2,
             rows: 1,
-            center: crate::geo::LonLat {
-                lon: 0.0,
-                lat: 0.0,
-            },
+            center: crate::geo::LonLat { lon: 0.0, lat: 0.0 },
             zoom: 0.0,
         };
         let area = Rect::new(0, 0, 2, 1);
