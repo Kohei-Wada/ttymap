@@ -23,10 +23,19 @@ pub mod logging;
 pub mod styler;
 
 // ── Internal modules (not part of the external surface) ──────────────────
+//
+// These are marked `pub` so integration tests and benchmarks under
+// `tests/` / `benches/` — which are compiled as external crates — can
+// reach them. `#[doc(hidden)]` signals "not stable API" to consumers.
 
-pub(crate) mod geo;
-pub(crate) mod palette;
-pub(crate) mod render;
-pub(crate) mod shared;
-pub(crate) mod tile;
+#[doc(hidden)]
+pub mod geo;
+#[doc(hidden)]
+pub mod palette;
+#[doc(hidden)]
+pub mod render;
+#[doc(hidden)]
+pub mod shared;
+#[doc(hidden)]
+pub mod tile;
 pub(crate) mod ui;

@@ -19,6 +19,9 @@ unicode-width = "0.2"
 log = { version = "0.4", features = ["std"] }
 toml = "1.1.2"
 
+[dev-dependencies]
+criterion = "0.5"
+
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
@@ -27,3 +30,11 @@ features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy", "run-cargo-f
 [build-dependencies]
 prost-build = "0.14"
 protox = "0.9"
+
+[[bench]]
+name = "decode_tile"
+harness = false
+
+[[bench]]
+name = "render_frame"
+harness = false
