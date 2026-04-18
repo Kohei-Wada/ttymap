@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
+use ttymap::palette::ThemeId;
 use ttymap::render::renderer::{Renderer, TileData};
 use ttymap::render::view::VisibleTile;
 use ttymap::styler::Styler;
@@ -40,7 +41,7 @@ fn build_tile_data(decoded: ttymap::tile::decode::DecodedTile) -> Vec<TileData> 
 fn bench_render_frame(c: &mut Criterion) {
     let decoded = decode::decode(SAMPLE);
     let tile_data = build_tile_data(decoded);
-    let styler = Arc::new(Styler::new("dark"));
+    let styler = Arc::new(Styler::new(ThemeId::Dark));
     // Typical terminal: 200×80 cells → 400×320 braille pixels.
     let mut renderer = Renderer::new(styler, "en".to_string(), 400, 320);
 

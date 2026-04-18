@@ -41,7 +41,8 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Self {
-        let styler = Arc::new(Styler::new(&config.style));
+        let theme_id = crate::palette::ThemeId::from_name(&config.style);
+        let styler = Arc::new(Styler::new(theme_id));
 
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::render::canvas_size(cols, rows);

@@ -3,6 +3,47 @@
 //! Values are xterm-256 color indices (`u8`). This module has no dependencies
 //! on ratatui or any UI crate, so it can be used by both the map renderer
 //! and the UI layer.
+//!
+//! [`ThemeId`] is the single source of truth for "which theme is active":
+//! pick one from the config, then derive everything else from it — the
+//! [`Palette`] the UI reads, the `styler::Styler` the map renderer reads,
+//! and the display name shown to the user.
+
+/// Identifies which theme the app is running with. Derives the concrete
+/// [`Palette`] and, separately, the set of styling rules consumed by
+/// `styler::Styler`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeId {
+    #[default]
+    Dark,
+    Bright,
+}
+
+impl ThemeId {
+    /// Parse a config string. Unknown names fall back to [`ThemeId::Dark`].
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "bright" => Self::Bright,
+            _ => Self::Dark,
+        }
+    }
+
+    /// The palette this theme ships with.
+    pub fn palette(self) -> &'static Palette {
+        match self {
+            Self::Dark => &DARK,
+            Self::Bright => &BRIGHT,
+        }
+    }
+
+    /// Canonical lowercase name used for logging / `styler.name()`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Bright => "bright",
+        }
+    }
+}
 
 /// All colors used by a single theme.
 pub struct Palette {
