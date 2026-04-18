@@ -19,6 +19,18 @@ use crate::ui::layout;
 use crate::ui::widget::search::SearchAction;
 use crate::ui::widget::wiki::WikiAction;
 
+/// What a key/mouse event just changed. Drives how the main loop
+/// reacts: a widget-only change redraws immediately (the map frame
+/// is unchanged); a map change only requests a new render — the
+/// main loop will redraw when a fresh frame arrives, avoiding a
+/// stale-frame draw followed by a second fresh-frame draw.
+#[derive(Clone, Copy, PartialEq)]
+enum KeyEffect {
+    None,
+    Widget,
+    Map,
+}
+
 pub struct App {
     core: Core,
     input: InputHandler,
@@ -88,10 +100,10 @@ impl App {
         // app is idle, which makes the CPU fan spin up.
         let mut dirty = true;
 
-        while self.core.is_running() {
-            // 1. Receive completed frames
+        'main_loop: while self.core.is_running() {
+            // 1. Receive completed frames — drain to latest so a burst from
+            // the render thread still produces only one redraw.
             while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
-                debug!("frame received");
                 self.ui.map_frame = Some(frame);
                 dirty = true;
             }
@@ -113,8 +125,15 @@ impl App {
                 dirty = false;
             }
 
-            // 5. Process input events
-            if event::poll(Duration::from_millis(16))? {
+            // 5. Process input events — drain the whole queue in one pass so
+            // a burst of key-repeat or mouse-drag events produces a single
+            // draw at the top of the next iteration, not one draw per event.
+            // First poll blocks up to 4 ms so render-thread frame arrivals
+            // (which don't wake the event poll) show up within ~4 ms at
+            // worst; subsequent polls use zero timeout to drain the queue.
+            let mut poll_timeout = Duration::from_millis(4);
+            while event::poll(poll_timeout)? {
+                poll_timeout = Duration::from_millis(0);
                 match event::read()? {
                     Event::Key(key_event) => {
                         if key_event.modifiers.contains(KeyModifiers::CONTROL)
@@ -122,15 +141,17 @@ impl App {
                         {
                             info!("Ctrl-C received, quitting");
                             self.core.stop();
-                            break;
+                            break 'main_loop;
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        let should_redraw = self.handle_key(key_event.code, key_event.modifiers);
-                        if should_redraw {
-                            dirty = true;
-                            if self.core.is_running() {
-                                self.request_draw();
+                        match self.handle_key(key_event.code, key_event.modifiers) {
+                            KeyEffect::None => {}
+                            KeyEffect::Widget => dirty = true,
+                            KeyEffect::Map => {
+                                if self.core.is_running() {
+                                    self.request_draw();
+                                }
                             }
                         }
                     }
@@ -142,10 +163,11 @@ impl App {
                         self.request_draw();
                         dirty = true;
                     }
-                    Event::Mouse(mouse) if self.handle_mouse(mouse) => {
-                        self.request_draw();
-                        dirty = true;
-                    }
+                    Event::Mouse(mouse) => match self.handle_mouse(mouse) {
+                        KeyEffect::None => {}
+                        KeyEffect::Widget => dirty = true,
+                        KeyEffect::Map => self.request_draw(),
+                    },
                     _ => {}
                 }
             }
@@ -160,23 +182,26 @@ impl App {
         Ok(())
     }
 
-    fn handle_key(&mut self, code: crossterm::event::KeyCode, modifiers: KeyModifiers) -> bool {
+    fn handle_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        modifiers: KeyModifiers,
+    ) -> KeyEffect {
         if self.ui.search.is_active() {
-            match self.ui.search.handle_key(code, modifiers) {
-                SearchAction::None | SearchAction::Consumed => {}
+            return match self.ui.search.handle_key(code, modifiers) {
+                SearchAction::None | SearchAction::Consumed => KeyEffect::Widget,
                 SearchAction::Jump(location) => {
                     info!("search: jumping to ({}, {})", location.lat, location.lon);
                     self.core.jump_to(location);
-                    self.request_draw();
+                    KeyEffect::Map
                 }
-            }
-            return true;
+            };
         }
 
         // Help toggle
         if self.ui.help.is_active() {
             self.ui.help.close();
-            return true;
+            return KeyEffect::Widget;
         }
 
         // Wiki panel navigation
@@ -184,12 +209,11 @@ impl App {
             let center = self.core.center();
             match self.ui.wiki.handle_key(code, modifiers, center) {
                 WikiAction::None => {}
-                WikiAction::Consumed => return true,
+                WikiAction::Consumed => return KeyEffect::Widget,
                 WikiAction::JumpTo(location) => {
                     info!("wiki: jumping to ({}, {})", location.lat, location.lon);
                     self.core.jump_to(location);
-                    self.request_draw();
-                    return true;
+                    return KeyEffect::Map;
                 }
             }
         }
@@ -198,23 +222,29 @@ impl App {
         match action {
             Action::SearchOpen => {
                 self.ui.search.open();
-                true
+                KeyEffect::Widget
             }
             Action::HelpToggle => {
                 self.ui.help.toggle();
-                true
+                KeyEffect::Widget
             }
             Action::WikiToggle => {
                 self.ui.wiki.toggle(self.core.center());
-                true
+                KeyEffect::Widget
             }
-            _ => self.core.process_action(&action),
+            _ => {
+                if self.core.process_action(&action) {
+                    KeyEffect::Map
+                } else {
+                    KeyEffect::None
+                }
+            }
         }
     }
 
-    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> KeyEffect {
         if self.ui.search.is_active() {
-            return false;
+            return KeyEffect::None;
         }
 
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -224,7 +254,7 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.drag_from = Some((mouse.column, mouse.row));
-                false
+                KeyEffect::None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((prev_x, prev_y)) = self.drag_from {
@@ -233,24 +263,24 @@ impl App {
                     self.drag_from = Some((mouse.column, mouse.row));
                     if drag_dx != 0 || drag_dy != 0 {
                         self.core.pan_by_cells(drag_dx, drag_dy);
-                        return true;
+                        return KeyEffect::Map;
                     }
                 }
-                false
+                KeyEffect::None
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag_from = None;
-                false
+                KeyEffect::None
             }
             MouseEventKind::ScrollUp => {
                 self.core.zoom_towards(dx, dy, self.core.zoom_step());
-                true
+                KeyEffect::Map
             }
             MouseEventKind::ScrollDown => {
                 self.core.zoom_towards(dx, dy, -self.core.zoom_step());
-                true
+                KeyEffect::Map
             }
-            _ => false,
+            _ => KeyEffect::None,
         }
     }
 

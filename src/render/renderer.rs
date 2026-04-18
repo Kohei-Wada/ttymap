@@ -75,8 +75,13 @@ impl Renderer {
         self.height
     }
 
-    /// Render pre-fetched tile data into a MapFrame.
-    /// Returns None if no tile data was provided.
+    /// Render pre-fetched tile data into a `MapFrame`.
+    ///
+    /// Always returns `Some`: if no tiles are loaded yet (e.g. panning into
+    /// an un-fetched area), we still emit a background-only frame so the
+    /// coords / scale-bar / place overlays keep updating with the new
+    /// `center` and `zoom`. Without this, the UI would look frozen while
+    /// tiles are in flight.
     pub fn draw(&mut self, tile_data: &[TileData], zoom: f64) -> Option<MapFrame> {
         // Clear canvas
         self.canvas.clear();
@@ -85,10 +90,6 @@ impl Renderer {
         }
 
         let tiles_found = tile_data.iter().filter(|t| !t.layers.is_empty()).count();
-        if tiles_found == 0 {
-            return None;
-        }
-
         let total_features: usize = tile_data
             .iter()
             .flat_map(|t| t.layers.iter())
@@ -348,9 +349,12 @@ mod tests {
     }
 
     #[test]
-    fn test_draw_empty_returns_none() {
+    fn test_draw_empty_still_emits_frame() {
+        // Empty tile data still produces a (background-only) frame so
+        // overlays (coords / scale bar / place) keep refreshing while
+        // tiles are in flight. Cf. `draw` doc comment.
         let styler = Arc::new(Styler::new("dark"));
         let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
-        assert!(renderer.draw(&[], 1.0).is_none());
+        assert!(renderer.draw(&[], 1.0).is_some());
     }
 }
