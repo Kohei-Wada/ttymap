@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use super::UiState;
 use super::overlay::MapOverlay;
 use super::widget::info::{CoordsOverlay, ScaleBarOverlay};
+use super::widget::search;
 use super::widget::wiki::{self, WikiMarkersOverlay};
 
 /// Draw the full screen.
@@ -49,8 +50,8 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     // Wiki panel
     wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
 
-    // Search overlay
-    ui.search.render(f, map_inner, &ui.theme);
+    // Search popup
+    search::render_panel(&ui.search, f, map_inner, &ui.theme);
 
     // Help overlay
     ui.help.render(f, map_inner, &ui.theme);

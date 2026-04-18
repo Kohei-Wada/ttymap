@@ -8,7 +8,7 @@ pub mod widget;
 use theme::Theme;
 use widget::help::HelpWidget;
 use widget::info::InfoState;
-use widget::search::SearchWidget;
+use widget::search::SearchState;
 use widget::wiki::WikiState;
 
 use crate::palette::Palette;
@@ -16,7 +16,7 @@ use crate::render::frame::MapFrame;
 
 /// Holds all UI widget state. Passed to layout::draw().
 pub struct UiState {
-    pub search: SearchWidget,
+    pub search: SearchState,
     pub info: InfoState,
     pub help: HelpWidget,
     pub wiki: WikiState,
@@ -27,7 +27,7 @@ pub struct UiState {
 impl UiState {
     pub fn new(palette: &Palette) -> Self {
         Self {
-            search: SearchWidget::new(),
+            search: SearchState::new(),
             info: InfoState::new(),
             help: HelpWidget::new(),
             wiki: WikiState::new(),
