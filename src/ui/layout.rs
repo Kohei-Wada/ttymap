@@ -8,6 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
+use super::overlay::MapOverlay;
+use super::widget::wiki::{self, WikiMarkersOverlay};
 
 /// Draw the full screen.
 pub fn draw(f: &mut Frame, ui: &UiState) {
@@ -32,16 +34,20 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
 
-        // Wiki markers overlay (only drawn when wiki panel is active)
-        ui.wiki
-            .render_markers(f.buffer_mut(), map_inner, map_frame, &ui.theme);
+        // Map overlays — each stamps on top of the rendered map. Adding
+        // a new overlay means implementing MapOverlay and appending here.
+        let wiki_markers = WikiMarkersOverlay { state: &ui.wiki };
+        let overlays: [&dyn MapOverlay; 1] = [&wiki_markers];
+        for overlay in overlays {
+            overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
+        }
     }
 
     // Info overlay
     ui.info.render(f, map_inner, &ui.theme);
 
     // Wiki panel
-    ui.wiki.render(f, map_inner, &ui.theme);
+    wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
 
     // Search overlay
     ui.search.render(f, map_inner, &ui.theme);

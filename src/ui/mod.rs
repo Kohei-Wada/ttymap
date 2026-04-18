@@ -1,6 +1,7 @@
 //! UI layer — ratatui layout and widgets.
 
 pub mod layout;
+pub mod overlay;
 pub mod theme;
 pub mod widget;
 
@@ -8,7 +9,7 @@ use theme::Theme;
 use widget::help::HelpWidget;
 use widget::info::InfoWidget;
 use widget::search::SearchWidget;
-use widget::wiki::WikiWidget;
+use widget::wiki::WikiState;
 
 use crate::palette::Palette;
 use crate::render::frame::MapFrame;
@@ -18,7 +19,7 @@ pub struct UiState {
     pub search: SearchWidget,
     pub info: InfoWidget,
     pub help: HelpWidget,
-    pub wiki: WikiWidget,
+    pub wiki: WikiState,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
 }
@@ -29,7 +30,7 @@ impl UiState {
             search: SearchWidget::new(),
             info: InfoWidget::new(),
             help: HelpWidget::new(),
-            wiki: WikiWidget::new(),
+            wiki: WikiState::new(),
             map_frame: None,
             theme: Theme::from_palette(palette),
         }
