@@ -58,6 +58,66 @@ pub fn tile2ll(x: f64, y: f64, zoom: u32) -> LonLat {
     }
 }
 
+/// Projection between world lat/lon and the braille canvas grid used by
+/// overlays. Canvas size is expressed in terminal cells, where each cell
+/// spans 2×4 braille sub-pixels. Both `ll_to_cell` and `cell_to_ll` use
+/// the top-left of the canvas as origin; callers add the map-area offset
+/// themselves.
+pub struct MapProjection {
+    center_tile: TileCoord,
+    tile_size: f64,
+    canvas_w: f64,
+    canvas_h: f64,
+    cols: u16,
+    rows: u16,
+    z: u32,
+}
+
+impl MapProjection {
+    pub fn new(center: LonLat, zoom: f64, cols: u16, rows: u16) -> Self {
+        let z = base_zoom(zoom);
+        Self {
+            center_tile: ll2tile(center.lon, center.lat, z),
+            tile_size: tile_size_at_zoom(zoom),
+            canvas_w: cols as f64 * 2.0,
+            canvas_h: rows as f64 * 4.0,
+            cols,
+            rows,
+            z,
+        }
+    }
+
+    /// Project `ll` to a canvas cell. `None` if the point falls outside
+    /// the canvas or the projection is not finite (e.g. poles).
+    pub fn ll_to_cell(&self, ll: LonLat) -> Option<(u16, u16)> {
+        let pt = ll2tile(ll.lon, ll.lat, self.z);
+        let px = self.canvas_w / 2.0 + (pt.x - self.center_tile.x) * self.tile_size;
+        let py = self.canvas_h / 2.0 + (pt.y - self.center_tile.y) * self.tile_size;
+        if !px.is_finite() || !py.is_finite() || px < 0.0 || py < 0.0 {
+            return None;
+        }
+        let col = (px / 2.0) as u16;
+        let row = (py / 4.0) as u16;
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        Some((col, row))
+    }
+
+    /// Project a canvas cell to lat/lon. `None` if the cell is outside
+    /// the canvas. Sub-pixel centre of the cell is used.
+    pub fn cell_to_ll(&self, col: u16, row: u16) -> Option<LonLat> {
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        let px = col as f64 * 2.0 + 1.0;
+        let py = row as f64 * 4.0 + 2.0;
+        let tx = self.center_tile.x + (px - self.canvas_w / 2.0) / self.tile_size;
+        let ty = self.center_tile.y + (py - self.canvas_h / 2.0) / self.tile_size;
+        Some(tile2ll(tx, ty, self.z))
+    }
+}
+
 /// Floor a zoom level and clamp to 0..=14.
 pub fn base_zoom(zoom: f64) -> u32 {
     zoom.floor().clamp(0.0, 14.0) as u32
@@ -212,6 +272,61 @@ mod tests {
         let ll = tile2ll(0.5, 0.5, 0);
         assert!(ll.lon.abs() < EPS);
         assert!(ll.lat.abs() < EPS);
+    }
+
+    #[test]
+    fn projection_center_maps_to_canvas_centre() {
+        let center = LonLat {
+            lon: 13.42,
+            lat: 52.51,
+        };
+        let proj = MapProjection::new(center, 10.0, 80, 24);
+        let (col, row) = proj.ll_to_cell(center).unwrap();
+        // Canvas centre in cells = (cols/2, rows/2) with sub-cell rounding.
+        assert_eq!(col, 40);
+        assert_eq!(row, 12);
+    }
+
+    #[test]
+    fn projection_cell_ll_roundtrip_near_centre() {
+        let proj = MapProjection::new(
+            LonLat {
+                lon: 13.42,
+                lat: 52.51,
+            },
+            12.0,
+            120,
+            40,
+        );
+        for &(col, row) in &[(0u16, 0u16), (60, 20), (119, 39)] {
+            let ll = proj.cell_to_ll(col, row).expect("inside canvas");
+            let (back_col, back_row) = proj
+                .ll_to_cell(ll)
+                .expect("projection back onto canvas must succeed");
+            assert!(
+                back_col.abs_diff(col) <= 1,
+                "col drift: {col} -> {back_col}"
+            );
+            assert!(
+                back_row.abs_diff(row) <= 1,
+                "row drift: {row} -> {back_row}"
+            );
+        }
+    }
+
+    #[test]
+    fn projection_rejects_out_of_canvas() {
+        let proj = MapProjection::new(LonLat { lon: 0.0, lat: 0.0 }, 5.0, 40, 20);
+        // A point 180° away from centre at the same zoom is offscreen.
+        assert!(
+            proj.ll_to_cell(LonLat {
+                lon: 170.0,
+                lat: -60.0,
+            })
+            .is_none()
+        );
+        assert!(proj.cell_to_ll(40, 0).is_none());
+        assert!(proj.cell_to_ll(0, 20).is_none());
     }
 
     #[test]

@@ -20,6 +20,7 @@ use crate::ui::theme::Theme;
 pub mod attribution;
 pub mod info;
 pub mod markers;
+mod place_service;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;

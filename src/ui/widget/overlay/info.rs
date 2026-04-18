@@ -8,8 +8,6 @@
 //! values show "unknown" instead of leaving a gap.
 
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use log::debug;
@@ -19,13 +17,14 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
-use crate::geo::{self, LonLat};
+use crate::geo::{LonLat, MapProjection};
 use crate::render::frame::MapFrame;
-use crate::shared::nominatim::{NominatimClient, PlaceInfo};
+use crate::shared::nominatim::NominatimClient;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;
 
 use super::MapOverlay;
+use super::place_service::{PlaceService, format_name};
 
 pub struct InfoWidget {
     cursor: Option<(u16, u16)>,
@@ -91,20 +90,17 @@ impl MapOverlay for InfoWidget {
         let center_line = format!(" center: {:.3}, {:.3}", frame.center.lat, frame.center.lon);
         draw_right_line(buf, map_area, CENTER_ROW, &center_line, style);
 
-        if ZOOM_ROW < map_area.height {
-            let line = format!(" zoom: {:.1}", frame.zoom);
-            draw_right_line(buf, map_area, ZOOM_ROW, &line, style);
-        }
-
         if CURSOR_ROW < map_area.height {
-            let cursor_ll = self
-                .cursor
-                .and_then(|pos| cursor_to_ll(pos, map_area, frame));
-            let line = match cursor_ll {
+            let line = match cursor_ll(self.cursor, map_area, frame) {
                 Some(ll) => format!(" cursor: {:.3}, {:.3}", ll.lat, ll.lon),
                 None => " cursor: unknown".to_string(),
             };
             draw_right_line(buf, map_area, CURSOR_ROW, &line, style);
+        }
+
+        if ZOOM_ROW < map_area.height {
+            let line = format!(" zoom: {:.1}", frame.zoom);
+            draw_right_line(buf, map_area, ZOOM_ROW, &line, style);
         }
 
         if PLACE_ROW < map_area.height {
@@ -130,64 +126,13 @@ fn draw_right_line(buf: &mut Buffer, map_area: Rect, row_offset: u16, line: &str
         .render(rect, buf);
 }
 
-fn cursor_to_ll(cursor: (u16, u16), map_area: Rect, frame: &MapFrame) -> Option<LonLat> {
-    let (cx, cy) = cursor;
+fn cursor_ll(cursor: Option<(u16, u16)>, map_area: Rect, frame: &MapFrame) -> Option<LonLat> {
+    let (cx, cy) = cursor?;
     if cx < map_area.x || cy < map_area.y {
         return None;
     }
-    let cell_col = cx - map_area.x;
-    let cell_row = cy - map_area.y;
-    if cell_col >= frame.cols || cell_row >= frame.rows {
-        return None;
-    }
-
-    let px = cell_col as f64 * 2.0 + 1.0;
-    let py = cell_row as f64 * 4.0 + 2.0;
-    let canvas_w = frame.cols as f64 * 2.0;
-    let canvas_h = frame.rows as f64 * 4.0;
-
-    let z = geo::base_zoom(frame.zoom);
-    let tile_size = geo::tile_size_at_zoom(frame.zoom);
-    let center_tile = geo::ll2tile(frame.center.lon, frame.center.lat, z);
-
-    let tx = center_tile.x + (px - canvas_w / 2.0) / tile_size;
-    let ty = center_tile.y + (py - canvas_h / 2.0) / tile_size;
-    Some(geo::tile2ll(tx, ty, z))
-}
-
-// ── Service: async wrapper for reverse geocoding ─────────────────────────────
-
-struct PlaceService {
-    client: Arc<NominatimClient>,
-    tx: mpsc::Sender<Option<PlaceInfo>>,
-    rx: mpsc::Receiver<Option<PlaceInfo>>,
-}
-
-impl PlaceService {
-    fn new(client: Arc<NominatimClient>) -> Self {
-        let (tx, rx) = mpsc::channel();
-        Self { client, tx, rx }
-    }
-
-    fn reverse(&self, center: LonLat) {
-        let tx = self.tx.clone();
-        let client = self.client.clone();
-        thread::spawn(move || {
-            let result = client.reverse(center.lat, center.lon);
-            let _ = tx.send(result);
-        });
-    }
-
-    fn poll(&self) -> Option<Option<PlaceInfo>> {
-        self.rx.try_recv().ok()
-    }
-}
-
-fn format_name(place: PlaceInfo) -> String {
-    match (place.city, place.country) {
-        (Some(city), Some(country)) => format!("{}, {}", city, country),
-        (None, Some(country)) => country,
-        (Some(city), None) => city,
-        (None, None) => place.display_name,
-    }
+    let local_col = cx - map_area.x;
+    let local_row = cy - map_area.y;
+    MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows)
+        .cell_to_ll(local_col, local_row)
 }
