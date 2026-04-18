@@ -16,7 +16,6 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub source: String,
     /// Visual theme name ("dark" / "bright"). Unknown values fall
     /// back to a default at styler-initialisation time.
     pub style: String,
@@ -37,7 +36,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            source: "http://mapscii.me/".to_string(),
             style: "dark".to_string(),
             initial_lat: 52.51298, // Berlin
             initial_lon: 13.42012,
@@ -107,13 +105,12 @@ mod tests {
     fn test_default_config() {
         let cfg = Config::default();
         assert_eq!(cfg.max_zoom, 18.0);
-        assert!(cfg.source.starts_with("http"));
+        assert_eq!(cfg.style, "dark");
     }
 
     #[test]
     fn test_partial_toml_fills_defaults_elsewhere() {
         let toml_str = r#"
-source = "http://example.com/"
 language = "ja"
 zoom_step = 0.5
 style = "bright"
@@ -125,7 +122,6 @@ quit = ["Q", "C-q"]
         let cfg: Config = toml::from_str(toml_str).unwrap();
 
         // Overridden.
-        assert_eq!(cfg.source, "http://example.com/");
         assert_eq!(cfg.language, "ja");
         assert_eq!(cfg.zoom_step, 0.5);
         assert_eq!(cfg.style, "bright");
@@ -146,7 +142,6 @@ quit = ["Q", "C-q"]
     fn test_empty_toml_is_all_defaults() {
         let cfg: Config = toml::from_str("").unwrap();
         let def = Config::default();
-        assert_eq!(cfg.source, def.source);
         assert_eq!(cfg.initial_lat, def.initial_lat);
         assert_eq!(cfg.max_zoom, def.max_zoom);
     }

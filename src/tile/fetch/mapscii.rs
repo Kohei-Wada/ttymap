@@ -1,6 +1,10 @@
-//! HTTP MVT tile client — fixed worker pool.
-//! Pops from internal queue, fetches via HTTP, returns raw bytes.
-//! Cache interacts only through public methods, not internal state.
+//! Client for `mapscii.me` — fetches MVT (`.pbf`) tiles over HTTP
+//! using the slippy-map URL scheme `{base}/{z}/{x}/{y}.pbf`. The base
+//! URL and attribution are hardcoded: ttymap's map rendering assumes
+//! OSM-derived OpenMapTiles data, and mapscii.me is the only public
+//! server that serves it without an API key. Fixed worker pool pops
+//! from an internal queue, GETs bytes, and forwards the payload to
+//! the cache through an `mpsc` channel.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,12 +13,15 @@ use std::thread;
 
 use log::debug;
 
+use super::TileClient;
 use super::priority::TilePriority;
-use super::queue::PriorityQueue;
+use super::queue::{PriorityFn, PriorityQueue};
 use crate::shared::http::HttpClient;
 use crate::tile::cache::TileKey;
 
 const NUM_WORKERS: usize = 6;
+const BASE_URL: &str = "http://mapscii.me";
+const ATTRIBUTION: &str = "© OpenStreetMap contributors";
 
 struct SharedState {
     queue: Mutex<PriorityQueue<TileKey, TilePriority>>,
@@ -23,15 +30,13 @@ struct SharedState {
     shutdown: AtomicBool,
 }
 
-pub struct HttpTileClient {
+pub struct MapsciiTileClient {
     shared: Arc<SharedState>,
     _workers: Vec<thread::JoinHandle<()>>,
 }
 
-impl HttpTileClient {
-    pub fn new(source_url: &str, tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
-        let source_url = source_url.trim_end_matches('/').to_string();
-
+impl MapsciiTileClient {
+    pub fn new(tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
         let shared = Arc::new(SharedState {
             queue: Mutex::new(PriorityQueue::new()),
             condvar: Condvar::new(),
@@ -47,22 +52,23 @@ impl HttpTileClient {
         let mut workers = Vec::with_capacity(NUM_WORKERS);
         for _ in 0..NUM_WORKERS {
             let shared = shared.clone();
-            let source_url = source_url.clone();
             let tx = tx.clone();
             let http = http.clone();
             workers.push(thread::spawn(move || {
-                worker_loop(&shared, &source_url, &tx, &http);
+                worker_loop(&shared, &tx, &http);
             }));
         }
 
-        HttpTileClient {
+        MapsciiTileClient {
             shared,
             _workers: workers,
         }
     }
+}
 
+impl TileClient for MapsciiTileClient {
     /// Enqueue a tile for fetching. Skips if already queued or in-flight.
-    pub fn enqueue(&self, key: &TileKey, priority: TilePriority) {
+    fn enqueue(&self, key: &TileKey, priority: TilePriority) {
         {
             let in_flight = self.shared.in_flight.lock().unwrap();
             if in_flight.contains(key) {
@@ -78,16 +84,17 @@ impl HttpTileClient {
     /// Recompute queue priorities (typically after a viewport change).
     /// A `TilePriority` with a large `zoom_diff` sinks the entry to the
     /// back, where overflow drop will evict it as new work arrives.
-    pub fn update_view<F>(&self, priority_fn: &F)
-    where
-        F: super::queue::PriorityFn<TileKey, TilePriority>,
-    {
+    fn update_view(&self, priority_fn: &dyn PriorityFn<TileKey, TilePriority>) {
         let mut queue = self.shared.queue.lock().unwrap();
         queue.reprioritize(priority_fn);
     }
+
+    fn attribution(&self) -> &str {
+        ATTRIBUTION
+    }
 }
 
-impl Drop for HttpTileClient {
+impl Drop for MapsciiTileClient {
     fn drop(&mut self) {
         self.shared.shutdown.store(true, Ordering::Relaxed);
         self.shared.condvar.notify_all();
@@ -96,12 +103,7 @@ impl Drop for HttpTileClient {
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 
-fn worker_loop(
-    shared: &SharedState,
-    source_url: &str,
-    tx: &mpsc::Sender<(TileKey, Vec<u8>)>,
-    http: &HttpClient,
-) {
+fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http: &HttpClient) {
     loop {
         let key = {
             let mut queue = shared.queue.lock().unwrap();
@@ -123,7 +125,7 @@ fn worker_loop(
         };
 
         // HTTP fetch
-        let url = format!("{}/{}.pbf", source_url, key);
+        let url = format!("{}/{}.pbf", BASE_URL, key);
         debug!("worker: fetching {}", url);
         let bytes = http.get_bytes(&url);
 
@@ -147,7 +149,7 @@ mod tests {
     #[test]
     fn test_enqueue_dedup_in_flight() {
         let (tx, _rx) = mpsc::channel();
-        let client = HttpTileClient::new("https://example.com", tx);
+        let client = MapsciiTileClient::new(tx);
         let key = TileKey::new(0, 0, 0);
 
         // Manually mark as in-flight

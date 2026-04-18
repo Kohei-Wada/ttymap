@@ -36,10 +36,6 @@ struct Cli {
     /// Style preset (dark, bright)
     #[arg(long)]
     style: Option<String>,
-
-    /// Tile source URL (default: http://mapscii.me/)
-    #[arg(long)]
-    source: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -77,9 +73,6 @@ fn main() {
     }
     if let Some(v) = cli.zoom {
         config.initial_zoom = Some(v);
-    }
-    if let Some(v) = cli.source {
-        config.source = v;
     }
     if let Some(v) = cli.style {
         // Unknown values get normalised to "dark" by the styler's

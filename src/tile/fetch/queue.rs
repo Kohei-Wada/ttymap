@@ -69,7 +69,7 @@ impl<T: PartialEq, P: PartialOrd> PriorityQueue<T, P> {
     /// Recompute every entry's priority and re-sort.
     pub fn reprioritize<F>(&mut self, priority_fn: &F)
     where
-        F: PriorityFn<T, P>,
+        F: PriorityFn<T, P> + ?Sized,
     {
         for entry in &mut self.entries {
             entry.priority = priority_fn.priority(&entry.item);

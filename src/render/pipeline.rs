@@ -19,15 +19,17 @@ pub struct RenderPipeline {
 }
 
 impl RenderPipeline {
+    /// Build a pipeline from its two owned subsystems. The caller
+    /// constructs the `TileCache` (typically via
+    /// `crate::tile::build_tile_cache`) so the backend selection stays
+    /// visible at the composition root.
     pub fn new(
-        source_url: &str,
-        enable_disk_cache: bool,
+        tile_cache: TileCache,
         styler: Arc<Styler>,
         language: String,
         width: usize,
         height: usize,
     ) -> Self {
-        let tile_cache = TileCache::new(source_url, enable_disk_cache);
         let renderer = Renderer::new(styler, language, width, height);
         Self {
             tile_cache,

@@ -1,6 +1,6 @@
-//! Tile cache — memory + disk storage with background HTTP fetching.
+//! Tile cache — memory + disk storage with background tile fetching.
 //! Owns the full tile lifecycle and all domain logic.
-//! Interacts with HttpTileClient only through its public API.
+//! Interacts with the fetch backend only through the `TileClient` trait.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -12,7 +12,7 @@ use directories::ProjectDirs;
 use log::debug;
 
 use super::decode::{self, DecodedTile};
-use super::fetch::{HttpTileClient, TilePriority};
+use super::fetch::{TileClient, TilePriority};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TileKey {
@@ -34,7 +34,7 @@ impl std::fmt::Display for TileKey {
 }
 
 pub struct TileCache {
-    client: HttpTileClient,
+    client: Box<dyn TileClient>,
     cache_dir: Option<PathBuf>,
     memory_cache: HashMap<TileKey, DecodedTile>,
     cache_order: VecDeque<TileKey>,
@@ -46,7 +46,17 @@ pub struct TileCache {
 }
 
 impl TileCache {
-    pub fn new(source_url: &str, enable_disk_cache: bool) -> Self {
+    /// Build a cache around an injected `TileClient`. The `rx` channel
+    /// is the receiving end of the pair whose `tx` was handed to the
+    /// client — completed fetches arrive on it.
+    ///
+    /// Most callers should use `crate::tile::build_tile_cache`, which
+    /// wires the channel and `select_client` together.
+    pub fn new(
+        client: Box<dyn TileClient>,
+        rx: mpsc::Receiver<(TileKey, Vec<u8>)>,
+        enable_disk_cache: bool,
+    ) -> Self {
         let cache_dir = if enable_disk_cache {
             ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
                 let dir = proj_dirs.cache_dir().to_path_buf();
@@ -56,9 +66,6 @@ impl TileCache {
         } else {
             None
         };
-
-        let (tx, rx) = mpsc::channel();
-        let client = HttpTileClient::new(source_url, tx);
 
         TileCache {
             client,
@@ -170,14 +177,22 @@ impl TileCache {
             }
         }
 
-        // z+1 center
+        // z+1: all 4 children of the center tile, so a zoom-in lands on
+        // already-warm tiles regardless of which quadrant the view
+        // fractionally sits on.
         if z < 14 {
-            let c = crate::geo::ll2tile(center_lon, center_lat, z + 1);
             let g = (1u64 << (z + 1)) as i32;
-            let tx = (c.x.floor() as i32).rem_euclid(g);
-            let ty = c.y.floor() as i32;
-            if ty >= 0 && ty < g {
-                self.get_tile(z + 1, tx, ty);
+            let base_x = cx * 2;
+            let base_y = cy * 2;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let ty = base_y + dy;
+                    if ty < 0 || ty >= g {
+                        continue;
+                    }
+                    let tx = (base_x + dx).rem_euclid(g);
+                    self.get_tile(z + 1, tx, ty);
+                }
             }
         }
 
@@ -232,6 +247,9 @@ fn tile_distance_sq(key: &TileKey, center_x: f64, center_y: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::super::fetch::queue::PriorityFn;
     use super::*;
 
     #[test]
@@ -243,5 +261,35 @@ mod tests {
     fn test_tile_distance_sq() {
         let d = tile_distance_sq(&TileKey::new(0, 5, 5), 5.5, 5.5);
         assert!(d < 0.01);
+    }
+
+    /// Proves `TileCache` drives its backend purely through the `TileClient`
+    /// trait: cache misses dispatch to the injected client, with no HTTP
+    /// or worker threads involved.
+    #[test]
+    fn test_cache_misses_dispatch_through_injected_client() {
+        struct RecordingClient(Arc<Mutex<Vec<TileKey>>>);
+        impl TileClient for RecordingClient {
+            fn enqueue(&self, key: &TileKey, _: TilePriority) {
+                self.0.lock().unwrap().push(key.clone());
+            }
+            fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
+            fn attribution(&self) -> &str {
+                "mock"
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::<TileKey>::new()));
+        let client: Box<dyn TileClient> = Box::new(RecordingClient(log.clone()));
+        let (_tx, rx) = mpsc::channel();
+        let mut cache = TileCache::new(client, rx, false);
+
+        cache.get_tile(3, 1, 2);
+        cache.get_tile(3, 5, 6);
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![TileKey::new(3, 1, 2), TileKey::new(3, 5, 6)],
+        );
     }
 }

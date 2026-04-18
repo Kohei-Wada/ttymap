@@ -55,14 +55,9 @@ impl App {
         let palette = styler.palette();
         let nominatim = Arc::new(NominatimClient::new());
         let mut ui = UiState::new(palette, &config.language, config.wiki_limit, nominatim);
-        let pipeline = RenderPipeline::new(
-            &config.source,
-            config.cache_tiles,
-            styler,
-            config.language.clone(),
-            width,
-            height,
-        );
+        let tile_cache = crate::tile::build_tile_cache(config.cache_tiles);
+        let pipeline =
+            RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
 
         let keymap = build_keymap(&config.keymap);
         let input = InputHandler::new(keymap);
