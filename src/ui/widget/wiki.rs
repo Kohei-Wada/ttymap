@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -357,7 +357,7 @@ impl WikiWidget {
             let y = map_area.y + cell_row;
             buf[(x, y)]
                 .set_char(ch)
-                .set_style(Style::default().fg(fg).bg(Color::Reset));
+                .set_style(Style::default().fg(fg).bg(theme.bg));
         }
     }
 }

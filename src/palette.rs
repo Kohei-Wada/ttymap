@@ -113,7 +113,7 @@ pub const DARK: Palette = Palette {
 pub const BRIGHT: Palette = Palette {
     background: 231,           // white
     accent: 25,                // dark blue (#005faf)
-    accent_alt: 30,            // teal (#008787)
+    accent_alt: 160,           // dark red (#d70000) — pops against accent blue
     fg: 16,                    // black
     muted: 245,                // mid gray
     water: 69,                 // #5f87ff (same as dark)
