@@ -1,4 +1,4 @@
-//! Tile HTTP client — fixed worker pool.
+//! HTTP MVT tile client — fixed worker pool.
 //! Pops from internal queue, fetches via HTTP, returns raw bytes.
 //! Cache interacts only through public methods, not internal state.
 
@@ -9,24 +9,25 @@ use std::thread;
 
 use log::debug;
 
-use super::cache::TileKey;
+use super::priority::TilePriority;
 use super::queue::PriorityQueue;
+use crate::tile::cache::TileKey;
 
 const NUM_WORKERS: usize = 6;
 
 struct SharedState {
-    queue: Mutex<PriorityQueue<TileKey>>,
+    queue: Mutex<PriorityQueue<TileKey, TilePriority>>,
     condvar: Condvar,
     in_flight: Mutex<HashSet<TileKey>>,
     shutdown: AtomicBool,
 }
 
-pub struct TileClient {
+pub struct HttpTileClient {
     shared: Arc<SharedState>,
     _workers: Vec<thread::JoinHandle<()>>,
 }
 
-impl TileClient {
+impl HttpTileClient {
     pub fn new(source_url: &str, tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
         let source_url = source_url.trim_end_matches('/').to_string();
 
@@ -56,14 +57,14 @@ impl TileClient {
             }));
         }
 
-        TileClient {
+        HttpTileClient {
             shared,
             _workers: workers,
         }
     }
 
     /// Enqueue a tile for fetching. Skips if already queued or in-flight.
-    pub fn enqueue(&self, key: &TileKey, priority: f64) {
+    pub fn enqueue(&self, key: &TileKey, priority: TilePriority) {
         {
             let in_flight = self.shared.in_flight.lock().unwrap();
             if in_flight.contains(key) {
@@ -76,14 +77,15 @@ impl TileClient {
         self.shared.condvar.notify_one();
     }
 
-    /// Update view: purge stale entries and re-sort by new priorities.
-    pub fn update_view<F, P>(&self, retain: F, priority_fn: &P)
+    /// Recompute queue priorities (typically after a viewport change).
+    /// A `TilePriority` with a large `zoom_diff` sinks the entry to the
+    /// back, where overflow drop will evict it as new work arrives.
+    pub fn update_view<F>(&self, priority_fn: &F)
     where
-        F: Fn(&TileKey) -> bool,
-        P: super::queue::PriorityFn<TileKey>,
+        F: super::queue::PriorityFn<TileKey, TilePriority>,
     {
         let mut queue = self.shared.queue.lock().unwrap();
-        queue.retain_and_reprioritize(retain, priority_fn);
+        queue.reprioritize(priority_fn);
     }
 
     /// Number of tiles in queue + in-flight.
@@ -104,7 +106,7 @@ impl TileClient {
     }
 }
 
-impl Drop for TileClient {
+impl Drop for HttpTileClient {
     fn drop(&mut self) {
         self.shared.shutdown.store(true, Ordering::Relaxed);
         self.shared.condvar.notify_all();
@@ -179,14 +181,20 @@ mod tests {
     #[test]
     fn test_enqueue_dedup_in_flight() {
         let (tx, _rx) = mpsc::channel();
-        let client = TileClient::new("https://example.com", tx);
+        let client = HttpTileClient::new("https://example.com", tx);
         let key = TileKey::new(0, 0, 0);
 
         // Manually mark as in-flight
         client.shared.in_flight.lock().unwrap().insert(key.clone());
 
         // Should skip (already in-flight)
-        client.enqueue(&key, 0.0);
+        client.enqueue(
+            &key,
+            TilePriority {
+                zoom_diff: 0,
+                distance_sq: 0.0,
+            },
+        );
         assert_eq!(client.queue_len(), 0);
     }
 }

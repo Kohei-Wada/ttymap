@@ -1,6 +1,6 @@
 //! Tile cache — memory + disk storage with background HTTP fetching.
 //! Owns the full tile lifecycle and all domain logic.
-//! Interacts with TileClient only through its public API.
+//! Interacts with HttpTileClient only through its public API.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -13,8 +13,8 @@ use std::sync::mpsc;
 use directories::ProjectDirs;
 use log::debug;
 
-use super::client::TileClient;
 use super::decode::{self, DecodedTile};
+use super::fetch::{HttpTileClient, TilePriority};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TileKey {
@@ -36,7 +36,7 @@ impl std::fmt::Display for TileKey {
 }
 
 pub struct TileCache {
-    client: TileClient,
+    client: HttpTileClient,
     pending_count: Arc<AtomicUsize>,
     cache_dir: Option<PathBuf>,
     styler: Arc<crate::styler::Styler>,
@@ -68,7 +68,7 @@ impl TileCache {
         };
 
         let (tx, rx) = mpsc::channel();
-        let client = TileClient::new(source_url, tx);
+        let client = HttpTileClient::new(source_url, tx);
         let pending_count = Arc::new(AtomicUsize::new(0));
 
         TileCache {
@@ -102,10 +102,10 @@ impl TileCache {
         let cy = self.center_y;
         let cz = self.current_z;
 
-        self.client
-            .update_view(|key| key.z.abs_diff(cz) <= 1, &|key: &TileKey| {
-                tile_distance_sq(key, cx, cy)
-            });
+        self.client.update_view(&|key: &TileKey| TilePriority {
+            zoom_diff: key.z.abs_diff(cz),
+            distance_sq: tile_distance_sq(key, cx, cy),
+        });
         self.sync_pending_count();
     }
 
@@ -156,7 +156,10 @@ impl TileCache {
             return self.memory_cache.get(&key);
         }
 
-        let priority = tile_distance_sq(&key, self.center_x, self.center_y);
+        let priority = TilePriority {
+            zoom_diff: key.z.abs_diff(self.current_z),
+            distance_sq: tile_distance_sq(&key, self.center_x, self.center_y),
+        };
         self.client.enqueue(&key, priority);
         self.sync_pending_count();
         None
