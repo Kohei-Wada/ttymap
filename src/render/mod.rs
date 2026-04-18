@@ -8,6 +8,9 @@ pub mod panic_silence;
 pub mod pipeline;
 pub mod renderer;
 pub mod thread;
+pub mod view;
+
+pub use view::{VisibleTile, visible_tiles};
 
 /// Padding (in pixels) around the viewport for clipping and point filtering.
 pub const VIEWPORT_PADDING: i32 = 64;

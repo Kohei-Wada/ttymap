@@ -7,8 +7,9 @@ use log::debug;
 
 use super::canvas::Canvas;
 use super::frame::MapFrame;
+use super::view::VisibleTile;
 use crate::styler::{StyleType, Styler};
-use crate::tile::{Feature, Point, VisibleTile};
+use crate::tile::{Feature, Point};
 
 /// Pre-collected tile data ready for rendering.
 pub struct TileData {

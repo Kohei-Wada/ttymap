@@ -9,9 +9,10 @@ use rstar::AABB;
 
 use super::frame::MapFrame;
 use super::renderer::{Renderer, TileData};
+use super::view::{VisibleTile, visible_tiles};
 use crate::core::RenderRequest;
 use crate::styler::Styler;
-use crate::tile::{Feature, TileCache, VisibleTile, visible_tiles};
+use crate::tile::{Feature, TileCache};
 
 pub struct RenderPipeline {
     tile_cache: TileCache,
