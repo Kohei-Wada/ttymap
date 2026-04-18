@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use theme::Theme;
 use widget::help::HelpWidget;
-use widget::overlay::PlaceWidget;
+use widget::overlay::InfoWidget;
 use widget::search::SearchWidget;
 use widget::wiki::WikiWidget;
 
@@ -19,7 +19,7 @@ use crate::shared::nominatim::NominatimClient;
 /// Holds all UI widget state. Passed to layout::draw().
 pub struct UiState {
     pub search: SearchWidget,
-    pub place: PlaceWidget,
+    pub info: InfoWidget,
     pub help: HelpWidget,
     pub wiki: WikiWidget,
     pub map_frame: Option<MapFrame>,
@@ -37,7 +37,7 @@ impl UiState {
     ) -> Self {
         Self {
             search: SearchWidget::new(nominatim.clone()),
-            place: PlaceWidget::new(nominatim),
+            info: InfoWidget::new(nominatim),
             help: HelpWidget::new(),
             wiki: WikiWidget::new(language, wiki_limit),
             map_frame: None,

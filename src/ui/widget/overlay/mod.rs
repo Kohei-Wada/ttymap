@@ -18,15 +18,13 @@ use crate::render::frame::MapFrame;
 use crate::ui::theme::Theme;
 
 pub mod attribution;
-pub mod coords;
+pub mod info;
 pub mod markers;
-pub mod place;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;
-pub use coords::CoordsOverlay;
+pub use info::InfoWidget;
 pub use markers::{MarkerPoint, MarkersOverlay};
-pub use place::PlaceWidget;
 pub use scale_bar::ScaleBarOverlay;
 
 /// A drawable layer stamped on top of the rendered map.

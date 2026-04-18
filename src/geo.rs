@@ -46,6 +46,18 @@ pub fn ll2tile(lon: f64, lat: f64, zoom: u32) -> TileCoord {
     TileCoord { x, y, z: zoom }
 }
 
+/// Inverse of `ll2tile`. Converts a (fractional) tile coordinate back to
+/// lon/lat using the Web Mercator projection.
+pub fn tile2ll(x: f64, y: f64, zoom: u32) -> LonLat {
+    let n = (1u64 << zoom) as f64;
+    let lon = x / n * 360.0 - 180.0;
+    let lat_rad = (PI * (1.0 - 2.0 * y / n)).sinh().atan();
+    LonLat {
+        lon,
+        lat: lat_rad.to_degrees(),
+    }
+}
+
 /// Floor a zoom level and clamp to 0..=14.
 pub fn base_zoom(zoom: f64) -> u32 {
     zoom.floor().clamp(0.0, 14.0) as u32
@@ -192,6 +204,29 @@ mod tests {
         assert!(t.x.abs() < EPS);
         assert!(t.y.abs() < 1e-3);
         assert_eq!(t.z, 1);
+    }
+
+    #[test]
+    fn tile2ll_origin_zoom0() {
+        // Centre of the only tile at zoom 0 is (0°, 0°).
+        let ll = tile2ll(0.5, 0.5, 0);
+        assert!(ll.lon.abs() < EPS);
+        assert!(ll.lat.abs() < EPS);
+    }
+
+    #[test]
+    fn ll2tile_tile2ll_roundtrip() {
+        for (lon, lat, z) in [
+            (13.42, 52.51, 10),  // Berlin
+            (139.76, 35.68, 12), // Tokyo
+            (-74.00, 40.71, 8),  // New York
+            (0.0, 0.0, 5),
+        ] {
+            let t = ll2tile(lon, lat, z);
+            let ll = tile2ll(t.x, t.y, z);
+            assert!((ll.lon - lon).abs() < 1e-9, "lon drift at z={z}");
+            assert!((ll.lat - lat).abs() < 1e-9, "lat drift at z={z}");
+        }
     }
 
     // --- base_zoom -----------------------------------------------------------

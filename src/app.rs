@@ -114,7 +114,7 @@ impl App {
             if self.ui.search.poll() {
                 dirty = true;
             }
-            if self.ui.place.poll() {
+            if self.ui.info.poll() {
                 dirty = true;
             }
             if self.ui.wiki.poll() {
@@ -249,11 +249,14 @@ impl App {
             return KeyEffect::None;
         }
 
+        self.ui.info.set_cursor((mouse.column, mouse.row));
+
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let dx = mouse.column as f64 - cols as f64 / 2.0;
         let dy = mouse.row as f64 - rows as f64 / 2.0;
 
         match mouse.kind {
+            MouseEventKind::Moved => KeyEffect::Widget,
             MouseEventKind::Down(MouseButton::Left) => {
                 self.drag_from = Some((mouse.column, mouse.row));
                 KeyEffect::None
@@ -295,7 +298,7 @@ impl App {
         // Wiki is intentionally not notified — Google-Maps-style, the
         // article list stays pinned to the query that produced it.
         if !self.ui.search.is_active() {
-            self.ui.place.on_map_moved(state.center);
+            self.ui.info.on_map_moved(state.center);
         }
     }
 
