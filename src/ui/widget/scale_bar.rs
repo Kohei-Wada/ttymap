@@ -1,5 +1,7 @@
-//! Bottom-right overlay showing a distance scale bar for the current
-//! zoom / latitude.
+//! Bottom-right overlay — distance scale bar.
+//!
+//! Stateless: derives its label and width directly from the `MapFrame`
+//! the map was rendered at (via `geo::scale_bar`).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -7,27 +9,28 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
+use crate::geo;
 use crate::render::frame::MapFrame;
 use crate::ui::overlay::MapOverlay;
 use crate::ui::theme::Theme;
 
-use super::state::InfoState;
+pub struct ScaleBarOverlay;
 
-pub struct ScaleBarOverlay<'a> {
-    pub state: &'a InfoState,
-}
+impl MapOverlay for ScaleBarOverlay {
+    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &Theme) {
+        if map_area.height < 2 {
+            return;
+        }
 
-impl MapOverlay for ScaleBarOverlay<'_> {
-    fn render(&self, buf: &mut Buffer, map_area: Rect, _frame: &MapFrame, theme: &Theme) {
-        let state = self.state;
-        if state.scale_width == 0 || map_area.height < 2 {
+        let (label, cells) = geo::scale_bar(frame.center.lat, frame.zoom, map_area.width);
+        if cells == 0 {
             return;
         }
 
         let bar = format!(
             "├{}┤ {}",
-            "─".repeat((state.scale_width as usize).saturating_sub(2)),
-            state.scale_label,
+            "─".repeat((cells as usize).saturating_sub(2)),
+            label
         );
 
         let width = (bar.width() as u16 + 1).min(map_area.width);

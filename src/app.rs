@@ -160,7 +160,7 @@ impl App {
                                 (Some(city), None) => city.clone(),
                                 (None, None) => place_info.display_name.clone(),
                             };
-                            self.ui.info.set_place(Some(name));
+                            self.ui.place.set_name(Some(name));
                         }
                     }
                 }
@@ -387,13 +387,8 @@ impl App {
     }
 
     fn draw_terminal(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        self.ui.info.set_coords(self.core.status_bar());
-
-        let req = self.core.render_request();
-        let (cols, _) = crossterm::terminal::size().unwrap_or((80, 24));
-        let (label, width) = crate::geo::scale_bar(req.center.lat, req.zoom, cols);
-        self.ui.info.set_scale(label, width);
-
+        // Coords and scale bar pull directly from the MapFrame inside
+        // their overlays, so app.rs no longer pushes derived strings.
         terminal.draw(|f| {
             layout::draw(f, &self.ui);
         })?;

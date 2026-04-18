@@ -113,13 +113,6 @@ impl Core {
         }
     }
 
-    pub fn status_bar(&self) -> String {
-        format!(
-            " {:.3}, {:.3}  zoom: {:.1}",
-            self.center.lat, self.center.lon, self.zoom
-        )
-    }
-
     fn pan(&mut self, step: f64, dlon: f64, dlat: f64) -> bool {
         self.center.lon += step * dlon;
         self.center.lat += step * dlat;
