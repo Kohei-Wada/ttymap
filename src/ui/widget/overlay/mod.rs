@@ -17,11 +17,13 @@ use ratatui::layout::Rect;
 use crate::render::frame::MapFrame;
 use crate::ui::theme::Theme;
 
+pub mod attribution;
 pub mod coords;
 pub mod markers;
 pub mod place;
 pub mod scale_bar;
 
+pub use attribution::AttributionOverlay;
 pub use coords::CoordsOverlay;
 pub use markers::{MarkerPoint, MarkersOverlay};
 pub use place::PlaceWidget;

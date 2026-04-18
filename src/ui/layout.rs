@@ -8,7 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::UiState;
-use super::widget::overlay::{CoordsOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay};
+use super::widget::overlay::{
+    AttributionOverlay, CoordsOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay,
+};
 use super::widget::search;
 use super::widget::wiki;
 
@@ -41,8 +43,16 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         let wiki_markers = MarkersOverlay {
             points: &wiki_points,
         };
-        let overlays: [&dyn MapOverlay; 4] =
-            [&wiki_markers, &CoordsOverlay, &ui.place, &ScaleBarOverlay];
+        let attribution = AttributionOverlay {
+            text: ui.attribution.as_deref().unwrap_or(""),
+        };
+        let overlays: [&dyn MapOverlay; 5] = [
+            &wiki_markers,
+            &CoordsOverlay,
+            &ui.place,
+            &ScaleBarOverlay,
+            &attribution,
+        ];
         for overlay in overlays {
             overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
         }

@@ -24,6 +24,7 @@ pub struct UiState {
     pub wiki: WikiWidget,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
+    pub attribution: Option<String>,
 }
 
 impl UiState {
@@ -32,6 +33,7 @@ impl UiState {
         language: &str,
         wiki_limit: u32,
         nominatim: Arc<NominatimClient>,
+        attribution: Option<String>,
     ) -> Self {
         Self {
             search: SearchWidget::new(nominatim.clone()),
@@ -40,6 +42,7 @@ impl UiState {
             wiki: WikiWidget::new(language, wiki_limit),
             map_frame: None,
             theme: Theme::from_palette(palette),
+            attribution,
         }
     }
 }
@@ -57,6 +60,7 @@ mod tests {
             "en",
             5,
             Arc::new(NominatimClient::new()),
+            None,
         );
         assert!(!ui.search.is_active());
         assert!(ui.map_frame.is_none());
@@ -69,6 +73,7 @@ mod tests {
             "en",
             5,
             Arc::new(NominatimClient::new()),
+            None,
         );
         assert!(!ui.search.is_active());
 
@@ -87,6 +92,7 @@ mod tests {
             "en",
             5,
             Arc::new(NominatimClient::new()),
+            None,
         );
         assert!(ui.map_frame.is_none());
 
