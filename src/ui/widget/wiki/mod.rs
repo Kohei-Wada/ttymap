@@ -1,9 +1,9 @@
 //! Wiki widget — Wikipedia geosearch panel, map markers, and the
 //! background fetcher that populates them.
 //!
-//! Self-contained: `app.rs` only interacts through [`WikiWidget`] and
-//! [`WikiAction`]. The HTTP client and async wrapper are private to
-//! this module.
+//! Self-contained: `app.rs` sees it only through the
+//! [`Widget`](super::Widget) trait. The HTTP client and async wrapper
+//! are private to this module.
 
 pub mod panel;
 mod service;
@@ -15,6 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
+use crate::core::input::Action;
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;
@@ -23,19 +24,9 @@ use crate::ui::widget::overlay::MarkerPoint;
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
 
-pub use panel::render_panel;
+use super::{Widget, WidgetAction};
 
-/// Action surfaced to the app event loop. `Refresh` is intentionally
-/// absent — the widget handles its own fetches internally.
-#[derive(Debug, Clone, PartialEq)]
-pub enum WikiAction {
-    /// Key not handled — let the global keymap see it.
-    None,
-    /// Key handled, no further effect beyond a redraw.
-    Consumed,
-    /// User selected an article — recenter the map.
-    JumpTo(LonLat),
-}
+pub use panel::render_panel;
 
 pub struct WikiWidget {
     pub(in crate::ui::widget::wiki) state: WikiState,
@@ -68,38 +59,50 @@ impl WikiWidget {
         }
     }
 
-    pub fn handle_key(
+    fn refresh(&mut self, center: LonLat) {
+        if self.throttle.check() {
+            self.service.geosearch(center.lat, center.lon);
+        }
+    }
+}
+
+impl Widget for WikiWidget {
+    fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         center: LonLat,
-    ) -> WikiAction {
+    ) -> WidgetAction {
+        if !self.state.is_active() {
+            return WidgetAction::Pass;
+        }
         match self.state.handle_key(code, modifiers) {
-            KeyOutcome::None => WikiAction::None,
-            KeyOutcome::Consumed => WikiAction::Consumed,
-            KeyOutcome::JumpTo(loc) => WikiAction::JumpTo(loc),
+            KeyOutcome::None => WidgetAction::Pass,
+            KeyOutcome::Consumed => WidgetAction::Consumed,
+            KeyOutcome::JumpTo(loc) => WidgetAction::Jump(loc),
             KeyOutcome::Refresh => {
                 self.refresh(center);
-                WikiAction::Consumed
+                WidgetAction::Consumed
             }
         }
     }
 
-    /// Drain any completed background fetches into state.
-    /// Returns `true` if new articles arrived (caller should redraw).
-    pub fn poll(&mut self) -> bool {
-        if let Some(articles) = self.service.poll() {
-            debug!("wiki: received {} articles", articles.len());
-            self.state.set_articles(articles);
+    fn handle_action(&mut self, action: &Action, center: LonLat) -> bool {
+        if *action == Action::WikiToggle {
+            self.toggle(center);
             true
         } else {
             false
         }
     }
 
-    fn refresh(&mut self, center: LonLat) {
-        if self.throttle.check() {
-            self.service.geosearch(center.lat, center.lon);
+    fn poll(&mut self) -> bool {
+        if let Some(articles) = self.service.poll() {
+            debug!("wiki: received {} articles", articles.len());
+            self.state.set_articles(articles);
+            true
+        } else {
+            false
         }
     }
 }

@@ -2,13 +2,17 @@
 
 use std::collections::HashMap;
 
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::input::Action;
 use crate::core::keymap::KeyMap;
+use crate::geo::LonLat;
 use crate::ui::theme::Theme;
+
+use super::{Widget, WidgetAction};
 
 pub struct HelpWidget {
     active: bool,
@@ -81,10 +85,6 @@ impl HelpWidget {
         self.active = !self.active;
     }
 
-    pub fn close(&mut self) {
-        self.active = false;
-    }
-
     pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if !self.active || map_inner.width < 20 || map_inner.height < 10 {
             return;
@@ -108,6 +108,31 @@ impl HelpWidget {
             .style(theme.text())
             .block(block);
         f.render_widget(widget, area);
+    }
+}
+
+impl Widget for HelpWidget {
+    fn handle_key(
+        &mut self,
+        _code: KeyCode,
+        _modifiers: KeyModifiers,
+        _center: LonLat,
+    ) -> WidgetAction {
+        if self.active {
+            self.active = false;
+            WidgetAction::Consumed
+        } else {
+            WidgetAction::Pass
+        }
+    }
+
+    fn handle_action(&mut self, action: &Action, _center: LonLat) -> bool {
+        if *action == Action::HelpToggle {
+            self.toggle();
+            true
+        } else {
+            false
+        }
     }
 }
 

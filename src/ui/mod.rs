@@ -7,6 +7,7 @@ pub mod widget;
 use std::sync::Arc;
 
 use theme::Theme;
+use widget::Widget;
 use widget::help::HelpWidget;
 use widget::overlay::InfoWidget;
 use widget::search::SearchWidget;
@@ -45,13 +46,25 @@ impl UiState {
             attribution,
         }
     }
+
+    /// Interactive widgets in priority order. `app.rs` uses this to
+    /// dispatch key / action events without hard-coding per-widget
+    /// names. Search takes precedence (modal), then help (modal), then
+    /// wiki (non-modal — falls through unrecognised keys).
+    pub fn widgets_mut(&mut self) -> [&mut dyn Widget; 3] {
+        [&mut self.search, &mut self.help, &mut self.wiki]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::input::Action;
+    use crate::geo::LonLat;
     use crate::render::frame::{MapCell, MapFrame};
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
 
     #[test]
     fn test_ui_state_initial() {
@@ -77,11 +90,12 @@ mod tests {
         );
         assert!(!ui.search.is_active());
 
-        ui.search.open();
+        assert!(ui.search.handle_action(&Action::SearchOpen, ZERO));
         assert!(ui.search.is_active());
 
-        ui.search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
-        ui.search.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        ui.search
+            .handle_key(KeyCode::Char('a'), KeyModifiers::NONE, ZERO);
+        ui.search.handle_key(KeyCode::Esc, KeyModifiers::NONE, ZERO);
         assert!(!ui.search.is_active());
     }
 

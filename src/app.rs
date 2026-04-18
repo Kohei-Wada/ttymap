@@ -16,8 +16,7 @@ use crate::shared::nominatim::NominatimClient;
 use crate::styler::Styler;
 use crate::ui::UiState;
 use crate::ui::layout;
-use crate::ui::widget::search::SearchAction;
-use crate::ui::widget::wiki::WikiAction;
+use crate::ui::widget::{Widget, WidgetAction};
 
 /// What a key/mouse event just changed. Drives how the main loop
 /// reacts: a widget-only change redraws immediately (the map frame
@@ -189,31 +188,13 @@ impl App {
         code: crossterm::event::KeyCode,
         modifiers: KeyModifiers,
     ) -> KeyEffect {
-        if self.ui.search.is_active() {
-            return match self.ui.search.handle_key(code, modifiers) {
-                SearchAction::None | SearchAction::Consumed => KeyEffect::Widget,
-                SearchAction::Jump(location) => {
-                    info!("search: jumping to ({}, {})", location.lat, location.lon);
-                    self.core.jump_to(location);
-                    KeyEffect::Map
-                }
-            };
-        }
-
-        // Help toggle
-        if self.ui.help.is_active() {
-            self.ui.help.close();
-            return KeyEffect::Widget;
-        }
-
-        // Wiki panel navigation
-        if self.ui.wiki.is_active() {
-            let center = self.core.center();
-            match self.ui.wiki.handle_key(code, modifiers, center) {
-                WikiAction::None => {}
-                WikiAction::Consumed => return KeyEffect::Widget,
-                WikiAction::JumpTo(location) => {
-                    info!("wiki: jumping to ({}, {})", location.lat, location.lon);
+        let center = self.core.center();
+        for widget in self.ui.widgets_mut() {
+            match widget.handle_key(code, modifiers, center) {
+                WidgetAction::Pass => continue,
+                WidgetAction::Consumed => return KeyEffect::Widget,
+                WidgetAction::Jump(location) => {
+                    info!("widget: jumping to ({}, {})", location.lat, location.lon);
                     self.core.jump_to(location);
                     return KeyEffect::Map;
                 }
@@ -221,26 +202,15 @@ impl App {
         }
 
         let action = self.input.handle_key(code, modifiers);
-        match action {
-            Action::SearchOpen => {
-                self.ui.search.open();
-                KeyEffect::Widget
+        for widget in self.ui.widgets_mut() {
+            if widget.handle_action(&action, center) {
+                return KeyEffect::Widget;
             }
-            Action::HelpToggle => {
-                self.ui.help.toggle();
-                KeyEffect::Widget
-            }
-            Action::WikiToggle => {
-                self.ui.wiki.toggle(self.core.center());
-                KeyEffect::Widget
-            }
-            _ => {
-                if self.core.process_action(&action) {
-                    KeyEffect::Map
-                } else {
-                    KeyEffect::None
-                }
-            }
+        }
+        if self.core.process_action(&action) {
+            KeyEffect::Map
+        } else {
+            KeyEffect::None
         }
     }
 
