@@ -50,8 +50,8 @@ impl TileCache {
     /// is the receiving end of the pair whose `tx` was handed to the
     /// client — completed fetches arrive on it.
     ///
-    /// Most callers should use `crate::tile::build_tile_cache`, which
-    /// wires the channel and `select_client` together.
+    /// Wiring (channel + client construction) lives at the composition
+    /// root in `app::build_tile_cache`, where backend selection is made.
     pub fn new(
         client: Box<dyn TileClient>,
         rx: mpsc::Receiver<(TileKey, Vec<u8>)>,

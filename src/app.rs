@@ -55,7 +55,7 @@ impl App {
         let palette = styler.palette();
         let nominatim = Arc::new(NominatimClient::new());
         let mut ui = UiState::new(palette, &config.language, config.wiki_limit, nominatim);
-        let tile_cache = crate::tile::build_tile_cache(config.cache_tiles);
+        let tile_cache = build_tile_cache(&config);
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
 
@@ -301,6 +301,17 @@ impl App {
         })?;
         Ok(())
     }
+}
+
+/// Composition root for the tile subsystem: selects a `TileClient`
+/// from config and wires it to a fresh `TileCache`. Backend selection
+/// lives here (not in `tile/`) so swapping mapscii for mbtiles/pmtiles
+/// stays visible alongside the rest of app wiring.
+fn build_tile_cache(config: &Config) -> crate::tile::TileCache {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let client: Box<dyn crate::tile::fetch::TileClient> =
+        Box::new(crate::tile::fetch::MapsciiTileClient::new(tx));
+    crate::tile::TileCache::new(client, rx, config.cache_tiles)
 }
 
 /// Apply `[keymap]` overrides from config onto the default `KeyMap`.
