@@ -3,6 +3,7 @@ mod preset_bright;
 mod preset_dark;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use filter::{Filter, PropertyValue};
 
@@ -86,7 +87,7 @@ impl Styler {
     pub fn get_style_for(
         &self,
         layer: &str,
-        properties: &HashMap<String, PropertyValue>,
+        properties: &HashMap<Arc<str>, PropertyValue>,
     ) -> Option<&StyleRule> {
         self.rules_by_layer
             .get(layer)?
@@ -126,8 +127,14 @@ mod tests {
     fn test_filter_match_road() {
         let styler = Styler::new("dark");
         let mut props = HashMap::new();
-        props.insert("class".into(), PropertyValue::String("motorway".into()));
-        props.insert("$type".into(), PropertyValue::String("LineString".into()));
+        props.insert(
+            Arc::from("class"),
+            PropertyValue::String(Arc::from("motorway")),
+        );
+        props.insert(
+            Arc::from("$type"),
+            PropertyValue::String(Arc::from("LineString")),
+        );
         let rule = styler.get_style_for("road", &props);
         assert!(rule.is_some());
     }
@@ -153,8 +160,14 @@ mod tests {
     fn dark_road_motorway_matches() {
         let styler = Styler::new("dark");
         let mut props = HashMap::new();
-        props.insert("class".into(), PropertyValue::String("motorway".into()));
-        props.insert("$type".into(), PropertyValue::String("LineString".into()));
+        props.insert(
+            Arc::from("class"),
+            PropertyValue::String(Arc::from("motorway")),
+        );
+        props.insert(
+            Arc::from("$type"),
+            PropertyValue::String(Arc::from("LineString")),
+        );
         let rule = styler.get_style_for("road", &props).unwrap();
         assert_eq!(rule.style_type, StyleType::Line);
     }
@@ -232,8 +245,14 @@ mod tests {
     fn bright_road_motorway_matches() {
         let styler = Styler::new("bright");
         let mut props = HashMap::new();
-        props.insert("class".into(), PropertyValue::String("motorway".into()));
-        props.insert("$type".into(), PropertyValue::String("LineString".into()));
+        props.insert(
+            Arc::from("class"),
+            PropertyValue::String(Arc::from("motorway")),
+        );
+        props.insert(
+            Arc::from("$type"),
+            PropertyValue::String(Arc::from("LineString")),
+        );
         let rule = styler.get_style_for("road", &props).unwrap();
         assert_eq!(rule.style_type, StyleType::Line);
     }

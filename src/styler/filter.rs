@@ -1,8 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
-    String(String),
+    /// String values use `Arc<str>` so tiles can intern a layer's key
+    /// and value pool once and hand out cheap refcount clones to each
+    /// feature instead of paying a per-tag heap allocation.
+    String(Arc<str>),
     Number(f64),
     Bool(bool),
 }
@@ -35,29 +39,29 @@ pub enum Filter {
 }
 
 impl Filter {
-    pub fn eval(&self, props: &HashMap<String, PropertyValue>) -> bool {
+    pub fn eval(&self, props: &HashMap<Arc<str>, PropertyValue>) -> bool {
         match self {
             Filter::Always => true,
-            Filter::Eq(key, val) => props.get(key) == Some(val),
-            Filter::NotEq(key, val) => props.get(key) != Some(val),
-            Filter::In(key, vals) => props.get(key).is_some_and(|v| vals.contains(v)),
-            Filter::NotIn(key, vals) => props.get(key).is_none_or(|v| !vals.contains(v)),
-            Filter::Has(key) => props.contains_key(key),
-            Filter::NotHas(key) => !props.contains_key(key),
+            Filter::Eq(key, val) => props.get(key.as_str()) == Some(val),
+            Filter::NotEq(key, val) => props.get(key.as_str()) != Some(val),
+            Filter::In(key, vals) => props.get(key.as_str()).is_some_and(|v| vals.contains(v)),
+            Filter::NotIn(key, vals) => props.get(key.as_str()).is_none_or(|v| !vals.contains(v)),
+            Filter::Has(key) => props.contains_key(key.as_str()),
+            Filter::NotHas(key) => !props.contains_key(key.as_str()),
             Filter::Gt(key, val) => props
-                .get(key)
+                .get(key.as_str())
                 .and_then(|v| v.as_f64())
                 .is_some_and(|n| n > *val),
             Filter::Gte(key, val) => props
-                .get(key)
+                .get(key.as_str())
                 .and_then(|v| v.as_f64())
                 .is_some_and(|n| n >= *val),
             Filter::Lt(key, val) => props
-                .get(key)
+                .get(key.as_str())
                 .and_then(|v| v.as_f64())
                 .is_some_and(|n| n < *val),
             Filter::Lte(key, val) => props
-                .get(key)
+                .get(key.as_str())
                 .and_then(|v| v.as_f64())
                 .is_some_and(|n| n <= *val),
             Filter::All(filters) => filters.iter().all(|f| f.eval(props)),
@@ -71,15 +75,15 @@ impl Filter {
 mod tests {
     use super::*;
 
-    fn props(pairs: &[(&str, PropertyValue)]) -> HashMap<String, PropertyValue> {
+    fn props(pairs: &[(&str, PropertyValue)]) -> HashMap<Arc<str>, PropertyValue> {
         pairs
             .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
+            .map(|(k, v)| (Arc::from(*k), v.clone()))
             .collect()
     }
 
     fn s(v: &str) -> PropertyValue {
-        PropertyValue::String(v.to_string())
+        PropertyValue::String(Arc::from(v))
     }
     fn n(v: f64) -> PropertyValue {
         PropertyValue::Number(v)

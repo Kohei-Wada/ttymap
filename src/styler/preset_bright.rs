@@ -5,7 +5,7 @@ use super::filter::PropertyValue as PV;
 use super::{StyleRule, StyleType};
 
 fn s(v: &str) -> PV {
-    PV::String(v.to_string())
+    PV::String(std::sync::Arc::from(v))
 }
 
 fn n(v: f64) -> PV {

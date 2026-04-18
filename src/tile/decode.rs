@@ -28,7 +28,7 @@ pub struct Point {
 #[derive(Debug, Clone)]
 pub struct Feature {
     pub layer_name: Arc<str>,
-    pub properties: Arc<HashMap<String, PropertyValue>>,
+    pub properties: Arc<HashMap<Arc<str>, PropertyValue>>,
     pub points: Arc<Vec<Vec<Point>>>,
     pub min_x: f64,
     pub max_x: f64,
@@ -127,11 +127,14 @@ fn decode_geometry(geometry: &[u32]) -> Vec<Vec<Point>> {
 
 // ── Tag decoder ────────────────────────────────────────────────────────────────
 
+/// Tag decoder. `keys_arc` and `values_pool` are pre-computed once per layer
+/// so each feature only pays for `Arc::clone` (refcount bump) rather than a
+/// fresh heap allocation per tag.
 fn decode_tags_into(
     tags: &[u32],
-    keys: &[String],
-    values: &[proto::tile::Value],
-    props: &mut HashMap<String, PropertyValue>,
+    keys_arc: &[Arc<str>],
+    values_pool: &[Option<PropertyValue>],
+    props: &mut HashMap<Arc<str>, PropertyValue>,
 ) {
     let mut j = 0;
     while j + 1 < tags.len() {
@@ -139,24 +142,20 @@ fn decode_tags_into(
         let val_idx = tags[j + 1] as usize;
         j += 2;
 
-        let key = match keys.get(key_idx) {
+        let key = match keys_arc.get(key_idx) {
             Some(k) => k,
             None => continue,
         };
-        let proto_val = match values.get(val_idx) {
-            Some(v) => v,
-            None => continue,
+        let Some(Some(pv)) = values_pool.get(val_idx) else {
+            continue;
         };
-
-        if let Some(pv) = proto_value_to_pv(proto_val) {
-            props.insert(key.clone(), pv);
-        }
+        props.insert(key.clone(), pv.clone());
     }
 }
 
 fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
     if let Some(s) = &v.string_value {
-        return Some(PropertyValue::String(s.clone()));
+        return Some(PropertyValue::String(Arc::from(s.as_str())));
     }
     if let Some(b) = v.bool_value {
         return Some(PropertyValue::Bool(b));
@@ -176,13 +175,13 @@ fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
 
 /// Pick a display label from a feature's properties using the requested
 /// language (falling back to `name_en`, then `name`, then `house_num`).
-pub fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> Option<String> {
+pub fn extract_label(props: &HashMap<Arc<str>, PropertyValue>, language: &str) -> Option<String> {
     let lang_key = format!("name_{}", language);
     for key in &[lang_key.as_str(), "name_en", "name", "house_num"] {
         if let Some(PropertyValue::String(s)) = props.get(*key)
             && !s.is_empty()
         {
-            return Some(s.clone());
+            return Some(s.to_string());
         }
     }
     None
@@ -191,7 +190,7 @@ pub fn extract_label(props: &HashMap<String, PropertyValue>, language: &str) -> 
 // ── Sort value extractor ───────────────────────────────────────────────────────
 
 /// Sort key used to order labels (smaller = drawn first, so higher priority).
-pub fn extract_sort(props: &HashMap<String, PropertyValue>) -> i64 {
+pub fn extract_sort(props: &HashMap<Arc<str>, PropertyValue>) -> i64 {
     if let Some(v) = props.get("localrank").or_else(|| props.get("scalerank"))
         && let Some(n) = v.as_f64()
     {
@@ -251,25 +250,39 @@ pub fn decode(buffer: &[u8]) -> DecodedTile {
 
     let mut decoded_layers: HashMap<String, TileLayer> = HashMap::new();
 
+    // "$type" is inserted on every feature but its content is one of four
+    // string constants; intern them once here so each feature's insert is a
+    // refcount bump. Same for the key itself.
+    let type_key: Arc<str> = Arc::from("$type");
+    let type_point: Arc<str> = Arc::from("Point");
+    let type_linestring: Arc<str> = Arc::from("LineString");
+    let type_polygon: Arc<str> = Arc::from("Polygon");
+    let type_unknown: Arc<str> = Arc::from("Unknown");
+
     for layer in &tile.layers {
         let extent = layer.extent.unwrap_or(4096);
         let layer_name: Arc<str> = Arc::from(layer.name.as_str());
+
+        // Pre-wrap the layer's key pool and value pool exactly once. Every
+        // feature in this layer references the same `Arc<str>` instances by
+        // cheap clone rather than allocating fresh Strings per tag.
+        let keys_arc: Vec<Arc<str>> = layer.keys.iter().map(|k| Arc::from(k.as_str())).collect();
+        let values_pool: Vec<Option<PropertyValue>> =
+            layer.values.iter().map(proto_value_to_pv).collect();
+
         let mut feats: Vec<Feature> = Vec::new();
 
         for feature in &layer.features {
-            let mut props: HashMap<String, PropertyValue> = HashMap::new();
-            decode_tags_into(&feature.tags, &layer.keys, &layer.values, &mut props);
+            let mut props: HashMap<Arc<str>, PropertyValue> = HashMap::new();
+            decode_tags_into(&feature.tags, &keys_arc, &values_pool, &mut props);
 
             let type_str = match feature.r#type.unwrap_or(0) {
-                1 => "Point",
-                2 => "LineString",
-                3 => "Polygon",
-                _ => "Unknown",
+                1 => type_point.clone(),
+                2 => type_linestring.clone(),
+                3 => type_polygon.clone(),
+                _ => type_unknown.clone(),
             };
-            props.insert(
-                "$type".to_string(),
-                PropertyValue::String(type_str.to_string()),
-            );
+            props.insert(type_key.clone(), PropertyValue::String(type_str));
 
             let points = decode_geometry(&feature.geometry);
             if points.is_empty() {
