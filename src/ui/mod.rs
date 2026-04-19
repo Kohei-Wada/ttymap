@@ -149,16 +149,19 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     {
         return w.footer_hints();
     }
-    {
-        vec![
-            ("hjkl", "pan"),
-            ("a/z", "zoom"),
-            ("/", "search"),
-            ("i", "wiki"),
-            ("?", "help"),
-            ("q", "quit"),
-        ]
+    let mut hints = vec![
+        ("hjkl", "pan"),
+        ("a/z", "zoom"),
+        ("/", "search"),
+        ("i", "wiki"),
+        ("?", "help"),
+    ];
+    // Tab only cycles when at least one plugin window is visible.
+    if ui.widgets.iter().any(|w| w.visible()) {
+        hints.push(("Tab/S-Tab", "focus"));
     }
+    hints.push(("q", "quit"));
+    hints
 }
 
 #[cfg(test)]
