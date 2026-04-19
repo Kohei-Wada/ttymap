@@ -101,10 +101,8 @@ impl WikiState {
         }
 
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-        let up = (ctrl && matches!(code, KeyCode::Char('k') | KeyCode::Char('p')))
-            || code == KeyCode::Up;
-        let down = (ctrl && matches!(code, KeyCode::Char('j') | KeyCode::Char('n')))
-            || code == KeyCode::Down;
+        let up = (ctrl && code == KeyCode::Char('p')) || code == KeyCode::Up;
+        let down = (ctrl && code == KeyCode::Char('n')) || code == KeyCode::Down;
         let exit_detail = matches!(code, KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter);
 
         if self.articles.is_empty() {

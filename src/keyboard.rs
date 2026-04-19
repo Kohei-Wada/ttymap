@@ -60,11 +60,29 @@ impl KeyboardHandler {
             }
         }
 
-        // 2. Activation check: if any registered widget claims this key,
-        //    deactivate whichever widget held focus (if different) so
-        //    it releases any state that shouldn't outlive losing focus
-        //    (e.g. wiki markers), then invoke the new widget's
-        //    `activate`.
+        // 2. Focus cycling keys. The focused plugin gets these first
+        //    via step 1 — wiki consumes C-j/C-k for article nav,
+        //    search swallows Tab in its query, etc. When focus is
+        //    elsewhere (or the focused plugin passes), cycle focus
+        //    through visible plugins.
+        let ctrl = modifiers == KeyModifiers::CONTROL;
+        let forward_cycle = (code == KeyCode::Tab && modifiers == KeyModifiers::NONE)
+            || (ctrl && code == KeyCode::Char('j'));
+        let backward_cycle = code == KeyCode::BackTab
+            || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT))
+            || (ctrl && code == KeyCode::Char('k'));
+        if forward_cycle {
+            return cycle_focus(ui, true);
+        }
+        if backward_cycle {
+            return cycle_focus(ui, false);
+        }
+
+        // 3. Activation check: if any registered plugin claims this
+        //    key, deactivate whichever plugin held focus (if
+        //    different) so it releases any state that shouldn't
+        //    outlive losing focus (e.g. wiki markers), then invoke
+        //    the new plugin's `activate`.
         if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
             let new_tag = tag.to_string();
             if let Focus::Plugin(prev_tag) = ui.focus.clone()
@@ -85,7 +103,7 @@ impl KeyboardHandler {
             }
         }
 
-        // 3. Keymap resolve → core. Plugin activation never reaches
+        // 4. Keymap resolve → core. Plugin activation never reaches
         //    here, so `Action` only carries map-level variants.
         let action = self.keymap.resolve(code, modifiers);
         if core.process_action(&action) {
@@ -94,4 +112,67 @@ impl KeyboardHandler {
             InputEffect::None
         }
     }
+}
+
+/// Move focus to the next (or previous) visible plugin, wrapping
+/// through Map. Cycle order: Map → visible[0] → … → visible[last] →
+/// Map → … (reverse swaps the ends).
+fn cycle_focus(ui: &mut UiState, forward: bool) -> InputEffect {
+    let visible: Vec<String> = ui
+        .widgets
+        .iter()
+        .filter(|w| w.visible())
+        .map(|w| w.tag().to_string())
+        .collect();
+
+    if visible.is_empty() {
+        return InputEffect::None;
+    }
+
+    let next: Option<String> = match &ui.focus {
+        // From Map, enter at the appropriate end of the list.
+        Focus::Map => Some(if forward {
+            visible.first().unwrap().clone()
+        } else {
+            visible.last().unwrap().clone()
+        }),
+        Focus::Plugin(cur) => {
+            let cur_str = cur.as_ref();
+            match visible.iter().position(|t| t == cur_str) {
+                Some(i) if forward => {
+                    if i + 1 < visible.len() {
+                        Some(visible[i + 1].clone())
+                    } else {
+                        None // past last → Map
+                    }
+                }
+                Some(i) => {
+                    if i > 0 {
+                        Some(visible[i - 1].clone())
+                    } else {
+                        None // before first → Map
+                    }
+                }
+                // Current focus not visible — enter the list at the edge.
+                None => Some(if forward {
+                    visible.first().unwrap().clone()
+                } else {
+                    visible.last().unwrap().clone()
+                }),
+            }
+        }
+    };
+
+    // Deactivate the currently-focused plugin (no-op for non-modal).
+    if let Focus::Plugin(prev) = ui.focus.clone()
+        && let Some(p) = ui.widgets.get_mut(prev.as_ref())
+    {
+        p.deactivate();
+    }
+
+    ui.focus = match next {
+        Some(tag) => Focus::Plugin(tag.into()),
+        None => Focus::Map,
+    };
+    InputEffect::Plugin
 }
