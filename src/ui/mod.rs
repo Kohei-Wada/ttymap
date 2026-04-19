@@ -6,7 +6,7 @@ pub mod overlay;
 pub mod painter;
 pub mod theme;
 
-pub use focus::Focus;
+pub use focus::{Focus, FocusManager};
 pub use painter::MapPainter;
 
 use std::sync::Arc;
@@ -32,7 +32,7 @@ use crate::shared::nominatim::NominatimClient;
 
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
-    pub focus: Focus,
+    pub focus: FocusManager,
     pub widgets: PluginRegistry,
     pub info: InfoOverlay,
     pub map_frame: Option<MapFrame>,
@@ -64,7 +64,7 @@ impl UiState {
         widgets.register(Box::new(wiki));
 
         Self {
-            focus: Focus::Map,
+            focus: FocusManager::new(),
             widgets,
             info: InfoOverlay::new(nominatim),
             map_frame: None,
@@ -149,7 +149,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused widget provides its own context-sensitive hints.
-    if let Focus::Plugin(tag) = &ui.focus
+    if let Focus::Plugin(tag) = &ui.focus.current
         && let Some(w) = ui.widgets.get(tag.as_ref())
     {
         return w.footer_hints();
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn test_ui_state_initial() {
         let ui = make_ui();
-        assert!(ui.focus == Focus::Map);
+        assert!(ui.focus.current == Focus::Map);
         assert!(ui.map_frame.is_none());
     }
 
@@ -201,11 +201,11 @@ mod tests {
     fn test_ui_state_search_lifecycle() {
         use crate::plugin::PluginCtx;
         let ui = &mut make_ui();
-        assert!(ui.focus == Focus::Map);
+        assert!(ui.focus.current == Focus::Map);
 
         let mut ctx = PluginCtx {
             center: ZERO,
-            focus: &mut ui.focus,
+            focus: &mut ui.focus.current,
         };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(&mut ctx);
