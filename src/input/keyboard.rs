@@ -154,8 +154,10 @@ impl KeyboardHandler {
             return command::dispatch(Command::ActivatePlugin(new_tag), map, ui, render_handle);
         }
 
-        // [5] Keymap resolve → map.
-        let action = self.keymap.resolve(code, modifiers);
-        command::dispatch(Command::Map(action), map, ui, render_handle)
+        // [5] Keymap resolve → command.
+        match self.keymap.resolve(code, modifiers) {
+            Some(cmd) => command::dispatch(cmd, map, ui, render_handle),
+            None => InputEffect::None,
+        }
     }
 }

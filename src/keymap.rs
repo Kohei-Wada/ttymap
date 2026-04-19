@@ -1,10 +1,17 @@
-//! Key binding table — the `key → Action` data used by the keyboard
+//! Key binding table — the `key → Command` data used by the keyboard
 //! handler, plus the TOML-deserialisable `KeybindingOverrides` shape
 //! used by config to customise it.
+//!
+//! The keymap speaks the same `Command` vocabulary as the palette and
+//! plugins — every key binding resolves to a `Command` that rides
+//! through `command::dispatch`. Today all defaults are `Command::Map`
+//! wrappers, but nothing prevents binding a key to `Command::Ui(...)`
+//! or `Command::ActivatePlugin(...)` in the future.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::Deserialize;
 
+use crate::command::Command;
 use crate::map::Action;
 
 /// A key binding: a key code + optional modifiers.
@@ -43,64 +50,63 @@ impl KeyBinding {
 }
 
 pub struct KeyMap {
-    pub bindings: Vec<(KeyBinding, Action)>,
+    pub bindings: Vec<(KeyBinding, Command)>,
     /// First-`g`-of-`gg` flag. Held on the map, not the keyboard
-    /// handler, so all key→`Action` translation stays in one place.
+    /// handler, so all key→`Command` translation stays in one place.
     pending_g: bool,
 }
 
 impl KeyMap {
-    /// Look up the action for a key event. Returns None if no binding
-    /// matches. Stateless — ignores sequence state.
-    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&Action> {
+    /// Look up the command for a key event. Returns `None` if no
+    /// binding matches. Stateless — ignores sequence state.
+    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&Command> {
         let clean_mods = modifiers & !KeyModifiers::SHIFT;
         self.bindings
             .iter()
             .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
-            .map(|(_, a)| a)
+            .map(|(_, c)| c)
     }
 
-    /// Resolve a key event to an `Action`. Handles the `gg` sequence
-    /// ahead of user-configurable bindings. Returns `Action::None`
-    /// while mid-sequence or when the key has no binding. Plugin
-    /// activation (e.g. `/` opens search) is **not** handled here —
-    /// widgets own their activation keys and the keyboard handler
-    /// checks them before falling through to this resolver.
-    pub fn resolve(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Action {
+    /// Resolve a key event to a `Command`. Handles the `gg` sequence
+    /// ahead of user-configurable bindings. Returns `None` while
+    /// mid-sequence or when the key has no binding — the caller
+    /// treats that as a no-op. Plugin activation (e.g. `/` opens
+    /// search) is **not** handled here — widgets own their activation
+    /// keys and the keyboard handler checks them before falling
+    /// through to this resolver.
+    pub fn resolve(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Command> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Action::ZoomToWorld;
+                return Some(Command::Map(Action::ZoomToWorld));
             }
             self.pending_g = true;
-            return Action::None;
+            return None;
         }
         self.pending_g = false;
 
-        self.lookup(code, modifiers)
-            .cloned()
-            .unwrap_or(Action::None)
+        self.lookup(code, modifiers).cloned()
     }
 
-    /// Every key string currently bound to `action`, in registration
+    /// Every key string currently bound to `cmd`, in registration
     /// order. Used by the command palette and help overlay to show
     /// "this command is invocable via these keys" hints.
-    pub fn keys_for(&self, action: &Action) -> Vec<String> {
+    pub fn keys_for(&self, cmd: &Command) -> Vec<String> {
         self.bindings
             .iter()
-            .filter(|(_, a)| a == action)
+            .filter(|(_, c)| c == cmd)
             .map(|(b, _)| b.display())
             .collect()
     }
 
-    /// Replace every existing binding for `action` with the supplied
-    /// list of key strings (e.g. `["h", "Left"]`). Invalid key strings
-    /// are logged and skipped.
-    pub fn set_bindings(&mut self, action: Action, keys: &[String]) {
-        self.bindings.retain(|(_, a)| a != &action);
+    /// Replace every existing binding for `cmd` with the supplied list
+    /// of key strings (e.g. `["h", "Left"]`). Invalid key strings are
+    /// logged and skipped.
+    pub fn set_bindings(&mut self, cmd: Command, keys: &[String]) {
+        self.bindings.retain(|(_, c)| c != &cmd);
         for key_str in keys {
             if let Some(binding) = parse_key_binding(key_str) {
-                self.bindings.push((binding, action.clone()));
+                self.bindings.push((binding, cmd.clone()));
             } else {
                 log::warn!("invalid key binding: {:?}", key_str);
             }
@@ -114,7 +120,7 @@ impl KeyMap {
         macro_rules! rebind {
             ($field:ident, $action:expr) => {
                 if let Some(keys) = &overrides.$field {
-                    km.set_bindings($action, keys);
+                    km.set_bindings(Command::Map($action), keys);
                 }
             };
         }
@@ -140,8 +146,8 @@ impl KeyMap {
 impl Default for KeyMap {
     fn default() -> Self {
         use Action::*;
-        let b = |key: &str, action: Action| -> (KeyBinding, Action) {
-            (parse_key_binding(key).unwrap(), action)
+        let b = |key: &str, action: Action| -> (KeyBinding, Command) {
+            (parse_key_binding(key).unwrap(), Command::Map(action))
         };
         Self {
             bindings: vec![
@@ -170,9 +176,9 @@ impl Default for KeyMap {
 }
 
 /// Raw keybinding overrides from the `[keymap]` section of
-/// `config.toml`. Each field names an `Action`; the listed key strings
-/// replace the default bindings for that action. Applied via
-/// `KeyMap::with_overrides`.
+/// `config.toml`. Each field names a map `Action`; the listed key
+/// strings replace the default bindings for that action (wrapped as
+/// `Command::Map` internally). Applied via `KeyMap::with_overrides`.
 #[derive(Deserialize, Default, Clone)]
 pub struct KeybindingOverrides {
     pub pan_left: Option<Vec<String>>,
@@ -235,6 +241,10 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
 mod tests {
     use super::*;
 
+    fn map(action: Action) -> Command {
+        Command::Map(action)
+    }
+
     #[test]
     fn test_parse_char() {
         let b = parse_key_binding("h").unwrap();
@@ -272,11 +282,11 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&Action::PanLeft)
+            Some(&map(Action::PanLeft))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            Some(&Action::PanDownHalf)
+            Some(&map(Action::PanDownHalf))
         );
         assert_eq!(km.lookup(KeyCode::Char('x'), KeyModifiers::NONE), None);
     }
@@ -291,15 +301,15 @@ mod tests {
 
         assert_eq!(
             km.lookup(KeyCode::Char('i'), KeyModifiers::NONE),
-            Some(&Action::ZoomIn)
+            Some(&map(Action::ZoomIn))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
-            Some(&Action::Quit)
+            Some(&map(Action::Quit))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('q'), KeyModifiers::CONTROL),
-            Some(&Action::Quit)
+            Some(&map(Action::Quit))
         );
     }
 
@@ -308,7 +318,7 @@ mod tests {
         let km = KeyMap::with_overrides(&KeybindingOverrides::default());
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&Action::PanLeft)
+            Some(&map(Action::PanLeft))
         );
     }
 
@@ -317,17 +327,32 @@ mod tests {
     #[test]
     fn resolve_basic_movement() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('h'), NONE), Action::PanLeft);
-        assert_eq!(km.resolve(KeyCode::Char('j'), NONE), Action::PanDown);
-        assert_eq!(km.resolve(KeyCode::Char('k'), NONE), Action::PanUp);
-        assert_eq!(km.resolve(KeyCode::Char('l'), NONE), Action::PanRight);
+        assert_eq!(
+            km.resolve(KeyCode::Char('h'), NONE),
+            Some(map(Action::PanLeft))
+        );
+        assert_eq!(
+            km.resolve(KeyCode::Char('j'), NONE),
+            Some(map(Action::PanDown))
+        );
+        assert_eq!(
+            km.resolve(KeyCode::Char('k'), NONE),
+            Some(map(Action::PanUp))
+        );
+        assert_eq!(
+            km.resolve(KeyCode::Char('l'), NONE),
+            Some(map(Action::PanRight))
+        );
     }
 
     #[test]
     fn resolve_gg_zoom_to_world() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), Action::None);
-        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), Action::ZoomToWorld);
+        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), None);
+        assert_eq!(
+            km.resolve(KeyCode::Char('g'), NONE),
+            Some(map(Action::ZoomToWorld))
+        );
     }
 
     #[test]
@@ -335,50 +360,68 @@ mod tests {
         let mut km = KeyMap::default();
         km.resolve(KeyCode::Char('g'), NONE);
         km.resolve(KeyCode::Char('h'), NONE); // breaks sequence
-        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), Action::None);
+        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), None);
     }
 
     #[test]
     fn resolve_zoom() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('a'), NONE), Action::ZoomIn);
-        assert_eq!(km.resolve(KeyCode::Char('z'), NONE), Action::ZoomOut);
+        assert_eq!(
+            km.resolve(KeyCode::Char('a'), NONE),
+            Some(map(Action::ZoomIn))
+        );
+        assert_eq!(
+            km.resolve(KeyCode::Char('z'), NONE),
+            Some(map(Action::ZoomOut))
+        );
     }
 
     #[test]
     fn resolve_quit() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('q'), NONE), Action::Quit);
+        assert_eq!(
+            km.resolve(KeyCode::Char('q'), NONE),
+            Some(map(Action::Quit))
+        );
     }
 
     #[test]
     fn resolve_big_pan() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('w'), NONE), Action::PanRightFast);
-        assert_eq!(km.resolve(KeyCode::Char('b'), NONE), Action::PanLeftFast);
+        assert_eq!(
+            km.resolve(KeyCode::Char('w'), NONE),
+            Some(map(Action::PanRightFast))
+        );
+        assert_eq!(
+            km.resolve(KeyCode::Char('b'), NONE),
+            Some(map(Action::PanLeftFast))
+        );
         assert_eq!(
             km.resolve(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            Action::PanDownHalf
+            Some(map(Action::PanDownHalf))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('u'), KeyModifiers::CONTROL),
-            Action::PanUpHalf
+            Some(map(Action::PanUpHalf))
         );
     }
 
     #[test]
     fn resolve_reset_position() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('0'), NONE), Action::ResetPosition);
+        assert_eq!(
+            km.resolve(KeyCode::Char('0'), NONE),
+            Some(map(Action::ResetPosition))
+        );
     }
 
     #[test]
     fn resolve_unknown_key_is_none() {
         let mut km = KeyMap::default();
         // `/`, `?`, `i` are widget activation triggers, not keymap
-        // entries — they fall through to `Action::None`.
-        assert_eq!(km.resolve(KeyCode::Char('/'), NONE), Action::None);
-        assert_eq!(km.resolve(KeyCode::Char('?'), NONE), Action::None);
-        assert_eq!(km.resolve(KeyCode::Char('i'), NONE), Action::None);
+        // entries — they fall through to `None`.
+        assert_eq!(km.resolve(KeyCode::Char('/'), NONE), None);
+        assert_eq!(km.resolve(KeyCode::Char('?'), NONE), None);
+        assert_eq!(km.resolve(KeyCode::Char('i'), NONE), None);
     }
 }

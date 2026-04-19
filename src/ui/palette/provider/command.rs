@@ -62,7 +62,7 @@ impl CommandProvider {
         for (label, action) in ACTIONS {
             all.push(Entry {
                 label: (*label).to_string(),
-                hint: keymap.keys_for(action).join(", "),
+                hint: keymap.keys_for(&Command::Map(action.clone())).join(", "),
                 kind: Kind::Action(action.clone()),
             });
         }

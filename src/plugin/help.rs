@@ -7,6 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
+use crate::command::Command;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
@@ -44,8 +45,8 @@ impl HelpPlugin {
 
         let mut action_keys: HashMap<&str, Vec<String>> = HashMap::new();
 
-        for (binding, action) in &keymap.bindings {
-            let label = action_label(action);
+        for (binding, cmd) in &keymap.bindings {
+            let label = command_label(cmd);
             if label.is_empty() {
                 continue;
             }
@@ -181,6 +182,16 @@ fn plugin_entries(p: &dyn Plugin) -> Vec<(String, String)> {
         .into_iter()
         .map(|k| (k.to_string(), desc.to_string()))
         .collect()
+}
+
+/// Short label for a keymap-bound command. Today only `Command::Map`
+/// entries have help labels; other command kinds (palette-only,
+/// plugin activations) are surfaced elsewhere.
+fn command_label(cmd: &Command) -> &'static str {
+    match cmd {
+        Command::Map(a) => action_label(a),
+        _ => "",
+    }
 }
 
 fn action_label(action: &Action) -> &'static str {
