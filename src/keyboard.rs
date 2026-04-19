@@ -17,8 +17,8 @@ use crate::focus::Focus;
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::MapState;
+use crate::map::render::thread::RenderHandle;
 use crate::plugin::{PluginAction, PluginCtx};
-use crate::render::thread::RenderHandle;
 use crate::ui::UiState;
 use crate::ui::palette::PaletteOutcome;
 

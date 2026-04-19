@@ -12,7 +12,7 @@ use log::{debug, error, info};
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
 use crate::map::RenderRequest;
-use crate::styler::Styler;
+use crate::map::styler::Styler;
 
 pub enum RenderCommand {
     Draw(RenderRequest),

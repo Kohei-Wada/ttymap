@@ -24,8 +24,8 @@ use crate::ui::palette::CommandPalette;
 use crate::config::Config;
 use crate::focus::{Focus, FocusManager};
 use crate::keymap::KeyMap;
+use crate::map::render::frame::MapFrame;
 use crate::painter::MapPainter;
-use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
@@ -196,7 +196,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
 mod tests {
     use super::*;
     use crate::geo::LonLat;
-    use crate::render::frame::{MapCell, MapFrame};
+    use crate::map::render::frame::{MapCell, MapFrame};
     use crossterm::event::{KeyCode, KeyModifiers};
 
     const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };

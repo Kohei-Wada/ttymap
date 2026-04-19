@@ -10,8 +10,8 @@ use super::frame::MapFrame;
 use super::renderer::{Renderer, TileData};
 use super::view::{VisibleTile, visible_tiles};
 use crate::map::RenderRequest;
-use crate::styler::Styler;
-use crate::tile::{Feature, TileCache};
+use crate::map::styler::Styler;
+use crate::map::tile::{Feature, TileCache};
 
 pub struct RenderPipeline {
     tile_cache: TileCache,

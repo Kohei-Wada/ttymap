@@ -9,12 +9,12 @@ use ratatui::DefaultTerminal;
 use crate::config::Config;
 use crate::keyboard::KeyboardHandler;
 use crate::keymap::KeyMap;
+use crate::map::render::pipeline::RenderPipeline;
+use crate::map::render::thread::{RenderHandle, RenderResult};
+use crate::map::styler::Styler;
 use crate::map::{MapState, MapStateOptions};
 use crate::mouse::MouseHandler;
-use crate::render::pipeline::RenderPipeline;
-use crate::render::thread::{RenderHandle, RenderResult};
 use crate::shared::nominatim::NominatimClient;
-use crate::styler::Styler;
 use crate::ui::UiState;
 
 /// What a key or mouse event just changed. Drives how the main loop
@@ -40,7 +40,7 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> Self {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let (width, height) = crate::render::canvas_size(cols, rows);
+        let (width, height) = crate::map::render::canvas_size(cols, rows);
 
         info!(
             "terminal size: {}x{}, canvas: {}x{}",
@@ -199,17 +199,17 @@ impl App {
 /// stays visible alongside the rest of app wiring. Also snapshots the
 /// client's attribution string before boxing, so the UI can display it
 /// without needing a live handle to the (moved) client.
-fn build_tile_cache(config: &Config) -> (crate::tile::TileCache, Option<String>) {
-    use crate::tile::fetch::TileClient;
+fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
+    use crate::map::tile::fetch::TileClient;
     let (tx, rx) = std::sync::mpsc::channel();
-    let client = crate::tile::fetch::MapsciiTileClient::new(tx);
+    let client = crate::map::tile::fetch::MapsciiTileClient::new(tx);
     let attribution = {
         let s = client.attribution();
         (!s.is_empty()).then(|| s.to_string())
     };
     let boxed: Box<dyn TileClient> = Box::new(client);
     (
-        crate::tile::TileCache::new(boxed, rx, config.cache_tiles),
+        crate::map::tile::TileCache::new(boxed, rx, config.cache_tiles),
         attribution,
     )
 }

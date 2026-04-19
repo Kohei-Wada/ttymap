@@ -9,7 +9,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use crate::render::frame::MapFrame;
+use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
 
 pub mod attribution;

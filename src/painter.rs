@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
 use crate::geo::{LonLat, MapProjection};
-use crate::render::frame::MapFrame;
+use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
 
 pub struct MapPainter<'a> {

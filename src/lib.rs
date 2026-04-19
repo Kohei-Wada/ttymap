@@ -13,9 +13,9 @@ pub mod app;
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;
 
-/// Map state — viewport (center/zoom), running flag, action dispatch.
-/// The "domain map" of the application; keyboard/mouse routes eventually
-/// funnel their effects into a `MapState::process_action` call.
+/// Map subsystem — viewport state, action dispatch, and the full map
+/// rendering pipeline (tile fetch, styler, render thread). `MapFrame`
+/// produced here is what the UI displays.
 pub mod map;
 
 /// Focus manager — single source of truth for "which surface owns the
@@ -54,9 +54,6 @@ pub(crate) mod plugin;
 /// File-based logging to XDG state directory.
 pub mod logging;
 
-/// Mapbox GL style JSON parser — filter compilation, color resolution.
-pub mod styler;
-
 // ── Internal modules (not part of the external surface) ──────────────────
 //
 // These are marked `pub` so integration tests and benchmarks under
@@ -68,9 +65,5 @@ pub mod color_palette;
 #[doc(hidden)]
 pub mod geo;
 #[doc(hidden)]
-pub mod render;
-#[doc(hidden)]
 pub mod shared;
-#[doc(hidden)]
-pub mod tile;
 pub(crate) mod ui;

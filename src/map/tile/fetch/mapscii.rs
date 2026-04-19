@@ -16,8 +16,8 @@ use log::debug;
 use super::TileClient;
 use super::priority::TilePriority;
 use super::queue::{PriorityFn, PriorityQueue};
+use crate::map::tile::cache::TileKey;
 use crate::shared::http::HttpClient;
-use crate::tile::cache::TileKey;
 
 const NUM_WORKERS: usize = 6;
 const BASE_URL: &str = "http://mapscii.me";

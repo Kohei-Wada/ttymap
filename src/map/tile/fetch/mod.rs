@@ -14,7 +14,7 @@ pub mod queue;
 pub use mapscii::MapsciiTileClient;
 pub use priority::TilePriority;
 
-use crate::tile::cache::TileKey;
+use crate::map::tile::cache::TileKey;
 use queue::PriorityFn;
 
 /// Abstract tile-fetch backend. Cache owns a `Box<dyn TileClient>` and

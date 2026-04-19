@@ -18,7 +18,7 @@ use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::geo::{LonLat, MapProjection};
-use crate::render::frame::MapFrame;
+use crate::map::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;

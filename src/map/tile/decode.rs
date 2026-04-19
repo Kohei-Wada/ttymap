@@ -5,7 +5,7 @@ use std::sync::Arc;
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::styler::filter::PropertyValue;
+use crate::map::styler::filter::PropertyValue;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/vector_tile.rs"));
@@ -19,7 +19,7 @@ pub mod proto {
 /// Coordinates are integers in the layer's `extent` (typically 0..4096).
 /// They are distinct from *screen pixels* and from *world Mercator*
 /// coordinates (see `geo::TileCoord`); converting between them happens
-/// at render time in [`crate::render::renderer`].
+/// at render time in [`crate::map::render::renderer`].
 pub struct TilePoint {
     pub x: i32,
     pub y: i32,

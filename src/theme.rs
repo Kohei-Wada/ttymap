@@ -6,8 +6,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 
 use crate::color_palette::{ColorPalette, ThemeId};
-use crate::render::thread::RenderHandle;
-use crate::styler::Styler;
+use crate::map::render::thread::RenderHandle;
+use crate::map::styler::Styler;
 
 /// Computed UI theme from a ColorPalette.
 pub struct UiTheme {
