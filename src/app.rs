@@ -95,42 +95,24 @@ impl App {
         info!("event loop started");
         self.request_draw();
 
-        // Only redraw the terminal when something has changed. Without this
-        // the main loop redraws on every poll tick (~60 Hz) even when the
-        // app is idle, which makes the CPU fan spin up.
-        let mut dirty = true;
-
         'main_loop: while self.core.is_running() {
-            // 1. Receive completed frames — drain to latest so a burst from
-            // the render thread still produces only one redraw.
+            // Drain completed render frames into UiState.
             while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
                 self.ui.map_frame = Some(frame);
-                dirty = true;
             }
 
-            // 2. Poll widgets with background fetches
-            if self.ui.search.poll() {
-                dirty = true;
-            }
-            if self.ui.info.poll() {
-                dirty = true;
-            }
-            if self.ui.wiki.poll() {
-                dirty = true;
-            }
+            // Poll widgets with background fetches.
+            self.ui.search.poll();
+            self.ui.info.poll();
+            self.ui.wiki.poll();
 
-            // 4. Draw (only when something changed)
-            if dirty {
-                self.draw_terminal(&mut terminal)?;
-                dirty = false;
-            }
+            self.draw_terminal(&mut terminal)?;
 
-            // 5. Process input events — drain the whole queue in one pass so
-            // a burst of key-repeat or mouse-drag events produces a single
-            // draw at the top of the next iteration, not one draw per event.
-            // First poll blocks up to 4 ms so render-thread frame arrivals
-            // (which don't wake the event poll) show up within ~4 ms at
-            // worst; subsequent polls use zero timeout to drain the queue.
+            // Drain the whole input queue in one pass so a burst of key-repeat
+            // or mouse-drag events produces one redraw next iteration, not one
+            // draw per event. First poll blocks up to 4 ms so render-thread
+            // frame arrivals (which don't wake the event poll) show up within
+            // ~4 ms at worst; subsequent polls use zero timeout.
             let mut poll_timeout = Duration::from_millis(4);
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
@@ -145,14 +127,10 @@ impl App {
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        match self.handle_key(key_event.code, key_event.modifiers) {
-                            KeyEffect::None => {}
-                            KeyEffect::Widget => dirty = true,
-                            KeyEffect::Map => {
-                                if self.core.is_running() {
-                                    self.request_draw();
-                                }
-                            }
+                        if let KeyEffect::Map = self.handle_key(key_event.code, key_event.modifiers)
+                            && self.core.is_running()
+                        {
+                            self.request_draw();
                         }
                     }
                     Event::Resize(cols, rows) => {
@@ -161,13 +139,12 @@ impl App {
                         self.render_handle
                             .request_resize(self.core.width(), self.core.height());
                         self.request_draw();
-                        dirty = true;
                     }
-                    Event::Mouse(mouse) => match self.handle_mouse(mouse) {
-                        KeyEffect::None => {}
-                        KeyEffect::Widget => dirty = true,
-                        KeyEffect::Map => self.request_draw(),
-                    },
+                    Event::Mouse(mouse) => {
+                        if let KeyEffect::Map = self.handle_mouse(mouse) {
+                            self.request_draw();
+                        }
+                    }
                     _ => {}
                 }
             }
