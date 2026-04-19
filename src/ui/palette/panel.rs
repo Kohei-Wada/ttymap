@@ -1,5 +1,6 @@
 //! Command-palette popup — centered over the map. Single bordered
-//! block enclosing an input line and a scrollable `Table` of commands.
+//! block enclosing an input line (provider prompt + query) and a
+//! scrollable `Table` driven by the current provider's items.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -14,11 +15,15 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
     if !state.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
+    let Some(provider) = state.provider.as_ref() else {
+        return;
+    };
+    let items = provider.items();
 
     let popup_width = (map_inner.width * 2 / 3).max(40).min(map_inner.width - 2);
     // outer borders + input line + blank + table rows
     let max_rows = map_inner.height.saturating_sub(6).max(3);
-    let rows = (state.filtered.len() as u16).max(1).min(max_rows);
+    let rows = (items.len() as u16).max(1).min(max_rows);
     let popup_height = rows + 4;
 
     let x = map_inner.x + (map_inner.width - popup_width) / 2;
@@ -34,47 +39,39 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // ":query"
+            Constraint::Length(1), // prompt + query
             Constraint::Length(1), // blank
             Constraint::Min(1),    // table
         ])
         .split(inner);
 
-    let input = Paragraph::new(format!(":{}", state.query)).style(theme.text());
+    let input = Paragraph::new(format!("{}{}", provider.prompt(), state.query)).style(theme.text());
     f.render_widget(input, chunks[0]);
 
-    render_table(widget, f, chunks[2], theme);
-}
-
-fn render_table(widget: &CommandPalette, f: &mut Frame, area: Rect, theme: &UiTheme) {
-    let state = widget.state();
-
-    let rows: Vec<Row> = state
-        .filtered
+    let table_rows: Vec<Row> = items
         .iter()
-        .map(|&i| {
-            let cmd = &state.commands[i];
-            let keys = if cmd.keys.is_empty() {
+        .map(|item| {
+            let hint_cell = if item.hint.is_empty() {
                 String::new()
             } else {
-                format!("[{}]", cmd.keys)
+                format!("[{}]", item.hint)
             };
             Row::new(vec![
-                Cell::from(cmd.label.clone()),
-                Cell::from(keys).style(theme.muted()),
+                Cell::from(item.label.clone()),
+                Cell::from(hint_cell).style(theme.muted()),
             ])
         })
         .collect();
 
     let mut ts = TableState::default();
-    if !state.filtered.is_empty() {
+    if !items.is_empty() {
         ts.select(Some(state.selected));
     }
 
-    let table = Table::new(rows, [Constraint::Min(10), Constraint::Length(16)])
+    let table = Table::new(table_rows, [Constraint::Min(10), Constraint::Length(16)])
         .highlight_symbol("> ")
         .row_highlight_style(theme.selected())
         .column_spacing(1);
 
-    f.render_stateful_widget(table, area, &mut ts);
+    f.render_stateful_widget(table, chunks[2], &mut ts);
 }

@@ -82,7 +82,16 @@ fn dispatch_palette(
     render_handle: &RenderHandle,
 ) -> InputEffect {
     let center = map.center();
-    match ui.palette.handle_key(code, modifiers, &mut ui.focus) {
+    let outcome = ui.palette.handle_key(code, modifiers);
+
+    // Auto-release: palette doesn't touch focus itself; if `is_visible()`
+    // dropped during handle_key (e.g. Esc / Enter closed it), the host
+    // drops focus back. Mirrors the plugin auto-release rule.
+    if !ui.palette.is_visible() && matches!(ui.focus.current(), Focus::Palette) {
+        ui.focus.release();
+    }
+
+    match outcome {
         PaletteOutcome::Consumed | PaletteOutcome::None => InputEffect::Plugin,
         PaletteOutcome::Run(action) => {
             info!("palette: running action {:?}", action);
@@ -178,8 +187,9 @@ impl KeyboardHandler {
         if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
             info!("palette: opening");
             ui.focus.deactivate_focused(&mut ui.widgets, None);
-            ui.palette
-                .activate(&mut ui.focus, &ui.widgets, &self.keymap);
+            let theme_id = ui.theme_id;
+            ui.palette.activate(&ui.widgets, &self.keymap, theme_id);
+            ui.focus.take_palette();
             return InputEffect::Plugin;
         }
 

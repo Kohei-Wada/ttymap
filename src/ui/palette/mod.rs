@@ -1,15 +1,18 @@
-//! Command palette — `:`-triggered popup that lists every map
-//! `Action` and every visible-to-the-user plugin, filterable by
-//! substring, runnable with Enter.
+//! Command palette — `:`-triggered popup, a **universal picker**.
 //!
-//! A **builtin**, not a `Plugin` — the palette inherently coordinates
-//! across plugins (it has to know all of them to list them), and that
-//! role does not fit the self-contained widget contract `Plugin`
-//! imposes. It lives on `UiState` like `InfoOverlay` does; `keyboard.rs`
-//! routes keys to it explicitly when focus is `Focus::Palette`.
+//! A **builtin**, not a `Plugin` — the palette coordinates across
+//! plugins and other app concerns, which doesn't fit the self-contained
+//! widget contract `Plugin` imposes. It lives on `UiState` like
+//! `InfoOverlay` does; `keyboard.rs` routes keys to it when focus is
+//! `Focus::Palette`.
+//!
+//! Concrete behaviour (items, filter, activation) lives on a
+//! [`PaletteProvider`](provider::PaletteProvider). The palette swaps
+//! providers when the user picks a "sub-mode" command (e.g. "Theme"
+//! switches to [`ThemeProvider`](provider::ThemeProvider)).
 
-pub mod commands;
 pub mod panel;
+pub mod provider;
 mod state;
 
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -17,21 +20,19 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::focus::FocusManager;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::plugin::PluginRegistry;
 use crate::theme::UiTheme;
 
-use commands::{ACTIONS, Command, CommandKind};
+use provider::{CommandProvider, PaletteAction};
 use state::{Outcome, PaletteState};
 
 /// What `handle_key` wants `keyboard.rs` to do after the keystroke.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaletteOutcome {
-    /// Key did not map to anything the palette cares about. The palette
-    /// is still visible; caller should treat it as consumed so focus
-    /// stays where it is.
+    /// Key did not map to anything the palette cares about. Palette is
+    /// still visible; caller treats it as consumed so focus stays.
     None,
     /// Key consumed, palette redraws.
     Consumed,
@@ -65,38 +66,40 @@ impl CommandPalette {
         self.state.is_active()
     }
 
-    /// Open the palette: capture the current set of runnable commands
-    /// (map actions + plugin activations) and take focus.
-    pub fn activate(
-        &mut self,
-        focus: &mut FocusManager,
-        widgets: &PluginRegistry,
-        keymap: &KeyMap,
-    ) {
-        let commands = build_commands(widgets, keymap);
-        self.state.set_commands(commands);
-        self.state.open();
-        focus.take_palette();
+    /// Open the palette with the default [`CommandProvider`]. The host
+    /// is responsible for taking palette focus afterwards — the palette
+    /// does not touch `FocusManager` itself (mirrors the plugin rule).
+    pub fn activate(&mut self, widgets: &PluginRegistry, keymap: &KeyMap, current_theme: ThemeId) {
+        let provider = Box::new(CommandProvider::new(widgets, keymap, current_theme));
+        self.state.open_with(provider);
     }
 
-    pub fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        focus: &mut FocusManager,
-    ) -> PaletteOutcome {
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> PaletteOutcome {
         let outcome = self.state.handle_key(code, modifiers);
-        if !self.state.is_active() {
-            focus.release();
-        }
         match outcome {
             Outcome::None => PaletteOutcome::None,
             Outcome::Consumed => PaletteOutcome::Consumed,
-            Outcome::Run(idx) => match self.state.commands[idx].kind.clone() {
-                CommandKind::Action(a) => PaletteOutcome::Run(a),
-                CommandKind::Activate(tag) => PaletteOutcome::Activate(tag),
-                CommandKind::SetTheme(t) => PaletteOutcome::SetTheme(t),
-            },
+            Outcome::Run(idx) => {
+                let action = self
+                    .state
+                    .provider
+                    .as_mut()
+                    .map(|p| p.execute(idx))
+                    .unwrap_or(PaletteAction::Close);
+                match action {
+                    PaletteAction::Close => PaletteOutcome::Consumed,
+                    PaletteAction::SwitchProvider(next) => {
+                        // Provider-to-provider transition: stay active,
+                        // reopen palette with the new provider. Host
+                        // sees `is_visible()` still true, keeps focus.
+                        self.state.open_with(next);
+                        PaletteOutcome::Consumed
+                    }
+                    PaletteAction::Run(a) => PaletteOutcome::Run(a),
+                    PaletteAction::Activate(tag) => PaletteOutcome::Activate(tag),
+                    PaletteAction::SetTheme(t) => PaletteOutcome::SetTheme(t),
+                }
+            }
         }
     }
 
@@ -112,38 +115,4 @@ impl CommandPalette {
     pub(in crate::ui::palette) fn state(&self) -> &PaletteState {
         &self.state
     }
-}
-
-fn build_commands(widgets: &PluginRegistry, keymap: &KeyMap) -> Vec<Command> {
-    let mut commands: Vec<Command> = Vec::new();
-
-    for (label, action) in ACTIONS {
-        commands.push(Command {
-            label: (*label).to_string(),
-            keys: keymap.keys_for(action).join(", "),
-            kind: CommandKind::Action(action.clone()),
-        });
-    }
-
-    for p in widgets.iter() {
-        let description = p.description();
-        if description.is_empty() {
-            continue;
-        }
-        commands.push(Command {
-            label: description.to_string(),
-            keys: p.activation_keys().join(", "),
-            kind: CommandKind::Activate(p.tag().to_string()),
-        });
-    }
-
-    for theme in ThemeId::all() {
-        commands.push(Command {
-            label: format!("UiTheme: {}", theme.name()),
-            keys: String::new(),
-            kind: CommandKind::SetTheme(*theme),
-        });
-    }
-
-    commands
 }
