@@ -154,6 +154,18 @@ impl PluginRegistry {
             .map(|(_, tag)| tag.as_str())
     }
 
+    /// Move the plugin with this tag to the end of iteration order.
+    /// Render / paint loops draw later entries on top, so the most
+    /// recently activated plugin appears at the front.
+    pub fn bring_to_front(&mut self, tag: &str) {
+        if let Some(i) = self.widgets.get_index_of(tag) {
+            let last = self.widgets.len().saturating_sub(1);
+            if i < last {
+                self.widgets.move_index(i, last);
+            }
+        }
+    }
+
     pub fn get<'a>(&'a self, tag: &str) -> Option<&'a (dyn Plugin + 'a)> {
         self.widgets
             .get(tag)

@@ -73,6 +73,8 @@ impl KeyboardHandler {
             {
                 prev.deactivate();
             }
+            // Newest activation renders on top (z-order).
+            ui.widgets.bring_to_front(&new_tag);
             let mut ctx = PluginCtx {
                 center,
                 focus: &mut ui.focus,
