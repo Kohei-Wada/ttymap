@@ -100,7 +100,7 @@ src/
 ├── mouse.rs          mouse dispatch
 ├── keymap.rs         key → Action translation + user overrides
 ├── geo.rs            Web Mercator, MapProjection, distance
-├── palette.rs        xterm-256 theme tables
+├── color_palette.rs xterm-256 color tables (ThemeId + DARK/BRIGHT)
 │
 ├── core/             domain — map state + commands
 │   ├── action.rs     Action enum (map-level only)

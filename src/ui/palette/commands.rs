@@ -6,8 +6,8 @@
 //! or a `SetTheme(ThemeId)` directive for runtime theme switching.
 //! The palette enumerates these on open and filters them by query.
 
+use crate::color_palette::ThemeId;
 use crate::core::Action;
-use crate::palette::ThemeId;
 
 #[derive(Debug, Clone)]
 pub enum CommandKind {

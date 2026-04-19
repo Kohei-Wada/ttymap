@@ -5,12 +5,12 @@ use std::sync::Arc;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 
-use crate::palette::{Palette, ThemeId};
+use crate::color_palette::{ColorPalette, ThemeId};
 use crate::render::thread::RenderHandle;
 use crate::styler::Styler;
 
-/// Computed UI theme from a Palette.
-pub struct Theme {
+/// Computed UI theme from a ColorPalette.
+pub struct UiTheme {
     pub accent: Color,
     pub accent_alt: Color,
     pub fg: Color,
@@ -18,8 +18,8 @@ pub struct Theme {
     pub bg: Color,
 }
 
-impl Theme {
-    pub fn from_palette(p: &Palette) -> Self {
+impl UiTheme {
+    pub fn from_palette(p: &ColorPalette) -> Self {
         Self {
             accent: Color::Indexed(p.accent),
             accent_alt: Color::Indexed(p.accent_alt),
@@ -57,10 +57,10 @@ impl Theme {
 }
 
 /// Runtime theme switch: build a fresh `Styler` for `new_id`, push it
-/// into the render thread, and refresh the passed-in UI `Theme` in
+/// into the render thread, and refresh the passed-in UI `UiTheme` in
 /// place. The caller keeps its own `theme_id` source of truth in sync.
-pub fn apply(new_id: ThemeId, ui_theme: &mut Theme, render_handle: &RenderHandle) {
+pub fn apply(new_id: ThemeId, ui_theme: &mut UiTheme, render_handle: &RenderHandle) {
     let styler = Arc::new(Styler::new(new_id));
     render_handle.set_styler(styler.clone());
-    *ui_theme = Theme::from_palette(styler.palette());
+    *ui_theme = UiTheme::from_palette(styler.palette());
 }

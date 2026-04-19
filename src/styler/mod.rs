@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use filter::{Filter, PropertyValue};
 
-use crate::palette::{Palette, ThemeId};
+use crate::color_palette::{ColorPalette, ThemeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleType {
@@ -67,7 +67,7 @@ impl Styler {
     }
 
     /// Convenience accessor — equivalent to `self.theme().palette()`.
-    pub fn palette(&self) -> &'static Palette {
+    pub fn palette(&self) -> &'static ColorPalette {
         self.theme.palette()
     }
 

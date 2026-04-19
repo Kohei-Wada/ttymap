@@ -17,7 +17,7 @@ use log::debug;
 
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
@@ -117,7 +117,7 @@ impl Plugin for WikiPlugin {
         }
     }
 
-    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &Theme) {
+    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
 

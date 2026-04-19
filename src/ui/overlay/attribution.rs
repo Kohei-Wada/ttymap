@@ -8,7 +8,7 @@ use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::frame::MapFrame;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use super::MapOverlay;
 
@@ -17,7 +17,7 @@ pub struct AttributionOverlay<'a> {
 }
 
 impl<'a> MapOverlay for AttributionOverlay<'a> {
-    fn render(&self, buf: &mut Buffer, map_area: Rect, _frame: &MapFrame, theme: &Theme) {
+    fn render(&self, buf: &mut Buffer, map_area: Rect, _frame: &MapFrame, theme: &UiTheme) {
         if self.text.is_empty() || map_area.height < 2 {
             return;
         }

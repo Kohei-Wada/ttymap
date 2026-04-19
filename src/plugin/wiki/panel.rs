@@ -9,14 +9,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use super::WikiPlugin;
 use super::state::WikiState;
 use super::wikipedia::WikiArticle;
 
 /// Render the wiki side panel (list or detail view) if active.
-pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
     let state = &widget.state;
     if !state.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
@@ -49,7 +49,7 @@ fn render_list(
     area: Rect,
     panel_height: u16,
     content_width: usize,
-    theme: &Theme,
+    theme: &UiTheme,
 ) {
     let block = theme.panel("wiki (Enter: open)");
 
@@ -147,7 +147,7 @@ fn render_detail(
     area: Rect,
     content_width: usize,
     article: &WikiArticle,
-    theme: &Theme,
+    theme: &UiTheme,
 ) {
     let block = theme.panel("wiki (Esc: back)");
     let dist = crate::geo::format_distance(article.dist_m);

@@ -14,7 +14,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::shared::nominatim::NominatimClient;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use service::SearchService;
 use state::{Outcome, SearchState};
@@ -94,7 +94,7 @@ impl Plugin for SearchPlugin {
         }
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
 

@@ -9,7 +9,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::Action;
 use crate::keymap::KeyMap;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use super::{Plugin, PluginAction, PluginCtx};
 
@@ -93,7 +93,7 @@ impl HelpPlugin {
         self.text = lines.join("\n");
     }
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
         if map_inner.width < 20 || map_inner.height < 10 {
             return;
         }
@@ -167,7 +167,7 @@ impl Plugin for HelpPlugin {
         PluginAction::Consumed
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         HelpPlugin::render(self, f, area, theme);
     }
 

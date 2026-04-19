@@ -16,12 +16,12 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
+use crate::color_palette::ThemeId;
 use crate::core::Action;
 use crate::keymap::KeyMap;
-use crate::palette::ThemeId;
 use crate::plugin::PluginRegistry;
 use crate::ui::focus::FocusManager;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use commands::{ACTIONS, Command, CommandKind};
 use state::{Outcome, PaletteState};
@@ -100,7 +100,7 @@ impl CommandPalette {
         }
     }
 
-    pub fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
 
@@ -139,7 +139,7 @@ fn build_commands(widgets: &PluginRegistry, keymap: &KeyMap) -> Vec<Command> {
 
     for theme in ThemeId::all() {
         commands.push(Command {
-            label: format!("Theme: {}", theme.name()),
+            label: format!("UiTheme: {}", theme.name()),
             keys: String::new(),
             kind: CommandKind::SetTheme(*theme),
         });

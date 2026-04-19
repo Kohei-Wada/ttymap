@@ -6,11 +6,11 @@
 //!
 //! [`ThemeId`] is the single source of truth for "which theme is active":
 //! pick one from the config, then derive everything else from it — the
-//! [`Palette`] the UI reads, the `styler::Styler` the map renderer reads,
+//! [`ColorPalette`] the UI reads, the `styler::Styler` the map renderer reads,
 //! and the display name shown to the user.
 
 /// Identifies which theme the app is running with. Derives the concrete
-/// [`Palette`] and, separately, the set of styling rules consumed by
+/// [`ColorPalette`] and, separately, the set of styling rules consumed by
 /// `styler::Styler`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeId {
@@ -29,7 +29,7 @@ impl ThemeId {
     }
 
     /// The palette this theme ships with.
-    pub fn palette(self) -> &'static Palette {
+    pub fn palette(self) -> &'static ColorPalette {
         match self {
             Self::Dark => &DARK,
             Self::Bright => &BRIGHT,
@@ -54,7 +54,7 @@ impl ThemeId {
 }
 
 /// All colors used by a single theme.
-pub struct Palette {
+pub struct ColorPalette {
     // background
     pub background: u8,
     // shared (used by both map renderer and UI chrome)
@@ -110,7 +110,7 @@ pub struct Palette {
     pub housenum_label: u8,
 }
 
-pub const DARK: Palette = Palette {
+pub const DARK: ColorPalette = ColorPalette {
     background: 16,            // #000
     accent: 226,               // Yellow (#ff0)
     accent_alt: 14,            // Cyan
@@ -159,7 +159,7 @@ pub const DARK: Palette = Palette {
 };
 
 /// Bright theme — white background, dark foreground colors.
-pub const BRIGHT: Palette = Palette {
+pub const BRIGHT: ColorPalette = ColorPalette {
     background: 231,           // white
     accent: 25,                // dark blue (#005faf)
     accent_alt: 160,           // dark red (#d70000) — pops against accent blue

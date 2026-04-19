@@ -12,17 +12,17 @@ use ratatui::style::{Color, Style};
 
 use crate::geo::{LonLat, MapProjection};
 use crate::render::frame::MapFrame;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 pub struct MapPainter<'a> {
     buf: &'a mut Buffer,
     map_area: Rect,
     proj: MapProjection,
-    theme: &'a Theme,
+    theme: &'a UiTheme,
 }
 
 impl<'a> MapPainter<'a> {
-    pub fn new(buf: &'a mut Buffer, map_area: Rect, frame: &MapFrame, theme: &'a Theme) -> Self {
+    pub fn new(buf: &'a mut Buffer, map_area: Rect, frame: &MapFrame, theme: &'a UiTheme) -> Self {
         let proj = MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows);
         Self {
             buf,
@@ -32,7 +32,7 @@ impl<'a> MapPainter<'a> {
         }
     }
 
-    pub fn theme(&self) -> &Theme {
+    pub fn theme(&self) -> &UiTheme {
         self.theme
     }
 

@@ -46,9 +46,9 @@ pub mod styler;
 // reach them. `#[doc(hidden)]` signals "not stable API" to consumers.
 
 #[doc(hidden)]
-pub mod geo;
+pub mod color_palette;
 #[doc(hidden)]
-pub mod palette;
+pub mod geo;
 #[doc(hidden)]
 pub mod render;
 #[doc(hidden)]

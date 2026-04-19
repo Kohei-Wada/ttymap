@@ -5,11 +5,11 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Cell, Clear, Paragraph, Row, Table, TableState};
 
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use super::CommandPalette;
 
-pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, theme: &Theme) {
+pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
     let state = widget.state();
     if !state.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
@@ -46,7 +46,7 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
     render_table(widget, f, chunks[2], theme);
 }
 
-fn render_table(widget: &CommandPalette, f: &mut Frame, area: Rect, theme: &Theme) {
+fn render_table(widget: &CommandPalette, f: &mut Frame, area: Rect, theme: &UiTheme) {
     let state = widget.state();
 
     let rows: Vec<Row> = state

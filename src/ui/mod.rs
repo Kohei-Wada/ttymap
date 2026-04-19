@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
-use theme::Theme;
+use theme::UiTheme;
 
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
@@ -44,8 +44,8 @@ pub struct UiState {
     /// Source of truth for the active theme on the main thread. Paired
     /// with `theme` (the derived UI color set); both get refreshed by
     /// `ui::theme::apply` on a runtime theme switch.
-    pub theme_id: crate::palette::ThemeId,
-    pub theme: Theme,
+    pub theme_id: crate::color_palette::ThemeId,
+    pub theme: UiTheme,
     pub attribution: Option<String>,
 }
 
@@ -56,7 +56,7 @@ impl UiState {
         attribution: Option<String>,
         keymap: &KeyMap,
     ) -> Self {
-        let theme_id = crate::palette::ThemeId::from_name(&config.style);
+        let theme_id = crate::color_palette::ThemeId::from_name(&config.style);
         let palette = theme_id.palette();
 
         let search = SearchPlugin::new(nominatim.clone());
@@ -84,7 +84,7 @@ impl UiState {
             info: InfoOverlay::new(nominatim),
             map_frame: None,
             theme_id,
-            theme: Theme::from_palette(palette),
+            theme: UiTheme::from_palette(palette),
             attribution,
         }
     }

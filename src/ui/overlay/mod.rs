@@ -10,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::render::frame::MapFrame;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 pub mod attribution;
 pub mod info;
@@ -26,5 +26,5 @@ pub use scale_bar::ScaleBarOverlay;
 /// the center/zoom/dimensions the map was rendered at so overlays can
 /// project world coordinates back to screen cells.
 pub trait MapOverlay {
-    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &Theme);
+    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &UiTheme);
 }

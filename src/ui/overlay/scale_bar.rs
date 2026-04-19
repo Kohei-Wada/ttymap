@@ -11,14 +11,14 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::geo;
 use crate::render::frame::MapFrame;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 use super::MapOverlay;
 
 pub struct ScaleBarOverlay;
 
 impl MapOverlay for ScaleBarOverlay {
-    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &Theme) {
+    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &UiTheme) {
         if map_area.height < 2 {
             return;
         }

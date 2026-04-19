@@ -21,7 +21,7 @@ use crate::geo::{LonLat, MapProjection};
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
 use crate::shared::throttle::Throttle;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 mod service;
 
@@ -83,7 +83,7 @@ const ZOOM_ROW: u16 = 2;
 const PLACE_ROW: u16 = 3;
 
 impl MapOverlay for InfoOverlay {
-    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &Theme) {
+    fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &UiTheme) {
         if map_area.width < 4 || map_area.height < 1 {
             return;
         }

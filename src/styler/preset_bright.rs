@@ -1,4 +1,4 @@
-use crate::palette::Palette;
+use crate::color_palette::ColorPalette;
 
 use super::filter::Filter;
 use super::filter::PropertyValue as PV;
@@ -12,7 +12,7 @@ fn n(v: f64) -> PV {
     PV::Number(v)
 }
 
-pub fn rules(p: &Palette) -> Vec<StyleRule> {
+pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
     vec![
         // 1. landuse_hospital
         StyleRule {

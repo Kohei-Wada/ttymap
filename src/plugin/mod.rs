@@ -20,7 +20,7 @@ use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::ui::focus::FocusManager;
 use crate::ui::painter::MapPainter;
-use crate::ui::theme::Theme;
+use crate::ui::theme::UiTheme;
 
 /// Outcome of a widget seeing a raw key event.
 #[derive(Debug, Clone, PartialEq)]
@@ -115,7 +115,7 @@ pub trait Plugin {
     /// Render the widget's modal panel. Called only when the widget
     /// holds focus; widgets that don't have a panel leave this as a
     /// no-op.
-    fn render(&self, _f: &mut Frame, _area: Rect, _theme: &Theme) {}
+    fn render(&self, _f: &mut Frame, _area: Rect, _theme: &UiTheme) {}
 
     /// Context-sensitive key hints for the footer, shown while the
     /// widget holds focus.
