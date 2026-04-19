@@ -15,7 +15,6 @@ use crate::ui::theme::Theme;
 use super::{Widget, WidgetAction, WidgetCtx};
 
 pub struct HelpWidget {
-    active: bool,
     text: String,
 }
 
@@ -28,7 +27,6 @@ impl Default for HelpWidget {
 impl HelpWidget {
     pub fn new() -> Self {
         Self {
-            active: false,
             text: String::new(),
         }
     }
@@ -78,7 +76,7 @@ impl HelpWidget {
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
-        if !self.active || map_inner.width < 20 || map_inner.height < 10 {
+        if map_inner.width < 20 || map_inner.height < 10 {
             return;
         }
 
@@ -113,17 +111,11 @@ impl Widget for HelpWidget {
     }
 
     fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
-        if ctx.focus.is_widget("help") {
-            self.active = false;
-            *ctx.focus = Focus::Map;
+        *ctx.focus = if ctx.focus.is_widget("help") {
+            Focus::Map
         } else {
-            self.active = true;
-            *ctx.focus = Focus::Widget("help".into());
-        }
-    }
-
-    fn deactivate(&mut self) {
-        self.active = false;
+            Focus::Widget("help".into())
+        };
     }
 
     fn handle_key(
@@ -133,7 +125,6 @@ impl Widget for HelpWidget {
         ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction {
         // Help is modal and consumes any key, releasing focus.
-        self.active = false;
         *ctx.focus = Focus::Map;
         WidgetAction::Consumed
     }
