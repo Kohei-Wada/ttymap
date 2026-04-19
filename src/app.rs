@@ -6,7 +6,7 @@ use crossterm::event::{self, Event, KeyModifiers};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
-use crate::command::{self, Command, InputEffect};
+use crate::command::{self, Command, DispatchCtx, InputEffect};
 use crate::config::Config;
 use crate::input::keyboard::KeyboardHandler;
 use crate::input::mouse::MouseHandler;
@@ -93,14 +93,13 @@ impl App {
             }
             if let Some(cmd) = async_cmd {
                 info!("plugin async command: {:?}", cmd);
-                let effect = command::dispatch(
-                    cmd,
-                    &mut self.map,
-                    &mut self.ui,
-                    &self.render_handle,
-                    self.keyboard.keymap(),
-                );
-                if let InputEffect::Map = effect {
+                let mut ctx = DispatchCtx {
+                    map: &mut self.map,
+                    ui: &mut self.ui,
+                    render_handle: &self.render_handle,
+                    keymap: self.keyboard.keymap(),
+                };
+                if let InputEffect::Map = command::dispatch(cmd, &mut ctx) {
                     self.request_draw();
                 }
             }
@@ -149,14 +148,13 @@ impl App {
                     }
                     Event::Mouse(mouse) => {
                         if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
-                            let effect = command::dispatch(
-                                cmd,
-                                &mut self.map,
-                                &mut self.ui,
-                                &self.render_handle,
-                                self.keyboard.keymap(),
-                            );
-                            if let InputEffect::Map = effect {
+                            let mut ctx = DispatchCtx {
+                                map: &mut self.map,
+                                ui: &mut self.ui,
+                                render_handle: &self.render_handle,
+                                keymap: self.keyboard.keymap(),
+                            };
+                            if let InputEffect::Map = command::dispatch(cmd, &mut ctx) {
                                 self.request_draw();
                             }
                         }

@@ -51,14 +51,12 @@ impl KeyBinding {
 
 pub struct KeyMap {
     pub bindings: Vec<(KeyBinding, Command)>,
-    /// First-`g`-of-`gg` flag. Held on the map, not the keyboard
-    /// handler, so all key→`Command` translation stays in one place.
-    pending_g: bool,
 }
 
 impl KeyMap {
     /// Look up the command for a key event. Returns `None` if no
-    /// binding matches. Stateless — ignores sequence state.
+    /// binding matches. Stateless — multi-key sequences (e.g. `gg`)
+    /// are owned by the keyboard handler, not the keymap.
     pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&Command> {
         let clean_mods = modifiers & !KeyModifiers::SHIFT;
         self.bindings
@@ -67,24 +65,12 @@ impl KeyMap {
             .map(|(_, c)| c)
     }
 
-    /// Resolve a key event to a `Command`. Handles the `gg` sequence
-    /// ahead of user-configurable bindings. Returns `None` while
-    /// mid-sequence or when the key has no binding — the caller
-    /// treats that as a no-op. Plugin activation (e.g. `/` opens
-    /// search) is **not** handled here — widgets own their activation
-    /// keys and the keyboard handler checks them before falling
-    /// through to this resolver.
-    pub fn resolve(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Command> {
-        if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
-            if self.pending_g {
-                self.pending_g = false;
-                return Some(Command::Map(Action::ZoomToWorld));
-            }
-            self.pending_g = true;
-            return None;
-        }
-        self.pending_g = false;
-
+    /// Resolve a key event to a `Command`. Stateless wrapper around
+    /// [`lookup`] that clones for ownership. Plugin activation (e.g.
+    /// `/` opens search) is **not** handled here — widgets own their
+    /// activation keys and the keyboard handler checks them before
+    /// falling through to this resolver.
+    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Command> {
         self.lookup(code, modifiers).cloned()
     }
 
@@ -170,7 +156,6 @@ impl Default for KeyMap {
                 b("0", ResetPosition),
                 b("q", Quit),
             ],
-            pending_g: false,
         }
     }
 }
@@ -326,7 +311,7 @@ mod tests {
 
     #[test]
     fn resolve_basic_movement() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('h'), NONE),
             Some(map(Action::PanLeft))
@@ -346,26 +331,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gg_zoom_to_world() {
-        let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), None);
-        assert_eq!(
-            km.resolve(KeyCode::Char('g'), NONE),
-            Some(map(Action::ZoomToWorld))
-        );
-    }
-
-    #[test]
-    fn resolve_gg_sequence_broken_by_other_key() {
-        let mut km = KeyMap::default();
-        km.resolve(KeyCode::Char('g'), NONE);
-        km.resolve(KeyCode::Char('h'), NONE); // breaks sequence
-        assert_eq!(km.resolve(KeyCode::Char('g'), NONE), None);
-    }
-
-    #[test]
     fn resolve_zoom() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('a'), NONE),
             Some(map(Action::ZoomIn))
@@ -378,7 +345,7 @@ mod tests {
 
     #[test]
     fn resolve_quit() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('q'), NONE),
             Some(map(Action::Quit))
@@ -387,7 +354,7 @@ mod tests {
 
     #[test]
     fn resolve_big_pan() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('w'), NONE),
             Some(map(Action::PanRightFast))
@@ -408,7 +375,7 @@ mod tests {
 
     #[test]
     fn resolve_reset_position() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('0'), NONE),
             Some(map(Action::ResetPosition))
@@ -417,7 +384,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_key_is_none() {
-        let mut km = KeyMap::default();
+        let km = KeyMap::default();
         // `/`, `?`, `i` are widget activation triggers, not keymap
         // entries — they fall through to `None`.
         assert_eq!(km.resolve(KeyCode::Char('/'), NONE), None);

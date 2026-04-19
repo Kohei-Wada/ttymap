@@ -78,51 +78,61 @@ pub enum KeyDelivery {
     Run(Command),
 }
 
+/// Bundle of borrows every controller entry point needs. Bundling
+/// them into one struct keeps call sites tidy — call `dispatch(cmd,
+/// &mut ctx)` instead of threading four separate references through
+/// every layer.
+///
+/// Fields are public so sites that already hold the individual pieces
+/// (e.g. `app::App::run`) can build the ctx in one place and reuse it
+/// for each dispatch in a loop iteration.
+pub struct DispatchCtx<'a> {
+    pub map: &'a mut MapState,
+    pub ui: &'a mut UiState,
+    pub render_handle: &'a RenderHandle,
+    /// Read by `OpenPalette` (key hints in the default provider) and
+    /// available to future commands that want to reason about key
+    /// bindings. Other arms leave it alone.
+    pub keymap: &'a KeyMap,
+}
+
 /// Apply a command to the app. This is the single funnel for every
 /// state-change intent emitted by palette / plugins / async polling.
-///
-/// `keymap` is threaded in because `OpenPalette` builds the default
-/// `CommandProvider` which snapshots the current key bindings for
-/// display hints. Other variants ignore it.
-pub fn dispatch(
-    cmd: Command,
-    map: &mut MapState,
-    ui: &mut UiState,
-    render_handle: &RenderHandle,
-    keymap: &KeyMap,
-) -> InputEffect {
+pub fn dispatch(cmd: Command, ctx: &mut DispatchCtx<'_>) -> InputEffect {
     match cmd {
         Command::Map(action) => {
-            if map.process_action(&action) {
+            if ctx.map.process_action(&action) {
                 InputEffect::Map
             } else {
                 InputEffect::None
             }
         }
         Command::Jump(loc) => {
-            map.jump_to(loc);
+            ctx.map.jump_to(loc);
             InputEffect::Map
         }
         Command::Ui(ui_action) => {
-            crate::ui::action::apply(ui_action, ui, render_handle);
+            crate::ui::action::apply(ui_action, ctx.ui, ctx.render_handle);
             InputEffect::Map
         }
         Command::ActivatePlugin(tag) => {
-            activate_plugin(&tag, ui, map.center());
+            activate_plugin(&tag, ctx.ui, ctx.map.center());
             InputEffect::Plugin
         }
         Command::CycleFocus(forward) => {
-            if ui.focus.cycle(&mut ui.widgets, forward) {
+            if ctx.ui.focus.cycle(&mut ctx.ui.widgets, forward) {
                 InputEffect::Plugin
             } else {
                 InputEffect::None
             }
         }
         Command::OpenPalette => {
-            ui.focus.deactivate_focused(&mut ui.widgets, None);
-            let theme_id = ui.theme_id;
-            ui.palette.activate(&ui.widgets, keymap, theme_id);
-            ui.focus.take_palette();
+            ctx.ui.focus.deactivate_focused(&mut ctx.ui.widgets, None);
+            let theme_id = ctx.ui.theme_id;
+            ctx.ui
+                .palette
+                .activate(&ctx.ui.widgets, ctx.keymap, theme_id);
+            ctx.ui.focus.take_palette();
             InputEffect::Plugin
         }
     }
@@ -133,19 +143,19 @@ pub fn dispatch(
 /// write — take on activation, auto-release on close, release on
 /// palette dismissal — lives in this module.
 ///
-/// `center` is read once by the caller (usually from `MapState`) and
-/// forwarded into `PluginCtx` so plugins can read the map viewport
-/// without this function touching `MapState`.
+/// Reads `map.center()` once and forwards it to `PluginCtx` so
+/// plugins can read the viewport without this function owning
+/// `MapState` directly.
 pub fn deliver_key_to_focused(
-    ui: &mut UiState,
+    ctx: &mut DispatchCtx<'_>,
     code: KeyCode,
     modifiers: KeyModifiers,
-    center: LonLat,
 ) -> KeyDelivery {
-    match ui.focus.current().clone() {
+    let center = ctx.map.center();
+    match ctx.ui.focus.current().clone() {
         Focus::Map => KeyDelivery::Passthrough,
-        Focus::Palette => deliver_to_palette(ui, code, modifiers),
-        Focus::Plugin(tag) => deliver_to_plugin(ui, &tag, code, modifiers, center),
+        Focus::Palette => deliver_to_palette(ctx.ui, code, modifiers),
+        Focus::Plugin(tag) => deliver_to_plugin(ctx.ui, &tag, code, modifiers, center),
     }
 }
 
