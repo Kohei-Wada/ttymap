@@ -1,9 +1,11 @@
 //! `Focus` — single source of truth for which widget (if any) has
-//! exclusive keyboard focus. Mutated by widgets via `PluginCtx::focus`
-//! (which still borrows `&mut Focus`), read by the dispatcher and layout
-//! code. A thin `FocusManager` wraps the enum and owns the policy for
-//! focus transitions that need to coordinate with the plugin registry
-//! (deactivation callbacks in particular).
+//! exclusive keyboard focus. Read by the dispatcher and layout code,
+//! mutated by widgets via `PluginCtx::focus` (which still borrows
+//! `&mut Focus`). `FocusManager` is the single gatekeeper: the inner
+//! `Focus` is private, exposed for reads via `current()` and for
+//! plugin-context construction via `plugin_slot()`. Routing code (key
+//! dispatch, Tab cycling) must go through `cycle` / `deactivate_focused`
+//! so deactivation callbacks can't be bypassed by accident.
 
 use std::borrow::Cow;
 
@@ -22,19 +24,33 @@ impl Focus {
     }
 }
 
-/// Coordinates focus transitions. The current `Focus` stays a public
-/// field so plugins can still get a `&mut Focus` (via `&mut
-/// focus.current`) and mutate it directly — only the multi-field
-/// operations (like "release the outgoing plugin before moving on")
-/// live here.
+/// Coordinates focus transitions. The inner `Focus` is private so the
+/// only way for routing code to move focus between plugins is via
+/// `deactivate_focused` / `cycle`, which call the outgoing plugin's
+/// `deactivate` hook. Plugins still mutate focus inside their own
+/// `activate` / `handle_key` through the `&mut Focus` handed out by
+/// `plugin_slot()`.
 #[derive(Default)]
 pub struct FocusManager {
-    pub current: Focus,
+    current: Focus,
 }
 
 impl FocusManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Read-only access to the current focus for pattern matching and
+    /// equality checks.
+    pub fn current(&self) -> &Focus {
+        &self.current
+    }
+
+    /// Returns `&mut Focus` for `PluginCtx` construction. Plugins mutate
+    /// only their own focus state (toggle Map ↔ self); routing code
+    /// should use `deactivate_focused` / `cycle` instead of poking this.
+    pub fn plugin_slot(&mut self) -> &mut Focus {
+        &mut self.current
     }
 
     pub fn is_plugin(&self, tag: &str) -> bool {

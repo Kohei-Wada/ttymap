@@ -36,14 +36,14 @@ impl KeyboardHandler {
 
         // 1. Focused widget sees the key first. It may consume, jump,
         //    or pass it back out.
-        let focused_tag = match &ui.focus.current {
+        let focused_tag = match ui.focus.current() {
             Focus::Map => None,
             Focus::Plugin(t) => Some(t.clone()),
         };
         if let Some(tag) = focused_tag {
             let mut ctx = PluginCtx {
                 center,
-                focus: &mut ui.focus.current,
+                focus: ui.focus.plugin_slot(),
             };
             let outcome = match ui.widgets.get_mut(tag.as_ref()) {
                 Some(w) => w.handle_key(code, modifiers, &mut ctx),
@@ -86,7 +86,7 @@ impl KeyboardHandler {
             ui.widgets.bring_to_front(&new_tag);
             let mut ctx = PluginCtx {
                 center,
-                focus: &mut ui.focus.current,
+                focus: ui.focus.plugin_slot(),
             };
             if let Some(w) = ui.widgets.get_mut(&new_tag) {
                 w.activate(&mut ctx);

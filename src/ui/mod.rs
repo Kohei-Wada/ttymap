@@ -149,7 +149,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused widget provides its own context-sensitive hints.
-    if let Focus::Plugin(tag) = &ui.focus.current
+    if let Focus::Plugin(tag) = ui.focus.current()
         && let Some(w) = ui.widgets.get(tag.as_ref())
     {
         return w.footer_hints();
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn test_ui_state_initial() {
         let ui = make_ui();
-        assert!(ui.focus.current == Focus::Map);
+        assert_eq!(ui.focus.current(), &Focus::Map);
         assert!(ui.map_frame.is_none());
     }
 
@@ -201,11 +201,11 @@ mod tests {
     fn test_ui_state_search_lifecycle() {
         use crate::plugin::PluginCtx;
         let ui = &mut make_ui();
-        assert!(ui.focus.current == Focus::Map);
+        assert_eq!(ui.focus.current(), &Focus::Map);
 
         let mut ctx = PluginCtx {
             center: ZERO,
-            focus: &mut ui.focus.current,
+            focus: ui.focus.plugin_slot(),
         };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(&mut ctx);
