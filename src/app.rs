@@ -15,7 +15,6 @@ use crate::render::thread::{RenderHandle, RenderResult};
 use crate::shared::nominatim::NominatimClient;
 use crate::styler::Styler;
 use crate::ui::UiState;
-use crate::ui::layout;
 use crate::ui::widget::{Widget, WidgetAction};
 
 /// What a key/mouse event just changed. Drives how the main loop
@@ -276,7 +275,7 @@ impl App {
         // Coords and scale bar pull directly from the MapFrame inside
         // their overlays, so app.rs no longer pushes derived strings.
         terminal.draw(|f| {
-            layout::draw(f, &self.ui);
+            crate::ui::draw(f, &self.ui);
         })?;
         Ok(())
     }

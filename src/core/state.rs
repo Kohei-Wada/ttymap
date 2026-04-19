@@ -1,8 +1,16 @@
 use log::debug;
 
 use super::input::Action;
-use super::snapshot::RenderRequest;
 use crate::geo::{self, LonLat};
+
+/// Snapshot of the map view handed to the render pipeline.
+#[derive(Clone, Copy)]
+pub struct RenderRequest {
+    pub center: LonLat,
+    pub zoom: f64,
+    pub width: usize,
+    pub height: usize,
+}
 
 /// Everything `Core` needs to boot. Built by the app from `Config`, so
 /// `Core` itself doesn't import `Config` and its tests don't need one.
