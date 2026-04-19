@@ -17,7 +17,7 @@ use ratatui::layout::Rect;
 
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
-use crate::ui::focus::Focus;
+use crate::ui::focus::FocusManager;
 use crate::ui::painter::MapPainter;
 use crate::ui::theme::Theme;
 
@@ -39,7 +39,7 @@ pub enum PluginAction {
 /// queue, a notification channel) without resignalling every widget.
 pub struct PluginCtx<'a> {
     pub center: LonLat,
-    pub focus: &'a mut Focus,
+    pub focus: &'a mut FocusManager,
 }
 
 /// Interactive widget dispatched from the keyboard handler.

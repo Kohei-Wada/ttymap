@@ -14,7 +14,6 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::shared::nominatim::NominatimClient;
-use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
 
 use service::SearchService;
@@ -55,7 +54,7 @@ impl Plugin for SearchPlugin {
 
     fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
         self.state.open();
-        *ctx.focus = Focus::Plugin("search".into());
+        ctx.focus.take("search");
     }
 
     fn deactivate(&mut self) {
@@ -74,7 +73,7 @@ impl Plugin for SearchPlugin {
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
         if !self.state.is_active() {
-            *ctx.focus = Focus::Map;
+            ctx.focus.release();
         }
         match outcome {
             Outcome::None | Outcome::Consumed => PluginAction::Consumed,

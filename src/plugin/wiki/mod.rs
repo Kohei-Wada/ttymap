@@ -23,7 +23,6 @@ use service::WikiService;
 use state::{KeyOutcome, WikiState};
 
 use super::{Plugin, PluginAction, PluginCtx};
-use crate::ui::focus::Focus;
 
 pub struct WikiPlugin {
     pub(in crate::plugin::wiki) state: WikiState,
@@ -66,14 +65,14 @@ impl Plugin for WikiPlugin {
             // Not visible → open and take focus.
             self.state.open();
             self.refresh(ctx.center);
-            *ctx.focus = Focus::Plugin("wiki".into());
+            ctx.focus.take("wiki");
         } else if ctx.focus.is_plugin("wiki") {
             // Visible and focused → toggle off.
             self.state.close();
-            *ctx.focus = Focus::Map;
+            ctx.focus.release();
         } else {
             // Visible but another plugin has focus → reclaim focus.
-            *ctx.focus = Focus::Plugin("wiki".into());
+            ctx.focus.take("wiki");
         }
     }
 
@@ -92,9 +91,10 @@ impl Plugin for WikiPlugin {
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
         // Wiki is non-modal: the panel can close on its own (Esc while
-        // not in detail view), in which case focus returns to the map.
+        // not in detail view), in which case focus returns to the
+        // previous holder (or the map if there wasn't one).
         if !self.state.is_active() {
-            *ctx.focus = Focus::Map;
+            ctx.focus.release();
         }
         match outcome {
             KeyOutcome::None => PluginAction::Pass,

@@ -205,7 +205,7 @@ mod tests {
 
         let mut ctx = PluginCtx {
             center: ZERO,
-            focus: ui.focus.plugin_slot(),
+            focus: &mut ui.focus,
         };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(&mut ctx);
@@ -213,7 +213,7 @@ mod tests {
 
         search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
         search.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
-        assert!(matches!(*ctx.focus, Focus::Map));
+        assert_eq!(ctx.focus.current(), &Focus::Map);
     }
 
     #[test]

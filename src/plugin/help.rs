@@ -9,7 +9,6 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::Action;
 use crate::keymap::KeyMap;
-use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
 
 use super::{Plugin, PluginAction, PluginCtx};
@@ -137,10 +136,10 @@ impl Plugin for HelpPlugin {
     fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
         if self.active {
             self.active = false;
-            *ctx.focus = Focus::Map;
+            ctx.focus.release();
         } else {
             self.active = true;
-            *ctx.focus = Focus::Plugin("help".into());
+            ctx.focus.take("help");
         }
     }
 
@@ -161,7 +160,7 @@ impl Plugin for HelpPlugin {
     ) -> PluginAction {
         // Help is modal and consumes any key, releasing focus.
         self.active = false;
-        *ctx.focus = Focus::Map;
+        ctx.focus.release();
         PluginAction::Consumed
     }
 

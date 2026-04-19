@@ -24,15 +24,15 @@ impl Focus {
     }
 }
 
-/// Coordinates focus transitions. The inner `Focus` is private so the
-/// only way for routing code to move focus between plugins is via
-/// `deactivate_focused` / `cycle`, which call the outgoing plugin's
-/// `deactivate` hook. Plugins still mutate focus inside their own
-/// `activate` / `handle_key` through the `&mut Focus` handed out by
-/// `plugin_slot()`.
+/// Coordinates focus transitions. The inner `Focus` is private so
+/// every transition runs through a method that also updates the
+/// `prev` slot — that's how `release()` restores the focus a plugin
+/// held before the current one grabbed it, instead of always dumping
+/// back to the map.
 #[derive(Default)]
 pub struct FocusManager {
     current: Focus,
+    prev: Focus,
 }
 
 impl FocusManager {
@@ -46,15 +46,30 @@ impl FocusManager {
         &self.current
     }
 
-    /// Returns `&mut Focus` for `PluginCtx` construction. Plugins mutate
-    /// only their own focus state (toggle Map ↔ self); routing code
-    /// should use `deactivate_focused` / `cycle` instead of poking this.
-    pub fn plugin_slot(&mut self) -> &mut Focus {
-        &mut self.current
-    }
-
     pub fn is_plugin(&self, tag: &str) -> bool {
         self.current.is_plugin(tag)
+    }
+
+    /// Plugin-facing: take focus for this tag. The previous focus (map
+    /// or another plugin) is remembered so `release()` can restore it.
+    pub fn take(&mut self, tag: impl Into<std::borrow::Cow<'static, str>>) {
+        self.transition_to(Focus::Plugin(tag.into()));
+    }
+
+    /// Plugin-facing: release focus, returning it to whoever held it
+    /// before this plugin took over. Falls back to the map if there's
+    /// no remembered predecessor.
+    pub fn release(&mut self) {
+        self.current = std::mem::replace(&mut self.prev, Focus::Map);
+    }
+
+    /// Record a transition, pushing the outgoing focus into `prev`.
+    /// No-op when the target already matches current (guards against
+    /// self-reactivation clobbering a useful `prev`).
+    fn transition_to(&mut self, new: Focus) {
+        if new != self.current {
+            self.prev = std::mem::replace(&mut self.current, new);
+        }
     }
 
     /// Call `deactivate` on the currently-focused plugin unless the
@@ -120,10 +135,10 @@ impl FocusManager {
         };
 
         self.deactivate_focused(widgets, None);
-        self.current = match next {
+        self.transition_to(match next {
             Some(tag) => Focus::Plugin(tag.into()),
             None => Focus::Map,
-        };
+        });
         true
     }
 }

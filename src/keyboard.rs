@@ -43,7 +43,7 @@ impl KeyboardHandler {
         if let Some(tag) = focused_tag {
             let mut ctx = PluginCtx {
                 center,
-                focus: ui.focus.plugin_slot(),
+                focus: &mut ui.focus,
             };
             let outcome = match ui.widgets.get_mut(tag.as_ref()) {
                 Some(w) => w.handle_key(code, modifiers, &mut ctx),
@@ -86,7 +86,7 @@ impl KeyboardHandler {
             ui.widgets.bring_to_front(&new_tag);
             let mut ctx = PluginCtx {
                 center,
-                focus: ui.focus.plugin_slot(),
+                focus: &mut ui.focus,
             };
             if let Some(w) = ui.widgets.get_mut(&new_tag) {
                 w.activate(&mut ctx);
