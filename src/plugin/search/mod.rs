@@ -52,9 +52,8 @@ impl Plugin for SearchPlugin {
         vec!["/"]
     }
 
-    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
+    fn activate(&mut self, _ctx: &mut PluginCtx) {
         self.state.open();
-        ctx.focus.take("search");
     }
 
     fn deactivate(&mut self) {
@@ -69,12 +68,11 @@ impl Plugin for SearchPlugin {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut PluginCtx<'_>,
+        _ctx: &mut PluginCtx,
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
-        if !self.state.is_active() {
-            ctx.focus.release();
-        }
+        // Focus release is host-driven: keyboard.rs detects `visible()`
+        // flipping to false and calls `ui.focus.release()`.
         match outcome {
             Outcome::None | Outcome::Consumed => PluginAction::Consumed,
             Outcome::Jump(loc) => PluginAction::Jump(loc),

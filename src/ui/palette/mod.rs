@@ -18,9 +18,9 @@ use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
 use crate::core::Action;
+use crate::focus::FocusManager;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
-use crate::ui::focus::FocusManager;
 use crate::ui::theme::UiTheme;
 
 use commands::{ACTIONS, Command, CommandKind};

@@ -1,13 +1,11 @@
 //! UI layer — widget state and screen rendering.
 
-pub mod focus;
 pub mod map_view;
 pub mod overlay;
 pub mod painter;
 pub mod palette;
 pub mod theme;
 
-pub use focus::{Focus, FocusManager};
 pub use painter::MapPainter;
 
 use std::sync::Arc;
@@ -29,6 +27,7 @@ use crate::plugin::wiki::WikiPlugin;
 use crate::ui::palette::CommandPalette;
 
 use crate::config::Config;
+use crate::focus::{Focus, FocusManager};
 use crate::keymap::KeyMap;
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
@@ -224,17 +223,20 @@ mod tests {
         let ui = &mut make_ui();
         assert_eq!(ui.focus.current(), &Focus::Map);
 
-        let mut ctx = PluginCtx {
-            center: ZERO,
-            focus: &mut ui.focus,
-        };
+        // Plugin.activate / handle_key no longer touch focus — the
+        // host (`keyboard::activate_plugin` + the focused-plugin
+        // dispatch loop) owns every focus transition. Here we just
+        // verify the plugin's own state machine: open on activate,
+        // close on Esc.
+        let mut ctx = PluginCtx { center: ZERO };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(&mut ctx);
-        assert!(ctx.focus.is_plugin("search"));
+        assert!(search.visible());
+        assert!(search.wants_focus());
 
         search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
         search.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
-        assert_eq!(ctx.focus.current(), &Focus::Map);
+        assert!(!search.visible());
     }
 
     #[test]

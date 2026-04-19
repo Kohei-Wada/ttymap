@@ -59,25 +59,23 @@ impl Plugin for WikiPlugin {
         vec!["i"]
     }
 
-    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
-        // Non-modal: visible and focus are independent.
+    fn activate(&mut self, ctx: &mut PluginCtx) {
+        // Non-modal: visible and focus are independent. Host drives
+        // focus; here we only manage panel state. If the panel is
+        // already visible, leave state alone — host may be reclaiming
+        // focus (case 3) or closing via `close()` on toggle-off.
         if !self.state.is_active() {
-            // Not visible → open and take focus.
             self.state.open();
             self.refresh(ctx.center);
-            ctx.focus.take("wiki");
-        } else if ctx.focus.is_plugin("wiki") {
-            // Visible and focused → toggle off.
-            self.state.close();
-            ctx.focus.release();
-        } else {
-            // Visible but another plugin has focus → reclaim focus.
-            ctx.focus.take("wiki");
         }
     }
 
-    // Non-modal: keep the panel visible when focus leaves. The
-    // default no-op is fine.
+    // Non-modal: keep the panel visible when focus leaves (default
+    // deactivate is no-op). `close()` fires on user-initiated toggle-off
+    // and tears down state.
+    fn close(&mut self) {
+        self.state.close();
+    }
 
     fn visible(&self) -> bool {
         self.state.is_active()
@@ -87,15 +85,11 @@ impl Plugin for WikiPlugin {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut PluginCtx<'_>,
+        ctx: &mut PluginCtx,
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
-        // Wiki is non-modal: the panel can close on its own (Esc while
-        // not in detail view), in which case focus returns to the
-        // previous holder (or the map if there wasn't one).
-        if !self.state.is_active() {
-            ctx.focus.release();
-        }
+        // Focus release is host-driven: if `visible()` flips to false
+        // (e.g. Esc closed the list), keyboard.rs releases for us.
         match outcome {
             KeyOutcome::None => PluginAction::Pass,
             KeyOutcome::Consumed => PluginAction::Consumed,

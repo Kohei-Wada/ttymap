@@ -16,6 +16,11 @@ pub mod config;
 /// Core state management — input, keymap, map state snapshots.
 pub mod core;
 
+/// Focus manager — single source of truth for "which surface owns the
+/// keyboard". Sits above `ui/` because keyboard dispatch routes input
+/// through it before falling back to global handlers.
+pub(crate) mod focus;
+
 /// Keyboard event handler — raw key dispatch to widgets + Action
 /// translation + fallback to core.
 pub(crate) mod keyboard;

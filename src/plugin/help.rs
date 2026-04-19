@@ -136,14 +136,8 @@ impl Plugin for HelpPlugin {
         vec!["?"]
     }
 
-    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
-        if self.active {
-            self.active = false;
-            ctx.focus.release();
-        } else {
-            self.active = true;
-            ctx.focus.take("help");
-        }
+    fn activate(&mut self, _ctx: &mut PluginCtx) {
+        self.active = true;
     }
 
     fn deactivate(&mut self) {
@@ -159,11 +153,11 @@ impl Plugin for HelpPlugin {
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        ctx: &mut PluginCtx<'_>,
+        _ctx: &mut PluginCtx,
     ) -> PluginAction {
-        // Help is modal and consumes any key, releasing focus.
+        // Modal: any key closes. Host detects `visible()=false` and
+        // releases focus.
         self.active = false;
-        ctx.focus.release();
         PluginAction::Consumed
     }
 

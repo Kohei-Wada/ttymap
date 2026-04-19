@@ -2,9 +2,10 @@
 //!
 //! Interactive widgets (search, help, wiki) implement the [`Plugin`]
 //! trait so `keyboard.rs` can dispatch events to them uniformly without
-//! hard-coding the per-widget `Action` mapping. Focus — which widget
-//! currently owns the keyboard — is tracked on `UiState.focus` and
-//! mutated through [`PluginCtx::focus`] from handler methods.
+//! hard-coding the per-widget `Action` mapping. Focus is owned by the
+//! host — plugins don't mutate `FocusManager` directly. The host takes
+//! focus on activation (auto, gated by `wants_focus`) and releases it
+//! when the plugin's `visible()` drops to false after a key event.
 
 pub mod help;
 pub mod here;
@@ -18,7 +19,6 @@ use ratatui::layout::Rect;
 
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
-use crate::ui::focus::FocusManager;
 use crate::ui::painter::MapPainter;
 use crate::ui::theme::UiTheme;
 
@@ -34,21 +34,24 @@ pub enum PluginAction {
     Jump(LonLat),
 }
 
-/// Context passed to widget handler methods. Exposes shared app state
-/// the widget may need to read (current map center) or mutate (focus).
-/// Keeping this in a struct lets us grow the surface (e.g. a command
-/// queue, a notification channel) without resignalling every widget.
-pub struct PluginCtx<'a> {
+/// Context passed to widget handler methods. Exposes read-only shared
+/// state (current map center). Focus is **not** on here — plugins
+/// don't touch `FocusManager`; the host derives focus transitions from
+/// activation keys + `visible()` state. Kept as a struct so the surface
+/// can grow (e.g. a notification channel) without re-signalling every
+/// widget.
+pub struct PluginCtx {
     pub center: LonLat,
-    pub focus: &'a mut FocusManager,
 }
 
 /// Interactive widget dispatched from the keyboard handler.
 ///
 /// Widgets decide which keys and actions they consume; the keyboard
 /// handler iterates them in priority order and never inspects
-/// per-widget types. Focus is mutated through `ctx.focus` inside
-/// handler methods.
+/// per-widget types. Focus transitions are entirely host-owned — the
+/// host takes focus for an activating plugin whose `wants_focus`
+/// returns true, and releases it when `visible()` flips to false
+/// after a key event.
 pub trait Plugin {
     /// Stable identifier used by the registry and `Focus::Plugin`.
     /// Built-ins return a `&'static str`; plugins supply their own.
@@ -67,15 +70,34 @@ pub trait Plugin {
         Vec::new()
     }
 
-    /// Called when one of this widget's `activation_keys` is pressed.
-    /// Default open/toggle/close semantics are the widget's own.
-    fn activate(&mut self, _ctx: &mut PluginCtx<'_>) {}
+    /// Whether this plugin wants keyboard focus on activation. Default
+    /// `true`; headless plugins (e.g. fire-and-forget background jobs
+    /// like `here`) override to `false` so the host does not steal
+    /// focus from whichever surface the user was on.
+    fn wants_focus(&self) -> bool {
+        true
+    }
+
+    /// Called when one of this widget's `activation_keys` is pressed —
+    /// or when the palette invokes the plugin. The host owns focus
+    /// transitions; plugins only update their own state here.
+    fn activate(&mut self, _ctx: &mut PluginCtx) {}
 
     /// Called when focus moves to a different plugin via another
     /// plugin's activation key. Modal plugins (search, help) close
     /// themselves here; non-modal plugins leave their window visible
     /// and only release focus. Default is a no-op (non-modal).
     fn deactivate(&mut self) {}
+
+    /// Called when the user explicitly dismisses the plugin — e.g. by
+    /// pressing its activation key a second time while it already has
+    /// focus (toggle-off). Unlike `deactivate` (which fires on any
+    /// focus transfer), this is user-initiated close and should tear
+    /// down the panel state. Non-modal plugins (wiki) override this
+    /// to close their state while leaving `deactivate` a no-op.
+    fn close(&mut self) {
+        self.deactivate();
+    }
 
     /// Whether this plugin's window is currently on screen. The main
     /// draw loop renders every plugin that reports `true`, regardless
@@ -94,7 +116,7 @@ pub trait Plugin {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut PluginCtx<'_>,
+        ctx: &mut PluginCtx,
     ) -> PluginAction;
 
     /// Drain any async/background work. Returns `true` if state

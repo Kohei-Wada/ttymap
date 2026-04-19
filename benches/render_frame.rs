@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::palette::ThemeId;
+use ttymap::color_palette::ThemeId;
 use ttymap::render::renderer::{Renderer, TileData};
 use ttymap::render::view::VisibleTile;
 use ttymap::styler::Styler;

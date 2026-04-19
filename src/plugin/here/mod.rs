@@ -48,7 +48,12 @@ impl Plugin for HerePlugin {
         Vec::new()
     }
 
-    fn activate(&mut self, _ctx: &mut PluginCtx<'_>) {
+    fn wants_focus(&self) -> bool {
+        // Headless: fires a background job, never owns the keyboard.
+        false
+    }
+
+    fn activate(&mut self, _ctx: &mut PluginCtx) {
         let endpoint = self.endpoint.clone();
         let timeout = self.timeout_ms;
         info!("here: starting geoip lookup");
@@ -63,7 +68,7 @@ impl Plugin for HerePlugin {
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        _ctx: &mut PluginCtx<'_>,
+        _ctx: &mut PluginCtx,
     ) -> PluginAction {
         PluginAction::Pass
     }

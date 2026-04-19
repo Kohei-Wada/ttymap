@@ -66,10 +66,6 @@ impl FocusManager {
         self.transition_to(Focus::Palette);
     }
 
-    pub fn is_palette(&self) -> bool {
-        matches!(self.current, Focus::Palette)
-    }
-
     /// Plugin-facing: release focus, returning it to whoever held it
     /// before this plugin took over. Falls back to the map if there's
     /// no remembered predecessor.
