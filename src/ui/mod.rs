@@ -1,6 +1,8 @@
 //! UI layer — widget state and screen rendering.
 
 pub mod focus;
+pub mod map_view;
+pub mod overlay;
 pub mod painter;
 pub mod theme;
 pub mod widget;
@@ -16,10 +18,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 use theme::Theme;
 use widget::WidgetRegistry;
 use widget::help::HelpWidget;
-use widget::overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 use widget::search::SearchWidget;
 use widget::wiki::WikiWidget;
 

@@ -7,8 +7,6 @@
 //! mutated through [`WidgetCtx::focus`] from handler methods.
 
 pub mod help;
-pub mod map;
-pub mod overlay;
 pub mod search;
 pub mod wiki;
 

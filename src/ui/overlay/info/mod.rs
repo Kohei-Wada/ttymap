@@ -23,8 +23,10 @@ use crate::shared::nominatim::NominatimClient;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;
 
+mod service;
+
 use super::MapOverlay;
-use super::place_service::{PlaceService, format_name};
+use service::{PlaceService, format_name};
 
 pub struct InfoOverlay {
     cursor: Option<(u16, u16)>,
