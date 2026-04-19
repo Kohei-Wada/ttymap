@@ -22,6 +22,7 @@ use theme::Theme;
 
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
+use crate::plugin::palette::PalettePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
 
@@ -52,16 +53,20 @@ impl UiState {
         let search = SearchPlugin::new(nominatim.clone());
         let mut help = HelpPlugin::new();
         let wiki = WikiPlugin::new(language, wiki_limit);
+        let mut command_palette = PalettePlugin::new();
 
         // Help introspects the other plugins to list their activation
-        // keys, so it must build after they're constructed.
-        help.build(keymap, &[&search, &wiki]);
+        // keys, so it must build after they're constructed. The palette
+        // does the same snapshot of actions + plugin activations.
+        help.build(keymap, &[&search, &wiki, &command_palette]);
+        command_palette.build(keymap, &[&search, &help, &wiki]);
 
         let mut widgets = PluginRegistry::new();
         // Registration order = dispatch priority for action broadcasts.
         widgets.register(Box::new(search));
         widgets.register(Box::new(help));
         widgets.register(Box::new(wiki));
+        widgets.register(Box::new(command_palette));
 
         Self {
             focus: FocusManager::new(),
@@ -157,6 +162,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     let mut hints = vec![
         ("hjkl", "pan"),
         ("a/z", "zoom"),
+        (":", "cmd"),
         ("/", "search"),
         ("i", "wiki"),
         ("?", "help"),

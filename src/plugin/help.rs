@@ -49,8 +49,10 @@ impl HelpPlugin {
             if label.is_empty() {
                 continue;
             }
-            let key = format_binding(binding);
-            action_keys.entry(label).or_default().push(key);
+            action_keys
+                .entry(label)
+                .or_default()
+                .push(binding.display());
         }
 
         let display_order: Vec<(&str, &str)> = vec![
@@ -197,30 +199,5 @@ fn action_label(action: &Action) -> &'static str {
         Action::ResetPosition => "Reset position",
         Action::Quit => "Quit",
         _ => "",
-    }
-}
-
-fn format_binding(binding: &crate::keymap::KeyBinding) -> String {
-    use crossterm::event::{KeyCode, KeyModifiers};
-
-    let key = match binding.code {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Left => "Left".to_string(),
-        KeyCode::Right => "Right".to_string(),
-        KeyCode::Up => "Up".to_string(),
-        KeyCode::Down => "Down".to_string(),
-        KeyCode::Enter => "Enter".to_string(),
-        KeyCode::Esc => "Esc".to_string(),
-        KeyCode::Tab => "Tab".to_string(),
-        KeyCode::Backspace => "BS".to_string(),
-        _ => "?".to_string(),
-    };
-
-    if binding.modifiers.contains(KeyModifiers::CONTROL) {
-        format!("C-{}", key)
-    } else if binding.modifiers.contains(KeyModifiers::SHIFT) {
-        format!("S-{}", key)
-    } else {
-        key
     }
 }

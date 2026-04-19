@@ -57,6 +57,28 @@ impl KeyboardHandler {
                     core.jump_to(location);
                     return InputEffect::Map;
                 }
+                PluginAction::RunAction(action) => {
+                    info!("palette: running action {:?}", action);
+                    return if core.process_action(&action) {
+                        InputEffect::Map
+                    } else {
+                        InputEffect::Plugin
+                    };
+                }
+                PluginAction::Activate(target_tag) => {
+                    info!("palette: activating plugin {:?}", target_tag);
+                    ui.focus
+                        .deactivate_focused(&mut ui.widgets, Some(&target_tag));
+                    ui.widgets.bring_to_front(&target_tag);
+                    let mut ctx = PluginCtx {
+                        center,
+                        focus: &mut ui.focus,
+                    };
+                    if let Some(w) = ui.widgets.get_mut(&target_tag) {
+                        w.activate(&mut ctx);
+                    }
+                    return InputEffect::Plugin;
+                }
             }
         }
 

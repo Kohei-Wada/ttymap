@@ -14,6 +14,34 @@ pub struct KeyBinding {
     pub modifiers: KeyModifiers,
 }
 
+impl KeyBinding {
+    /// Human-readable form for UI display (help overlay, command
+    /// palette). Matches the input notation accepted by
+    /// [`parse_key_binding`] for plain keys (`"h"`, `"Left"`, `"C-d"`).
+    pub fn display(&self) -> String {
+        let key = match self.code {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Left => "Left".to_string(),
+            KeyCode::Right => "Right".to_string(),
+            KeyCode::Up => "Up".to_string(),
+            KeyCode::Down => "Down".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "BS".to_string(),
+            _ => "?".to_string(),
+        };
+
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            format!("C-{}", key)
+        } else if self.modifiers.contains(KeyModifiers::SHIFT) {
+            format!("S-{}", key)
+        } else {
+            key
+        }
+    }
+}
+
 pub struct KeyMap {
     pub bindings: Vec<(KeyBinding, Action)>,
     /// First-`g`-of-`gg` flag. Held on the map, not the keyboard
@@ -52,6 +80,17 @@ impl KeyMap {
         self.lookup(code, modifiers)
             .cloned()
             .unwrap_or(Action::None)
+    }
+
+    /// Every key string currently bound to `action`, in registration
+    /// order. Used by the command palette and help overlay to show
+    /// "this command is invocable via these keys" hints.
+    pub fn keys_for(&self, action: &Action) -> Vec<String> {
+        self.bindings
+            .iter()
+            .filter(|(_, a)| a == action)
+            .map(|(b, _)| b.display())
+            .collect()
     }
 
     /// Replace every existing binding for `action` with the supplied

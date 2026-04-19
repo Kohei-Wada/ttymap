@@ -7,6 +7,7 @@
 //! mutated through [`PluginCtx::focus`] from handler methods.
 
 pub mod help;
+pub mod palette;
 pub mod search;
 pub mod wiki;
 
@@ -15,6 +16,7 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
+use crate::core::Action;
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::ui::focus::FocusManager;
@@ -31,6 +33,12 @@ pub enum PluginAction {
     Consumed,
     /// Plugin wants the map recentered on this location.
     Jump(LonLat),
+    /// Plugin wants a core `Action` dispatched on its behalf
+    /// (command-palette-style invocation).
+    RunAction(Action),
+    /// Plugin wants another plugin (by tag) activated — mirrors the
+    /// effect of pressing that plugin's activation key.
+    Activate(String),
 }
 
 /// Context passed to widget handler methods. Exposes shared app state
