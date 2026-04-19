@@ -7,6 +7,7 @@ pub mod palette;
 
 use std::sync::Arc;
 
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
@@ -15,12 +16,16 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 
-use crate::plugin::PluginRegistry;
+use crate::command::KeyDelivery;
+use crate::geo::LonLat;
+use crate::map::render::thread::RenderHandle;
 use crate::plugin::help::HelpPlugin;
 use crate::plugin::here::HerePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
-use crate::ui::palette::CommandPalette;
+use crate::plugin::{PluginAction, PluginCtx, PluginRegistry};
+use crate::ui::action::UiAction;
+use crate::ui::palette::{CommandPalette, PaletteOutcome};
 
 use crate::config::Config;
 use crate::focus::{Focus, FocusManager};
@@ -83,6 +88,130 @@ impl UiState {
             theme_id,
             theme: UiTheme::from_palette(palette),
             attribution,
+        }
+    }
+
+    // ── Workflow methods ──────────────────────────────────────────
+    //
+    // Multi-step UI transitions live here (not on the controller) so
+    // the invariants between `focus`, `palette`, `widgets` are owned
+    // by the type that holds all three. The controller just picks
+    // which workflow a given `Command` maps to.
+
+    /// Apply a `UiAction`. Today: theme switch. Drives the render
+    /// thread's styler through `render_handle`.
+    pub fn apply(&mut self, action: UiAction, render_handle: &RenderHandle) {
+        match action {
+            UiAction::SetTheme(new_id) => {
+                self.theme_id = new_id;
+                crate::theme::apply(new_id, &mut self.theme, render_handle);
+            }
+        }
+    }
+
+    /// Open the command palette with its default provider. Takes
+    /// focus; deactivates any previously focused plugin.
+    pub fn open_palette(&mut self, keymap: &KeyMap) {
+        self.focus.deactivate_focused(&mut self.widgets, None);
+        let theme_id = self.theme_id;
+        self.palette.activate(&self.widgets, keymap, theme_id);
+        self.focus.take_palette();
+    }
+
+    /// Cycle keyboard focus across visible plugins. `true` = forward
+    /// (Tab), `false` = backward (Shift-Tab). Returns whether the
+    /// focus actually moved.
+    pub fn cycle_focus(&mut self, forward: bool) -> bool {
+        self.focus.cycle(&mut self.widgets, forward)
+    }
+
+    /// Drive a plugin through an activation request (activation key,
+    /// palette selection, or external command). Re-activating a
+    /// currently-focused plugin toggles it off. On first activation,
+    /// deactivates any previously focused plugin, brings this one to
+    /// front, lets it run its `activate` hook, and (if it claims it)
+    /// takes focus.
+    pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
+        // Toggle-off: re-activating the currently-focused plugin closes it.
+        if self.focus.is_plugin(tag) {
+            if let Some(w) = self.widgets.get_mut(tag) {
+                w.close();
+            }
+            self.focus.release();
+            return;
+        }
+
+        // Normal activation.
+        self.focus.deactivate_focused(&mut self.widgets, Some(tag));
+        self.widgets.bring_to_front(tag);
+
+        let wants_focus = self.widgets.get(tag).is_some_and(|w| w.wants_focus());
+
+        let mut ctx = PluginCtx { center };
+        if let Some(w) = self.widgets.get_mut(tag) {
+            w.activate(&mut ctx);
+        }
+
+        if wants_focus {
+            self.focus.take(tag.to_string());
+        }
+    }
+
+    /// Route a raw key event to the currently-focused surface. Owns
+    /// every focus write the delivery touches — auto-release on
+    /// palette / plugin close lives here. Returns what the caller
+    /// should do with the event (`Passthrough` = fall through to the
+    /// input layer's fallback chain).
+    pub fn deliver_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        center: LonLat,
+    ) -> KeyDelivery {
+        match self.focus.current().clone() {
+            Focus::Map => KeyDelivery::Passthrough,
+            Focus::Palette => self.deliver_to_palette(code, modifiers),
+            Focus::Plugin(tag) => self.deliver_to_plugin(&tag, code, modifiers, center),
+        }
+    }
+
+    /// Deliver a key to the palette. Auto-releases focus if
+    /// `handle_key` dropped visibility (e.g. Esc / Enter).
+    fn deliver_to_palette(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyDelivery {
+        let outcome = self.palette.handle_key(code, modifiers);
+        if !self.palette.is_visible() && matches!(self.focus.current(), Focus::Palette) {
+            self.focus.release();
+        }
+        match outcome {
+            PaletteOutcome::Consumed | PaletteOutcome::None => KeyDelivery::Consumed,
+            PaletteOutcome::Run(cmd) => KeyDelivery::Run(cmd),
+        }
+    }
+
+    /// Deliver a key to a focused plugin. Auto-releases focus if
+    /// `visible()` dropped during `handle_key`. `Pass` means "not my
+    /// key" → `Passthrough` so the host falls through to the global
+    /// fallback chain.
+    fn deliver_to_plugin(
+        &mut self,
+        tag: &str,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        center: LonLat,
+    ) -> KeyDelivery {
+        let mut ctx = PluginCtx { center };
+        let outcome = match self.widgets.get_mut(tag) {
+            Some(w) => w.handle_key(code, modifiers, &mut ctx),
+            None => PluginAction::Pass,
+        };
+        let still_visible = self.widgets.get(tag).is_some_and(|w| w.visible());
+        if !still_visible && self.focus.is_plugin(tag) {
+            self.focus.release();
+        }
+        match outcome {
+            PluginAction::Pass => KeyDelivery::Passthrough,
+            PluginAction::Consumed => KeyDelivery::Consumed,
+            PluginAction::Run(cmd) => KeyDelivery::Run(cmd),
         }
     }
 }

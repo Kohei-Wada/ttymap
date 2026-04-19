@@ -19,7 +19,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::command::{self, Command, KeyDelivery};
+use crate::command::{Command, KeyDelivery};
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::Action;
@@ -80,8 +80,8 @@ impl KeyboardHandler {
         // reads it.
         let fallback_cmd = self.resolve_with_sequence(code, modifiers);
 
-        // [1] Focus-first delivery via the controller.
-        match command::deliver_key_to_focused(ui, code, modifiers, center) {
+        // [1] Focus-first delivery — UiState owns the transition.
+        match ui.deliver_key(code, modifiers, center) {
             KeyDelivery::Consumed => return None,
             KeyDelivery::Run(cmd) => return Some(cmd),
             KeyDelivery::Passthrough => {}
