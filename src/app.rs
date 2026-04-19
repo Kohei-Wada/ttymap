@@ -29,12 +29,21 @@ enum KeyEffect {
     Map,
 }
 
+/// Transient mouse-gesture state. Lives in `App` but is only touched
+/// from `handle_mouse` — keeping it in its own struct prevents the
+/// top-level composition from growing a drawer of input-handler
+/// internals as more gestures land.
+#[derive(Default)]
+struct MouseState {
+    drag_from: Option<(u16, u16)>,
+}
+
 pub struct App {
     core: Core,
     input: InputHandler,
     render_handle: RenderHandle,
     ui: UiState,
-    drag_from: Option<(u16, u16)>,
+    mouse: MouseState,
 }
 
 impl App {
@@ -84,7 +93,7 @@ impl App {
             input,
             render_handle,
             ui,
-            drag_from: None,
+            mouse: MouseState::default(),
         }
     }
 
@@ -204,14 +213,14 @@ impl App {
         match mouse.kind {
             MouseEventKind::Moved => KeyEffect::Widget,
             MouseEventKind::Down(MouseButton::Left) => {
-                self.drag_from = Some((mouse.column, mouse.row));
+                self.mouse.drag_from = Some((mouse.column, mouse.row));
                 KeyEffect::None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some((prev_x, prev_y)) = self.drag_from {
+                if let Some((prev_x, prev_y)) = self.mouse.drag_from {
                     let drag_dx = mouse.column as i16 - prev_x as i16;
                     let drag_dy = mouse.row as i16 - prev_y as i16;
-                    self.drag_from = Some((mouse.column, mouse.row));
+                    self.mouse.drag_from = Some((mouse.column, mouse.row));
                     if drag_dx != 0 || drag_dy != 0 {
                         self.core.pan_by_cells(drag_dx, drag_dy);
                         return KeyEffect::Map;
@@ -220,7 +229,7 @@ impl App {
                 KeyEffect::None
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.drag_from = None;
+                self.mouse.drag_from = None;
                 KeyEffect::None
             }
             MouseEventKind::ScrollUp => {
