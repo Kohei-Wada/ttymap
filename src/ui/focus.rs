@@ -16,6 +16,11 @@ pub enum Focus {
     #[default]
     Map,
     Plugin(Cow<'static, str>),
+    /// Command palette — a builtin, not in `PluginRegistry`. Modelled
+    /// as its own variant because the palette inherently coordinates
+    /// across plugins and doesn't fit the self-contained widget
+    /// contract `Plugin` imposes.
+    Palette,
 }
 
 impl Focus {
@@ -56,6 +61,15 @@ impl FocusManager {
         self.transition_to(Focus::Plugin(tag.into()));
     }
 
+    /// Builtin palette-facing: take focus for the command palette.
+    pub fn take_palette(&mut self) {
+        self.transition_to(Focus::Palette);
+    }
+
+    pub fn is_palette(&self) -> bool {
+        matches!(self.current, Focus::Palette)
+    }
+
     /// Plugin-facing: release focus, returning it to whoever held it
     /// before this plugin took over. Falls back to the map if there's
     /// no remembered predecessor.
@@ -90,6 +104,13 @@ impl FocusManager {
     /// through Map. Returns `true` if focus moved. Map → visible[0] →
     /// … → visible[last] → Map (reverse swaps the ends).
     pub fn cycle(&mut self, widgets: &mut PluginRegistry, forward: bool) -> bool {
+        // Palette is modal and outside the plugin cycle; user must close
+        // it first. (In practice palette.handle_key consumes Tab too, so
+        // this branch is defensive.)
+        if matches!(self.current, Focus::Palette) {
+            return false;
+        }
+
         let visible: Vec<String> = widgets
             .iter()
             .filter(|w| w.visible())
@@ -107,6 +128,7 @@ impl FocusManager {
             } else {
                 visible.last().unwrap().clone()
             }),
+            Focus::Palette => unreachable!("handled by early return above"),
             Focus::Plugin(cur) => {
                 let cur_str = cur.as_ref();
                 match visible.iter().position(|t| t == cur_str) {

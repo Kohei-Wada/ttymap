@@ -4,6 +4,7 @@ pub mod focus;
 pub mod map_view;
 pub mod overlay;
 pub mod painter;
+pub mod palette;
 pub mod theme;
 
 pub use focus::{Focus, FocusManager};
@@ -22,9 +23,9 @@ use theme::Theme;
 
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
-use crate::plugin::palette::PalettePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
+use crate::ui::palette::CommandPalette;
 
 use crate::keymap::KeyMap;
 use crate::palette::Palette;
@@ -35,6 +36,8 @@ use crate::shared::nominatim::NominatimClient;
 pub struct UiState {
     pub focus: FocusManager,
     pub widgets: PluginRegistry,
+    /// Command palette — builtin, not a plugin. See `ui::palette` for why.
+    pub palette: CommandPalette,
     pub info: InfoOverlay,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
@@ -53,24 +56,23 @@ impl UiState {
         let search = SearchPlugin::new(nominatim.clone());
         let mut help = HelpPlugin::new();
         let wiki = WikiPlugin::new(language, wiki_limit);
-        let mut command_palette = PalettePlugin::new();
 
         // Help introspects the other plugins to list their activation
-        // keys, so it must build after they're constructed. The palette
-        // does the same snapshot of actions + plugin activations.
-        help.build(keymap, &[&search, &wiki, &command_palette]);
-        command_palette.build(keymap, &[&search, &help, &wiki]);
+        // keys, so it must build after they're constructed. Palette is
+        // a builtin (see `ui::palette`) so help references it directly
+        // via a hardcoded line rather than a `Plugin` trait object.
+        help.build(keymap, &[&search, &wiki]);
 
         let mut widgets = PluginRegistry::new();
         // Registration order = dispatch priority for action broadcasts.
         widgets.register(Box::new(search));
         widgets.register(Box::new(help));
         widgets.register(Box::new(wiki));
-        widgets.register(Box::new(command_palette));
 
         Self {
             focus: FocusManager::new(),
             widgets,
+            palette: CommandPalette::new(),
             info: InfoOverlay::new(nominatim),
             map_frame: None,
             theme: Theme::from_palette(palette),
@@ -132,6 +134,12 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         }
     }
 
+    // Palette draws on top of every plugin when visible (it's modal
+    // and coordinates over them).
+    if ui.palette.is_visible() {
+        ui.palette.render(f, map_inner, &ui.theme);
+    }
+
     let hints = build_hints(ui);
     let sep = Span::styled("  ", Style::default().fg(ui.theme.muted_color));
     let mut spans: Vec<Span> = Vec::new();
@@ -153,11 +161,15 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 }
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
-    // Focused widget provides its own context-sensitive hints.
-    if let Focus::Plugin(tag) = ui.focus.current()
-        && let Some(w) = ui.widgets.get(tag.as_ref())
-    {
-        return w.footer_hints();
+    // Focused surface provides its own context-sensitive hints.
+    match ui.focus.current() {
+        Focus::Palette => return ui.palette.footer_hints(),
+        Focus::Plugin(tag) => {
+            if let Some(w) = ui.widgets.get(tag.as_ref()) {
+                return w.footer_hints();
+            }
+        }
+        Focus::Map => {}
     }
     let mut hints = vec![
         ("hjkl", "pan"),

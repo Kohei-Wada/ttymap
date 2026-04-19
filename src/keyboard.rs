@@ -15,6 +15,7 @@ use crate::keymap::KeyMap;
 use crate::plugin::{PluginAction, PluginCtx};
 use crate::ui::UiState;
 use crate::ui::focus::Focus;
+use crate::ui::palette::PaletteOutcome;
 
 pub struct KeyboardHandler {
     keymap: KeyMap,
@@ -34,10 +35,42 @@ impl KeyboardHandler {
     ) -> InputEffect {
         let center = core.center();
 
-        // 1. Focused widget sees the key first. It may consume, jump,
-        //    or pass it back out.
+        // 1a. Palette (builtin) has first dibs if focused.
+        if ui.focus.is_palette() {
+            let outcome = ui.palette.handle_key(code, modifiers, &mut ui.focus);
+            match outcome {
+                PaletteOutcome::Consumed | PaletteOutcome::None => {
+                    return InputEffect::Plugin;
+                }
+                PaletteOutcome::Run(action) => {
+                    info!("palette: running action {:?}", action);
+                    return if core.process_action(&action) {
+                        InputEffect::Map
+                    } else {
+                        InputEffect::Plugin
+                    };
+                }
+                PaletteOutcome::Activate(target_tag) => {
+                    info!("palette: activating plugin {:?}", target_tag);
+                    ui.focus
+                        .deactivate_focused(&mut ui.widgets, Some(&target_tag));
+                    ui.widgets.bring_to_front(&target_tag);
+                    let mut ctx = PluginCtx {
+                        center,
+                        focus: &mut ui.focus,
+                    };
+                    if let Some(w) = ui.widgets.get_mut(&target_tag) {
+                        w.activate(&mut ctx);
+                    }
+                    return InputEffect::Plugin;
+                }
+            }
+        }
+
+        // 1b. Focused plugin sees the key. It may consume, jump, or
+        //     pass it back out.
         let focused_tag = match ui.focus.current() {
-            Focus::Map => None,
+            Focus::Map | Focus::Palette => None,
             Focus::Plugin(t) => Some(t.clone()),
         };
         if let Some(tag) = focused_tag {
@@ -57,28 +90,6 @@ impl KeyboardHandler {
                     core.jump_to(location);
                     return InputEffect::Map;
                 }
-                PluginAction::RunAction(action) => {
-                    info!("palette: running action {:?}", action);
-                    return if core.process_action(&action) {
-                        InputEffect::Map
-                    } else {
-                        InputEffect::Plugin
-                    };
-                }
-                PluginAction::Activate(target_tag) => {
-                    info!("palette: activating plugin {:?}", target_tag);
-                    ui.focus
-                        .deactivate_focused(&mut ui.widgets, Some(&target_tag));
-                    ui.widgets.bring_to_front(&target_tag);
-                    let mut ctx = PluginCtx {
-                        center,
-                        focus: &mut ui.focus,
-                    };
-                    if let Some(w) = ui.widgets.get_mut(&target_tag) {
-                        w.activate(&mut ctx);
-                    }
-                    return InputEffect::Plugin;
-                }
             }
         }
 
@@ -97,7 +108,18 @@ impl KeyboardHandler {
             };
         }
 
-        // 3. Activation check: if any registered plugin claims this
+        // 3. Palette is a builtin with a fixed, non-overridable key.
+        //    Opens from any focus (Map or another plugin); the latter
+        //    closes first via `deactivate_focused`.
+        if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
+            info!("palette: opening");
+            ui.focus.deactivate_focused(&mut ui.widgets, None);
+            ui.palette
+                .activate(&mut ui.focus, &ui.widgets, &self.keymap);
+            return InputEffect::Plugin;
+        }
+
+        // 4. Activation check: if any registered plugin claims this
         //    key, release whichever plugin held focus (unless it's the
         //    same one, so toggling re-activation works) and invoke
         //    the new plugin's `activate`.

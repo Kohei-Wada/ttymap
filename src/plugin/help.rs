@@ -80,6 +80,7 @@ impl HelpPlugin {
         lines.push(String::new());
         lines.push(format!(" {:<20} {}", "gg", "Zoom to world"));
         lines.push(format!(" {:<20} {}", "Tab/S-Tab", "Cycle focus"));
+        lines.push(format!(" {:<20} {}", ":", "Command palette"));
         for (key, description) in &entries {
             lines.push(format!(" {:<20} {}", key, description));
         }

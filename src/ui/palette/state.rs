@@ -47,13 +47,6 @@ impl PaletteState {
         self.rebuild_filter();
     }
 
-    pub(super) fn close(&mut self) {
-        self.query.clear();
-        self.filtered.clear();
-        self.selected = 0;
-        self.active = false;
-    }
-
     pub(super) fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
 
@@ -138,7 +131,7 @@ impl PaletteState {
 mod tests {
     use super::*;
     use crate::core::Action;
-    use crate::plugin::palette::commands::CommandKind;
+    use crate::ui::palette::commands::CommandKind;
 
     fn cmd(label: &str) -> Command {
         Command {
