@@ -15,7 +15,7 @@ use theme::Theme;
 use widget::Widget;
 use widget::help::HelpWidget;
 use widget::overlay::{
-    AttributionOverlay, InfoWidget, MapOverlay, MarkersOverlay, ScaleBarOverlay,
+    AttributionOverlay, InfoOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay,
 };
 use widget::search::{self, SearchWidget};
 use widget::wiki::{self, WikiWidget};
@@ -27,7 +27,7 @@ use crate::shared::nominatim::NominatimClient;
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
     pub search: SearchWidget,
-    pub info: InfoWidget,
+    pub info: InfoOverlay,
     pub help: HelpWidget,
     pub wiki: WikiWidget,
     pub map_frame: Option<MapFrame>,
@@ -45,7 +45,7 @@ impl UiState {
     ) -> Self {
         Self {
             search: SearchWidget::new(nominatim.clone()),
-            info: InfoWidget::new(nominatim),
+            info: InfoOverlay::new(nominatim),
             help: HelpWidget::new(),
             wiki: WikiWidget::new(language, wiki_limit),
             map_frame: None,

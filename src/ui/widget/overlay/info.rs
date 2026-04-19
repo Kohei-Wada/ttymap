@@ -26,14 +26,14 @@ use crate::ui::theme::Theme;
 use super::MapOverlay;
 use super::place_service::{PlaceService, format_name};
 
-pub struct InfoWidget {
+pub struct InfoOverlay {
     cursor: Option<(u16, u16)>,
     place_name: Option<String>,
     place_service: PlaceService,
     place_throttle: Throttle,
 }
 
-impl InfoWidget {
+impl InfoOverlay {
     pub fn new(nominatim: Arc<NominatimClient>) -> Self {
         Self {
             cursor: None,
@@ -80,7 +80,7 @@ const CURSOR_ROW: u16 = 1;
 const ZOOM_ROW: u16 = 2;
 const PLACE_ROW: u16 = 3;
 
-impl MapOverlay for InfoWidget {
+impl MapOverlay for InfoOverlay {
     fn render(&self, buf: &mut Buffer, map_area: Rect, frame: &MapFrame, theme: &Theme) {
         if map_area.width < 4 || map_area.height < 1 {
             return;

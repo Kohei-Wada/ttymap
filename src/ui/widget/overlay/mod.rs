@@ -24,7 +24,7 @@ mod place_service;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;
-pub use info::InfoWidget;
+pub use info::InfoOverlay;
 pub use markers::{MarkerPoint, MarkersOverlay};
 pub use scale_bar::ScaleBarOverlay;
 
