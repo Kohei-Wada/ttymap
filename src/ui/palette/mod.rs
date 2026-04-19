@@ -1,15 +1,41 @@
 //! Command palette — `:`-triggered popup, a **universal picker**.
 //!
-//! A **builtin**, not a `Plugin` — the palette coordinates across
-//! plugins and other app concerns, which doesn't fit the self-contained
-//! widget contract `Plugin` imposes. It lives on `UiState` like
-//! `InfoOverlay` does; `keyboard.rs` routes keys to it when focus is
-//! `Focus::Palette`.
+//! # Deliberately not a `Plugin` — do not "unify"
+//!
+//! Plugins and the palette look similar at a distance (both react to
+//! key events, both draw popups), but they're different categories:
+//!
+//! - **Plugin** = a component that *contributes* functionality (one
+//!   feature, self-contained state, small activation key surface).
+//! - **Palette** = a *coordinator* that aggregates over the plugin
+//!   registry + keymap + theme state to present a unified picker.
+//!   Its whole job is to read other subsystems' state.
+//!
+//! Folding palette into the `Plugin` trait would work mechanically —
+//! with a wider `PluginCtx<'a>` carrying `&PluginRegistry`, `&KeyMap`,
+//! `ThemeId` — but it would erase that semantic distinction: every
+//! plugin would gain permission to enumerate the registry (the "plugins
+//! don't see each other" invariant weakens from `pub(crate)` structure
+//! to a naming convention), and palette-specific concepts
+//! (`SwitchProvider`, Tab-cycle exclusion) would turn into stringly-
+//! typed special cases keyed on `tag == "palette"`.
+//!
+//! The cost of keeping it a builtin (one special field on `UiState`,
+//! one `Focus::Palette` variant, two `FocusEvent::Palette*` events,
+//! one `Command::OpenPalette` arm) is localised and tagged. The cost
+//! of unification would be spread across the `Plugin` trait contract.
+//! The current asymmetry is chosen.
+//!
+//! # Mechanics
 //!
 //! Concrete behaviour (items, filter, activation) lives on a
 //! [`PaletteProvider`](provider::PaletteProvider). The palette swaps
 //! providers when the user picks a "sub-mode" command (e.g. "Theme"
-//! switches to [`ThemeProvider`](provider::ThemeProvider)).
+//! switches to [`ThemeProvider`](provider::ThemeProvider)). The
+//! palette never touches `FocusManager`; focus transitions are
+//! driven by `UiState::open_palette` emitting `FocusEvent::PaletteOpened`
+//! and by the delivery path emitting `FocusEvent::PaletteClosed` when
+//! `is_visible()` flips to false.
 
 pub mod panel;
 pub mod provider;

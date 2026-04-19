@@ -93,18 +93,40 @@ src/
 ├── main.rs           CLI entry + subcommands
 ├── lib.rs            crate root
 ├── app.rs            App struct, event loop, composition root
+├── command.rs        Command enum + dispatch (the controller) + DispatchCtx
 ├── config.rs         TOML config + CLI overrides
 ├── logging.rs        XDG state log
 │
-├── keyboard.rs       key dispatch (focus-aware routing)
-├── mouse.rs          mouse dispatch
-├── keymap.rs         key → Action translation + user overrides
+├── focus.rs          FocusManager — event-driven focus transitions
+├── painter.rs        MapPainter — plugins' world-space drawing API
+├── theme.rs          UiTheme + runtime theme switch
+├── keymap.rs         KeyBinding → Command table + user overrides
 ├── geo.rs            Web Mercator, MapProjection, distance
-├── color_palette.rs xterm-256 color tables (ThemeId + DARK/BRIGHT)
+├── color_palette.rs  xterm-256 color tables (ThemeId + DARK/BRIGHT)
 │
-├── core/             domain — map state + commands
-│   ├── action.rs     Action enum (map-level only)
-│   └── state.rs      Core, CoreOptions, RenderRequest
+├── input/            pure translators: raw event → Option<Command>
+│   ├── mod.rs
+│   ├── keyboard.rs   focus-first routing + gg sequence + keymap fallback
+│   └── mouse.rs      drag/scroll → Command::Map(PanCells/ZoomAt)
+│
+├── map/              domain — viewport state + rendering pipeline
+│   ├── action.rs     Action enum (discrete + mouse-continuous variants)
+│   ├── state.rs      MapState, MapStateOptions, RenderRequest
+│   ├── render/       tiles → MapFrame on a dedicated thread
+│   │   ├── pipeline.rs   RenderPipeline
+│   │   ├── thread.rs     RenderHandle
+│   │   ├── renderer.rs   Feature[] → Canvas
+│   │   ├── canvas.rs     Braille drawing primitives
+│   │   ├── braille.rs    2×4 pixel buffer
+│   │   ├── frame.rs      MapFrame DTO
+│   │   ├── view.rs       Visible-tile math
+│   │   ├── label.rs      R-tree label collision buffer
+│   │   └── geom/         Bresenham, clipping
+│   ├── styler/       Mapbox GL-style rules (dark / bright presets)
+│   └── tile/         MVT fetch + cache + decode
+│       ├── cache.rs      Memory + disk LRU
+│       ├── decode.rs     Protobuf → DecodedTile
+│       └── fetch/        TileClient trait + mapscii HTTP backend
 │
 ├── plugin/           plugin API + built-in plugins
 │   ├── mod.rs        Plugin trait, PluginCtx, PluginAction, PluginRegistry
@@ -112,24 +134,6 @@ src/
 │   ├── here/         IP-geolocation "jump to here" (headless, palette-only)
 │   ├── search/       forward-geocode popup
 │   └── wiki/         nearby-Wikipedia panel
-│
-├── render/           tiles → MapFrame on a dedicated thread
-│   ├── pipeline.rs   RenderPipeline
-│   ├── thread.rs     RenderHandle
-│   ├── renderer.rs   Feature[] → Canvas
-│   ├── canvas.rs     Braille drawing primitives
-│   ├── braille.rs    2×4 pixel buffer
-│   ├── frame.rs      MapFrame DTO
-│   ├── view.rs       Visible-tile math
-│   ├── label.rs      R-tree label collision buffer
-│   └── geom/         Bresenham, clipping
-│
-├── tile/             MVT fetch + cache + decode
-│   ├── cache.rs      Memory + disk LRU
-│   ├── decode.rs     Protobuf → DecodedTile
-│   └── fetch/        TileClient trait + mapscii HTTP backend
-│
-├── styler/           Mapbox GL-style rules (dark / bright presets)
 │
 ├── shared/           cross-cutting utilities
 │   ├── async_job.rs  fire-and-poll background job (reused by geocode/wiki/here)
@@ -139,17 +143,18 @@ src/
 │   └── throttle.rs
 │
 └── ui/               terminal UI framework
-    ├── mod.rs        UiState + draw()
-    ├── focus.rs      Focus enum (Map | Plugin(tag) | Palette)
+    ├── mod.rs        UiState + draw() + workflow methods (open_palette, …)
+    ├── action.rs     UiAction enum (UI-level commands, e.g. SetTheme)
     ├── map_view.rs   MapFrame ratatui adapter
-    ├── painter.rs    MapPainter — plugins' world-space drawing API
-    ├── theme.rs      UI color set
     │
-    ├── palette/      command palette (builtin, not a Plugin)
+    ├── palette/      command palette (builtin coordinator — see mod.rs)
     │   ├── mod.rs    CommandPalette + PaletteOutcome
-    │   ├── commands.rs  static ACTIONS table
-    │   ├── panel.rs     ratatui Table popup
-    │   └── state.rs     query buffer + substring filter
+    │   ├── panel.rs  ratatui Table popup
+    │   ├── state.rs  query buffer + substring filter
+    │   └── provider/ universal picker backends
+    │       ├── mod.rs     PaletteProvider trait + PaletteAction
+    │       ├── command.rs default provider (actions + plugins + sub-modes)
+    │       └── theme.rs   theme-picker sub-mode
     │
     └── overlay/      built-in, always-on map decorations
         ├── attribution.rs   © OpenStreetMap
@@ -161,31 +166,56 @@ src/
 
 ### Layering
 
-- **`core/`** — domain state. Knows nothing about UI or plugins. `Action` only carries map-level commands (Pan, Zoom, Quit, ResetPosition, …); plugin activation is a separate concern.
+- **`map/`** — domain state. Knows nothing about UI or plugins. `Action` carries every map-level mutation, including mouse-emitted continuous variants (`PanCells`, `ZoomAt`); plugin activation and UI state are separate concerns.
+- **`command.rs`** — the **controller**. One `Command` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
+- **`input/`** — pure translators. `keyboard.rs` / `mouse.rs` turn raw events into `Option<Command>` and return it to `app.rs`; they never call `dispatch` themselves and never touch domain state directly. Symmetric with async plugin polling.
+- **`focus.rs`** — `FocusManager` driven by `FocusEvent`s (`PaletteOpened`, `PluginActivated(tag)`, …). Callers emit *what happened*; the manager decides the transition (wants_focus gating, auto-release, prev-slot restoration). All focus writes live here.
 - **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
-- **`ui/palette/`** — command palette. A **builtin**, not a `Plugin`, because it inherently coordinates across every plugin and would violate the self-contained-widget contract. It enumerates `PluginRegistry` live on activation to build its command list.
-- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and are registered into the same `PluginRegistry` that will host external plugins. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name.
+- **`ui/palette/`** — command palette. A **builtin coordinator**, not a `Plugin`. Plugins contribute functionality; palette aggregates over the plugin registry + keymap + theme to present a picker. Folding it into `Plugin` would widen `PluginCtx` to grant every plugin access to the registry and reduce the self-contained-widget contract to a naming convention. The asymmetry is deliberate — see `src/ui/palette/mod.rs` for the full rationale.
+- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `Command`s via `PluginAction::Run(cmd)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
 
 ### Input flow
 
 ```
-key event
-  ↓ keyboard.handle():
-    [1a] if palette has focus → route to palette → PaletteOutcome dispatches
-    [1b] otherwise focused plugin sees the key first
-    [2]  Tab / Shift-Tab cycle focus across visible plugins
-    [3]  `:` opens the command palette (builtin activation)
-    [4]  registry activation lookup (plugins own their activation keys)
-    [5]  keymap.resolve(code, mods) → Action
-    [6]  core.process_action(&action)
+raw event
+  ↓ input layer (keyboard / mouse / async poll)
+  ↓ Option<Command>          ← pure translation, no state mutation
+  ↓
+app.rs: self.dispatch(cmd)
+  ↓
+command::dispatch(cmd, &mut ctx)    ← single state mutator
+  ↓
+    Command::Map(a)            → ctx.map.process_action(&a)
+    Command::Jump(loc)         → ctx.map.jump_to(loc)
+    Command::Ui(a)             → ctx.ui.apply(a, render_handle)
+    Command::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
+    Command::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
+    Command::OpenPalette       → ctx.ui.open_palette(keymap)
+    Command::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
 ```
+
+The keyboard translator's decision tree:
+
+```
+key event
+  ↓ keyboard.handle() → Option<Command>:
+    [1] focused surface delivery via ui.deliver_key() — consumes, runs, or passes through
+    [2] Tab / Shift-Tab        → Command::CycleFocus(forward)
+    [3] `:`                    → Command::OpenPalette
+    [4] plugin activation key  → Command::ActivatePlugin(tag)
+    [5] keymap.resolve()       → whatever Command the binding produces
+       (with gg sequence state on the handler)
+```
+
+Mouse is similar:
 
 ```
 mouse event
-  ↓ mouse.handle():
-    search focused? ignore.
-    update core (drag → pan, scroll → zoom)
-    notify InfoOverlay of cursor position
+  ↓ mouse.handle(event, &mut ui) → Option<Command>:
+    search focused?       → None (ignored)
+    drag (left)           → Command::Map(Action::PanCells(dx, dy))
+    scroll up / down      → Command::Map(Action::ZoomAt { anchor_*, zoom_in })
+    (cursor readout side effect on InfoOverlay always)
 ```
 
 ### Render flow
