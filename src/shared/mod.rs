@@ -5,6 +5,7 @@
 //! client factory; future candidates include retry policies, rate-limiters,
 //! or shared middleware.
 
+pub mod async_job;
 pub mod http;
 pub mod nominatim;
 pub mod throttle;

@@ -4,35 +4,32 @@
 //! one-shot thread per request.
 
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::thread;
 
 use crate::geo::LonLat;
+use crate::shared::async_job::AsyncJob;
 use crate::shared::nominatim::{NominatimClient, PlaceInfo};
 
 pub struct PlaceService {
     client: Arc<NominatimClient>,
-    tx: mpsc::Sender<Option<PlaceInfo>>,
-    rx: mpsc::Receiver<Option<PlaceInfo>>,
+    job: AsyncJob<Option<PlaceInfo>>,
 }
 
 impl PlaceService {
     pub fn new(client: Arc<NominatimClient>) -> Self {
-        let (tx, rx) = mpsc::channel();
-        Self { client, tx, rx }
+        Self {
+            client,
+            job: AsyncJob::new(),
+        }
     }
 
     pub fn reverse(&self, center: LonLat) {
-        let tx = self.tx.clone();
         let client = self.client.clone();
-        thread::spawn(move || {
-            let result = client.reverse(center.lat, center.lon);
-            let _ = tx.send(result);
-        });
+        self.job
+            .spawn(move || client.reverse(center.lat, center.lon));
     }
 
     pub fn poll(&self) -> Option<Option<PlaceInfo>> {
-        self.rx.try_recv().ok()
+        self.job.poll()
     }
 }
 
