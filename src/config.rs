@@ -32,6 +32,13 @@ pub struct Config {
     pub cache_tiles: bool,
     pub language: String,
     pub wiki_limit: u32,
+    /// Jump to IP-based location on startup (can also be enabled by `--here`).
+    pub here_on_startup: bool,
+    /// IP geolocation endpoint. Must return JSON with `latitude`/`longitude`
+    /// numeric fields (ipapi.co shape).
+    pub geoip_endpoint: String,
+    /// Timeout for the IP geolocation request, in milliseconds.
+    pub geoip_timeout_ms: u64,
     pub keymap: KeybindingOverrides,
 }
 
@@ -47,6 +54,9 @@ impl Default for Config {
             cache_tiles: true,
             language: "en".to_string(),
             wiki_limit: 50,
+            here_on_startup: false,
+            geoip_endpoint: "https://ipapi.co/json/".to_string(),
+            geoip_timeout_ms: 2000,
             keymap: KeybindingOverrides::default(),
         }
     }
@@ -95,6 +105,8 @@ mod tests {
 language = "ja"
 zoom_step = 0.5
 style = "bright"
+here_on_startup = true
+geoip_timeout_ms = 500
 
 [keymap]
 zoom_in = ["i"]
@@ -106,10 +118,13 @@ quit = ["Q", "C-q"]
         assert_eq!(cfg.language, "ja");
         assert_eq!(cfg.zoom_step, 0.5);
         assert_eq!(cfg.style, "bright");
+        assert!(cfg.here_on_startup);
+        assert_eq!(cfg.geoip_timeout_ms, 500);
 
         // Unspecified fields kept their defaults.
         assert_eq!(cfg.max_zoom, 18.0);
         assert_eq!(cfg.initial_lat, 52.51298);
+        assert_eq!(cfg.geoip_endpoint, "https://ipapi.co/json/");
 
         // Keymap overrides are stored raw; resolution to KeyMap is in app.rs.
         assert_eq!(cfg.keymap.zoom_in.as_deref(), Some(&["i".to_string()][..]));

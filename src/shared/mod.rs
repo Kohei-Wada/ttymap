@@ -6,6 +6,7 @@
 //! or shared middleware.
 
 pub mod async_job;
+pub mod geoip;
 pub mod http;
 pub mod nominatim;
 pub mod throttle;

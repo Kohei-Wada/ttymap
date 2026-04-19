@@ -22,11 +22,11 @@ struct Cli {
     command: Option<Command>,
 
     /// Initial latitude
-    #[arg(long)]
+    #[arg(long, conflicts_with = "here")]
     lat: Option<f64>,
 
     /// Initial longitude
-    #[arg(long)]
+    #[arg(long, conflicts_with = "here")]
     lon: Option<f64>,
 
     /// Initial zoom level
@@ -36,6 +36,10 @@ struct Cli {
     /// Style preset (dark, bright)
     #[arg(long)]
     style: Option<String>,
+
+    /// Jump to IP-based current location on startup
+    #[arg(long)]
+    here: bool,
 }
 
 #[derive(Subcommand)]
@@ -78,6 +82,23 @@ fn main() {
         // Unknown values get normalised to "dark" by the styler's
         // fallback at construction time; just hand the raw string in.
         config.style = v;
+    }
+
+    if cli.here || config.here_on_startup {
+        match ttymap::shared::geoip::lookup(&config.geoip_endpoint, config.geoip_timeout_ms) {
+            Some((lat, lon)) => {
+                log::info!("geoip: resolved to {}, {}", lat, lon);
+                config.initial_lat = lat;
+                config.initial_lon = lon;
+            }
+            None => {
+                log::warn!(
+                    "geoip lookup failed, using default {}, {}",
+                    config.initial_lat,
+                    config.initial_lon
+                );
+            }
+        }
     }
 
     log::info!(
