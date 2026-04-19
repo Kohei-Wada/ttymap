@@ -93,8 +93,13 @@ impl App {
             }
             if let Some(cmd) = async_cmd {
                 info!("plugin async command: {:?}", cmd);
-                let effect =
-                    command::dispatch(cmd, &mut self.map, &mut self.ui, &self.render_handle);
+                let effect = command::dispatch(
+                    cmd,
+                    &mut self.map,
+                    &mut self.ui,
+                    &self.render_handle,
+                    self.keyboard.keymap(),
+                );
                 if let InputEffect::Map = effect {
                     self.request_draw();
                 }

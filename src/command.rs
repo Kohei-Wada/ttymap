@@ -12,6 +12,7 @@
 //! (palette outcomes, plugin actions) stay oblivious.
 
 use crate::geo::LonLat;
+use crate::keymap::KeyMap;
 use crate::map::render::thread::RenderHandle;
 use crate::map::{Action, MapState};
 use crate::plugin::PluginCtx;
@@ -33,6 +34,12 @@ pub enum Command {
     /// Activate a plugin by its registered tag — same semantics as
     /// pressing the plugin's activation key.
     ActivatePlugin(String),
+    /// Cycle focus across visible plugins. `true` = forward (Tab),
+    /// `false` = backward (Shift-Tab).
+    CycleFocus(bool),
+    /// Open the command palette with its default provider. No-op if
+    /// already open.
+    OpenPalette,
 }
 
 /// What a key or mouse event just changed. Drives how the main loop
@@ -53,11 +60,16 @@ pub enum InputEffect {
 
 /// Apply a command to the app. This is the single funnel for every
 /// state-change intent emitted by palette / plugins / async polling.
+///
+/// `keymap` is threaded in because `OpenPalette` builds the default
+/// `CommandProvider` which snapshots the current key bindings for
+/// display hints. Other variants ignore it.
 pub fn dispatch(
     cmd: Command,
     map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
+    keymap: &KeyMap,
 ) -> InputEffect {
     match cmd {
         Command::Map(action) => {
@@ -77,6 +89,20 @@ pub fn dispatch(
         }
         Command::ActivatePlugin(tag) => {
             activate_plugin(&tag, ui, map.center());
+            InputEffect::Plugin
+        }
+        Command::CycleFocus(forward) => {
+            if ui.focus.cycle(&mut ui.widgets, forward) {
+                InputEffect::Plugin
+            } else {
+                InputEffect::None
+            }
+        }
+        Command::OpenPalette => {
+            ui.focus.deactivate_focused(&mut ui.widgets, None);
+            let theme_id = ui.theme_id;
+            ui.palette.activate(&ui.widgets, keymap, theme_id);
+            ui.focus.take_palette();
             InputEffect::Plugin
         }
     }

@@ -35,11 +35,21 @@ fn dispatch_focused(
     map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
+    keymap: &KeyMap,
 ) -> Option<InputEffect> {
     match ui.focus.current().clone() {
         Focus::Map => None,
-        Focus::Palette => Some(dispatch_palette(code, modifiers, map, ui, render_handle)),
-        Focus::Plugin(tag) => dispatch_plugin(&tag, code, modifiers, map, ui, render_handle),
+        Focus::Palette => Some(dispatch_palette(
+            code,
+            modifiers,
+            map,
+            ui,
+            render_handle,
+            keymap,
+        )),
+        Focus::Plugin(tag) => {
+            dispatch_plugin(&tag, code, modifiers, map, ui, render_handle, keymap)
+        }
     }
 }
 
@@ -51,6 +61,7 @@ fn dispatch_palette(
     map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
+    keymap: &KeyMap,
 ) -> InputEffect {
     let outcome = ui.palette.handle_key(code, modifiers);
 
@@ -65,7 +76,7 @@ fn dispatch_palette(
         PaletteOutcome::Consumed | PaletteOutcome::None => InputEffect::Plugin,
         PaletteOutcome::Run(cmd) => {
             info!("palette: running {:?}", cmd);
-            command::dispatch(cmd, map, ui, render_handle)
+            command::dispatch(cmd, map, ui, render_handle, keymap)
         }
     }
 }
@@ -80,6 +91,7 @@ fn dispatch_plugin(
     map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
+    keymap: &KeyMap,
 ) -> Option<InputEffect> {
     let center = map.center();
     let mut ctx = PluginCtx { center };
@@ -99,7 +111,7 @@ fn dispatch_plugin(
         PluginAction::Consumed => Some(InputEffect::Plugin),
         PluginAction::Run(cmd) => {
             info!("widget {:?}: running {:?}", tag, cmd);
-            Some(command::dispatch(cmd, map, ui, render_handle))
+            Some(command::dispatch(cmd, map, ui, render_handle, keymap))
         }
     }
 }
@@ -113,6 +125,13 @@ impl KeyboardHandler {
         Self { keymap }
     }
 
+    /// Expose the keymap so the async dispatch path in `app.rs` (and
+    /// anything else that invokes `command::dispatch` outside the
+    /// keyboard handler) can thread it through.
+    pub fn keymap(&self) -> &KeyMap {
+        &self.keymap
+    }
+
     pub fn handle(
         &mut self,
         code: KeyCode,
@@ -122,41 +141,47 @@ impl KeyboardHandler {
         render_handle: &RenderHandle,
     ) -> InputEffect {
         // [1] Focus-first routing.
-        if let Some(effect) = dispatch_focused(code, modifiers, map, ui, render_handle) {
+        if let Some(effect) =
+            dispatch_focused(code, modifiers, map, ui, render_handle, &self.keymap)
+        {
             return effect;
         }
 
-        // [2] Focus cycling — Tab / Shift-Tab move across visible plugins.
+        // [2] Focus cycling — Tab / Shift-Tab → Command::CycleFocus.
         let forward_cycle = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
         let backward_cycle = code == KeyCode::BackTab
             || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
         if forward_cycle || backward_cycle {
-            return if ui.focus.cycle(&mut ui.widgets, forward_cycle) {
-                InputEffect::Plugin
-            } else {
-                InputEffect::None
-            };
+            return command::dispatch(
+                Command::CycleFocus(forward_cycle),
+                map,
+                ui,
+                render_handle,
+                &self.keymap,
+            );
         }
 
         // [3] `:` opens the command palette (builtin, fixed key).
         if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
             info!("palette: opening");
-            ui.focus.deactivate_focused(&mut ui.widgets, None);
-            let theme_id = ui.theme_id;
-            ui.palette.activate(&ui.widgets, &self.keymap, theme_id);
-            ui.focus.take_palette();
-            return InputEffect::Plugin;
+            return command::dispatch(Command::OpenPalette, map, ui, render_handle, &self.keymap);
         }
 
         // [4] Plugin activation keys.
         if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
             let new_tag = tag.to_string();
-            return command::dispatch(Command::ActivatePlugin(new_tag), map, ui, render_handle);
+            return command::dispatch(
+                Command::ActivatePlugin(new_tag),
+                map,
+                ui,
+                render_handle,
+                &self.keymap,
+            );
         }
 
         // [5] Keymap resolve → command.
         match self.keymap.resolve(code, modifiers) {
-            Some(cmd) => command::dispatch(cmd, map, ui, render_handle),
+            Some(cmd) => command::dispatch(cmd, map, ui, render_handle, &self.keymap),
             None => InputEffect::None,
         }
     }
