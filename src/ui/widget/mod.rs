@@ -13,10 +13,15 @@ pub mod search;
 pub mod wiki;
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use indexmap::IndexMap;
+use ratatui::Frame;
+use ratatui::layout::Rect;
 
 use crate::core::Action;
 use crate::geo::LonLat;
 use crate::ui::focus::Focus;
+use crate::ui::theme::Theme;
+use crate::ui::widget::overlay::MarkerPoint;
 
 /// Outcome of a widget seeing a raw key event.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,5 +72,79 @@ pub trait Widget {
     /// changed and the app should redraw.
     fn poll(&mut self) -> bool {
         false
+    }
+
+    /// Stable identifier used by the registry and `Focus::Widget`.
+    /// Built-ins return a `&'static str`; plugins supply their own.
+    fn tag(&self) -> &str;
+
+    /// Render the widget's modal panel. Called only when the widget
+    /// holds focus; widgets that don't have a panel leave this as a
+    /// no-op.
+    fn render(&self, _f: &mut Frame, _area: Rect, _theme: &Theme) {}
+
+    /// Context-sensitive key hints for the footer, shown while the
+    /// widget holds focus.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
+    /// Marker points this widget wants drawn on the map. Always
+    /// queried (not gated by focus) so e.g. wiki markers stay visible
+    /// while the user is searching.
+    fn markers(&self, _theme: &Theme) -> Vec<MarkerPoint> {
+        Vec::new()
+    }
+}
+
+/// Ordered registry of interactive widgets. Built-ins register at app
+/// startup; plugins register as they're loaded. Insertion order is the
+/// dispatch priority for action broadcasts.
+pub struct WidgetRegistry {
+    widgets: IndexMap<String, Box<dyn Widget>>,
+}
+
+impl WidgetRegistry {
+    pub fn new() -> Self {
+        Self {
+            widgets: IndexMap::new(),
+        }
+    }
+
+    /// Register a widget. The tag comes from `Widget::tag`; a
+    /// duplicate tag replaces the prior entry.
+    pub fn register(&mut self, w: Box<dyn Widget>) {
+        let tag = w.tag().to_string();
+        self.widgets.insert(tag, w);
+    }
+
+    pub fn get<'a>(&'a self, tag: &str) -> Option<&'a (dyn Widget + 'a)> {
+        self.widgets
+            .get(tag)
+            .map(|b| b.as_ref() as &(dyn Widget + 'a))
+    }
+
+    pub fn get_mut<'a>(&'a mut self, tag: &str) -> Option<&'a mut (dyn Widget + 'a)> {
+        self.widgets
+            .get_mut(tag)
+            .map(|b| b.as_mut() as &mut (dyn Widget + 'a))
+    }
+
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a (dyn Widget + 'a)> + 'a {
+        self.widgets
+            .values()
+            .map(|b| b.as_ref() as &(dyn Widget + 'a))
+    }
+
+    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut (dyn Widget + 'a)> + 'a {
+        self.widgets
+            .values_mut()
+            .map(|b| b.as_mut() as &mut (dyn Widget + 'a))
+    }
+}
+
+impl Default for WidgetRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

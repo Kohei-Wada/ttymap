@@ -18,7 +18,7 @@ use crate::core::Core;
 use crate::keymap::KeyMap;
 use crate::ui::UiState;
 use crate::ui::focus::Focus;
-use crate::ui::widget::{Widget, WidgetAction, WidgetCtx};
+use crate::ui::widget::{WidgetAction, WidgetCtx};
 
 pub struct KeyboardHandler {
     keymap: KeyMap,
@@ -27,10 +27,6 @@ pub struct KeyboardHandler {
 impl KeyboardHandler {
     pub fn new(keymap: KeyMap) -> Self {
         Self { keymap }
-    }
-
-    pub fn keymap(&self) -> &KeyMap {
-        &self.keymap
     }
 
     pub fn handle(
@@ -42,9 +38,7 @@ impl KeyboardHandler {
     ) -> InputEffect {
         let center = core.center();
 
-        // Raw-key dispatch: only the focused widget sees the key. Match
-        // on focus first so we can split-borrow `ui.focus` and the
-        // focused widget field independently.
+        // Raw-key dispatch: only the focused widget sees the key.
         let focused_tag = match &ui.focus {
             Focus::Map => None,
             Focus::Widget(t) => Some(t.clone()),
@@ -54,11 +48,9 @@ impl KeyboardHandler {
                 center,
                 focus: &mut ui.focus,
             };
-            let outcome = match tag.as_ref() {
-                "search" => ui.search.handle_key(code, modifiers, &mut ctx),
-                "help" => ui.help.handle_key(code, modifiers, &mut ctx),
-                "wiki" => ui.wiki.handle_key(code, modifiers, &mut ctx),
-                _ => WidgetAction::Pass,
+            let outcome = match ui.widgets.get_mut(tag.as_ref()) {
+                Some(w) => w.handle_key(code, modifiers, &mut ctx),
+                None => WidgetAction::Pass,
             };
             match outcome {
                 WidgetAction::Pass => {}
@@ -77,9 +69,13 @@ impl KeyboardHandler {
             center,
             focus: &mut ui.focus,
         };
-        let claimed = ui.search.handle_action(&action, &mut ctx)
-            || ui.help.handle_action(&action, &mut ctx)
-            || ui.wiki.handle_action(&action, &mut ctx);
+        let mut claimed = false;
+        for widget in ui.widgets.iter_mut() {
+            if widget.handle_action(&action, &mut ctx) {
+                claimed = true;
+                break;
+            }
+        }
         if claimed {
             return InputEffect::Widget;
         }

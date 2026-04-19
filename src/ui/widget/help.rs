@@ -130,6 +130,18 @@ impl Widget for HelpWidget {
             false
         }
     }
+
+    fn tag(&self) -> &str {
+        "help"
+    }
+
+    fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+        HelpWidget::render(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("any key", "close")]
+    }
 }
 
 fn action_label(action: &Action) -> &'static str {

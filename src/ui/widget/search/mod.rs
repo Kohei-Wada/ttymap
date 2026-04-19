@@ -10,17 +10,18 @@ mod state;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::Frame;
+use ratatui::layout::Rect;
 
 use crate::core::Action;
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::focus::Focus;
+use crate::ui::theme::Theme;
 
 use service::SearchService;
 use state::{Outcome, SearchState};
 
 use super::{Widget, WidgetAction, WidgetCtx};
-
-pub use panel::render_panel;
 
 pub struct SearchWidget {
     pub(in crate::ui::widget::search) state: SearchState,
@@ -78,6 +79,22 @@ impl Widget for SearchWidget {
             true
         } else {
             false
+        }
+    }
+
+    fn tag(&self) -> &str {
+        "search"
+    }
+
+    fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.has_candidates() {
+            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
+        } else {
+            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
         }
     }
 }

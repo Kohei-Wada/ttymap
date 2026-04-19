@@ -16,7 +16,6 @@ use crate::render::thread::{RenderHandle, RenderResult};
 use crate::shared::nominatim::NominatimClient;
 use crate::styler::Styler;
 use crate::ui::UiState;
-use crate::ui::widget::Widget;
 
 /// What a key or mouse event just changed. Drives how the main loop
 /// reacts: a widget-only change redraws immediately (the map frame is
@@ -54,17 +53,17 @@ impl App {
         let palette = styler.palette();
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
-        let mut ui = UiState::new(
+        let keymap = KeyMap::with_overrides(&config.keymap);
+        let ui = UiState::new(
             palette,
             &config.language,
             config.wiki_limit,
             nominatim,
             attribution,
+            &keymap,
         );
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
-
-        let keymap = KeyMap::with_overrides(&config.keymap);
         let core = Core::new(
             CoreOptions {
                 initial_lon: config.initial_lon,
@@ -78,7 +77,6 @@ impl App {
         );
         let render_handle = RenderHandle::spawn(pipeline);
         let keyboard = KeyboardHandler::new(keymap);
-        ui.help.build(keyboard.keymap());
 
         App {
             core,
@@ -103,9 +101,10 @@ impl App {
             }
 
             // Poll widgets with background fetches.
-            self.ui.search.poll();
+            for w in self.ui.widgets.iter_mut() {
+                w.poll();
+            }
             self.ui.info.poll();
-            self.ui.wiki.poll();
 
             self.draw_terminal(&mut terminal)?;
 

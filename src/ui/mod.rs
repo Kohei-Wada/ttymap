@@ -15,13 +15,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use theme::Theme;
+use widget::WidgetRegistry;
 use widget::help::HelpWidget;
 use widget::overlay::{
     AttributionOverlay, InfoOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay,
 };
-use widget::search::{self, SearchWidget};
-use widget::wiki::{self, WikiWidget};
+use widget::search::SearchWidget;
+use widget::wiki::WikiWidget;
 
+use crate::keymap::KeyMap;
 use crate::palette::Palette;
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
@@ -29,10 +31,8 @@ use crate::shared::nominatim::NominatimClient;
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
     pub focus: Focus,
-    pub search: SearchWidget,
+    pub widgets: WidgetRegistry,
     pub info: InfoOverlay,
-    pub help: HelpWidget,
-    pub wiki: WikiWidget,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
     pub attribution: Option<String>,
@@ -45,13 +45,21 @@ impl UiState {
         wiki_limit: u32,
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
+        keymap: &KeyMap,
     ) -> Self {
+        let mut help = HelpWidget::new();
+        help.build(keymap);
+
+        let mut widgets = WidgetRegistry::new();
+        // Registration order = dispatch priority for action broadcasts.
+        widgets.register(Box::new(SearchWidget::new(nominatim.clone())));
+        widgets.register(Box::new(help));
+        widgets.register(Box::new(WikiWidget::new(language, wiki_limit)));
+
         Self {
             focus: Focus::Map,
-            search: SearchWidget::new(nominatim.clone()),
+            widgets,
             info: InfoOverlay::new(nominatim),
-            help: HelpWidget::new(),
-            wiki: WikiWidget::new(language, wiki_limit),
             map_frame: None,
             theme: Theme::from_palette(palette),
             attribution,
@@ -81,33 +89,31 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
 
-        // Map overlays — each stamps on top of the rendered map. Adding
-        // a new overlay means implementing MapOverlay and appending here.
-        let wiki_points = wiki::marker_points(&ui.wiki, &ui.theme);
-        let wiki_markers = MarkersOverlay {
-            points: &wiki_points,
+        // Gather marker points from every widget that supplies any.
+        let widget_markers: Vec<_> = ui
+            .widgets
+            .iter()
+            .flat_map(|w| w.markers(&ui.theme))
+            .collect();
+        let markers = MarkersOverlay {
+            points: &widget_markers,
         };
         let attribution = AttributionOverlay {
             text: ui.attribution.as_deref().unwrap_or(""),
         };
-        let overlays: [&dyn MapOverlay; 4] =
-            [&wiki_markers, &ui.info, &ScaleBarOverlay, &attribution];
+        let overlays: [&dyn MapOverlay; 4] = [&markers, &ui.info, &ScaleBarOverlay, &attribution];
         for overlay in overlays {
             overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
         }
     }
 
-    // Modal widgets render only when focused. This keeps focus the
+    // Modal panels render only while focused. This keeps focus the
     // single source of truth — if a widget isn't focused, it isn't on
     // screen regardless of any lingering internal state.
-    if ui.focus.is_widget("wiki") {
-        wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
-    }
-    if ui.focus.is_widget("search") {
-        search::render_panel(&ui.search, f, map_inner, &ui.theme);
-    }
-    if ui.focus.is_widget("help") {
-        ui.help.render(f, map_inner, &ui.theme);
+    if let Focus::Widget(tag) = &ui.focus
+        && let Some(w) = ui.widgets.get(tag.as_ref())
+    {
+        w.render(f, map_inner, &ui.theme);
     }
 
     let hints = build_hints(ui);
@@ -131,34 +137,13 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 }
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
-    if ui.focus.is_widget("search") {
-        if ui.search.has_candidates() {
-            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
-        } else {
-            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
-        }
-    } else if ui.focus.is_widget("help") {
-        vec![("any key", "close")]
-    } else if ui.focus.is_widget("wiki") {
-        if ui.wiki.is_detail_open() {
-            vec![
-                ("C-n/C-p", "prev/next"),
-                ("Enter/Esc", "back"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("?", "help"),
-            ]
-        } else {
-            vec![
-                ("C-n/C-p", "select"),
-                ("Enter", "open"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("/", "search"),
-                ("?", "help"),
-            ]
-        }
-    } else {
+    // Focused widget provides its own context-sensitive hints.
+    if let Focus::Widget(tag) = &ui.focus
+        && let Some(w) = ui.widgets.get(tag.as_ref())
+    {
+        return w.footer_hints();
+    }
+    {
         vec![
             ("hjkl", "pan"),
             ("a/z", "zoom"),
@@ -180,54 +165,47 @@ mod tests {
 
     const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
 
-    #[test]
-    fn test_ui_state_initial() {
-        let ui = UiState::new(
+    fn make_ui() -> UiState {
+        let keymap = KeyMap::default();
+        UiState::new(
             &crate::palette::DARK,
             "en",
             5,
             Arc::new(NominatimClient::new()),
             None,
-        );
+            &keymap,
+        )
+    }
+
+    #[test]
+    fn test_ui_state_initial() {
+        let ui = make_ui();
         assert!(ui.focus == Focus::Map);
         assert!(ui.map_frame.is_none());
     }
 
     #[test]
     fn test_ui_state_search_lifecycle() {
-        use crate::ui::widget::{Widget, WidgetCtx};
-        let ui = &mut UiState::new(
-            &crate::palette::DARK,
-            "en",
-            5,
-            Arc::new(NominatimClient::new()),
-            None,
-        );
+        use crate::ui::widget::WidgetCtx;
+        let ui = &mut make_ui();
         assert!(ui.focus == Focus::Map);
 
         let mut ctx = WidgetCtx {
             center: ZERO,
             focus: &mut ui.focus,
         };
-        assert!(ui.search.handle_action(&Action::SearchOpen, &mut ctx));
+        let search = ui.widgets.get_mut("search").unwrap();
+        assert!(search.handle_action(&Action::SearchOpen, &mut ctx));
         assert!(ctx.focus.is_widget("search"));
 
-        ui.search
-            .handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
-        ui.search
-            .handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
+        search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
+        search.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
         assert!(matches!(*ctx.focus, Focus::Map));
     }
 
     #[test]
     fn test_ui_state_map_frame() {
-        let mut ui = UiState::new(
-            &crate::palette::DARK,
-            "en",
-            5,
-            Arc::new(NominatimClient::new()),
-            None,
-        );
+        let mut ui = make_ui();
         assert!(ui.map_frame.is_none());
 
         ui.map_frame = Some(MapFrame {

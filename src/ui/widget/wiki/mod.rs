@@ -27,8 +27,6 @@ use state::{KeyOutcome, WikiState};
 use super::{Widget, WidgetAction, WidgetCtx};
 use crate::ui::focus::Focus;
 
-pub use panel::render_panel;
-
 pub struct WikiWidget {
     pub(in crate::ui::widget::wiki) state: WikiState,
     service: WikiService,
@@ -42,10 +40,6 @@ impl WikiWidget {
             service: WikiService::new(language, limit),
             throttle: Throttle::with_cooldown(Duration::from_secs(2)),
         }
-    }
-
-    pub fn is_detail_open(&self) -> bool {
-        self.state.is_detail_open()
     }
 
     fn refresh(&mut self, center: LonLat) {
@@ -106,28 +100,54 @@ impl Widget for WikiWidget {
             false
         }
     }
-}
 
-/// Adapt the current article list into `MarkerPoint`s for `MarkersOverlay`.
-/// Returns an empty vec when the panel is inactive so nothing is drawn.
-pub fn marker_points(widget: &WikiWidget, theme: &Theme) -> Vec<MarkerPoint> {
-    let state = &widget.state;
-    if !state.is_active() {
-        return Vec::new();
+    fn tag(&self) -> &str {
+        "wiki"
     }
-    state
-        .articles
-        .iter()
-        .enumerate()
-        .map(|(i, a)| MarkerPoint {
-            lon: a.lon,
-            lat: a.lat,
-            glyph: '●',
-            fg: if i == state.selected {
-                theme.accent_alt
-            } else {
-                theme.accent
-            },
-        })
-        .collect()
+
+    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &Theme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.state.is_detail_open() {
+            vec![
+                ("C-n/C-p", "prev/next"),
+                ("Enter/Esc", "back"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("?", "help"),
+            ]
+        } else {
+            vec![
+                ("C-n/C-p", "select"),
+                ("Enter", "open"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("/", "search"),
+                ("?", "help"),
+            ]
+        }
+    }
+
+    fn markers(&self, theme: &Theme) -> Vec<MarkerPoint> {
+        if !self.state.is_active() {
+            return Vec::new();
+        }
+        self.state
+            .articles
+            .iter()
+            .enumerate()
+            .map(|(i, a)| MarkerPoint {
+                lon: a.lon,
+                lat: a.lat,
+                glyph: '●',
+                fg: if i == self.state.selected {
+                    theme.accent_alt
+                } else {
+                    theme.accent
+                },
+            })
+            .collect()
+    }
 }

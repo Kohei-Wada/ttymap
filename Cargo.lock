@@ -2992,6 +2992,7 @@ dependencies = [
  "directories",
  "earcut",
  "flate2",
+ "indexmap",
  "log",
  "prost",
  "prost-build",
