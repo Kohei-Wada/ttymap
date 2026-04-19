@@ -19,8 +19,8 @@ use ratatui::layout::Rect;
 
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
-use crate::ui::painter::MapPainter;
-use crate::ui::theme::UiTheme;
+use crate::painter::MapPainter;
+use crate::theme::UiTheme;
 
 /// Outcome of a widget seeing a raw key event.
 #[derive(Debug, Clone, PartialEq)]

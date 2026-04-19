@@ -4,13 +4,13 @@
 //! ratatui buffer after the base map.
 //!
 //! World-space primitives contributed by widgets (e.g. wiki markers)
-//! go through [`crate::ui::painter::MapPainter`], not an overlay.
+//! go through [`crate::painter::MapPainter`], not an overlay.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::render::frame::MapFrame;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 pub mod attribution;
 pub mod info;

@@ -100,7 +100,7 @@ fn dispatch_palette(
         PaletteOutcome::SetTheme(new_id) => {
             info!("palette: switching theme to {}", new_id.name());
             ui.theme_id = new_id;
-            crate::ui::theme::apply(new_id, &mut ui.theme, render_handle);
+            crate::theme::apply(new_id, &mut ui.theme, render_handle);
             InputEffect::Map
         }
     }

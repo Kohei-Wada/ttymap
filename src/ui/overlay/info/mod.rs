@@ -21,7 +21,7 @@ use crate::geo::{LonLat, MapProjection};
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
 use crate::shared::throttle::Throttle;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 mod service;
 

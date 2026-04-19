@@ -21,7 +21,7 @@ use crate::core::Action;
 use crate::focus::FocusManager;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use commands::{ACTIONS, Command, CommandKind};
 use state::{Outcome, PaletteState};

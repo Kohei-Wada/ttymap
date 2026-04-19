@@ -2,11 +2,7 @@
 
 pub mod map_view;
 pub mod overlay;
-pub mod painter;
 pub mod palette;
-pub mod theme;
-
-pub use painter::MapPainter;
 
 use std::sync::Arc;
 
@@ -17,7 +13,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
-use theme::UiTheme;
 
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
@@ -29,8 +24,10 @@ use crate::ui::palette::CommandPalette;
 use crate::config::Config;
 use crate::focus::{Focus, FocusManager};
 use crate::keymap::KeyMap;
+use crate::painter::MapPainter;
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
+use crate::theme::UiTheme;
 
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
@@ -42,7 +39,7 @@ pub struct UiState {
     pub map_frame: Option<MapFrame>,
     /// Source of truth for the active theme on the main thread. Paired
     /// with `theme` (the derived UI color set); both get refreshed by
-    /// `ui::theme::apply` on a runtime theme switch.
+    /// `theme::apply` on a runtime theme switch.
     pub theme_id: crate::color_palette::ThemeId,
     pub theme: UiTheme,
     pub attribution: Option<String>,

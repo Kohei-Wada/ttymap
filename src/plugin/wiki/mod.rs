@@ -17,7 +17,7 @@ use log::debug;
 
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
@@ -136,7 +136,7 @@ impl Plugin for WikiPlugin {
         }
     }
 
-    fn paint_on_map(&self, p: &mut crate::ui::painter::MapPainter<'_>) {
+    fn paint_on_map(&self, p: &mut crate::painter::MapPainter<'_>) {
         if !self.state.is_active() {
             return;
         }

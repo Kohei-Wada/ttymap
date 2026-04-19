@@ -21,6 +21,17 @@ pub mod core;
 /// through it before falling back to global handlers.
 pub(crate) mod focus;
 
+/// UI color set (Theme) + runtime theme-switch helper. Lives at the
+/// crate root because it's a **plugin-facing service** — plugins read
+/// colors from it during `render()`, so putting it under `ui/` would
+/// recreate the ui↔plugin cycle we just broke.
+pub(crate) mod theme;
+
+/// `MapPainter` — world-space drawing primitives plugins use inside
+/// `paint_on_map`. Also plugin-facing, also lives at the crate root
+/// for the same cycle-avoidance reason as `theme`.
+pub(crate) mod painter;
+
 /// Keyboard event handler — raw key dispatch to widgets + Action
 /// translation + fallback to core.
 pub(crate) mod keyboard;

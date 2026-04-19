@@ -12,7 +12,7 @@ use ratatui::style::{Color, Style};
 
 use crate::geo::{LonLat, MapProjection};
 use crate::render::frame::MapFrame;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 pub struct MapPainter<'a> {
     buf: &'a mut Buffer,

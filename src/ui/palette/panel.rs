@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Cell, Clear, Paragraph, Row, Table, TableState};
 
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::CommandPalette;
 

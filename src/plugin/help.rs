@@ -9,7 +9,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::Action;
 use crate::keymap::KeyMap;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::{Plugin, PluginAction, PluginCtx};
 

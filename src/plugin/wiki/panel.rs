@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::WikiPlugin;
 use super::state::WikiState;

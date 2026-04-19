@@ -8,7 +8,7 @@ use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::frame::MapFrame;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::MapOverlay;
 

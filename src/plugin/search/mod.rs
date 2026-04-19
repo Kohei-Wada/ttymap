@@ -14,7 +14,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::shared::nominatim::NominatimClient;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use service::SearchService;
 use state::{Outcome, SearchState};

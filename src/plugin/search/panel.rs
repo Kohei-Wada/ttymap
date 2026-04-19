@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::SearchPlugin;
 

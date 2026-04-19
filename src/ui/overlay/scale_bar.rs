@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::geo;
 use crate::render::frame::MapFrame;
-use crate::ui::theme::UiTheme;
+use crate::theme::UiTheme;
 
 use super::MapOverlay;
 
