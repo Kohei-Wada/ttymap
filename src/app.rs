@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{self, Event, KeyModifiers};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
@@ -10,6 +10,7 @@ use crate::config::{Config, KeybindingOverrides};
 use crate::core::input::InputHandler;
 use crate::core::keymap::KeyMap;
 use crate::core::{Action, Core, CoreOptions};
+use crate::mouse::MouseHandler;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
 use crate::shared::nominatim::NominatimClient;
@@ -17,25 +18,16 @@ use crate::styler::Styler;
 use crate::ui::UiState;
 use crate::ui::widget::{Widget, WidgetAction};
 
-/// What a key/mouse event just changed. Drives how the main loop
-/// reacts: a widget-only change redraws immediately (the map frame
-/// is unchanged); a map change only requests a new render — the
-/// main loop will redraw when a fresh frame arrives, avoiding a
+/// What a key or mouse event just changed. Drives how the main loop
+/// reacts: a widget-only change redraws immediately (the map frame is
+/// unchanged); a map change only requests a new render — the main
+/// loop will redraw when a fresh frame arrives, avoiding a
 /// stale-frame draw followed by a second fresh-frame draw.
 #[derive(Clone, Copy, PartialEq)]
-enum KeyEffect {
+pub(crate) enum InputEffect {
     None,
     Widget,
     Map,
-}
-
-/// Transient mouse-gesture state. Lives in `App` but is only touched
-/// from `handle_mouse` — keeping it in its own struct prevents the
-/// top-level composition from growing a drawer of input-handler
-/// internals as more gestures land.
-#[derive(Default)]
-struct MouseState {
-    drag_from: Option<(u16, u16)>,
 }
 
 pub struct App {
@@ -43,7 +35,7 @@ pub struct App {
     input: InputHandler,
     render_handle: RenderHandle,
     ui: UiState,
-    mouse: MouseState,
+    mouse: MouseHandler,
 }
 
 impl App {
@@ -93,7 +85,7 @@ impl App {
             input,
             render_handle,
             ui,
-            mouse: MouseState::default(),
+            mouse: MouseHandler::default(),
         }
     }
 
@@ -136,7 +128,8 @@ impl App {
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        if let KeyEffect::Map = self.handle_key(key_event.code, key_event.modifiers)
+                        if let InputEffect::Map =
+                            self.handle_key(key_event.code, key_event.modifiers)
                             && self.core.is_running()
                         {
                             self.request_draw();
@@ -150,7 +143,9 @@ impl App {
                         self.request_draw();
                     }
                     Event::Mouse(mouse) => {
-                        if let KeyEffect::Map = self.handle_mouse(mouse) {
+                        if let InputEffect::Map =
+                            self.mouse.handle(mouse, &mut self.core, &mut self.ui)
+                        {
                             self.request_draw();
                         }
                     }
@@ -172,16 +167,16 @@ impl App {
         &mut self,
         code: crossterm::event::KeyCode,
         modifiers: KeyModifiers,
-    ) -> KeyEffect {
+    ) -> InputEffect {
         let center = self.core.center();
         for widget in self.ui.widgets_mut() {
             match widget.handle_key(code, modifiers, center) {
                 WidgetAction::Pass => continue,
-                WidgetAction::Consumed => return KeyEffect::Widget,
+                WidgetAction::Consumed => return InputEffect::Widget,
                 WidgetAction::Jump(location) => {
                     info!("widget: jumping to ({}, {})", location.lat, location.lon);
                     self.core.jump_to(location);
-                    return KeyEffect::Map;
+                    return InputEffect::Map;
                 }
             }
         }
@@ -189,58 +184,13 @@ impl App {
         let action = self.input.handle_key(code, modifiers);
         for widget in self.ui.widgets_mut() {
             if widget.handle_action(&action, center) {
-                return KeyEffect::Widget;
+                return InputEffect::Widget;
             }
         }
         if self.core.process_action(&action) {
-            KeyEffect::Map
+            InputEffect::Map
         } else {
-            KeyEffect::None
-        }
-    }
-
-    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> KeyEffect {
-        if self.ui.search.is_active() {
-            return KeyEffect::None;
-        }
-
-        self.ui.info.set_cursor((mouse.column, mouse.row));
-
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let dx = mouse.column as f64 - cols as f64 / 2.0;
-        let dy = mouse.row as f64 - rows as f64 / 2.0;
-
-        match mouse.kind {
-            MouseEventKind::Moved => KeyEffect::Widget,
-            MouseEventKind::Down(MouseButton::Left) => {
-                self.mouse.drag_from = Some((mouse.column, mouse.row));
-                KeyEffect::None
-            }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some((prev_x, prev_y)) = self.mouse.drag_from {
-                    let drag_dx = mouse.column as i16 - prev_x as i16;
-                    let drag_dy = mouse.row as i16 - prev_y as i16;
-                    self.mouse.drag_from = Some((mouse.column, mouse.row));
-                    if drag_dx != 0 || drag_dy != 0 {
-                        self.core.pan_by_cells(drag_dx, drag_dy);
-                        return KeyEffect::Map;
-                    }
-                }
-                KeyEffect::None
-            }
-            MouseEventKind::Up(MouseButton::Left) => {
-                self.mouse.drag_from = None;
-                KeyEffect::None
-            }
-            MouseEventKind::ScrollUp => {
-                self.core.zoom_towards(dx, dy, self.core.zoom_step());
-                KeyEffect::Map
-            }
-            MouseEventKind::ScrollDown => {
-                self.core.zoom_towards(dx, dy, -self.core.zoom_step());
-                KeyEffect::Map
-            }
-            _ => KeyEffect::None,
+            InputEffect::None
         }
     }
 
