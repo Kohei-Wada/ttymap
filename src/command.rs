@@ -44,6 +44,10 @@ pub enum Command {
     /// Open the command palette with its default provider. No-op if
     /// already open.
     OpenPalette,
+    /// Terminal resized — update the map viewport and the render
+    /// thread's canvas dimensions. Arguments are the new terminal
+    /// size in cells.
+    Resize(u16, u16),
 }
 
 /// What a key or mouse event just changed. Drives how the main loop
@@ -134,6 +138,12 @@ pub fn dispatch(cmd: Command, ctx: &mut DispatchCtx<'_>) -> InputEffect {
                 .activate(&ctx.ui.widgets, ctx.keymap, theme_id);
             ctx.ui.focus.take_palette();
             InputEffect::Plugin
+        }
+        Command::Resize(cols, rows) => {
+            ctx.map.resize(cols, rows);
+            ctx.render_handle
+                .request_resize(ctx.map.width(), ctx.map.height());
+            InputEffect::Map
         }
     }
 }

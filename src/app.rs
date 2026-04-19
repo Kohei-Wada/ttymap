@@ -149,10 +149,17 @@ impl App {
                     }
                     Event::Resize(cols, rows) => {
                         info!("resize: {}x{}", cols, rows);
-                        self.map.resize(cols, rows);
-                        self.render_handle
-                            .request_resize(self.map.width(), self.map.height());
-                        self.request_draw();
+                        let mut ctx = DispatchCtx {
+                            map: &mut self.map,
+                            ui: &mut self.ui,
+                            render_handle: &self.render_handle,
+                            keymap: self.keyboard.keymap(),
+                        };
+                        if let InputEffect::Map =
+                            command::dispatch(Command::Resize(cols, rows), &mut ctx)
+                        {
+                            self.request_draw();
+                        }
                     }
                     Event::Mouse(mouse) => {
                         if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
