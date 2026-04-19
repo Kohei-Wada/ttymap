@@ -11,19 +11,20 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Mouse support** — drag to pan, scroll to zoom towards cursor
 - **Location search** — `/` to search with autocomplete (Nominatim)
 - **Wikipedia panel** — `i` to show nearby Wikipedia articles, Enter to jump
+- **Cursor readout** — live lat/lon under the mouse cursor
 - **Place name display** — reverse geocoding shows current location
-- **Scale bar** — distance indicator that updates with zoom level
+- **Scale bar + attribution** — always on screen
 - **Help popup** — `?` shows all keybindings
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Context-sensitive footer** — shows available keys for current mode
+- **Plugin-ready widget API** — built-in widgets use the same trait plugins will
 
 ## Usage
 
 ```bash
 cargo run                                         # default position
 cargo run -- --lat 35.68 --lon 139.76 --zoom 10   # Tokyo
-cargo run -- --style styles/bright.json            # bright theme
-ttymap clear-cache                                 # clear disk tile cache
+cargo run -- --style bright                       # bright theme
+ttymap clear-cache                                # clear disk tile cache
 ```
 
 ### Keybindings
@@ -42,28 +43,31 @@ ttymap clear-cache                                 # clear disk tile cache
 | `q` / `Ctrl-C` | Quit |
 
 **Mouse:**
+
 | Action | Effect |
 |--------|--------|
 | Drag | Pan |
 | Scroll | Zoom towards cursor |
+| Move | Live cursor lat/lon in the info readout |
 
 **Search mode (`/`):**
+
 | Key | Action |
 |-----|--------|
-| Type | Filter locations (autocomplete after 3 chars) |
-| `Tab` | Accept completion |
+| Type | Filter locations |
 | `Enter` | Execute search |
 | `↑` `↓` / `Ctrl-N` `Ctrl-P` | Navigate results |
-| `Ctrl-H` | Delete character |
 | `Ctrl-U` | Clear query |
 | `Esc` | Cancel |
 
 **Wikipedia panel (`i`):**
+
 | Key | Action |
 |-----|--------|
-| `Ctrl-J` `Ctrl-K` / `Ctrl-N` `Ctrl-P` | Navigate articles |
-| `Enter` | Jump to article location |
-| `i` | Close panel |
+| `Ctrl-N` `Ctrl-P` | Navigate articles |
+| `Enter` | Open article detail / jump to location |
+| `r` | Refresh from current map center |
+| `Esc` | Close detail / close panel |
 
 Keybindings are customizable via `~/.config/ttymap/config.toml`.
 
@@ -71,89 +75,139 @@ Keybindings are customizable via `~/.config/ttymap/config.toml`.
 
 ```
 src/
-  main.rs             CLI entry point + subcommands (clear-cache)
-  app.rs              Event loop, input routing, geocode orchestration
-  lib.rs              Module declarations
-
-  core/               State management (no render/tile/UI dependency)
-    state.rs          Core: center, zoom, process_action()
-    config.rs         Config struct + TOML file loader
-    keymap.rs         Key bindings, key notation parser
-    input.rs          Action enum, InputHandler (keymap lookup)
-    snapshot.rs       RenderRequest (DTO sent to render thread)
-
-  ui/                 ratatui-based UI layer
-    mod.rs            UiState (bundles all widgets)
-    layout.rs         Screen layout + context-sensitive footer
-    theme.rs          Color constants and widget helpers
-    widget/
-      map.rs          MapFrame ratatui Widget impl
-      search.rs       Search: input, autocomplete, result selection
-      info.rs         Coordinates, place name, scale bar overlay
-      wiki.rs         Wikipedia article panel with jump
-      help.rs         Keybinding help popup
-
-  render/             Display pipeline
-    pipeline.rs       Orchestrates tile fetch + draw (owns TileCache + Renderer)
-    renderer.rs       Feature[] → pixel output (no cache knowledge)
-    thread.rs         Background thread (calls pipeline, knows nothing else)
-    canvas.rs         Drawing primitives, line/polygon clipping
-    braille.rs        2x4 pixel Braille buffer → MapFrame
-    frame.rs          MapCell, MapFrame data types
-    label.rs          R-tree collision-free label placement
-
-  tile/               Tile data management
-    cache.rs          Memory + disk LRU cache, decode, prefetch strategy
-    client.rs         Fixed worker pool (6 threads), HTTP fetch only
-    queue.rs          Generic priority queue (pluggable sort)
-    decode.rs         MVT protobuf → DecodedTile with R-tree spatial index
-    view.rs           Visible tile calculation (pure math)
-
-  nominatim.rs        Nominatim API client (forward + reverse geocoding)
-  geocode.rs          Async geocoding wrapper (search, complete, reverse)
-  wikipedia.rs        Wikipedia API client (geosearch + extracts)
-  styler.rs           Mapbox GL style JSON → color/filter rules
-  geo.rs              Web Mercator math, distance, scale bar
-  color.rs            Hex → RGB → xterm-256 conversion
-  logging.rs          File logger (~/.local/state/ttymap/)
+├── main.rs           CLI entry + subcommands
+├── lib.rs            crate root
+├── app.rs            App struct, event loop, composition root
+├── config.rs         TOML config + CLI overrides
+├── logging.rs        XDG state log
+│
+├── keyboard.rs       key dispatch (focus-aware routing)
+├── mouse.rs          mouse dispatch
+├── keymap.rs         key → Action translation + user overrides
+├── geo.rs            Web Mercator, MapProjection, distance
+├── palette.rs        xterm-256 theme tables
+│
+├── core/             domain — map state + commands
+│   ├── action.rs     Action enum (map-level only)
+│   └── state.rs      Core, CoreOptions, RenderRequest
+│
+├── render/           tiles → MapFrame on a dedicated thread
+│   ├── pipeline.rs   RenderPipeline
+│   ├── thread.rs     RenderHandle
+│   ├── renderer.rs   Feature[] → Canvas
+│   ├── canvas.rs     Braille drawing primitives
+│   ├── braille.rs    2×4 pixel buffer
+│   ├── frame.rs      MapFrame DTO
+│   ├── view.rs       Visible-tile math
+│   ├── label.rs      R-tree label collision buffer
+│   └── geom/         Bresenham, clipping
+│
+├── tile/             MVT fetch + cache + decode
+│   ├── cache.rs      Memory + disk LRU
+│   ├── decode.rs     Protobuf → DecodedTile
+│   └── fetch/        TileClient trait + mapscii HTTP backend
+│
+├── styler/           Mapbox GL-style rules (dark / bright presets)
+│
+├── shared/           cross-cutting utilities
+│   ├── http/
+│   ├── nominatim.rs
+│   └── throttle.rs
+│
+└── ui/               terminal UI
+    ├── mod.rs        UiState + draw()
+    ├── focus.rs      Focus enum (Map | Widget(tag))
+    ├── map_view.rs   MapFrame ratatui adapter
+    ├── painter.rs    MapPainter — widgets' world-space drawing API
+    ├── theme.rs      UI color set
+    │
+    ├── overlay/      built-in, always-on map decorations
+    │   ├── attribution.rs   © OpenStreetMap
+    │   ├── scale_bar.rs     distance ruler
+    │   └── info/            center/cursor/zoom/place readout
+    │       ├── mod.rs
+    │       └── service.rs   async reverse-geocoder
+    │
+    └── widget/       plugin API + built-in interactive widgets
+        ├── mod.rs    Widget trait, WidgetCtx, WidgetAction, WidgetRegistry
+        ├── help.rs
+        ├── search/
+        └── wiki/
 ```
 
-### Data flow
+### Layering
+
+- **`core/`** — domain state. Knows nothing about UI or widgets. `Action` only carries map-level commands (Pan, Zoom, Quit, ResetPosition, …); widget activation is a separate concern.
+- **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
+- **`ui/widget/`** — the plugin surface. Built-in widgets (search, help, wiki) implement the `Widget` trait and are registered into the same `WidgetRegistry` that will host external plugins. The keyboard handler dispatches by focus + activation-key lookup, never by widget name.
+
+### Input flow
 
 ```
-┌──────────────┐  RenderRequest   ┌────────────────────────┐
-│  Main thread │ ──────────────→  │  Render thread         │
-│              │                  │  RenderPipeline        │
-│  App         │  MapFrame        │   TileCache → Renderer │
-│   ├ Core     │ ←──────────────  │                        │
-│   ├ Input    │                  └──────────┬─────────────┘
-│   ├ Geocoder │                             │ cache miss
-│   └ UiState  │                  ┌──────────▼─────────────┐
-│     ├ Search │                  │  Worker pool (6)       │
-│     ├ Info   │                  │  HTTP fetch → raw bytes│
-│     ├ Wiki   │                  └────────────────────────┘
-│     └ Help   │
-│              │   Nominatim API
-│  ratatui     │ ←─────────────── Geocoder (background thread)
-│  Terminal    │
-│              │   Wikipedia API
-│              │ ←─────────────── WikipediaClient (background thread)
-└──────────────┘
+key event
+  ↓ keyboard.handle():
+    [1] focused widget sees the key first
+    [2] registry activation lookup (widgets own their activation keys)
+    [3] keymap.resolve(code, mods) → Action
+    [4] core.process_action(&action)
 ```
 
-### Dependency direction
+```
+mouse event
+  ↓ mouse.handle():
+    search focused? ignore.
+    update core (drag → pan, scroll → zoom)
+    notify InfoOverlay of cursor position
+```
+
+### Render flow
 
 ```
-app → core, ui, render/thread, geocode, wikipedia
-ui/layout → ui/widget/*, ui/theme
-render/thread → render/pipeline
-render/pipeline → render/renderer, tile/cache
-render/renderer → render/canvas (no tile dependency)
-tile/cache → tile/client, tile/decode
-tile/client → tile/queue (HTTP fetch only)
-geocode → nominatim
-core → geo (no render, tile, or UI dependency)
+main thread (ratatui draw):
+  ui::draw(f, &ui):
+    1. map_view renders the latest MapFrame
+    2. MapPainter set up; widgets.paint_on_map(painter)
+       — wiki plots article markers via painter.point(...)
+    3. built-in overlays (info, attribution, scale_bar) stamp their
+       rectangles onto the buffer
+    4. focused widget's panel (search popup / help / wiki)
+    5. footer hints from the focused widget (or default)
 ```
+
+Rendering is decoupled from fetching. The render thread produces a `MapFrame` from the current `RenderRequest`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
+
+### Focus model
+
+`UiState.focus: Focus` is the single source of truth for which widget (if any) owns the keyboard. Widgets never carry their own `active` flag — rendering, hint selection, and modality all consult `focus`. Activating one widget implicitly `deactivate`s the previously-focused widget, so lingering state (wiki markers, etc.) is cleared.
+
+### Widget API (built-ins + plugins)
+
+```rust
+trait Widget {
+    fn tag(&self) -> &str;
+    fn activation_keys(&self) -> Vec<&'static str>;
+    fn activate(&mut self, ctx: &mut WidgetCtx);
+    fn deactivate(&mut self);
+    fn handle_key(&mut self, code, mods, ctx) -> WidgetAction;
+    fn poll(&mut self) -> bool;
+    fn render(&self, f, area, theme);              // focused panel
+    fn footer_hints(&self) -> Vec<(&str, &str)>;
+    fn paint_on_map(&self, p: &mut MapPainter);    // world-space primitives
+}
+```
+
+`MapPainter` hides projection, buffer, and theme behind primitives like `point(ll, glyph, fg)` — widgets never compute screen coordinates themselves.
+
+### Concurrency
+
+| Thread | Responsibility |
+|--------|----------------|
+| main | event loop, UI state, terminal draw |
+| render | MapFrame generation (tile fetch + draw) |
+| tile fetch | HTTP workers with priority queue |
+| geocode | Nominatim / Wikipedia calls |
+
+mpsc channels connect the threads; the main thread never blocks on I/O.
 
 ## Configuration
 
@@ -177,7 +231,7 @@ See `config.example.toml` for all options.
 
 ```bash
 cargo build       # build.rs compiles proto/vector_tile.proto via protox
-cargo test        # 109 tests
+cargo test        # 144 tests
 cargo clippy      # lint
 ```
 
