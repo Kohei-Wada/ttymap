@@ -12,9 +12,9 @@ pub struct RenderRequest {
     pub height: usize,
 }
 
-/// Everything `Core` needs to boot. Built by the app from `Config`, so
-/// `Core` itself doesn't import `Config` and its tests don't need one.
-pub struct CoreOptions {
+/// Everything `MapState` needs to boot. Built by the app from `Config`, so
+/// `MapState` itself doesn't import `Config` and its tests don't need one.
+pub struct MapStateOptions {
     pub initial_lon: f64,
     pub initial_lat: f64,
     pub initial_zoom: Option<f64>,
@@ -22,7 +22,7 @@ pub struct CoreOptions {
     pub max_zoom: f64,
 }
 
-pub struct Core {
+pub struct MapState {
     center: LonLat,
     zoom: f64,
     min_zoom: f64,
@@ -38,8 +38,8 @@ pub struct Core {
     max_zoom: f64,
 }
 
-impl Core {
-    pub fn new(opts: CoreOptions, width: usize, height: usize) -> Self {
+impl MapState {
+    pub fn new(opts: MapStateOptions, width: usize, height: usize) -> Self {
         let min_zoom = Self::calculate_min_zoom(width);
         let zoom = opts.initial_zoom.unwrap_or(min_zoom);
         let center = LonLat {
@@ -47,7 +47,7 @@ impl Core {
             lat: opts.initial_lat,
         };
 
-        Core {
+        MapState {
             center,
             zoom,
             min_zoom,
@@ -208,9 +208,9 @@ impl Core {
 mod tests {
     use super::*;
 
-    fn default_core() -> Core {
-        Core::new(
-            CoreOptions {
+    fn default_core() -> MapState {
+        MapState::new(
+            MapStateOptions {
                 initial_lon: 13.4,
                 initial_lat: 52.5,
                 initial_zoom: None,
@@ -224,47 +224,47 @@ mod tests {
 
     #[test]
     fn test_quit() {
-        let mut core = default_core();
-        assert!(core.is_running());
-        core.process_action(&Action::Quit);
-        assert!(!core.is_running());
+        let mut map = default_core();
+        assert!(map.is_running());
+        map.process_action(&Action::Quit);
+        assert!(!map.is_running());
     }
 
     #[test]
     fn test_pan() {
-        let mut core = default_core();
-        let before = core.center.lon;
-        core.process_action(&Action::PanRight);
-        assert!(core.center.lon > before);
+        let mut map = default_core();
+        let before = map.center.lon;
+        map.process_action(&Action::PanRight);
+        assert!(map.center.lon > before);
     }
 
     #[test]
     fn test_zoom_in_out() {
-        let mut core = default_core();
+        let mut map = default_core();
         for _ in 0..5 {
-            core.process_action(&Action::ZoomIn);
+            map.process_action(&Action::ZoomIn);
         }
-        let after_in = core.zoom;
-        core.process_action(&Action::ZoomOut);
-        assert!(core.zoom < after_in);
+        let after_in = map.zoom;
+        map.process_action(&Action::ZoomOut);
+        assert!(map.zoom < after_in);
     }
 
     #[test]
     fn test_resize() {
-        let mut core = default_core();
-        core.resize(120, 40);
+        let mut map = default_core();
+        map.resize(120, 40);
         let (expected_w, expected_h) = crate::render::canvas_size(120, 40);
-        assert_eq!(core.width(), expected_w);
-        assert_eq!(core.height(), expected_h);
+        assert_eq!(map.width(), expected_w);
+        assert_eq!(map.height(), expected_h);
     }
 
     #[test]
     fn test_reset_position() {
-        let mut core = default_core();
-        core.process_action(&Action::PanRight);
-        let moved = core.center.lon;
-        core.process_action(&Action::ResetPosition);
-        assert_ne!(core.center.lon, moved);
-        assert_eq!(core.center.lon, core.initial_lon);
+        let mut map = default_core();
+        map.process_action(&Action::PanRight);
+        let moved = map.center.lon;
+        map.process_action(&Action::ResetPosition);
+        assert_ne!(map.center.lon, moved);
+        assert_eq!(map.center.lon, map.initial_lon);
     }
 }

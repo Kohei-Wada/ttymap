@@ -11,7 +11,7 @@ use log::{debug, error, info};
 
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
-use crate::core::RenderRequest;
+use crate::map::RenderRequest;
 use crate::styler::Styler;
 
 pub enum RenderCommand {

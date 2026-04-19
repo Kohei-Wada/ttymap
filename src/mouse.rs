@@ -1,5 +1,5 @@
 //! Mouse input handler. Translates raw crossterm `MouseEvent`s into
-//! `Core` (map state) updates and UI observer notifications.
+//! `MapState` (map state) updates and UI observer notifications.
 //!
 //! Flow: gate on modal widgets → update map state → notify UI
 //! observers (`InfoOverlay` cursor readout). Key and mouse paths stay
@@ -10,7 +10,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::InputEffect;
-use crate::core::Core;
+use crate::map::MapState;
 use crate::ui::UiState;
 
 #[derive(Default)]
@@ -19,18 +19,23 @@ pub struct MouseHandler {
 }
 
 impl MouseHandler {
-    pub fn handle(&mut self, event: MouseEvent, core: &mut Core, ui: &mut UiState) -> InputEffect {
+    pub fn handle(
+        &mut self,
+        event: MouseEvent,
+        map: &mut MapState,
+        ui: &mut UiState,
+    ) -> InputEffect {
         // Search is modal — ignore mouse while its panel is open.
         if ui.focus.is_plugin("search") {
             return InputEffect::None;
         }
 
-        let effect = self.update_core(event, core);
+        let effect = self.update_core(event, map);
         ui.info.set_cursor((event.column, event.row));
         effect
     }
 
-    fn update_core(&mut self, event: MouseEvent, core: &mut Core) -> InputEffect {
+    fn update_core(&mut self, event: MouseEvent, map: &mut MapState) -> InputEffect {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let dx = event.column as f64 - cols as f64 / 2.0;
         let dy = event.row as f64 - rows as f64 / 2.0;
@@ -47,7 +52,7 @@ impl MouseHandler {
                     let drag_dy = event.row as i16 - prev_y as i16;
                     self.drag_from = Some((event.column, event.row));
                     if drag_dx != 0 || drag_dy != 0 {
-                        core.pan_by_cells(drag_dx, drag_dy);
+                        map.pan_by_cells(drag_dx, drag_dy);
                         return InputEffect::Map;
                     }
                 }
@@ -58,11 +63,11 @@ impl MouseHandler {
                 InputEffect::None
             }
             MouseEventKind::ScrollUp => {
-                core.zoom_towards(dx, dy, core.zoom_step());
+                map.zoom_towards(dx, dy, map.zoom_step());
                 InputEffect::Map
             }
             MouseEventKind::ScrollDown => {
-                core.zoom_towards(dx, dy, -core.zoom_step());
+                map.zoom_towards(dx, dy, -map.zoom_step());
                 InputEffect::Map
             }
             _ => InputEffect::None,

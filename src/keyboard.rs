@@ -7,16 +7,16 @@
 //! 2. Tab / Shift-Tab cycles focus across visible plugins.
 //! 3. `:` opens the command palette.
 //! 4. Plugin activation keys (`/`, `?`, `i`, …).
-//! 5. `KeyMap::resolve` → `core::Action` dispatch.
+//! 5. `KeyMap::resolve` → `map::Action` dispatch.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::info;
 
 use crate::app::InputEffect;
-use crate::core::Core;
 use crate::focus::Focus;
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
+use crate::map::MapState;
 use crate::plugin::{PluginAction, PluginCtx};
 use crate::render::thread::RenderHandle;
 use crate::ui::UiState;
@@ -61,14 +61,14 @@ fn activate_plugin(tag: &str, ui: &mut UiState, center: LonLat) {
 fn dispatch_focused(
     code: KeyCode,
     modifiers: KeyModifiers,
-    core: &mut Core,
+    map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
 ) -> Option<InputEffect> {
     match ui.focus.current().clone() {
         Focus::Map => None,
-        Focus::Palette => Some(dispatch_palette(code, modifiers, core, ui, render_handle)),
-        Focus::Plugin(tag) => dispatch_plugin(&tag, code, modifiers, core, ui),
+        Focus::Palette => Some(dispatch_palette(code, modifiers, map, ui, render_handle)),
+        Focus::Plugin(tag) => dispatch_plugin(&tag, code, modifiers, map, ui),
     }
 }
 
@@ -77,16 +77,16 @@ fn dispatch_focused(
 fn dispatch_palette(
     code: KeyCode,
     modifiers: KeyModifiers,
-    core: &mut Core,
+    map: &mut MapState,
     ui: &mut UiState,
     render_handle: &RenderHandle,
 ) -> InputEffect {
-    let center = core.center();
+    let center = map.center();
     match ui.palette.handle_key(code, modifiers, &mut ui.focus) {
         PaletteOutcome::Consumed | PaletteOutcome::None => InputEffect::Plugin,
         PaletteOutcome::Run(action) => {
             info!("palette: running action {:?}", action);
-            if core.process_action(&action) {
+            if map.process_action(&action) {
                 InputEffect::Map
             } else {
                 InputEffect::Plugin
@@ -113,10 +113,10 @@ fn dispatch_plugin(
     tag: &str,
     code: KeyCode,
     modifiers: KeyModifiers,
-    core: &mut Core,
+    map: &mut MapState,
     ui: &mut UiState,
 ) -> Option<InputEffect> {
-    let center = core.center();
+    let center = map.center();
     let mut ctx = PluginCtx { center };
     let outcome = match ui.widgets.get_mut(tag) {
         Some(w) => w.handle_key(code, modifiers, &mut ctx),
@@ -134,7 +134,7 @@ fn dispatch_plugin(
         PluginAction::Consumed => Some(InputEffect::Plugin),
         PluginAction::Jump(location) => {
             info!("widget: jumping to ({}, {})", location.lat, location.lon);
-            core.jump_to(location);
+            map.jump_to(location);
             Some(InputEffect::Map)
         }
     }
@@ -153,12 +153,12 @@ impl KeyboardHandler {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        core: &mut Core,
+        map: &mut MapState,
         ui: &mut UiState,
         render_handle: &RenderHandle,
     ) -> InputEffect {
         // [1] Focus-first routing.
-        if let Some(effect) = dispatch_focused(code, modifiers, core, ui, render_handle) {
+        if let Some(effect) = dispatch_focused(code, modifiers, map, ui, render_handle) {
             return effect;
         }
 
@@ -186,13 +186,13 @@ impl KeyboardHandler {
         // [4] Plugin activation keys.
         if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
             let new_tag = tag.to_string();
-            activate_plugin(&new_tag, ui, core.center());
+            activate_plugin(&new_tag, ui, map.center());
             return InputEffect::Plugin;
         }
 
-        // [5] Keymap resolve → core.
+        // [5] Keymap resolve → map.
         let action = self.keymap.resolve(code, modifiers);
-        if core.process_action(&action) {
+        if map.process_action(&action) {
             InputEffect::Map
         } else {
             InputEffect::None

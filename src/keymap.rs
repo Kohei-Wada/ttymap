@@ -5,7 +5,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::Deserialize;
 
-use crate::core::Action;
+use crate::map::Action;
 
 /// A key binding: a key code + optional modifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

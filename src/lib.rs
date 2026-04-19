@@ -13,8 +13,10 @@ pub mod app;
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;
 
-/// Core state management — input, keymap, map state snapshots.
-pub mod core;
+/// Map state — viewport (center/zoom), running flag, action dispatch.
+/// The "domain map" of the application; keyboard/mouse routes eventually
+/// funnel their effects into a `MapState::process_action` call.
+pub mod map;
 
 /// Focus manager — single source of truth for "which surface owns the
 /// keyboard". Sits above `ui/` because keyboard dispatch routes input
@@ -33,14 +35,14 @@ pub(crate) mod theme;
 pub(crate) mod painter;
 
 /// Keyboard event handler — raw key dispatch to widgets + Action
-/// translation + fallback to core.
+/// translation + fallback to map.
 pub(crate) mod keyboard;
 
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
 
 /// Mouse event handler — translates crossterm mouse events into
-/// core/UI updates. Key input lives elsewhere; keeping the two split
+/// map/UI updates. Key input lives elsewhere; keeping the two split
 /// matches the pattern used by helix and other Rust TUI apps.
 pub(crate) mod mouse;
 

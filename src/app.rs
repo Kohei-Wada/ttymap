@@ -7,9 +7,9 @@ use log::{debug, info};
 use ratatui::DefaultTerminal;
 
 use crate::config::Config;
-use crate::core::{Core, CoreOptions};
 use crate::keyboard::KeyboardHandler;
 use crate::keymap::KeyMap;
+use crate::map::{MapState, MapStateOptions};
 use crate::mouse::MouseHandler;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
@@ -30,7 +30,7 @@ pub(crate) enum InputEffect {
 }
 
 pub struct App {
-    core: Core,
+    map: MapState,
     keyboard: KeyboardHandler,
     render_handle: RenderHandle,
     ui: UiState,
@@ -54,8 +54,8 @@ impl App {
         let styler = Arc::new(Styler::new(ui.theme_id));
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
-        let core = Core::new(
-            CoreOptions {
+        let map = MapState::new(
+            MapStateOptions {
                 initial_lon: config.initial_lon,
                 initial_lat: config.initial_lat,
                 initial_zoom: config.initial_zoom,
@@ -69,7 +69,7 @@ impl App {
         let keyboard = KeyboardHandler::new(keymap);
 
         App {
-            core,
+            map,
             keyboard,
             render_handle,
             ui,
@@ -84,7 +84,7 @@ impl App {
         info!("event loop started");
         self.request_draw();
 
-        'main_loop: while self.core.is_running() {
+        'main_loop: while self.map.is_running() {
             // Drain completed render frames into UiState.
             while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
                 self.ui.map_frame = Some(frame);
@@ -103,7 +103,7 @@ impl App {
             }
             if let Some(loc) = async_jump {
                 info!("plugin async jump: ({}, {})", loc.lat, loc.lon);
-                self.core.jump_to(loc);
+                self.map.jump_to(loc);
                 self.request_draw();
             }
             self.ui.info.poll();
@@ -124,7 +124,7 @@ impl App {
                             && key_event.code == crossterm::event::KeyCode::Char('c')
                         {
                             info!("Ctrl-C received, quitting");
-                            self.core.stop();
+                            self.map.stop();
                             break 'main_loop;
                         }
 
@@ -132,26 +132,26 @@ impl App {
                         let effect = self.keyboard.handle(
                             key_event.code,
                             key_event.modifiers,
-                            &mut self.core,
+                            &mut self.map,
                             &mut self.ui,
                             &self.render_handle,
                         );
                         if let InputEffect::Map = effect
-                            && self.core.is_running()
+                            && self.map.is_running()
                         {
                             self.request_draw();
                         }
                     }
                     Event::Resize(cols, rows) => {
                         info!("resize: {}x{}", cols, rows);
-                        self.core.resize(cols, rows);
+                        self.map.resize(cols, rows);
                         self.render_handle
-                            .request_resize(self.core.width(), self.core.height());
+                            .request_resize(self.map.width(), self.map.height());
                         self.request_draw();
                     }
                     Event::Mouse(mouse) => {
                         if let InputEffect::Map =
-                            self.mouse.handle(mouse, &mut self.core, &mut self.ui)
+                            self.mouse.handle(mouse, &mut self.map, &mut self.ui)
                         {
                             self.request_draw();
                         }
@@ -171,7 +171,7 @@ impl App {
     }
 
     fn request_draw(&mut self) {
-        let state = self.core.render_request();
+        let state = self.map.render_request();
         self.render_handle.request_draw(state);
 
         // Notify passive widgets that the map recentered. They decide

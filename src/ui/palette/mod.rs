@@ -1,4 +1,4 @@
-//! Command palette — `:`-triggered popup that lists every core
+//! Command palette — `:`-triggered popup that lists every map
 //! `Action` and every visible-to-the-user plugin, filterable by
 //! substring, runnable with Enter.
 //!
@@ -17,9 +17,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::core::Action;
 use crate::focus::FocusManager;
 use crate::keymap::KeyMap;
+use crate::map::Action;
 use crate::plugin::PluginRegistry;
 use crate::theme::UiTheme;
 
@@ -35,7 +35,7 @@ pub enum PaletteOutcome {
     None,
     /// Key consumed, palette redraws.
     Consumed,
-    /// User picked a core `Action` — dispatch through `core.process_action`.
+    /// User picked a map `Action` — dispatch through `map.process_action`.
     Run(Action),
     /// User picked a plugin activation — activate the plugin with this tag.
     Activate(String),
@@ -66,7 +66,7 @@ impl CommandPalette {
     }
 
     /// Open the palette: capture the current set of runnable commands
-    /// (core actions + plugin activations) and take focus.
+    /// (map actions + plugin activations) and take focus.
     pub fn activate(
         &mut self,
         focus: &mut FocusManager,

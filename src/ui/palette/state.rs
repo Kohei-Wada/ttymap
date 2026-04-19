@@ -130,7 +130,7 @@ impl PaletteState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Action;
+    use crate::map::Action;
     use crate::ui::palette::commands::CommandKind;
 
     fn cmd(label: &str) -> Command {

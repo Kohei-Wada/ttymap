@@ -7,8 +7,8 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::core::Action;
 use crate::keymap::KeyMap;
+use crate::map::Action;
 use crate::theme::UiTheme;
 
 use super::{Plugin, PluginAction, PluginCtx};

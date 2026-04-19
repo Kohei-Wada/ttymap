@@ -1,13 +1,13 @@
 //! Command table for the command palette.
 //!
-//! Each `Command` couples a human label with either a `core::Action`
+//! Each `Command` couples a human label with either a `map::Action`
 //! (dispatched through the usual keymap path), an `Activate(tag)`
 //! directive (equivalent to pressing that plugin's activation key),
 //! or a `SetTheme(ThemeId)` directive for runtime theme switching.
 //! The palette enumerates these on open and filters them by query.
 
 use crate::color_palette::ThemeId;
-use crate::core::Action;
+use crate::map::Action;
 
 #[derive(Debug, Clone)]
 pub enum CommandKind {
@@ -27,7 +27,7 @@ pub struct Command {
 }
 
 /// Static list of `(label, Action)` covering every map-level action the
-/// core exposes. Kept here (not in `core::Action`) because labels are a
+/// map exposes. Kept here (not in `map::Action`) because labels are a
 /// UI concern.
 pub const ACTIONS: &[(&str, Action)] = &[
     ("Pan left", Action::PanLeft),
