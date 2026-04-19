@@ -39,9 +39,6 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Self {
-        let theme_id = crate::palette::ThemeId::from_name(&config.style);
-        let styler = Arc::new(Styler::new(theme_id));
-
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::render::canvas_size(cols, rows);
 
@@ -50,11 +47,11 @@ impl App {
             cols, rows, width, height
         );
 
-        let palette = styler.palette();
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
-        let ui = UiState::new(&config, palette, nominatim, attribution, &keymap);
+        let ui = UiState::new(&config, nominatim, attribution, &keymap);
+        let styler = Arc::new(Styler::new(ui.theme_id));
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
         let core = Core::new(
@@ -132,12 +129,15 @@ impl App {
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        if let InputEffect::Map = self.keyboard.handle(
+                        let effect = self.keyboard.handle(
                             key_event.code,
                             key_event.modifiers,
                             &mut self.core,
                             &mut self.ui,
-                        ) && self.core.is_running()
+                            &self.render_handle,
+                        );
+                        if let InputEffect::Map = effect
+                            && self.core.is_running()
                         {
                             self.request_draw();
                         }

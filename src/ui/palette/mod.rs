@@ -18,6 +18,7 @@ use ratatui::layout::Rect;
 
 use crate::core::Action;
 use crate::keymap::KeyMap;
+use crate::palette::ThemeId;
 use crate::plugin::PluginRegistry;
 use crate::ui::focus::FocusManager;
 use crate::ui::theme::Theme;
@@ -38,6 +39,9 @@ pub enum PaletteOutcome {
     Run(Action),
     /// User picked a plugin activation — activate the plugin with this tag.
     Activate(String),
+    /// User picked a theme switch — `app.rs` rebuilds the `Styler`,
+    /// swaps it into the render thread, and updates `UiState.theme`.
+    SetTheme(ThemeId),
 }
 
 pub struct CommandPalette {
@@ -91,6 +95,7 @@ impl CommandPalette {
             Outcome::Run(idx) => match self.state.commands[idx].kind.clone() {
                 CommandKind::Action(a) => PaletteOutcome::Run(a),
                 CommandKind::Activate(tag) => PaletteOutcome::Activate(tag),
+                CommandKind::SetTheme(t) => PaletteOutcome::SetTheme(t),
             },
         }
     }
@@ -129,6 +134,14 @@ fn build_commands(widgets: &PluginRegistry, keymap: &KeyMap) -> Vec<Command> {
             label: description.to_string(),
             keys: p.activation_keys().join(", "),
             kind: CommandKind::Activate(p.tag().to_string()),
+        });
+    }
+
+    for theme in ThemeId::all() {
+        commands.push(Command {
+            label: format!("Theme: {}", theme.name()),
+            keys: String::new(),
+            kind: CommandKind::SetTheme(*theme),
         });
     }
 

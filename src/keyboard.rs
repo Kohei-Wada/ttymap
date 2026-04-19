@@ -13,6 +13,7 @@ use crate::app::InputEffect;
 use crate::core::Core;
 use crate::keymap::KeyMap;
 use crate::plugin::{PluginAction, PluginCtx};
+use crate::render::thread::RenderHandle;
 use crate::ui::UiState;
 use crate::ui::focus::Focus;
 use crate::ui::palette::PaletteOutcome;
@@ -32,6 +33,7 @@ impl KeyboardHandler {
         modifiers: KeyModifiers,
         core: &mut Core,
         ui: &mut UiState,
+        render_handle: &RenderHandle,
     ) -> InputEffect {
         let center = core.center();
 
@@ -63,6 +65,12 @@ impl KeyboardHandler {
                         w.activate(&mut ctx);
                     }
                     return InputEffect::Plugin;
+                }
+                PaletteOutcome::SetTheme(new_id) => {
+                    info!("palette: switching theme to {}", new_id.name());
+                    ui.theme_id = new_id;
+                    crate::ui::theme::apply(new_id, &mut ui.theme, render_handle);
+                    return InputEffect::Map;
                 }
             }
         }

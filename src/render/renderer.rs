@@ -68,6 +68,13 @@ impl Renderer {
         self.canvas = Canvas::new(width, height);
     }
 
+    /// Replace the active `Styler`. Subsequent `draw` calls use the
+    /// new theme immediately; in-flight tile decodes are unaffected
+    /// (they don't consult the styler).
+    pub fn set_styler(&mut self, styler: Arc<Styler>) {
+        self.styler = styler;
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }

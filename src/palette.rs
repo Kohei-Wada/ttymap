@@ -43,6 +43,14 @@ impl ThemeId {
             Self::Bright => "bright",
         }
     }
+
+    /// Every known theme, in the order they should appear in UI
+    /// listings (command palette, help overlay). Extend here when
+    /// adding a new preset; the rest of the app discovers them through
+    /// this single table.
+    pub fn all() -> &'static [ThemeId] {
+        &[ThemeId::Dark, ThemeId::Bright]
+    }
 }
 
 /// All colors used by a single theme.

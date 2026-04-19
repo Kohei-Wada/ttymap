@@ -73,6 +73,13 @@ impl RenderPipeline {
         self.renderer.set_size(width, height);
     }
 
+    /// Swap the active `Styler` — used for runtime theme switching.
+    /// Cached decoded tiles are theme-agnostic (`tile::decode` does not
+    /// consult a styler), so no cache flush is needed.
+    pub fn set_styler(&mut self, styler: Arc<Styler>) {
+        self.renderer.set_styler(styler);
+    }
+
     // ── Private ──────────────────────────────────────────────────────────
 
     /// Collect features from tile cache for visible tiles.

@@ -1,16 +1,19 @@
 //! Command table for the command palette.
 //!
 //! Each `Command` couples a human label with either a `core::Action`
-//! (dispatched through the usual keymap path) or an `Activate(tag)`
-//! directive (equivalent to pressing that plugin's activation key).
+//! (dispatched through the usual keymap path), an `Activate(tag)`
+//! directive (equivalent to pressing that plugin's activation key),
+//! or a `SetTheme(ThemeId)` directive for runtime theme switching.
 //! The palette enumerates these on open and filters them by query.
 
 use crate::core::Action;
+use crate::palette::ThemeId;
 
 #[derive(Debug, Clone)]
 pub enum CommandKind {
     Action(Action),
     Activate(String),
+    SetTheme(ThemeId),
 }
 
 #[derive(Debug, Clone)]

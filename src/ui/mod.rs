@@ -30,7 +30,6 @@ use crate::ui::palette::CommandPalette;
 
 use crate::config::Config;
 use crate::keymap::KeyMap;
-use crate::palette::Palette;
 use crate::render::frame::MapFrame;
 use crate::shared::nominatim::NominatimClient;
 
@@ -42,6 +41,10 @@ pub struct UiState {
     pub palette: CommandPalette,
     pub info: InfoOverlay,
     pub map_frame: Option<MapFrame>,
+    /// Source of truth for the active theme on the main thread. Paired
+    /// with `theme` (the derived UI color set); both get refreshed by
+    /// `ui::theme::apply` on a runtime theme switch.
+    pub theme_id: crate::palette::ThemeId,
     pub theme: Theme,
     pub attribution: Option<String>,
 }
@@ -49,11 +52,13 @@ pub struct UiState {
 impl UiState {
     pub fn new(
         config: &Config,
-        palette: &Palette,
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
         keymap: &KeyMap,
     ) -> Self {
+        let theme_id = crate::palette::ThemeId::from_name(&config.style);
+        let palette = theme_id.palette();
+
         let search = SearchPlugin::new(nominatim.clone());
         let mut help = HelpPlugin::new();
         let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
@@ -78,6 +83,7 @@ impl UiState {
             palette: CommandPalette::new(),
             info: InfoOverlay::new(nominatim),
             map_frame: None,
+            theme_id,
             theme: Theme::from_palette(palette),
             attribution,
         }
@@ -202,13 +208,7 @@ mod tests {
     fn make_ui() -> UiState {
         let keymap = KeyMap::default();
         let config = Config::default();
-        UiState::new(
-            &config,
-            &crate::palette::DARK,
-            Arc::new(NominatimClient::new()),
-            None,
-            &keymap,
-        )
+        UiState::new(&config, Arc::new(NominatimClient::new()), None, &keymap)
     }
 
     #[test]

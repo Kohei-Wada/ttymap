@@ -12,10 +12,12 @@ use log::{debug, error, info};
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
 use crate::core::RenderRequest;
+use crate::styler::Styler;
 
 pub enum RenderCommand {
     Draw(RenderRequest),
     Resize { width: usize, height: usize },
+    SetStyler(Arc<Styler>),
     Shutdown,
 }
 
@@ -75,6 +77,15 @@ impl RenderHandle {
         }
     }
 
+    /// Hand a fresh `Styler` to the render thread. Processed in order
+    /// with `Draw` / `Resize`, so an in-flight frame at the old theme
+    /// never collides with one at the new theme.
+    pub fn set_styler(&self, styler: Arc<Styler>) {
+        if self.cmd_tx.send(RenderCommand::SetStyler(styler)).is_err() {
+            log::warn!("render thread channel closed on set_styler");
+        }
+    }
+
     pub fn shutdown(&mut self) {
         self.should_quit.store(true, Ordering::Relaxed);
         let _ = self.cmd_tx.send(RenderCommand::Shutdown);
@@ -100,6 +111,7 @@ fn drain_commands(
         match cmd_rx.try_recv() {
             Ok(RenderCommand::Draw(state)) => latest_draw = Some(state),
             Ok(RenderCommand::Resize { width, height }) => pipeline.resize(width, height),
+            Ok(RenderCommand::SetStyler(styler)) => pipeline.set_styler(styler),
             Ok(RenderCommand::Shutdown) => return Err(()),
             Err(_) => break,
         }
@@ -169,6 +181,7 @@ fn run_loop(
                 last_state = Some(state);
             }
             Ok(RenderCommand::Resize { width, height }) => pipeline.resize(width, height),
+            Ok(RenderCommand::SetStyler(styler)) => pipeline.set_styler(styler),
             Ok(RenderCommand::Shutdown) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
