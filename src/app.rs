@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
@@ -73,110 +73,12 @@ impl App {
         info!("event loop started");
         self.request_draw();
 
-        'main_loop: while self.map.is_running() {
-            // Drain completed render frames into UiState.
-            while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
-                self.ui.map_frame = Some(frame);
-            }
-
-            // Poll widgets with background fetches. A plugin may
-            // surface a deferred `Command` (e.g. the `here` plugin
-            // resolving a geoip lookup into `Command::Jump`); apply
-            // the latest one after the loop so we can still
-            // `&mut self` for the dispatcher + `request_draw`.
-            let mut async_cmd: Option<Command> = None;
-            for w in self.ui.widgets.iter_mut() {
-                w.poll();
-                if let Some(cmd) = w.pending_command() {
-                    async_cmd = Some(cmd);
-                }
-            }
-            if let Some(cmd) = async_cmd {
-                info!("plugin async command: {:?}", cmd);
-                let mut ctx = DispatchCtx {
-                    map: &mut self.map,
-                    ui: &mut self.ui,
-                    render_handle: &self.render_handle,
-                    keymap: self.keyboard.keymap(),
-                };
-                if let InputEffect::Map = command::dispatch(cmd, &mut ctx) {
-                    self.request_draw();
-                }
-            }
+        while self.map.is_running() {
+            self.drain_render_frames();
+            self.poll_widgets();
             self.ui.info.poll();
-
             self.draw_terminal(&mut terminal)?;
-
-            // Drain the whole input queue in one pass so a burst of key-repeat
-            // or mouse-drag events produces one redraw next iteration, not one
-            // draw per event. First poll blocks up to 4 ms so render-thread
-            // frame arrivals (which don't wake the event poll) show up within
-            // ~4 ms at worst; subsequent polls use zero timeout.
-            let mut poll_timeout = Duration::from_millis(4);
-            while event::poll(poll_timeout)? {
-                poll_timeout = Duration::from_millis(0);
-                match event::read()? {
-                    Event::Key(key_event) => {
-                        if key_event.modifiers.contains(KeyModifiers::CONTROL)
-                            && key_event.code == crossterm::event::KeyCode::Char('c')
-                        {
-                            info!("Ctrl-C received, quitting");
-                            self.map.stop();
-                            break 'main_loop;
-                        }
-
-                        debug!("key event: {:?}", key_event.code);
-                        let cmd = self.keyboard.handle(
-                            key_event.code,
-                            key_event.modifiers,
-                            &mut self.ui,
-                            self.map.center(),
-                        );
-                        if let Some(cmd) = cmd {
-                            let mut ctx = DispatchCtx {
-                                map: &mut self.map,
-                                ui: &mut self.ui,
-                                render_handle: &self.render_handle,
-                                keymap: self.keyboard.keymap(),
-                            };
-                            let effect = command::dispatch(cmd, &mut ctx);
-                            if let InputEffect::Map = effect
-                                && self.map.is_running()
-                            {
-                                self.request_draw();
-                            }
-                        }
-                    }
-                    Event::Resize(cols, rows) => {
-                        info!("resize: {}x{}", cols, rows);
-                        let mut ctx = DispatchCtx {
-                            map: &mut self.map,
-                            ui: &mut self.ui,
-                            render_handle: &self.render_handle,
-                            keymap: self.keyboard.keymap(),
-                        };
-                        if let InputEffect::Map =
-                            command::dispatch(Command::Resize(cols, rows), &mut ctx)
-                        {
-                            self.request_draw();
-                        }
-                    }
-                    Event::Mouse(mouse) => {
-                        if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
-                            let mut ctx = DispatchCtx {
-                                map: &mut self.map,
-                                ui: &mut self.ui,
-                                render_handle: &self.render_handle,
-                                keymap: self.keyboard.keymap(),
-                            };
-                            if let InputEffect::Map = command::dispatch(cmd, &mut ctx) {
-                                self.request_draw();
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            self.drain_input_events()?;
         }
 
         info!("event loop ended, shutting down render thread");
@@ -186,6 +88,99 @@ impl App {
         info!("terminal restored, exiting");
 
         Ok(())
+    }
+
+    /// Run a command through the controller, then request a new map
+    /// frame if the command changed map state. Single entry point for
+    /// every `dispatch(...)` call site so the ctx bundle and
+    /// post-dispatch redraw rule live in exactly one place.
+    fn dispatch(&mut self, cmd: Command) {
+        let effect = {
+            let mut ctx = DispatchCtx {
+                map: &mut self.map,
+                ui: &mut self.ui,
+                render_handle: &self.render_handle,
+                keymap: self.keyboard.keymap(),
+            };
+            command::dispatch(cmd, &mut ctx)
+        };
+        if matches!(effect, InputEffect::Map) && self.map.is_running() {
+            self.request_draw();
+        }
+    }
+
+    /// Pick up any `MapFrame` the render thread has produced since the
+    /// last tick and hand it to the UI for drawing.
+    fn drain_render_frames(&mut self) {
+        while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
+            self.ui.map_frame = Some(frame);
+        }
+    }
+
+    /// Poll every plugin for background work and dispatch any deferred
+    /// `Command` one emitted (e.g. the `here` plugin surfacing a
+    /// geoip-resolved `Command::Jump`). Only the latest pending
+    /// command is applied per tick.
+    fn poll_widgets(&mut self) {
+        let mut async_cmd: Option<Command> = None;
+        for w in self.ui.widgets.iter_mut() {
+            w.poll();
+            if let Some(cmd) = w.pending_command() {
+                async_cmd = Some(cmd);
+            }
+        }
+        if let Some(cmd) = async_cmd {
+            info!("plugin async command: {:?}", cmd);
+            self.dispatch(cmd);
+        }
+    }
+
+    /// Drain the whole input queue in one pass so a burst of key-repeat
+    /// or mouse-drag events produces one redraw next iteration, not
+    /// one draw per event. First poll blocks up to 4 ms so render-
+    /// thread frame arrivals (which don't wake the event poll) show
+    /// up within ~4 ms at worst; subsequent polls use zero timeout.
+    fn drain_input_events(&mut self) -> io::Result<()> {
+        let mut poll_timeout = Duration::from_millis(4);
+        while event::poll(poll_timeout)? {
+            poll_timeout = Duration::from_millis(0);
+            match event::read()? {
+                Event::Key(key_event) => self.handle_key_event(key_event),
+                Event::Resize(cols, rows) => {
+                    info!("resize: {}x{}", cols, rows);
+                    self.dispatch(Command::Resize(cols, rows));
+                }
+                Event::Mouse(mouse) => {
+                    if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
+                        self.dispatch(cmd);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Translate a key event into an optional `Command` via the
+    /// keyboard handler and dispatch it. Ctrl-C is handled as a
+    /// host-level safety valve, bypassing the keymap.
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && key_event.code == KeyCode::Char('c')
+        {
+            info!("Ctrl-C received, quitting");
+            self.map.stop();
+            return;
+        }
+        debug!("key event: {:?}", key_event.code);
+        if let Some(cmd) = self.keyboard.handle(
+            key_event.code,
+            key_event.modifiers,
+            &mut self.ui,
+            self.map.center(),
+        ) {
+            self.dispatch(cmd);
+        }
     }
 
     fn request_draw(&mut self) {
