@@ -53,6 +53,12 @@ pub trait Plugin {
     /// Built-ins return a `&'static str`; plugins supply their own.
     fn tag(&self) -> &str;
 
+    /// Short human-readable label used by the help overlay and other
+    /// introspection surfaces. Empty means "opt out of help listing".
+    fn description(&self) -> &str {
+        ""
+    }
+
     /// Key strings (parsed by `parse_key_binding`) that activate this
     /// widget. Registered at startup; the keyboard handler dispatches
     /// them to `activate` without going through the keymap.

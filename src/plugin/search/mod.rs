@@ -45,6 +45,10 @@ impl Plugin for SearchPlugin {
         "search"
     }
 
+    fn description(&self) -> &str {
+        "Search location"
+    }
+
     fn activation_keys(&self) -> Vec<&'static str> {
         vec!["/"]
     }

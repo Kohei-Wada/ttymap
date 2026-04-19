@@ -52,6 +52,10 @@ impl Plugin for WikiPlugin {
         "wiki"
     }
 
+    fn description(&self) -> &str {
+        "Toggle wiki"
+    }
+
     fn activation_keys(&self) -> Vec<&'static str> {
         vec!["i"]
     }

@@ -33,7 +33,16 @@ impl HelpPlugin {
         }
     }
 
-    pub fn build(&mut self, keymap: &KeyMap) {
+    /// Build the help text. `other_plugins` is inspected for each
+    /// plugin's activation keys + description, so the listing stays in
+    /// sync with the plugins actually loaded rather than a hardcoded
+    /// table in this file. Help includes its own entry automatically.
+    pub fn build(&mut self, keymap: &KeyMap, other_plugins: &[&dyn Plugin]) {
+        let entries: Vec<(String, String)> = plugin_entries(self)
+            .into_iter()
+            .chain(other_plugins.iter().flat_map(|p| plugin_entries(*p)))
+            .collect();
+
         let mut action_keys: HashMap<&str, Vec<String>> = HashMap::new();
 
         for (binding, action) in &keymap.bindings {
@@ -57,6 +66,9 @@ impl HelpPlugin {
         ];
 
         let mut lines = Vec::new();
+        lines.push(" A terminal-based map viewer — Mapbox vector tiles".to_string());
+        lines.push(" rendered as Unicode Braille.".to_string());
+        lines.push(String::new());
         for (action_name, description) in &display_order {
             if let Some(keys) = action_keys.get(action_name) {
                 let keys_str = keys.join(", ");
@@ -66,13 +78,15 @@ impl HelpPlugin {
 
         lines.push(String::new());
         lines.push(format!(" {:<20} {}", "gg", "Zoom to world"));
-        lines.push(format!(" {:<20} {}", "/", "Search location"));
-        lines.push(format!(" {:<20} {}", "i", "Toggle wiki"));
-        lines.push(format!(" {:<20} {}", "?", "Toggle help"));
+        lines.push(format!(" {:<20} {}", "Tab/S-Tab", "Cycle focus"));
+        for (key, description) in &entries {
+            lines.push(format!(" {:<20} {}", key, description));
+        }
         lines.push(String::new());
-        lines.push(" Mouse:".to_string());
-        lines.push(format!(" {:<20} {}", "Drag", "Pan"));
-        lines.push(format!(" {:<20} {}", "Scroll", "Zoom"));
+        lines.push(format!(" {:<20} {}", "Drag / Scroll", "Pan / zoom (mouse)"));
+        lines.push(String::new());
+        lines.push(" Bug reports and pull requests welcome:".to_string());
+        lines.push(" https://github.com/Kohei-Wada/ttymap".to_string());
 
         self.text = lines.join("\n");
     }
@@ -82,12 +96,16 @@ impl HelpPlugin {
             return;
         }
 
+        // Fit content with breathing room, but cap at ~80% of the map
+        // area so the popup doesn't dominate the viewport.
         let lines: Vec<&str> = self.text.lines().collect();
+        let content_width = lines.iter().map(|l| l.len() as u16).max().unwrap_or(30) + 6;
         let content_height = lines.len() as u16 + 2;
-        let content_width = lines.iter().map(|l| l.len() as u16).max().unwrap_or(30) + 4;
 
-        let popup_width = content_width.min(map_inner.width - 2);
-        let popup_height = content_height.min(map_inner.height - 2);
+        let max_width = map_inner.width.saturating_sub(4).max(20);
+        let max_height = map_inner.height.saturating_sub(2).max(10);
+        let popup_width = content_width.clamp(50, max_width);
+        let popup_height = content_height.min(max_height);
 
         let x = map_inner.x + (map_inner.width - popup_width) / 2;
         let y = map_inner.y + (map_inner.height - popup_height) / 2;
@@ -106,6 +124,10 @@ impl HelpPlugin {
 impl Plugin for HelpPlugin {
     fn tag(&self) -> &str {
         "help"
+    }
+
+    fn description(&self) -> &str {
+        "Toggle help"
     }
 
     fn activation_keys(&self) -> Vec<&'static str> {
@@ -150,6 +172,19 @@ impl Plugin for HelpPlugin {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("any key", "close")]
     }
+}
+
+/// `(activation_key, description)` pairs from one plugin. Empty
+/// description means the plugin opted out of help listing.
+fn plugin_entries(p: &dyn Plugin) -> Vec<(String, String)> {
+    let desc = p.description();
+    if desc.is_empty() {
+        return Vec::new();
+    }
+    p.activation_keys()
+        .into_iter()
+        .map(|k| (k.to_string(), desc.to_string()))
+        .collect()
 }
 
 fn action_label(action: &Action) -> &'static str {

@@ -49,14 +49,19 @@ impl UiState {
         attribution: Option<String>,
         keymap: &KeyMap,
     ) -> Self {
+        let search = SearchPlugin::new(nominatim.clone());
         let mut help = HelpPlugin::new();
-        help.build(keymap);
+        let wiki = WikiPlugin::new(language, wiki_limit);
+
+        // Help introspects the other plugins to list their activation
+        // keys, so it must build after they're constructed.
+        help.build(keymap, &[&search, &wiki]);
 
         let mut widgets = PluginRegistry::new();
         // Registration order = dispatch priority for action broadcasts.
-        widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
+        widgets.register(Box::new(search));
         widgets.register(Box::new(help));
-        widgets.register(Box::new(WikiPlugin::new(language, wiki_limit)));
+        widgets.register(Box::new(wiki));
 
         Self {
             focus: Focus::Map,
