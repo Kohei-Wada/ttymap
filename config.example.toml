@@ -26,6 +26,17 @@
 # Style preset ("dark" or "bright")
 # style = "dark"
 
+# Jump to IP-based current location on startup (default: false)
+# Can also be triggered per-run with the --here CLI flag.
+# here_on_startup = true
+
+# IP geolocation endpoint (default: "https://ipapi.co/json/")
+# Must return JSON with numeric "latitude" / "longitude" fields.
+# geoip_endpoint = "https://ipapi.co/json/"
+
+# Timeout for the IP geolocation request in milliseconds (default: 2000)
+# geoip_timeout_ms = 2000
+
 # Key bindings
 # Notation: "h" (character), "Left" (special key), "C-d" (Ctrl+d)
 # Special keys: Left, Right, Up, Down, Enter, Esc, Tab
