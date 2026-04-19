@@ -28,7 +28,7 @@ use crate::ui::action::UiAction;
 use crate::ui::palette::{CommandPalette, PaletteOutcome};
 
 use crate::config::Config;
-use crate::focus::{Focus, FocusManager};
+use crate::focus::{Focus, FocusEvent, FocusManager};
 use crate::keymap::KeyMap;
 use crate::map::render::frame::MapFrame;
 use crate::painter::MapPainter;
@@ -109,52 +109,51 @@ impl UiState {
         }
     }
 
-    /// Open the command palette with its default provider. Takes
-    /// focus; deactivates any previously focused plugin.
+    /// Open the command palette with its default provider. Palette
+    /// becomes visible; the focus manager takes focus in response to
+    /// the `PaletteOpened` event.
     pub fn open_palette(&mut self, keymap: &KeyMap) {
-        self.focus.deactivate_focused(&mut self.widgets, None);
         let theme_id = self.theme_id;
         self.palette.activate(&self.widgets, keymap, theme_id);
-        self.focus.take_palette();
+        self.focus.on(FocusEvent::PaletteOpened, &mut self.widgets);
     }
 
     /// Cycle keyboard focus across visible plugins. `true` = forward
     /// (Tab), `false` = backward (Shift-Tab). Returns whether the
-    /// focus actually moved.
+    /// focus actually moved. Tab is an explicit user intent, not a
+    /// reactive state change, so it stays a dedicated method rather
+    /// than riding `FocusEvent`.
     pub fn cycle_focus(&mut self, forward: bool) -> bool {
         self.focus.cycle(&mut self.widgets, forward)
     }
 
     /// Drive a plugin through an activation request (activation key,
     /// palette selection, or external command). Re-activating a
-    /// currently-focused plugin toggles it off. On first activation,
-    /// deactivates any previously focused plugin, brings this one to
-    /// front, lets it run its `activate` hook, and (if it claims it)
-    /// takes focus.
+    /// currently-focused plugin toggles it off. For first-time
+    /// activation, brings the plugin to the front and calls its
+    /// `activate` hook; the focus manager reacts to `PluginActivated`
+    /// and takes focus iff the plugin's `wants_focus` is true.
     pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
         // Toggle-off: re-activating the currently-focused plugin closes it.
         if self.focus.is_plugin(tag) {
             if let Some(w) = self.widgets.get_mut(tag) {
                 w.close();
             }
-            self.focus.release();
+            self.focus
+                .on(FocusEvent::PluginClosed(tag.to_string()), &mut self.widgets);
             return;
         }
 
         // Normal activation.
-        self.focus.deactivate_focused(&mut self.widgets, Some(tag));
         self.widgets.bring_to_front(tag);
-
-        let wants_focus = self.widgets.get(tag).is_some_and(|w| w.wants_focus());
-
         let mut ctx = PluginCtx { center };
         if let Some(w) = self.widgets.get_mut(tag) {
             w.activate(&mut ctx);
         }
-
-        if wants_focus {
-            self.focus.take(tag.to_string());
-        }
+        self.focus.on(
+            FocusEvent::PluginActivated(tag.to_string()),
+            &mut self.widgets,
+        );
     }
 
     /// Route a raw key event to the currently-focused surface. Owns
@@ -175,12 +174,13 @@ impl UiState {
         }
     }
 
-    /// Deliver a key to the palette. Auto-releases focus if
-    /// `handle_key` dropped visibility (e.g. Esc / Enter).
+    /// Deliver a key to the palette. Emits `PaletteClosed` if
+    /// `handle_key` dropped visibility (e.g. Esc / Enter); the focus
+    /// manager auto-releases in response.
     fn deliver_to_palette(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyDelivery {
         let outcome = self.palette.handle_key(code, modifiers);
-        if !self.palette.is_visible() && matches!(self.focus.current(), Focus::Palette) {
-            self.focus.release();
+        if !self.palette.is_visible() {
+            self.focus.on(FocusEvent::PaletteClosed, &mut self.widgets);
         }
         match outcome {
             PaletteOutcome::Consumed | PaletteOutcome::None => KeyDelivery::Consumed,
@@ -188,10 +188,11 @@ impl UiState {
         }
     }
 
-    /// Deliver a key to a focused plugin. Auto-releases focus if
-    /// `visible()` dropped during `handle_key`. `Pass` means "not my
-    /// key" → `Passthrough` so the host falls through to the global
-    /// fallback chain.
+    /// Deliver a key to a focused plugin. Emits `PluginClosed` if
+    /// `visible()` dropped during `handle_key`; the focus manager
+    /// auto-releases in response. `Pass` means "not my key" →
+    /// `Passthrough` so the host falls through to the global fallback
+    /// chain.
     fn deliver_to_plugin(
         &mut self,
         tag: &str,
@@ -205,8 +206,9 @@ impl UiState {
             None => PluginAction::Pass,
         };
         let still_visible = self.widgets.get(tag).is_some_and(|w| w.visible());
-        if !still_visible && self.focus.is_plugin(tag) {
-            self.focus.release();
+        if !still_visible {
+            self.focus
+                .on(FocusEvent::PluginClosed(tag.to_string()), &mut self.widgets);
         }
         match outcome {
             PluginAction::Pass => KeyDelivery::Passthrough,
