@@ -20,7 +20,7 @@ pub(super) enum KeyOutcome {
 }
 
 /// Wiki panel state — article list, current selection, detail view,
-/// visibility flag. Owned by `WikiWidget`; read by the side panel
+/// visibility flag. Owned by `WikiPlugin`; read by the side panel
 /// renderer and the map marker overlay.
 pub(super) struct WikiState {
     pub(super) active: bool,

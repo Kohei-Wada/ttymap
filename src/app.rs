@@ -25,7 +25,7 @@ use crate::ui::UiState;
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum InputEffect {
     None,
-    Widget,
+    Plugin,
     Map,
 }
 
@@ -173,7 +173,7 @@ impl App {
         // internally whether to act (e.g., place throttles to 5s).
         // Wiki is intentionally not notified — Google-Maps-style, the
         // article list stays pinned to the query that produced it.
-        if !self.ui.focus.is_widget("search") {
+        if !self.ui.focus.is_plugin("search") {
             self.ui.info.on_map_moved(state.center);
         }
     }

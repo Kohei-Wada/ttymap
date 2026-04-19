@@ -1,7 +1,7 @@
 //! Search widget — center popup for forward geocoding.
 //!
 //! Self-contained: owns its UI state, HTTP wrapper, and key dispatch.
-//! `app.rs` sees it only through the [`Widget`](super::Widget) trait.
+//! `app.rs` sees it only through the [`Plugin`](super::Plugin) trait.
 
 pub mod panel;
 mod service;
@@ -20,14 +20,14 @@ use crate::ui::theme::Theme;
 use service::SearchService;
 use state::{Outcome, SearchState};
 
-use super::{Widget, WidgetAction, WidgetCtx};
+use super::{Plugin, PluginAction, PluginCtx};
 
-pub struct SearchWidget {
-    pub(in crate::ui::widget::search) state: SearchState,
+pub struct SearchPlugin {
+    pub(in crate::plugin::search) state: SearchState,
     service: SearchService,
 }
 
-impl SearchWidget {
+impl SearchPlugin {
     pub fn new(nominatim: Arc<NominatimClient>) -> Self {
         Self {
             state: SearchState::new(),
@@ -40,7 +40,7 @@ impl SearchWidget {
     }
 }
 
-impl Widget for SearchWidget {
+impl Plugin for SearchPlugin {
     fn tag(&self) -> &str {
         "search"
     }
@@ -49,31 +49,35 @@ impl Widget for SearchWidget {
         vec!["/"]
     }
 
-    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
+    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
         self.state.open();
-        *ctx.focus = Focus::Widget("search".into());
+        *ctx.focus = Focus::Plugin("search".into());
     }
 
     fn deactivate(&mut self) {
         self.state.close();
     }
 
+    fn visible(&self) -> bool {
+        self.state.is_active()
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut WidgetCtx<'_>,
-    ) -> WidgetAction {
+        ctx: &mut PluginCtx<'_>,
+    ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
         if !self.state.is_active() {
             *ctx.focus = Focus::Map;
         }
         match outcome {
-            Outcome::None | Outcome::Consumed => WidgetAction::Consumed,
-            Outcome::Jump(loc) => WidgetAction::Jump(loc),
+            Outcome::None | Outcome::Consumed => PluginAction::Consumed,
+            Outcome::Jump(loc) => PluginAction::Jump(loc),
             Outcome::Submit(query) => {
                 self.service.search(&query);
-                WidgetAction::Consumed
+                PluginAction::Consumed
             }
         }
     }

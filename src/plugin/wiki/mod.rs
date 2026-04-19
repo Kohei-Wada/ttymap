@@ -2,7 +2,7 @@
 //! background fetcher that populates them.
 //!
 //! Self-contained: `app.rs` sees it only through the
-//! [`Widget`](super::Widget) trait. The HTTP client and async wrapper
+//! [`Plugin`](super::Plugin) trait. The HTTP client and async wrapper
 //! are private to this module.
 
 pub mod panel;
@@ -22,16 +22,16 @@ use crate::ui::theme::Theme;
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
 
-use super::{Widget, WidgetAction, WidgetCtx};
+use super::{Plugin, PluginAction, PluginCtx};
 use crate::ui::focus::Focus;
 
-pub struct WikiWidget {
-    pub(in crate::ui::widget::wiki) state: WikiState,
+pub struct WikiPlugin {
+    pub(in crate::plugin::wiki) state: WikiState,
     service: WikiService,
     throttle: Throttle,
 }
 
-impl WikiWidget {
+impl WikiPlugin {
     pub fn new(language: &str, limit: u32) -> Self {
         Self {
             state: WikiState::new(),
@@ -47,7 +47,7 @@ impl WikiWidget {
     }
 }
 
-impl Widget for WikiWidget {
+impl Plugin for WikiPlugin {
     fn tag(&self) -> &str {
         "wiki"
     }
@@ -56,29 +56,36 @@ impl Widget for WikiWidget {
         vec!["i"]
     }
 
-    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
-        // Focus, not internal state, is the source of truth for
-        // whether wiki is currently open.
-        if ctx.focus.is_widget("wiki") {
+    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
+        // Non-modal: visible and focus are independent.
+        if !self.state.is_active() {
+            // Not visible → open and take focus.
+            self.state.open();
+            self.refresh(ctx.center);
+            *ctx.focus = Focus::Plugin("wiki".into());
+        } else if ctx.focus.is_plugin("wiki") {
+            // Visible and focused → toggle off.
             self.state.close();
             *ctx.focus = Focus::Map;
         } else {
-            self.state.open();
-            self.refresh(ctx.center);
-            *ctx.focus = Focus::Widget("wiki".into());
+            // Visible but another plugin has focus → reclaim focus.
+            *ctx.focus = Focus::Plugin("wiki".into());
         }
     }
 
-    fn deactivate(&mut self) {
-        self.state.close();
+    // Non-modal: keep the panel visible when focus leaves. The
+    // default no-op is fine.
+
+    fn visible(&self) -> bool {
+        self.state.is_active()
     }
 
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut WidgetCtx<'_>,
-    ) -> WidgetAction {
+        ctx: &mut PluginCtx<'_>,
+    ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
         // Wiki is non-modal: the panel can close on its own (Esc while
         // not in detail view), in which case focus returns to the map.
@@ -86,12 +93,12 @@ impl Widget for WikiWidget {
             *ctx.focus = Focus::Map;
         }
         match outcome {
-            KeyOutcome::None => WidgetAction::Pass,
-            KeyOutcome::Consumed => WidgetAction::Consumed,
-            KeyOutcome::JumpTo(loc) => WidgetAction::Jump(loc),
+            KeyOutcome::None => PluginAction::Pass,
+            KeyOutcome::Consumed => PluginAction::Consumed,
+            KeyOutcome::JumpTo(loc) => PluginAction::Jump(loc),
             KeyOutcome::Refresh => {
                 self.refresh(ctx.center);
-                WidgetAction::Consumed
+                PluginAction::Consumed
             }
         }
     }

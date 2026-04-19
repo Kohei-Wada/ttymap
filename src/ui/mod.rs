@@ -5,7 +5,6 @@ pub mod map_view;
 pub mod overlay;
 pub mod painter;
 pub mod theme;
-pub mod widget;
 
 pub use focus::Focus;
 pub use painter::MapPainter;
@@ -20,10 +19,11 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 use theme::Theme;
-use widget::WidgetRegistry;
-use widget::help::HelpWidget;
-use widget::search::SearchWidget;
-use widget::wiki::WikiWidget;
+
+use crate::plugin::PluginRegistry;
+use crate::plugin::help::HelpPlugin;
+use crate::plugin::search::SearchPlugin;
+use crate::plugin::wiki::WikiPlugin;
 
 use crate::keymap::KeyMap;
 use crate::palette::Palette;
@@ -33,7 +33,7 @@ use crate::shared::nominatim::NominatimClient;
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
     pub focus: Focus,
-    pub widgets: WidgetRegistry,
+    pub widgets: PluginRegistry,
     pub info: InfoOverlay,
     pub map_frame: Option<MapFrame>,
     pub theme: Theme,
@@ -49,14 +49,14 @@ impl UiState {
         attribution: Option<String>,
         keymap: &KeyMap,
     ) -> Self {
-        let mut help = HelpWidget::new();
+        let mut help = HelpPlugin::new();
         help.build(keymap);
 
-        let mut widgets = WidgetRegistry::new();
+        let mut widgets = PluginRegistry::new();
         // Registration order = dispatch priority for action broadcasts.
-        widgets.register(Box::new(SearchWidget::new(nominatim.clone())));
+        widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
         widgets.register(Box::new(help));
-        widgets.register(Box::new(WikiWidget::new(language, wiki_limit)));
+        widgets.register(Box::new(WikiPlugin::new(language, wiki_limit)));
 
         Self {
             focus: Focus::Map,
@@ -76,7 +76,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     let map_area = chunks[0];
     let footer_area = chunks[1];
 
-    let map_focused = !ui.focus.is_widget("search");
+    let map_focused = !ui.focus.is_plugin("search");
     let border_color = if map_focused {
         ui.theme.accent
     } else {
@@ -112,13 +112,14 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         }
     }
 
-    // Modal panels render only while focused. This keeps focus the
-    // single source of truth — if a widget isn't focused, it isn't on
-    // screen regardless of any lingering internal state.
-    if let Focus::Widget(tag) = &ui.focus
-        && let Some(w) = ui.widgets.get(tag.as_ref())
-    {
-        w.render(f, map_inner, &ui.theme);
+    // Render every visible plugin panel. Non-modal plugins (wiki,
+    // weather, …) can stay on screen even while focus is elsewhere;
+    // modal plugins (search/help) self-close on deactivate so they
+    // only render while focused.
+    for w in ui.widgets.iter() {
+        if w.visible() {
+            w.render(f, map_inner, &ui.theme);
+        }
     }
 
     let hints = build_hints(ui);
@@ -143,7 +144,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused widget provides its own context-sensitive hints.
-    if let Focus::Widget(tag) = &ui.focus
+    if let Focus::Plugin(tag) = &ui.focus
         && let Some(w) = ui.widgets.get(tag.as_ref())
     {
         return w.footer_hints();
@@ -190,17 +191,17 @@ mod tests {
 
     #[test]
     fn test_ui_state_search_lifecycle() {
-        use crate::ui::widget::WidgetCtx;
+        use crate::plugin::PluginCtx;
         let ui = &mut make_ui();
         assert!(ui.focus == Focus::Map);
 
-        let mut ctx = WidgetCtx {
+        let mut ctx = PluginCtx {
             center: ZERO,
             focus: &mut ui.focus,
         };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(&mut ctx);
-        assert!(ctx.focus.is_widget("search"));
+        assert!(ctx.focus.is_plugin("search"));
 
         search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
         search.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);

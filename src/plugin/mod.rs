@@ -1,10 +1,10 @@
 //! UI widgets — self-contained components with their own state and rendering.
 //!
-//! Interactive widgets (search, help, wiki) implement the [`Widget`]
+//! Interactive widgets (search, help, wiki) implement the [`Plugin`]
 //! trait so `keyboard.rs` can dispatch events to them uniformly without
 //! hard-coding the per-widget `Action` mapping. Focus — which widget
 //! currently owns the keyboard — is tracked on `UiState.focus` and
-//! mutated through [`WidgetCtx::focus`] from handler methods.
+//! mutated through [`PluginCtx::focus`] from handler methods.
 
 pub mod help;
 pub mod search;
@@ -23,13 +23,13 @@ use crate::ui::theme::Theme;
 
 /// Outcome of a widget seeing a raw key event.
 #[derive(Debug, Clone, PartialEq)]
-pub enum WidgetAction {
+pub enum PluginAction {
     /// Key is not for this widget. Iteration should try the next widget
     /// and, if none claim it, the global keymap.
     Pass,
     /// Key consumed by the widget. App should redraw.
     Consumed,
-    /// Widget wants the map recentered on this location.
+    /// Plugin wants the map recentered on this location.
     Jump(LonLat),
 }
 
@@ -37,7 +37,7 @@ pub enum WidgetAction {
 /// the widget may need to read (current map center) or mutate (focus).
 /// Keeping this in a struct lets us grow the surface (e.g. a command
 /// queue, a notification channel) without resignalling every widget.
-pub struct WidgetCtx<'a> {
+pub struct PluginCtx<'a> {
     pub center: LonLat,
     pub focus: &'a mut Focus,
 }
@@ -48,8 +48,8 @@ pub struct WidgetCtx<'a> {
 /// handler iterates them in priority order and never inspects
 /// per-widget types. Focus is mutated through `ctx.focus` inside
 /// handler methods.
-pub trait Widget {
-    /// Stable identifier used by the registry and `Focus::Widget`.
+pub trait Plugin {
+    /// Stable identifier used by the registry and `Focus::Plugin`.
     /// Built-ins return a `&'static str`; plugins supply their own.
     fn tag(&self) -> &str;
 
@@ -62,14 +62,21 @@ pub trait Widget {
 
     /// Called when one of this widget's `activation_keys` is pressed.
     /// Default open/toggle/close semantics are the widget's own.
-    fn activate(&mut self, _ctx: &mut WidgetCtx<'_>) {}
+    fn activate(&mut self, _ctx: &mut PluginCtx<'_>) {}
 
-    /// Called when focus moves to a different widget via another
-    /// widget's activation key. Widgets should close / clear any
-    /// state that shouldn't outlive losing focus (e.g. wiki's article
-    /// list is kept, but its "panel is open" flag is cleared so
-    /// markers stop rendering).
+    /// Called when focus moves to a different plugin via another
+    /// plugin's activation key. Modal plugins (search, help) close
+    /// themselves here; non-modal plugins leave their window visible
+    /// and only release focus. Default is a no-op (non-modal).
     fn deactivate(&mut self) {}
+
+    /// Whether this plugin's window is currently on screen. The main
+    /// draw loop renders every plugin that reports `true`, regardless
+    /// of focus — so non-modal panels (weather, status, wiki) can
+    /// stay visible while the user is doing something else.
+    fn visible(&self) -> bool {
+        false
+    }
 
     /// Raw key event while this widget holds focus. The handler is
     /// only called when the dispatcher routes to it — widgets do not
@@ -80,8 +87,8 @@ pub trait Widget {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut WidgetCtx<'_>,
-    ) -> WidgetAction;
+        ctx: &mut PluginCtx<'_>,
+    ) -> PluginAction;
 
     /// Drain any async/background work. Returns `true` if state
     /// changed and the app should redraw.
@@ -111,12 +118,12 @@ pub trait Widget {
 /// startup; plugins register as they're loaded. Activation-key
 /// bindings declared by each widget are indexed here so the keyboard
 /// handler can look them up without knowing any widget name.
-pub struct WidgetRegistry {
-    widgets: IndexMap<String, Box<dyn Widget>>,
+pub struct PluginRegistry {
+    widgets: IndexMap<String, Box<dyn Plugin>>,
     activations: Vec<(KeyBinding, String)>,
 }
 
-impl WidgetRegistry {
+impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             widgets: IndexMap::new(),
@@ -124,10 +131,10 @@ impl WidgetRegistry {
         }
     }
 
-    /// Register a widget. The tag comes from `Widget::tag`; a
+    /// Register a widget. The tag comes from `Plugin::tag`; a
     /// duplicate tag replaces the prior entry. Each activation key
     /// the widget declares is recorded for later lookup.
-    pub fn register(&mut self, w: Box<dyn Widget>) {
+    pub fn register(&mut self, w: Box<dyn Plugin>) {
         let tag = w.tag().to_string();
         for key_str in w.activation_keys() {
             match parse_key_binding(key_str) {
@@ -147,32 +154,32 @@ impl WidgetRegistry {
             .map(|(_, tag)| tag.as_str())
     }
 
-    pub fn get<'a>(&'a self, tag: &str) -> Option<&'a (dyn Widget + 'a)> {
+    pub fn get<'a>(&'a self, tag: &str) -> Option<&'a (dyn Plugin + 'a)> {
         self.widgets
             .get(tag)
-            .map(|b| b.as_ref() as &(dyn Widget + 'a))
+            .map(|b| b.as_ref() as &(dyn Plugin + 'a))
     }
 
-    pub fn get_mut<'a>(&'a mut self, tag: &str) -> Option<&'a mut (dyn Widget + 'a)> {
+    pub fn get_mut<'a>(&'a mut self, tag: &str) -> Option<&'a mut (dyn Plugin + 'a)> {
         self.widgets
             .get_mut(tag)
-            .map(|b| b.as_mut() as &mut (dyn Widget + 'a))
+            .map(|b| b.as_mut() as &mut (dyn Plugin + 'a))
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a (dyn Widget + 'a)> + 'a {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a (dyn Plugin + 'a)> + 'a {
         self.widgets
             .values()
-            .map(|b| b.as_ref() as &(dyn Widget + 'a))
+            .map(|b| b.as_ref() as &(dyn Plugin + 'a))
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut (dyn Widget + 'a)> + 'a {
+    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut (dyn Plugin + 'a)> + 'a {
         self.widgets
             .values_mut()
-            .map(|b| b.as_mut() as &mut (dyn Widget + 'a))
+            .map(|b| b.as_mut() as &mut (dyn Plugin + 'a))
     }
 }
 
-impl Default for WidgetRegistry {
+impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
     }

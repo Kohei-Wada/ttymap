@@ -21,7 +21,7 @@ pub struct MouseHandler {
 impl MouseHandler {
     pub fn handle(&mut self, event: MouseEvent, core: &mut Core, ui: &mut UiState) -> InputEffect {
         // Search is modal — ignore mouse while its panel is open.
-        if ui.focus.is_widget("search") {
+        if ui.focus.is_plugin("search") {
             return InputEffect::None;
         }
 
@@ -36,7 +36,7 @@ impl MouseHandler {
         let dy = event.row as f64 - rows as f64 / 2.0;
 
         match event.kind {
-            MouseEventKind::Moved => InputEffect::Widget,
+            MouseEventKind::Moved => InputEffect::Plugin,
             MouseEventKind::Down(MouseButton::Left) => {
                 self.drag_from = Some((event.column, event.row));
                 InputEffect::None

@@ -1,5 +1,5 @@
 //! Map frame — structured cell data produced by the render pipeline.
-//! Widget implementation lives in ui/widget.rs.
+//! Plugin implementation lives in ui/widget.rs.
 
 use crate::geo::LonLat;
 

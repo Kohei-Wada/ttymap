@@ -34,7 +34,7 @@ impl KeyMap {
 
     /// Resolve a key event to an `Action`. Handles the `gg` sequence
     /// ahead of user-configurable bindings. Returns `Action::None`
-    /// while mid-sequence or when the key has no binding. Widget
+    /// while mid-sequence or when the key has no binding. Plugin
     /// activation (e.g. `/` opens search) is **not** handled here —
     /// widgets own their activation keys and the keyboard handler
     /// checks them before falling through to this resolver.

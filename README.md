@@ -16,7 +16,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Scale bar + attribution** — always on screen
 - **Help popup** — `?` shows all keybindings
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Plugin-ready widget API** — built-in widgets use the same trait plugins will
+- **Plugin API** — built-in features (search, help, wiki) use the same `Plugin` trait external plugins will
 
 ## Usage
 
@@ -91,6 +91,12 @@ src/
 │   ├── action.rs     Action enum (map-level only)
 │   └── state.rs      Core, CoreOptions, RenderRequest
 │
+├── plugin/           plugin API + built-in plugins (search, help, wiki)
+│   ├── mod.rs        Plugin trait, PluginCtx, PluginAction, PluginRegistry
+│   ├── help.rs
+│   ├── search/
+│   └── wiki/
+│
 ├── render/           tiles → MapFrame on a dedicated thread
 │   ├── pipeline.rs   RenderPipeline
 │   ├── thread.rs     RenderHandle
@@ -114,40 +120,34 @@ src/
 │   ├── nominatim.rs
 │   └── throttle.rs
 │
-└── ui/               terminal UI
+└── ui/               terminal UI framework
     ├── mod.rs        UiState + draw()
-    ├── focus.rs      Focus enum (Map | Widget(tag))
+    ├── focus.rs      Focus enum (Map | Plugin(tag))
     ├── map_view.rs   MapFrame ratatui adapter
-    ├── painter.rs    MapPainter — widgets' world-space drawing API
+    ├── painter.rs    MapPainter — plugins' world-space drawing API
     ├── theme.rs      UI color set
     │
-    ├── overlay/      built-in, always-on map decorations
-    │   ├── attribution.rs   © OpenStreetMap
-    │   ├── scale_bar.rs     distance ruler
-    │   └── info/            center/cursor/zoom/place readout
-    │       ├── mod.rs
-    │       └── service.rs   async reverse-geocoder
-    │
-    └── widget/       plugin API + built-in interactive widgets
-        ├── mod.rs    Widget trait, WidgetCtx, WidgetAction, WidgetRegistry
-        ├── help.rs
-        ├── search/
-        └── wiki/
+    └── overlay/      built-in, always-on map decorations
+        ├── attribution.rs   © OpenStreetMap
+        ├── scale_bar.rs     distance ruler
+        └── info/            center/cursor/zoom/place readout
+            ├── mod.rs
+            └── service.rs   async reverse-geocoder
 ```
 
 ### Layering
 
-- **`core/`** — domain state. Knows nothing about UI or widgets. `Action` only carries map-level commands (Pan, Zoom, Quit, ResetPosition, …); widget activation is a separate concern.
+- **`core/`** — domain state. Knows nothing about UI or plugins. `Action` only carries map-level commands (Pan, Zoom, Quit, ResetPosition, …); plugin activation is a separate concern.
 - **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
-- **`ui/widget/`** — the plugin surface. Built-in widgets (search, help, wiki) implement the `Widget` trait and are registered into the same `WidgetRegistry` that will host external plugins. The keyboard handler dispatches by focus + activation-key lookup, never by widget name.
+- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki) implement the `Plugin` trait and are registered into the same `PluginRegistry` that will host external plugins. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name.
 
 ### Input flow
 
 ```
 key event
   ↓ keyboard.handle():
-    [1] focused widget sees the key first
-    [2] registry activation lookup (widgets own their activation keys)
+    [1] focused plugin sees the key first
+    [2] registry activation lookup (plugins own their activation keys)
     [3] keymap.resolve(code, mods) → Action
     [4] core.process_action(&action)
 ```
@@ -166,29 +166,29 @@ mouse event
 main thread (ratatui draw):
   ui::draw(f, &ui):
     1. map_view renders the latest MapFrame
-    2. MapPainter set up; widgets.paint_on_map(painter)
+    2. MapPainter set up; plugins.paint_on_map(painter)
        — wiki plots article markers via painter.point(...)
     3. built-in overlays (info, attribution, scale_bar) stamp their
        rectangles onto the buffer
-    4. focused widget's panel (search popup / help / wiki)
-    5. footer hints from the focused widget (or default)
+    4. focused plugin's panel (search popup / help / wiki)
+    5. footer hints from the focused plugin (or default)
 ```
 
 Rendering is decoupled from fetching. The render thread produces a `MapFrame` from the current `RenderRequest`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
 
 ### Focus model
 
-`UiState.focus: Focus` is the single source of truth for which widget (if any) owns the keyboard. Widgets never carry their own `active` flag — rendering, hint selection, and modality all consult `focus`. Activating one widget implicitly `deactivate`s the previously-focused widget, so lingering state (wiki markers, etc.) is cleared.
+`UiState.focus: Focus` is the single source of truth for which plugin (if any) owns the keyboard. Plugins never carry their own `active` flag — rendering, hint selection, and modality all consult `focus`. Activating one plugin implicitly `deactivate`s the previously-focused plugin, so lingering state (wiki markers, etc.) is cleared.
 
-### Widget API (built-ins + plugins)
+### Plugin API (built-ins + external plugins)
 
 ```rust
-trait Widget {
+trait Plugin {
     fn tag(&self) -> &str;
     fn activation_keys(&self) -> Vec<&'static str>;
-    fn activate(&mut self, ctx: &mut WidgetCtx);
+    fn activate(&mut self, ctx: &mut PluginCtx);
     fn deactivate(&mut self);
-    fn handle_key(&mut self, code, mods, ctx) -> WidgetAction;
+    fn handle_key(&mut self, code, mods, ctx) -> PluginAction;
     fn poll(&mut self) -> bool;
     fn render(&self, f, area, theme);              // focused panel
     fn footer_hints(&self) -> Vec<(&str, &str)>;
@@ -196,7 +196,11 @@ trait Widget {
 }
 ```
 
-`MapPainter` hides projection, buffer, and theme behind primitives like `point(ll, glyph, fg)` — widgets never compute screen coordinates themselves.
+All methods except `tag` and `handle_key` have defaults, so a passive
+data-only plugin (e.g. a map-marker feed) can implement just `tag` +
+`paint_on_map` and skip the UI-heavy parts.
+
+`MapPainter` hides projection, buffer, and theme behind primitives like `point(ll, glyph, fg)` — plugins never compute screen coordinates themselves.
 
 ### Concurrency
 

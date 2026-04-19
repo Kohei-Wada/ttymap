@@ -12,21 +12,23 @@ use crate::keymap::KeyMap;
 use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
 
-use super::{Widget, WidgetAction, WidgetCtx};
+use super::{Plugin, PluginAction, PluginCtx};
 
-pub struct HelpWidget {
+pub struct HelpPlugin {
+    active: bool,
     text: String,
 }
 
-impl Default for HelpWidget {
+impl Default for HelpPlugin {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HelpWidget {
+impl HelpPlugin {
     pub fn new() -> Self {
         Self {
+            active: false,
             text: String::new(),
         }
     }
@@ -101,7 +103,7 @@ impl HelpWidget {
     }
 }
 
-impl Widget for HelpWidget {
+impl Plugin for HelpPlugin {
     fn tag(&self) -> &str {
         "help"
     }
@@ -110,27 +112,39 @@ impl Widget for HelpWidget {
         vec!["?"]
     }
 
-    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
-        *ctx.focus = if ctx.focus.is_widget("help") {
-            Focus::Map
+    fn activate(&mut self, ctx: &mut PluginCtx<'_>) {
+        if self.active {
+            self.active = false;
+            *ctx.focus = Focus::Map;
         } else {
-            Focus::Widget("help".into())
-        };
+            self.active = true;
+            *ctx.focus = Focus::Plugin("help".into());
+        }
+    }
+
+    fn deactivate(&mut self) {
+        // Modal: losing focus means closing.
+        self.active = false;
+    }
+
+    fn visible(&self) -> bool {
+        self.active
     }
 
     fn handle_key(
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        ctx: &mut WidgetCtx<'_>,
-    ) -> WidgetAction {
+        ctx: &mut PluginCtx<'_>,
+    ) -> PluginAction {
         // Help is modal and consumes any key, releasing focus.
+        self.active = false;
         *ctx.focus = Focus::Map;
-        WidgetAction::Consumed
+        PluginAction::Consumed
     }
 
     fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
-        HelpWidget::render(self, f, area, theme);
+        HelpPlugin::render(self, f, area, theme);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

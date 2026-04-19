@@ -28,6 +28,11 @@ pub(crate) mod keymap;
 /// matches the pattern used by helix and other Rust TUI apps.
 pub(crate) mod mouse;
 
+/// Plugin surface: the `Plugin` trait + `PluginRegistry` + built-in
+/// widget implementations (search, help, wiki) that dogfood the same
+/// trait external plugins will use.
+pub(crate) mod plugin;
+
 /// File-based logging to XDG state directory.
 pub mod logging;
 

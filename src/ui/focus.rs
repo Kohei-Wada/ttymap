@@ -1,6 +1,6 @@
 //! `Focus` — single source of truth for which widget (if any) has
 //! exclusive keyboard focus. Lives on `UiState`; mutated by widgets
-//! via `WidgetCtx::focus`, read by the dispatcher to route keys and by
+//! via `PluginCtx::focus`, read by the dispatcher to route keys and by
 //! layout code to decide border colour / modal visibility.
 
 use std::borrow::Cow;
@@ -9,11 +9,11 @@ use std::borrow::Cow;
 pub enum Focus {
     #[default]
     Map,
-    Widget(Cow<'static, str>),
+    Plugin(Cow<'static, str>),
 }
 
 impl Focus {
-    pub fn is_widget(&self, tag: &str) -> bool {
-        matches!(self, Focus::Widget(t) if t == tag)
+    pub fn is_plugin(&self, tag: &str) -> bool {
+        matches!(self, Focus::Plugin(t) if t == tag)
     }
 }

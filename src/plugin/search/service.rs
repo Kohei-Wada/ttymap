@@ -1,4 +1,4 @@
-//! Async wrapper around forward geocoding. Widget-internal.
+//! Async wrapper around forward geocoding. Plugin-internal.
 
 use std::sync::Arc;
 use std::sync::mpsc;
