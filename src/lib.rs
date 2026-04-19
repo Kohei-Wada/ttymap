@@ -16,6 +16,10 @@ pub mod config;
 /// Core state management — input, keymap, map state snapshots.
 pub mod core;
 
+/// Keyboard event handler — raw key dispatch to widgets + Action
+/// translation + fallback to core.
+pub(crate) mod keyboard;
+
 /// Mouse event handler — translates crossterm mouse events into
 /// core/UI updates. Key input lives elsewhere; keeping the two split
 /// matches the pattern used by helix and other Rust TUI apps.

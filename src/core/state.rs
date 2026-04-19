@@ -1,6 +1,6 @@
 use log::debug;
 
-use super::input::Action;
+use super::action::Action;
 use crate::geo::{self, LonLat};
 
 /// Snapshot of the map view handed to the render pipeline.

@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::input::Action;
+use super::action::Action;
 
 /// A key binding: a key code + optional modifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::core::input::Action;
+use crate::core::Action;
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;

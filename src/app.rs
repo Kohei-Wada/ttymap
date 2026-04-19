@@ -7,16 +7,16 @@ use log::{debug, info};
 use ratatui::DefaultTerminal;
 
 use crate::config::{Config, KeybindingOverrides};
-use crate::core::input::InputHandler;
 use crate::core::keymap::KeyMap;
 use crate::core::{Action, Core, CoreOptions};
+use crate::keyboard::KeyboardHandler;
 use crate::mouse::MouseHandler;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
 use crate::shared::nominatim::NominatimClient;
 use crate::styler::Styler;
 use crate::ui::UiState;
-use crate::ui::widget::{Widget, WidgetAction};
+use crate::ui::widget::Widget;
 
 /// What a key or mouse event just changed. Drives how the main loop
 /// reacts: a widget-only change redraws immediately (the map frame is
@@ -32,7 +32,7 @@ pub(crate) enum InputEffect {
 
 pub struct App {
     core: Core,
-    input: InputHandler,
+    keyboard: KeyboardHandler,
     render_handle: RenderHandle,
     ui: UiState,
     mouse: MouseHandler,
@@ -65,7 +65,6 @@ impl App {
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
 
         let keymap = build_keymap(&config.keymap);
-        let input = InputHandler::new(keymap);
         let core = Core::new(
             CoreOptions {
                 initial_lon: config.initial_lon,
@@ -78,11 +77,12 @@ impl App {
             height,
         );
         let render_handle = RenderHandle::spawn(pipeline);
-        ui.help.build(input.keymap());
+        let keyboard = KeyboardHandler::new(keymap);
+        ui.help.build(keyboard.keymap());
 
         App {
             core,
-            input,
+            keyboard,
             render_handle,
             ui,
             mouse: MouseHandler::default(),
@@ -128,9 +128,12 @@ impl App {
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        if let InputEffect::Map =
-                            self.handle_key(key_event.code, key_event.modifiers)
-                            && self.core.is_running()
+                        if let InputEffect::Map = self.keyboard.handle(
+                            key_event.code,
+                            key_event.modifiers,
+                            &mut self.core,
+                            &mut self.ui,
+                        ) && self.core.is_running()
                         {
                             self.request_draw();
                         }
@@ -161,37 +164,6 @@ impl App {
         info!("terminal restored, exiting");
 
         Ok(())
-    }
-
-    fn handle_key(
-        &mut self,
-        code: crossterm::event::KeyCode,
-        modifiers: KeyModifiers,
-    ) -> InputEffect {
-        let center = self.core.center();
-        for widget in self.ui.widgets_mut() {
-            match widget.handle_key(code, modifiers, center) {
-                WidgetAction::Pass => continue,
-                WidgetAction::Consumed => return InputEffect::Widget,
-                WidgetAction::Jump(location) => {
-                    info!("widget: jumping to ({}, {})", location.lat, location.lon);
-                    self.core.jump_to(location);
-                    return InputEffect::Map;
-                }
-            }
-        }
-
-        let action = self.input.handle_key(code, modifiers);
-        for widget in self.ui.widgets_mut() {
-            if widget.handle_action(&action, center) {
-                return InputEffect::Widget;
-            }
-        }
-        if self.core.process_action(&action) {
-            InputEffect::Map
-        } else {
-            InputEffect::None
-        }
     }
 
     fn request_draw(&mut self) {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::core::input::Action;
+use crate::core::Action;
 use crate::geo::LonLat;
 use crate::shared::nominatim::NominatimClient;
 

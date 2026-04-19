@@ -12,7 +12,7 @@ pub mod wiki;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::core::input::Action;
+use crate::core::Action;
 use crate::geo::LonLat;
 
 /// Outcome of a widget seeing a raw key event.

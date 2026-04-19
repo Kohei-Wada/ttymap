@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::core::input::Action;
+use crate::core::Action;
 use crate::core::keymap::KeyMap;
 use crate::geo::LonLat;
 use crate::ui::theme::Theme;

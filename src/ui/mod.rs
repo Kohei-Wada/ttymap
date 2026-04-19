@@ -168,7 +168,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::input::Action;
+    use crate::core::Action;
     use crate::geo::LonLat;
     use crate::render::frame::{MapCell, MapFrame};
     use crossterm::event::{KeyCode, KeyModifiers};
