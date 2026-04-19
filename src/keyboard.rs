@@ -61,16 +61,12 @@ impl KeyboardHandler {
         }
 
         // 2. Focus cycling keys. The focused plugin gets these first
-        //    via step 1 — wiki consumes C-j/C-k for article nav,
-        //    search swallows Tab in its query, etc. When focus is
-        //    elsewhere (or the focused plugin passes), cycle focus
-        //    through visible plugins.
-        let ctrl = modifiers == KeyModifiers::CONTROL;
-        let forward_cycle = (code == KeyCode::Tab && modifiers == KeyModifiers::NONE)
-            || (ctrl && code == KeyCode::Char('j'));
+        //    via step 1 — search swallows Tab in its query, etc. When
+        //    focus is elsewhere (or the focused plugin passes), cycle
+        //    focus through visible plugins.
+        let forward_cycle = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
         let backward_cycle = code == KeyCode::BackTab
-            || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT))
-            || (ctrl && code == KeyCode::Char('k'));
+            || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
         if forward_cycle {
             return cycle_focus(ui, true);
         }

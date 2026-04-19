@@ -90,15 +90,6 @@ impl App {
     pub fn run(&mut self) -> io::Result<()> {
         let mut terminal = ratatui::init();
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
-        // Ask the terminal to disambiguate C-j/Enter, C-i/Tab, etc.
-        // when it supports the kitty keyboard protocol; ignored by
-        // older terminals.
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::event::PushKeyboardEnhancementFlags(
-                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
-            )
-        );
 
         info!("event loop started");
         self.request_draw();
