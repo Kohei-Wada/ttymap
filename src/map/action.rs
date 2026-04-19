@@ -23,4 +23,16 @@ pub enum Action {
     ZoomToWorld,
     ResetPosition,
     Redraw,
+    /// Continuous pan by terminal-cell deltas — produced by mouse drag.
+    /// `Pan*` above are discrete, keybinding-friendly steps; this is
+    /// the arbitrary-delta version the mouse needs.
+    PanCells(i16, i16),
+    /// Zoom toward a screen anchor — produced by mouse scroll wheel.
+    /// The anchor is expressed in cells relative to screen center;
+    /// `zoom_in == true` zooms in by one step, else out.
+    ZoomAt {
+        anchor_dx: f64,
+        anchor_dy: f64,
+        zoom_in: bool,
+    },
 }

@@ -148,10 +148,17 @@ impl App {
                         self.request_draw();
                     }
                     Event::Mouse(mouse) => {
-                        if let InputEffect::Map =
-                            self.mouse.handle(mouse, &mut self.map, &mut self.ui)
-                        {
-                            self.request_draw();
+                        if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
+                            let effect = command::dispatch(
+                                cmd,
+                                &mut self.map,
+                                &mut self.ui,
+                                &self.render_handle,
+                                self.keyboard.keymap(),
+                            );
+                            if let InputEffect::Map = effect {
+                                self.request_draw();
+                            }
                         }
                     }
                     _ => {}

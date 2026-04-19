@@ -128,6 +128,22 @@ impl MapState {
                 self.center != old_center || self.zoom != old_zoom
             }
             Action::Redraw => true,
+            Action::PanCells(dx, dy) => {
+                let old = self.center;
+                self.pan_by_cells(*dx, *dy);
+                self.center != old
+            }
+            Action::ZoomAt {
+                anchor_dx,
+                anchor_dy,
+                zoom_in,
+            } => {
+                let delta = if *zoom_in { zoom_step } else { -zoom_step };
+                let old_zoom = self.zoom;
+                let old_center = self.center;
+                self.zoom_towards(*anchor_dx, *anchor_dy, delta);
+                self.zoom != old_zoom || self.center != old_center
+            }
         }
     }
 
