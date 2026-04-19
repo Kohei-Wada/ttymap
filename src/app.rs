@@ -7,13 +7,13 @@ use log::{debug, info};
 use ratatui::DefaultTerminal;
 
 use crate::config::Config;
-use crate::keyboard::KeyboardHandler;
+use crate::input::keyboard::KeyboardHandler;
+use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::{RenderHandle, RenderResult};
 use crate::map::styler::Styler;
 use crate::map::{MapState, MapStateOptions};
-use crate::mouse::MouseHandler;
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::UiState;
 

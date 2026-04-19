@@ -34,17 +34,13 @@ pub(crate) mod theme;
 /// for the same cycle-avoidance reason as `theme`.
 pub(crate) mod painter;
 
-/// Keyboard event handler — raw key dispatch to widgets + Action
-/// translation + fallback to map.
-pub(crate) mod keyboard;
+/// Input dispatchers — keyboard (focus-first + keymap fallback) and
+/// mouse (modal-gated map interaction). Kept intentionally separate
+/// inside this module; see `input/mod.rs` for rationale.
+pub(crate) mod input;
 
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
-
-/// Mouse event handler — translates crossterm mouse events into
-/// map/UI updates. Key input lives elsewhere; keeping the two split
-/// matches the pattern used by helix and other Rust TUI apps.
-pub(crate) mod mouse;
 
 /// Plugin surface: the `Plugin` trait + `PluginRegistry` + built-in
 /// widget implementations (search, help, wiki) that dogfood the same
