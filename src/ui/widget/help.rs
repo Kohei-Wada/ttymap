@@ -8,8 +8,8 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::Action;
-use crate::core::keymap::KeyMap;
 use crate::geo::LonLat;
+use crate::keymap::KeyMap;
 use crate::ui::theme::Theme;
 
 use super::{Widget, WidgetAction};
@@ -150,7 +150,7 @@ fn action_label(action: &Action) -> &'static str {
     }
 }
 
-fn format_binding(binding: &crate::core::keymap::KeyBinding) -> String {
+fn format_binding(binding: &crate::keymap::KeyBinding) -> String {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     let key = match binding.code {

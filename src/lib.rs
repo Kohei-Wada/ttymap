@@ -20,6 +20,9 @@ pub mod core;
 /// translation + fallback to core.
 pub(crate) mod keyboard;
 
+/// Key binding table and TOML override shape.
+pub(crate) mod keymap;
+
 /// Mouse event handler — translates crossterm mouse events into
 /// core/UI updates. Key input lives elsewhere; keeping the two split
 /// matches the pattern used by helix and other Rust TUI apps.

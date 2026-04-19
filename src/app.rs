@@ -6,10 +6,10 @@ use crossterm::event::{self, Event, KeyModifiers};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
-use crate::config::{Config, KeybindingOverrides};
-use crate::core::keymap::KeyMap;
-use crate::core::{Action, Core, CoreOptions};
+use crate::config::Config;
+use crate::core::{Core, CoreOptions};
 use crate::keyboard::KeyboardHandler;
+use crate::keymap::KeyMap;
 use crate::mouse::MouseHandler;
 use crate::render::pipeline::RenderPipeline;
 use crate::render::thread::{RenderHandle, RenderResult};
@@ -64,7 +64,7 @@ impl App {
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
 
-        let keymap = build_keymap(&config.keymap);
+        let keymap = KeyMap::with_overrides(&config.keymap);
         let core = Core::new(
             CoreOptions {
                 initial_lon: config.initial_lon,
@@ -208,74 +208,4 @@ fn build_tile_cache(config: &Config) -> (crate::tile::TileCache, Option<String>)
         crate::tile::TileCache::new(boxed, rx, config.cache_tiles),
         attribution,
     )
-}
-
-/// Apply `[keymap]` overrides from config onto the default `KeyMap`.
-/// Each field in `KeybindingOverrides` names an `Action`; the listed key strings
-/// replace any default bindings for that action. Invalid key strings
-/// are skipped (logged at warn level by `KeyMap::set_bindings`).
-fn build_keymap(overrides: &KeybindingOverrides) -> KeyMap {
-    let mut km = KeyMap::default();
-
-    macro_rules! rebind {
-        ($field:ident, $action:expr) => {
-            if let Some(keys) = &overrides.$field {
-                km.set_bindings($action, keys);
-            }
-        };
-    }
-
-    rebind!(pan_left, Action::PanLeft);
-    rebind!(pan_right, Action::PanRight);
-    rebind!(pan_up, Action::PanUp);
-    rebind!(pan_down, Action::PanDown);
-    rebind!(pan_left_fast, Action::PanLeftFast);
-    rebind!(pan_right_fast, Action::PanRightFast);
-    rebind!(pan_up_half, Action::PanUpHalf);
-    rebind!(pan_down_half, Action::PanDownHalf);
-    rebind!(zoom_in, Action::ZoomIn);
-    rebind!(zoom_out, Action::ZoomOut);
-    rebind!(zoom_to_world, Action::ZoomToWorld);
-    rebind!(reset_position, Action::ResetPosition);
-    rebind!(quit, Action::Quit);
-
-    km
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::{KeyCode, KeyModifiers};
-
-    #[test]
-    fn build_keymap_applies_overrides() {
-        let mut overrides = KeybindingOverrides::default();
-        overrides.zoom_in = Some(vec!["i".to_string()]);
-        overrides.quit = Some(vec!["Q".to_string(), "C-q".to_string()]);
-
-        let km = build_keymap(&overrides);
-
-        assert_eq!(
-            km.lookup(KeyCode::Char('i'), KeyModifiers::NONE),
-            Some(&Action::ZoomIn)
-        );
-        assert_eq!(
-            km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
-            Some(&Action::Quit)
-        );
-        assert_eq!(
-            km.lookup(KeyCode::Char('q'), KeyModifiers::CONTROL),
-            Some(&Action::Quit)
-        );
-    }
-
-    #[test]
-    fn build_keymap_keeps_unoverridden_defaults() {
-        let km = build_keymap(&KeybindingOverrides::default());
-        // 'h' is a default PanLeft binding.
-        assert_eq!(
-            km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&Action::PanLeft)
-        );
-    }
 }

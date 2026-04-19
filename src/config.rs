@@ -3,15 +3,17 @@
 //! to `Config::default()` via `#[serde(default)]`, so a partially
 //! written `config.toml` picks up sane values for everything else.
 //!
-//! Resolution of raw keybindings into a concrete `KeyMap` lives in the
-//! app layer (`app.rs::build_keymap`); this module stays focused on
-//! "parse TOML into ergonomic data".
+//! The `[keymap]` section deserialises into `KeybindingOverrides`
+//! (defined in `keymap.rs` alongside the `KeyMap` it configures);
+//! this module stays focused on "parse TOML into ergonomic data".
 
 use std::fs;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use serde::Deserialize;
+
+pub use crate::keymap::KeybindingOverrides;
 
 #[derive(Deserialize)]
 #[serde(default)]
@@ -74,27 +76,6 @@ pub fn load_config() -> Config {
 fn config_path() -> Option<PathBuf> {
     let dirs = ProjectDirs::from("", "", "ttymap")?;
     Some(dirs.config_dir().join("config.toml"))
-}
-
-/// Raw keybinding overrides from the `[keymap]` section of
-/// `config.toml`. Each field names an `Action`; the listed key strings
-/// replace the default bindings for that action. `app.rs::build_keymap`
-/// resolves this into a `KeyMap`.
-#[derive(Deserialize, Default, Clone)]
-pub struct KeybindingOverrides {
-    pub pan_left: Option<Vec<String>>,
-    pub pan_right: Option<Vec<String>>,
-    pub pan_up: Option<Vec<String>>,
-    pub pan_down: Option<Vec<String>>,
-    pub pan_left_fast: Option<Vec<String>>,
-    pub pan_right_fast: Option<Vec<String>>,
-    pub pan_up_half: Option<Vec<String>>,
-    pub pan_down_half: Option<Vec<String>>,
-    pub zoom_in: Option<Vec<String>>,
-    pub zoom_out: Option<Vec<String>>,
-    pub zoom_to_world: Option<Vec<String>>,
-    pub reset_position: Option<Vec<String>>,
-    pub quit: Option<Vec<String>>,
 }
 
 #[cfg(test)]
