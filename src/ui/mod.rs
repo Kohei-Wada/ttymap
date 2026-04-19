@@ -1,10 +1,12 @@
 //! UI layer — widget state and screen rendering.
 
 pub mod focus;
+pub mod painter;
 pub mod theme;
 pub mod widget;
 
 pub use focus::Focus;
+pub use painter::MapPainter;
 
 use std::sync::Arc;
 
@@ -17,9 +19,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use theme::Theme;
 use widget::WidgetRegistry;
 use widget::help::HelpWidget;
-use widget::overlay::{
-    AttributionOverlay, InfoOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay,
-};
+use widget::overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 use widget::search::SearchWidget;
 use widget::wiki::WikiWidget;
 
@@ -89,19 +89,22 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
 
-        // Gather marker points from every widget that supplies any.
-        let widget_markers: Vec<_> = ui
-            .widgets
-            .iter()
-            .flat_map(|w| w.markers(&ui.theme))
-            .collect();
-        let markers = MarkersOverlay {
-            points: &widget_markers,
-        };
+        // Widgets paint world-space primitives (markers, labels, …)
+        // via a single `MapPainter` exposed by the UI framework.
+        {
+            let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, &ui.theme);
+            for w in ui.widgets.iter() {
+                w.paint_on_map(&mut painter);
+            }
+        }
+
+        // Built-in overlays (info / attribution / scale-bar) stay as
+        // typed fields: they're part of the map-viewer identity, not
+        // plugin extensions.
         let attribution = AttributionOverlay {
             text: ui.attribution.as_deref().unwrap_or(""),
         };
-        let overlays: [&dyn MapOverlay; 4] = [&markers, &ui.info, &ScaleBarOverlay, &attribution];
+        let overlays: [&dyn MapOverlay; 3] = [&ui.info, &ScaleBarOverlay, &attribution];
         for overlay in overlays {
             overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
         }

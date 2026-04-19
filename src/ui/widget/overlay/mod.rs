@@ -1,15 +1,10 @@
-//! Map overlay layer abstraction and the concrete pure-overlay widgets.
+//! Built-in map overlays — part of the map-viewer identity, not
+//! plugin territory. Info, attribution, and scale-bar are always on
+//! screen; they implement [`MapOverlay`] and stamp themselves onto the
+//! ratatui buffer after the base map.
 //!
-//! The map widget renders the base map and stops. Anything drawn on top —
-//! wiki markers, scale bar, future route/traffic layers — implements
-//! [`MapOverlay`] and gets stamped onto the same buffer after the map in
-//! the layout pass. Adding a new overlay means implementing the trait,
-//! not touching the map widget. Designed like Google Maps' layer stack:
-//! base map + independently toggle-able overlays.
-//!
-//! Domain widgets with per-point markers (wiki, future POI types)
-//! adapt their state into `Vec<MarkerPoint>` and plug it into the
-//! shared [`MarkersOverlay`]; no per-domain overlay impl needed.
+//! World-space primitives contributed by widgets (e.g. wiki markers)
+//! go through [`crate::ui::painter::MapPainter`], not an overlay.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -19,13 +14,11 @@ use crate::ui::theme::Theme;
 
 pub mod attribution;
 pub mod info;
-pub mod markers;
 mod place_service;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;
 pub use info::InfoOverlay;
-pub use markers::{MarkerPoint, MarkersOverlay};
 pub use scale_bar::ScaleBarOverlay;
 
 /// A drawable layer stamped on top of the rendered map.

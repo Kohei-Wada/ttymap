@@ -18,7 +18,6 @@ use log::debug;
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;
-use crate::ui::widget::overlay::MarkerPoint;
 
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
@@ -132,24 +131,28 @@ impl Widget for WikiWidget {
         }
     }
 
-    fn markers(&self, theme: &Theme) -> Vec<MarkerPoint> {
+    fn paint_on_map(&self, p: &mut crate::ui::painter::MapPainter<'_>) {
         if !self.state.is_active() {
-            return Vec::new();
+            return;
         }
-        self.state
-            .articles
-            .iter()
-            .enumerate()
-            .map(|(i, a)| MarkerPoint {
-                lon: a.lon,
-                lat: a.lat,
-                glyph: '●',
-                fg: if i == self.state.selected {
-                    theme.accent_alt
-                } else {
-                    theme.accent
+        let (primary, accent) = {
+            let theme = p.theme();
+            (theme.accent, theme.accent_alt)
+        };
+        for (i, a) in self.state.articles.iter().enumerate() {
+            let fg = if i == self.state.selected {
+                accent
+            } else {
+                primary
+            };
+            p.point(
+                crate::geo::LonLat {
+                    lon: a.lon,
+                    lat: a.lat,
                 },
-            })
-            .collect()
+                '●',
+                fg,
+            );
+        }
     }
 }

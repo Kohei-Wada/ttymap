@@ -20,8 +20,8 @@ use ratatui::layout::Rect;
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::ui::focus::Focus;
+use crate::ui::painter::MapPainter;
 use crate::ui::theme::Theme;
-use crate::ui::widget::overlay::MarkerPoint;
 
 /// Outcome of a widget seeing a raw key event.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,12 +102,11 @@ pub trait Widget {
         Vec::new()
     }
 
-    /// Marker points this widget wants drawn on the map. Always
-    /// queried (not gated by focus) so e.g. wiki markers stay visible
-    /// while the user is searching.
-    fn markers(&self, _theme: &Theme) -> Vec<MarkerPoint> {
-        Vec::new()
-    }
+    /// Paint primitives on the map via the supplied `MapPainter`.
+    /// Always called during the draw phase, regardless of focus — a
+    /// widget can leave its markers on the map even while another
+    /// widget holds the keyboard.
+    fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
 }
 
 /// Ordered registry of interactive widgets. Built-ins register at app
