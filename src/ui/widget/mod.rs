@@ -17,8 +17,8 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::core::Action;
 use crate::geo::LonLat;
+use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
 use crate::ui::widget::overlay::MarkerPoint;
@@ -51,6 +51,28 @@ pub struct WidgetCtx<'a> {
 /// per-widget types. Focus is mutated through `ctx.focus` inside
 /// handler methods.
 pub trait Widget {
+    /// Stable identifier used by the registry and `Focus::Widget`.
+    /// Built-ins return a `&'static str`; plugins supply their own.
+    fn tag(&self) -> &str;
+
+    /// Key strings (parsed by `parse_key_binding`) that activate this
+    /// widget. Registered at startup; the keyboard handler dispatches
+    /// them to `activate` without going through the keymap.
+    fn activation_keys(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Called when one of this widget's `activation_keys` is pressed.
+    /// Default open/toggle/close semantics are the widget's own.
+    fn activate(&mut self, _ctx: &mut WidgetCtx<'_>) {}
+
+    /// Called when focus moves to a different widget via another
+    /// widget's activation key. Widgets should close / clear any
+    /// state that shouldn't outlive losing focus (e.g. wiki's article
+    /// list is kept, but its "panel is open" flag is cleared so
+    /// markers stop rendering).
+    fn deactivate(&mut self) {}
+
     /// Raw key event while this widget holds focus. The handler is
     /// only called when the dispatcher routes to it — widgets do not
     /// need to self-gate. Return `Pass` only when the key is
@@ -63,20 +85,11 @@ pub trait Widget {
         ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction;
 
-    /// A global [`Action`] produced by the keymap. Returns `true` if
-    /// the widget claimed it (e.g. `SearchOpen` on `SearchWidget`).
-    /// Widgets typically transition `ctx.focus` here.
-    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool;
-
     /// Drain any async/background work. Returns `true` if state
     /// changed and the app should redraw.
     fn poll(&mut self) -> bool {
         false
     }
-
-    /// Stable identifier used by the registry and `Focus::Widget`.
-    /// Built-ins return a `&'static str`; plugins supply their own.
-    fn tag(&self) -> &str;
 
     /// Render the widget's modal panel. Called only when the widget
     /// holds focus; widgets that don't have a panel leave this as a
@@ -98,24 +111,43 @@ pub trait Widget {
 }
 
 /// Ordered registry of interactive widgets. Built-ins register at app
-/// startup; plugins register as they're loaded. Insertion order is the
-/// dispatch priority for action broadcasts.
+/// startup; plugins register as they're loaded. Activation-key
+/// bindings declared by each widget are indexed here so the keyboard
+/// handler can look them up without knowing any widget name.
 pub struct WidgetRegistry {
     widgets: IndexMap<String, Box<dyn Widget>>,
+    activations: Vec<(KeyBinding, String)>,
 }
 
 impl WidgetRegistry {
     pub fn new() -> Self {
         Self {
             widgets: IndexMap::new(),
+            activations: Vec::new(),
         }
     }
 
     /// Register a widget. The tag comes from `Widget::tag`; a
-    /// duplicate tag replaces the prior entry.
+    /// duplicate tag replaces the prior entry. Each activation key
+    /// the widget declares is recorded for later lookup.
     pub fn register(&mut self, w: Box<dyn Widget>) {
         let tag = w.tag().to_string();
+        for key_str in w.activation_keys() {
+            match parse_key_binding(key_str) {
+                Some(binding) => self.activations.push((binding, tag.clone())),
+                None => log::warn!("invalid activation key {:?} for widget {:?}", key_str, tag),
+            }
+        }
         self.widgets.insert(tag, w);
+    }
+
+    /// Return the tag of the widget that claims this key, if any.
+    pub fn activation_tag(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&str> {
+        let clean_mods = modifiers & !KeyModifiers::SHIFT;
+        self.activations
+            .iter()
+            .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
+            .map(|(_, tag)| tag.as_str())
     }
 
     pub fn get<'a>(&'a self, tag: &str) -> Option<&'a (dyn Widget + 'a)> {

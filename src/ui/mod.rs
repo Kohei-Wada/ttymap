@@ -158,7 +158,6 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Action;
     use crate::geo::LonLat;
     use crate::render::frame::{MapCell, MapFrame};
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -195,7 +194,7 @@ mod tests {
             focus: &mut ui.focus,
         };
         let search = ui.widgets.get_mut("search").unwrap();
-        assert!(search.handle_action(&Action::SearchOpen, &mut ctx));
+        search.activate(&mut ctx);
         assert!(ctx.focus.is_widget("search"));
 
         search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);

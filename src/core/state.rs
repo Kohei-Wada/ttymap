@@ -88,7 +88,7 @@ impl Core {
         let max_zoom = self.max_zoom;
 
         match action {
-            Action::None | Action::SearchOpen | Action::HelpToggle | Action::WikiToggle => false,
+            Action::None => false,
             Action::Quit => {
                 debug!("action: Quit");
                 self.running = false;

@@ -55,6 +55,13 @@ impl SearchState {
         self.active = true;
     }
 
+    pub(super) fn close(&mut self) {
+        self.query.clear();
+        self.candidates.clear();
+        self.selected = 0;
+        self.active = false;
+    }
+
     pub(super) fn set_candidates(&mut self, candidates: Vec<SearchResult>) {
         self.candidates = candidates;
         self.selected = 0;

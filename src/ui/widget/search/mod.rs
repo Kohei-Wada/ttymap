@@ -13,7 +13,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::core::Action;
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
@@ -42,6 +41,23 @@ impl SearchWidget {
 }
 
 impl Widget for SearchWidget {
+    fn tag(&self) -> &str {
+        "search"
+    }
+
+    fn activation_keys(&self) -> Vec<&'static str> {
+        vec!["/"]
+    }
+
+    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
+        self.state.open();
+        *ctx.focus = Focus::Widget("search".into());
+    }
+
+    fn deactivate(&mut self) {
+        self.state.close();
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
@@ -49,7 +65,6 @@ impl Widget for SearchWidget {
         ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction {
         let outcome = self.state.handle_key(code, modifiers);
-        // Any outcome that closes the panel also releases focus.
         if !self.state.is_active() {
             *ctx.focus = Focus::Map;
         }
@@ -63,16 +78,6 @@ impl Widget for SearchWidget {
         }
     }
 
-    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
-        if *action == Action::SearchOpen {
-            self.state.open();
-            *ctx.focus = Focus::Widget("search".into());
-            true
-        } else {
-            false
-        }
-    }
-
     fn poll(&mut self) -> bool {
         if let Some(results) = self.service.poll() {
             self.state.set_candidates(results);
@@ -80,10 +85,6 @@ impl Widget for SearchWidget {
         } else {
             false
         }
-    }
-
-    fn tag(&self) -> &str {
-        "search"
     }
 
     fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {

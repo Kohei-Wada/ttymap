@@ -15,7 +15,6 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::core::Action;
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::ui::theme::Theme;
@@ -50,6 +49,31 @@ impl WikiWidget {
 }
 
 impl Widget for WikiWidget {
+    fn tag(&self) -> &str {
+        "wiki"
+    }
+
+    fn activation_keys(&self) -> Vec<&'static str> {
+        vec!["i"]
+    }
+
+    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
+        // Focus, not internal state, is the source of truth for
+        // whether wiki is currently open.
+        if ctx.focus.is_widget("wiki") {
+            self.state.close();
+            *ctx.focus = Focus::Map;
+        } else {
+            self.state.open();
+            self.refresh(ctx.center);
+            *ctx.focus = Focus::Widget("wiki".into());
+        }
+    }
+
+    fn deactivate(&mut self) {
+        self.state.close();
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
@@ -73,24 +97,6 @@ impl Widget for WikiWidget {
         }
     }
 
-    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
-        if *action == Action::WikiToggle {
-            // Focus, not internal state, is the source of truth for
-            // whether wiki is currently open.
-            if ctx.focus.is_widget("wiki") {
-                self.state.close();
-                *ctx.focus = Focus::Map;
-            } else {
-                self.state.open();
-                self.refresh(ctx.center);
-                *ctx.focus = Focus::Widget("wiki".into());
-            }
-            true
-        } else {
-            false
-        }
-    }
-
     fn poll(&mut self) -> bool {
         if let Some(articles) = self.service.poll() {
             debug!("wiki: received {} articles", articles.len());
@@ -99,10 +105,6 @@ impl Widget for WikiWidget {
         } else {
             false
         }
-    }
-
-    fn tag(&self) -> &str {
-        "wiki"
     }
 
     fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &Theme) {

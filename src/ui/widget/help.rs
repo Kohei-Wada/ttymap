@@ -104,6 +104,28 @@ impl HelpWidget {
 }
 
 impl Widget for HelpWidget {
+    fn tag(&self) -> &str {
+        "help"
+    }
+
+    fn activation_keys(&self) -> Vec<&'static str> {
+        vec!["?"]
+    }
+
+    fn activate(&mut self, ctx: &mut WidgetCtx<'_>) {
+        if ctx.focus.is_widget("help") {
+            self.active = false;
+            *ctx.focus = Focus::Map;
+        } else {
+            self.active = true;
+            *ctx.focus = Focus::Widget("help".into());
+        }
+    }
+
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
+
     fn handle_key(
         &mut self,
         _code: KeyCode,
@@ -114,25 +136,6 @@ impl Widget for HelpWidget {
         self.active = false;
         *ctx.focus = Focus::Map;
         WidgetAction::Consumed
-    }
-
-    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
-        if *action == Action::HelpToggle {
-            if ctx.focus.is_widget("help") {
-                self.active = false;
-                *ctx.focus = Focus::Map;
-            } else {
-                self.active = true;
-                *ctx.focus = Focus::Widget("help".into());
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    fn tag(&self) -> &str {
-        "help"
     }
 
     fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {

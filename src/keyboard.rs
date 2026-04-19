@@ -1,14 +1,10 @@
 //! Keyboard input handler. Routes raw keys to the focused widget,
-//! then asks the keymap to resolve an `Action` and lets widgets claim
-//! it before falling through to core.
+//! consults the widget registry for activation triggers, and finally
+//! asks the keymap to resolve a map-level `Action`.
 //!
-//! All key→`Action` translation (including the `gg` sequence) lives in
-//! `KeyMap::resolve` — this handler only does dispatch.
-//!
-//! Key and mouse paths stay intentionally separate — they have
-//! different semantics (keys are modal/captured, mouse is observer +
-//! target), matching the pattern used by helix and other Rust TUI
-//! apps (gitui documented a regret for unifying them).
+//! Widgets own their activation bindings; neither `keymap.rs` nor
+//! `core/` knows any widget name. Only `KeyMap::resolve` handles the
+//! `gg` sequence and user-configurable map-action bindings.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::info;
@@ -38,7 +34,8 @@ impl KeyboardHandler {
     ) -> InputEffect {
         let center = core.center();
 
-        // Raw-key dispatch: only the focused widget sees the key.
+        // 1. Focused widget sees the key first. It may consume, jump,
+        //    or pass it back out.
         let focused_tag = match &ui.focus {
             Focus::Map => None,
             Focus::Widget(t) => Some(t.clone()),
@@ -63,22 +60,32 @@ impl KeyboardHandler {
             }
         }
 
-        // Keymap resolve → widgets claim action → core fallback.
-        let action = self.keymap.resolve(code, modifiers);
-        let mut ctx = WidgetCtx {
-            center,
-            focus: &mut ui.focus,
-        };
-        let mut claimed = false;
-        for widget in ui.widgets.iter_mut() {
-            if widget.handle_action(&action, &mut ctx) {
-                claimed = true;
-                break;
+        // 2. Activation check: if any registered widget claims this key,
+        //    deactivate whichever widget held focus (if different) so
+        //    it releases any state that shouldn't outlive losing focus
+        //    (e.g. wiki markers), then invoke the new widget's
+        //    `activate`.
+        if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
+            let new_tag = tag.to_string();
+            if let Focus::Widget(prev_tag) = ui.focus.clone()
+                && prev_tag.as_ref() != new_tag.as_str()
+                && let Some(prev) = ui.widgets.get_mut(prev_tag.as_ref())
+            {
+                prev.deactivate();
+            }
+            let mut ctx = WidgetCtx {
+                center,
+                focus: &mut ui.focus,
+            };
+            if let Some(w) = ui.widgets.get_mut(&new_tag) {
+                w.activate(&mut ctx);
+                return InputEffect::Widget;
             }
         }
-        if claimed {
-            return InputEffect::Widget;
-        }
+
+        // 3. Keymap resolve → core. Widget activation never reaches
+        //    here, so `Action` only carries map-level variants.
+        let action = self.keymap.resolve(code, modifiers);
         if core.process_action(&action) {
             InputEffect::Map
         } else {

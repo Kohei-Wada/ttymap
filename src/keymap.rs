@@ -33,9 +33,11 @@ impl KeyMap {
     }
 
     /// Resolve a key event to an `Action`. Handles the `gg` sequence
-    /// and reserved mode-transition keys (`/`, `?`, `i`) ahead of
-    /// user-configurable bindings. Returns `Action::None` while
-    /// mid-sequence or when the key has no binding.
+    /// ahead of user-configurable bindings. Returns `Action::None`
+    /// while mid-sequence or when the key has no binding. Widget
+    /// activation (e.g. `/` opens search) is **not** handled here —
+    /// widgets own their activation keys and the keyboard handler
+    /// checks them before falling through to this resolver.
     pub fn resolve(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Action {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
@@ -46,17 +48,6 @@ impl KeyMap {
             return Action::None;
         }
         self.pending_g = false;
-
-        // Reserved keys: not exposed via `KeybindingOverrides`, so
-        // user config can't shadow them.
-        if modifiers == KeyModifiers::NONE {
-            match code {
-                KeyCode::Char('/') => return Action::SearchOpen,
-                KeyCode::Char('?') => return Action::HelpToggle,
-                KeyCode::Char('i') => return Action::WikiToggle,
-                _ => {}
-            }
-        }
 
         self.lookup(code, modifiers)
             .cloned()
@@ -343,10 +334,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mode_transitions() {
+    fn resolve_unknown_key_is_none() {
         let mut km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('/'), NONE), Action::SearchOpen);
-        assert_eq!(km.resolve(KeyCode::Char('?'), NONE), Action::HelpToggle);
-        assert_eq!(km.resolve(KeyCode::Char('i'), NONE), Action::WikiToggle);
+        // `/`, `?`, `i` are widget activation triggers, not keymap
+        // entries — they fall through to `Action::None`.
+        assert_eq!(km.resolve(KeyCode::Char('/'), NONE), Action::None);
+        assert_eq!(km.resolve(KeyCode::Char('?'), NONE), Action::None);
+        assert_eq!(km.resolve(KeyCode::Char('i'), NONE), Action::None);
     }
 }
