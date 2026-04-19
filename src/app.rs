@@ -126,17 +126,25 @@ impl App {
                         }
 
                         debug!("key event: {:?}", key_event.code);
-                        let effect = self.keyboard.handle(
+                        let cmd = self.keyboard.handle(
                             key_event.code,
                             key_event.modifiers,
-                            &mut self.map,
                             &mut self.ui,
-                            &self.render_handle,
+                            self.map.center(),
                         );
-                        if let InputEffect::Map = effect
-                            && self.map.is_running()
-                        {
-                            self.request_draw();
+                        if let Some(cmd) = cmd {
+                            let mut ctx = DispatchCtx {
+                                map: &mut self.map,
+                                ui: &mut self.ui,
+                                render_handle: &self.render_handle,
+                                keymap: self.keyboard.keymap(),
+                            };
+                            let effect = command::dispatch(cmd, &mut ctx);
+                            if let InputEffect::Map = effect
+                                && self.map.is_running()
+                            {
+                                self.request_draw();
+                            }
                         }
                     }
                     Event::Resize(cols, rows) => {

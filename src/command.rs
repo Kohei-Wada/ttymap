@@ -143,19 +143,20 @@ pub fn dispatch(cmd: Command, ctx: &mut DispatchCtx<'_>) -> InputEffect {
 /// write — take on activation, auto-release on close, release on
 /// palette dismissal — lives in this module.
 ///
-/// Reads `map.center()` once and forwards it to `PluginCtx` so
-/// plugins can read the viewport without this function owning
-/// `MapState` directly.
+/// Takes `ui` + `center` directly (not a `DispatchCtx`): delivery
+/// doesn't need `render_handle` or `keymap`, and keeping the surface
+/// narrow lets the keyboard layer call this without building a full
+/// ctx just to pass through.
 pub fn deliver_key_to_focused(
-    ctx: &mut DispatchCtx<'_>,
+    ui: &mut UiState,
     code: KeyCode,
     modifiers: KeyModifiers,
+    center: LonLat,
 ) -> KeyDelivery {
-    let center = ctx.map.center();
-    match ctx.ui.focus.current().clone() {
+    match ui.focus.current().clone() {
         Focus::Map => KeyDelivery::Passthrough,
-        Focus::Palette => deliver_to_palette(ctx.ui, code, modifiers),
-        Focus::Plugin(tag) => deliver_to_plugin(ctx.ui, &tag, code, modifiers, center),
+        Focus::Palette => deliver_to_palette(ui, code, modifiers),
+        Focus::Plugin(tag) => deliver_to_plugin(ui, &tag, code, modifiers, center),
     }
 }
 
