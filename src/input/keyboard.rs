@@ -1,120 +1,27 @@
-//! Keyboard input handler. Follows the industry-standard input
-//! pipeline: **focus-first routing**, then global fallback chain.
+//! Keyboard input handler. Pure **input router**: translates raw key
+//! events into `Command`s and hands them to `command::dispatch`.
 //!
-//! 1. [`dispatch_focused`] — the focused surface (palette or plugin)
-//!    gets the event first. Returns `Some(effect)` if consumed;
-//!    `None` means "focus had no interest" → fall through.
-//! 2. Tab / Shift-Tab cycles focus across visible plugins.
-//! 3. `:` opens the command palette.
-//! 4. Plugin activation keys (`/`, `?`, `i`, …).
-//! 5. `KeyMap::resolve` → `map::Action` dispatch.
+//! The routing decision tree:
 //!
-//! Every state-change path (palette selection, plugin handle_key,
-//! activation key) funnels through [`crate::command::dispatch`] so
-//! palette and plugins share one vocabulary.
+//! 1. **Focus-first** — `command::deliver_key_to_focused` hands the
+//!    event to the currently focused surface (palette / plugin). If it
+//!    consumes or emits a `Command`, we're done.
+//! 2. **Tab / Shift-Tab** → `Command::CycleFocus(forward)`.
+//! 3. **`:`** → `Command::OpenPalette`.
+//! 4. **Plugin activation keys** → `Command::ActivatePlugin(tag)`.
+//! 5. **`KeyMap::resolve`** → whatever `Command` the binding produces.
+//!
+//! Focus writes never happen here — they're all in `command`. This
+//! layer only *reads* focus (indirectly, via `deliver_key_to_focused`).
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::info;
 
-use crate::command::{self, Command, InputEffect};
-use crate::focus::Focus;
+use crate::command::{self, Command, InputEffect, KeyDelivery};
 use crate::keymap::KeyMap;
 use crate::map::MapState;
 use crate::map::render::thread::RenderHandle;
-use crate::plugin::{PluginAction, PluginCtx};
 use crate::ui::UiState;
-use crate::ui::palette::PaletteOutcome;
-
-/// Focus-first routing. Returns `Some(effect)` when the focused
-/// surface consumed the event, `None` when the host should fall
-/// through to the global fallback chain (cycling, activation,
-/// keymap).
-fn dispatch_focused(
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    map: &mut MapState,
-    ui: &mut UiState,
-    render_handle: &RenderHandle,
-    keymap: &KeyMap,
-) -> Option<InputEffect> {
-    match ui.focus.current().clone() {
-        Focus::Map => None,
-        Focus::Palette => Some(dispatch_palette(
-            code,
-            modifiers,
-            map,
-            ui,
-            render_handle,
-            keymap,
-        )),
-        Focus::Plugin(tag) => {
-            dispatch_plugin(&tag, code, modifiers, map, ui, render_handle, keymap)
-        }
-    }
-}
-
-/// Palette is modal when focused: every key is consumed. Returns the
-/// `InputEffect` unconditionally.
-fn dispatch_palette(
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    map: &mut MapState,
-    ui: &mut UiState,
-    render_handle: &RenderHandle,
-    keymap: &KeyMap,
-) -> InputEffect {
-    let outcome = ui.palette.handle_key(code, modifiers);
-
-    // Auto-release: palette doesn't touch focus itself; if `is_visible()`
-    // dropped during handle_key (e.g. Esc / Enter closed it), the host
-    // drops focus back. Mirrors the plugin auto-release rule.
-    if !ui.palette.is_visible() && matches!(ui.focus.current(), Focus::Palette) {
-        ui.focus.release();
-    }
-
-    match outcome {
-        PaletteOutcome::Consumed | PaletteOutcome::None => InputEffect::Plugin,
-        PaletteOutcome::Run(cmd) => {
-            info!("palette: running {:?}", cmd);
-            command::dispatch(cmd, map, ui, render_handle, keymap)
-        }
-    }
-}
-
-/// Focused plugin gets the key. May consume, emit a `Command`, or
-/// pass through. Host auto-releases focus when the plugin's
-/// `visible()` drops to false during handle_key.
-fn dispatch_plugin(
-    tag: &str,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    map: &mut MapState,
-    ui: &mut UiState,
-    render_handle: &RenderHandle,
-    keymap: &KeyMap,
-) -> Option<InputEffect> {
-    let center = map.center();
-    let mut ctx = PluginCtx { center };
-    let outcome = match ui.widgets.get_mut(tag) {
-        Some(w) => w.handle_key(code, modifiers, &mut ctx),
-        None => PluginAction::Pass,
-    };
-
-    // Auto-release: if the panel closed during handle_key, drop focus.
-    let still_visible = ui.widgets.get(tag).is_some_and(|w| w.visible());
-    if !still_visible && ui.focus.is_plugin(tag) {
-        ui.focus.release();
-    }
-
-    match outcome {
-        PluginAction::Pass => None,
-        PluginAction::Consumed => Some(InputEffect::Plugin),
-        PluginAction::Run(cmd) => {
-            info!("widget {:?}: running {:?}", tag, cmd);
-            Some(command::dispatch(cmd, map, ui, render_handle, keymap))
-        }
-    }
-}
 
 pub struct KeyboardHandler {
     keymap: KeyMap,
@@ -140,11 +47,14 @@ impl KeyboardHandler {
         ui: &mut UiState,
         render_handle: &RenderHandle,
     ) -> InputEffect {
-        // [1] Focus-first routing.
-        if let Some(effect) =
-            dispatch_focused(code, modifiers, map, ui, render_handle, &self.keymap)
-        {
-            return effect;
+        // [1] Focus-first delivery via the controller.
+        match command::deliver_key_to_focused(ui, code, modifiers, map.center()) {
+            KeyDelivery::Consumed => return InputEffect::Plugin,
+            KeyDelivery::Run(cmd) => {
+                info!("focused: running {:?}", cmd);
+                return command::dispatch(cmd, map, ui, render_handle, &self.keymap);
+            }
+            KeyDelivery::Passthrough => {}
         }
 
         // [2] Focus cycling — Tab / Shift-Tab → Command::CycleFocus.

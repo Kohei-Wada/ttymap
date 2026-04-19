@@ -11,13 +11,17 @@
 //! variant here + one new match arm in `dispatch`. All emit sites
 //! (palette outcomes, plugin actions) stay oblivious.
 
+use crossterm::event::{KeyCode, KeyModifiers};
+
+use crate::focus::Focus;
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::render::thread::RenderHandle;
 use crate::map::{Action, MapState};
-use crate::plugin::PluginCtx;
+use crate::plugin::{PluginAction, PluginCtx};
 use crate::ui::UiState;
 use crate::ui::action::UiAction;
+use crate::ui::palette::PaletteOutcome;
 
 /// What the app can do in response to an event. Emitted by palette
 /// providers, plugin handlers, and async plugin polling; dispatched by
@@ -56,6 +60,22 @@ pub enum InputEffect {
     None,
     Plugin,
     Map,
+}
+
+/// Outcome of delivering a raw key event to the focused surface via
+/// [`deliver_key_to_focused`]. The host routes on this:
+/// `Passthrough` falls through to the global fallback chain; `Consumed`
+/// is absorbed by the surface; `Run` is a `Command` for the caller to
+/// dispatch next.
+pub enum KeyDelivery {
+    /// Focus had no claim (`Focus::Map`) or the focused plugin
+    /// returned `Pass`. Caller should try the global fallback chain.
+    Passthrough,
+    /// Focused surface consumed the key; no `Command` to run.
+    Consumed,
+    /// Focused surface emitted a `Command` — caller should
+    /// `dispatch` it.
+    Run(Command),
 }
 
 /// Apply a command to the app. This is the single funnel for every
@@ -105,6 +125,67 @@ pub fn dispatch(
             ui.focus.take_palette();
             InputEffect::Plugin
         }
+    }
+}
+
+/// Route a raw key event to the currently-focused surface. The host
+/// owns both key delivery and focus transitions, so every focus
+/// write — take on activation, auto-release on close, release on
+/// palette dismissal — lives in this module.
+///
+/// `center` is read once by the caller (usually from `MapState`) and
+/// forwarded into `PluginCtx` so plugins can read the map viewport
+/// without this function touching `MapState`.
+pub fn deliver_key_to_focused(
+    ui: &mut UiState,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    center: LonLat,
+) -> KeyDelivery {
+    match ui.focus.current().clone() {
+        Focus::Map => KeyDelivery::Passthrough,
+        Focus::Palette => deliver_to_palette(ui, code, modifiers),
+        Focus::Plugin(tag) => deliver_to_plugin(ui, &tag, code, modifiers, center),
+    }
+}
+
+/// Deliver a key to the palette. Auto-releases focus if `handle_key`
+/// dropped the palette's visibility (e.g. Esc / Enter).
+fn deliver_to_palette(ui: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> KeyDelivery {
+    let outcome = ui.palette.handle_key(code, modifiers);
+    if !ui.palette.is_visible() && matches!(ui.focus.current(), Focus::Palette) {
+        ui.focus.release();
+    }
+    match outcome {
+        PaletteOutcome::Consumed | PaletteOutcome::None => KeyDelivery::Consumed,
+        PaletteOutcome::Run(cmd) => KeyDelivery::Run(cmd),
+    }
+}
+
+/// Deliver a key to a focused plugin. Auto-releases focus if the
+/// plugin's `visible()` dropped during `handle_key`. `Pass` means
+/// "not my key" → `Passthrough` so the host falls through to the
+/// global fallback chain.
+fn deliver_to_plugin(
+    ui: &mut UiState,
+    tag: &str,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    center: LonLat,
+) -> KeyDelivery {
+    let mut ctx = PluginCtx { center };
+    let outcome = match ui.widgets.get_mut(tag) {
+        Some(w) => w.handle_key(code, modifiers, &mut ctx),
+        None => PluginAction::Pass,
+    };
+    let still_visible = ui.widgets.get(tag).is_some_and(|w| w.visible());
+    if !still_visible && ui.focus.is_plugin(tag) {
+        ui.focus.release();
+    }
+    match outcome {
+        PluginAction::Pass => KeyDelivery::Passthrough,
+        PluginAction::Consumed => KeyDelivery::Consumed,
+        PluginAction::Run(cmd) => KeyDelivery::Run(cmd),
     }
 }
 
