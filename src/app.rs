@@ -54,14 +54,7 @@ impl App {
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
-        let ui = UiState::new(
-            palette,
-            &config.language,
-            config.wiki_limit,
-            nominatim,
-            attribution,
-            &keymap,
-        );
+        let ui = UiState::new(&config, palette, nominatim, attribution, &keymap);
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
         let core = Core::new(
@@ -100,9 +93,21 @@ impl App {
                 self.ui.map_frame = Some(frame);
             }
 
-            // Poll widgets with background fetches.
+            // Poll widgets with background fetches. A plugin may
+            // surface a deferred jump (e.g. the `here` plugin resolving
+            // a geoip lookup); apply the latest one after the loop so
+            // we can still `&mut self` for `request_draw`.
+            let mut async_jump: Option<crate::geo::LonLat> = None;
             for w in self.ui.widgets.iter_mut() {
                 w.poll();
+                if let Some(loc) = w.pending_jump() {
+                    async_jump = Some(loc);
+                }
+            }
+            if let Some(loc) = async_jump {
+                info!("plugin async jump: ({}, {})", loc.lat, loc.lon);
+                self.core.jump_to(loc);
+                self.request_draw();
             }
             self.ui.info.poll();
 

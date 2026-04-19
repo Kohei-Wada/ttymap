@@ -7,6 +7,7 @@
 //! mutated through [`PluginCtx::focus`] from handler methods.
 
 pub mod help;
+pub mod here;
 pub mod search;
 pub mod wiki;
 
@@ -100,6 +101,15 @@ pub trait Plugin {
     /// changed and the app should redraw.
     fn poll(&mut self) -> bool {
         false
+    }
+
+    /// Async jump request produced by the plugin (e.g. `here` resolves
+    /// a geoip lookup started from the command palette). Called right
+    /// after `poll`; returning `Some(loc)` makes the app recenter and
+    /// redraw. Plugins that emit jumps only through `handle_key` keep
+    /// the default.
+    fn pending_jump(&mut self) -> Option<LonLat> {
+        None
     }
 
     /// Render the widget's modal panel. Called only when the widget

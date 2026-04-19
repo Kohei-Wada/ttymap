@@ -23,10 +23,12 @@ use theme::Theme;
 
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
+use crate::plugin::here::HerePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
 use crate::ui::palette::CommandPalette;
 
+use crate::config::Config;
 use crate::keymap::KeyMap;
 use crate::palette::Palette;
 use crate::render::frame::MapFrame;
@@ -46,16 +48,16 @@ pub struct UiState {
 
 impl UiState {
     pub fn new(
+        config: &Config,
         palette: &Palette,
-        language: &str,
-        wiki_limit: u32,
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
         keymap: &KeyMap,
     ) -> Self {
         let search = SearchPlugin::new(nominatim.clone());
         let mut help = HelpPlugin::new();
-        let wiki = WikiPlugin::new(language, wiki_limit);
+        let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
+        let here = HerePlugin::new(config.geoip_endpoint.clone(), config.geoip_timeout_ms);
 
         // Help introspects the other plugins to list their activation
         // keys, so it must build after they're constructed. Palette is
@@ -68,6 +70,7 @@ impl UiState {
         widgets.register(Box::new(search));
         widgets.register(Box::new(help));
         widgets.register(Box::new(wiki));
+        widgets.register(Box::new(here));
 
         Self {
             focus: FocusManager::new(),
@@ -198,10 +201,10 @@ mod tests {
 
     fn make_ui() -> UiState {
         let keymap = KeyMap::default();
+        let config = Config::default();
         UiState::new(
+            &config,
             &crate::palette::DARK,
-            "en",
-            5,
             Arc::new(NominatimClient::new()),
             None,
             &keymap,
