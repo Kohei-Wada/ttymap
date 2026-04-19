@@ -24,7 +24,8 @@ use crate::ui::widget::overlay::MarkerPoint;
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
 
-use super::{Widget, WidgetAction};
+use super::{Widget, WidgetAction, WidgetCtx};
+use crate::ui::focus::Focus;
 
 pub use panel::render_panel;
 
@@ -43,20 +44,8 @@ impl WikiWidget {
         }
     }
 
-    pub fn is_active(&self) -> bool {
-        self.state.is_active()
-    }
-
     pub fn is_detail_open(&self) -> bool {
         self.state.is_detail_open()
-    }
-
-    /// Toggle panel visibility. Auto-fetches on open.
-    pub fn toggle(&mut self, center: LonLat) {
-        self.state.toggle();
-        if self.state.is_active() {
-            self.refresh(center);
-        }
     }
 
     fn refresh(&mut self, center: LonLat) {
@@ -71,25 +60,37 @@ impl Widget for WikiWidget {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        center: LonLat,
+        ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction {
+        let outcome = self.state.handle_key(code, modifiers);
+        // Wiki is non-modal: the panel can close on its own (Esc while
+        // not in detail view), in which case focus returns to the map.
         if !self.state.is_active() {
-            return WidgetAction::Pass;
+            *ctx.focus = Focus::Map;
         }
-        match self.state.handle_key(code, modifiers) {
+        match outcome {
             KeyOutcome::None => WidgetAction::Pass,
             KeyOutcome::Consumed => WidgetAction::Consumed,
             KeyOutcome::JumpTo(loc) => WidgetAction::Jump(loc),
             KeyOutcome::Refresh => {
-                self.refresh(center);
+                self.refresh(ctx.center);
                 WidgetAction::Consumed
             }
         }
     }
 
-    fn handle_action(&mut self, action: &Action, center: LonLat) -> bool {
+    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
         if *action == Action::WikiToggle {
-            self.toggle(center);
+            // Focus, not internal state, is the source of truth for
+            // whether wiki is currently open.
+            if ctx.focus.is_widget("wiki") {
+                self.state.close();
+                *ctx.focus = Focus::Map;
+            } else {
+                self.state.open();
+                self.refresh(ctx.center);
+                *ctx.focus = Focus::Widget("wiki".into());
+            }
             true
         } else {
             false

@@ -56,8 +56,14 @@ impl WikiState {
         self.detail.is_some()
     }
 
-    pub fn toggle(&mut self) {
-        self.active = !self.active;
+    pub fn open(&mut self) {
+        self.active = true;
+        self.selected = 0;
+        self.detail = None;
+    }
+
+    pub fn close(&mut self) {
+        self.active = false;
         self.selected = 0;
         self.detail = None;
     }

@@ -1,7 +1,10 @@
 //! UI layer — widget state and screen rendering.
 
+pub mod focus;
 pub mod theme;
 pub mod widget;
+
+pub use focus::Focus;
 
 use std::sync::Arc;
 
@@ -12,7 +15,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use theme::Theme;
-use widget::Widget;
 use widget::help::HelpWidget;
 use widget::overlay::{
     AttributionOverlay, InfoOverlay, MapOverlay, MarkersOverlay, ScaleBarOverlay,
@@ -26,6 +28,7 @@ use crate::shared::nominatim::NominatimClient;
 
 /// Holds all UI widget state. Passed to `draw()`.
 pub struct UiState {
+    pub focus: Focus,
     pub search: SearchWidget,
     pub info: InfoOverlay,
     pub help: HelpWidget,
@@ -44,6 +47,7 @@ impl UiState {
         attribution: Option<String>,
     ) -> Self {
         Self {
+            focus: Focus::Map,
             search: SearchWidget::new(nominatim.clone()),
             info: InfoOverlay::new(nominatim),
             help: HelpWidget::new(),
@@ -52,14 +56,6 @@ impl UiState {
             theme: Theme::from_palette(palette),
             attribution,
         }
-    }
-
-    /// Interactive widgets in priority order. `app.rs` uses this to
-    /// dispatch key / action events without hard-coding per-widget
-    /// names. Search takes precedence (modal), then help (modal), then
-    /// wiki (non-modal — falls through unrecognised keys).
-    pub fn widgets_mut(&mut self) -> [&mut dyn Widget; 3] {
-        [&mut self.search, &mut self.help, &mut self.wiki]
     }
 }
 
@@ -70,7 +66,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     let map_area = chunks[0];
     let footer_area = chunks[1];
 
-    let map_focused = !ui.search.is_active();
+    let map_focused = !ui.focus.is_widget("search");
     let border_color = if map_focused {
         ui.theme.accent
     } else {
@@ -101,9 +97,18 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         }
     }
 
-    wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
-    search::render_panel(&ui.search, f, map_inner, &ui.theme);
-    ui.help.render(f, map_inner, &ui.theme);
+    // Modal widgets render only when focused. This keeps focus the
+    // single source of truth — if a widget isn't focused, it isn't on
+    // screen regardless of any lingering internal state.
+    if ui.focus.is_widget("wiki") {
+        wiki::render_panel(&ui.wiki, f, map_inner, &ui.theme);
+    }
+    if ui.focus.is_widget("search") {
+        search::render_panel(&ui.search, f, map_inner, &ui.theme);
+    }
+    if ui.focus.is_widget("help") {
+        ui.help.render(f, map_inner, &ui.theme);
+    }
 
     let hints = build_hints(ui);
     let sep = Span::styled("  ", Style::default().fg(ui.theme.muted_color));
@@ -126,15 +131,15 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 }
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
-    if ui.search.is_active() {
+    if ui.focus.is_widget("search") {
         if ui.search.has_candidates() {
             vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
         } else {
             vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
         }
-    } else if ui.help.is_active() {
+    } else if ui.focus.is_widget("help") {
         vec![("any key", "close")]
-    } else if ui.wiki.is_active() {
+    } else if ui.focus.is_widget("wiki") {
         if ui.wiki.is_detail_open() {
             vec![
                 ("C-n/C-p", "prev/next"),
@@ -184,12 +189,13 @@ mod tests {
             Arc::new(NominatimClient::new()),
             None,
         );
-        assert!(!ui.search.is_active());
+        assert!(ui.focus == Focus::Map);
         assert!(ui.map_frame.is_none());
     }
 
     #[test]
     fn test_ui_state_search_lifecycle() {
+        use crate::ui::widget::{Widget, WidgetCtx};
         let ui = &mut UiState::new(
             &crate::palette::DARK,
             "en",
@@ -197,15 +203,20 @@ mod tests {
             Arc::new(NominatimClient::new()),
             None,
         );
-        assert!(!ui.search.is_active());
+        assert!(ui.focus == Focus::Map);
 
-        assert!(ui.search.handle_action(&Action::SearchOpen, ZERO));
-        assert!(ui.search.is_active());
+        let mut ctx = WidgetCtx {
+            center: ZERO,
+            focus: &mut ui.focus,
+        };
+        assert!(ui.search.handle_action(&Action::SearchOpen, &mut ctx));
+        assert!(ctx.focus.is_widget("search"));
 
         ui.search
-            .handle_key(KeyCode::Char('a'), KeyModifiers::NONE, ZERO);
-        ui.search.handle_key(KeyCode::Esc, KeyModifiers::NONE, ZERO);
-        assert!(!ui.search.is_active());
+            .handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
+        ui.search
+            .handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
+        assert!(matches!(*ctx.focus, Focus::Map));
     }
 
     #[test]

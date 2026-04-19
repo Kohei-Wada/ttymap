@@ -1,5 +1,6 @@
-//! Keyboard input handler. Dispatches raw key events to widgets, then
-//! asks the keymap to resolve an `Action` and routes it onwards.
+//! Keyboard input handler. Routes raw keys to the focused widget,
+//! then asks the keymap to resolve an `Action` and lets widgets claim
+//! it before falling through to core.
 //!
 //! All key→`Action` translation (including the `gg` sequence) lives in
 //! `KeyMap::resolve` — this handler only does dispatch.
@@ -16,7 +17,8 @@ use crate::app::InputEffect;
 use crate::core::Core;
 use crate::keymap::KeyMap;
 use crate::ui::UiState;
-use crate::ui::widget::WidgetAction;
+use crate::ui::focus::Focus;
+use crate::ui::widget::{Widget, WidgetAction, WidgetCtx};
 
 pub struct KeyboardHandler {
     keymap: KeyMap,
@@ -40,10 +42,26 @@ impl KeyboardHandler {
     ) -> InputEffect {
         let center = core.center();
 
-        // Raw-key pass: let active widgets consume or Jump.
-        for widget in ui.widgets_mut() {
-            match widget.handle_key(code, modifiers, center) {
-                WidgetAction::Pass => continue,
+        // Raw-key dispatch: only the focused widget sees the key. Match
+        // on focus first so we can split-borrow `ui.focus` and the
+        // focused widget field independently.
+        let focused_tag = match &ui.focus {
+            Focus::Map => None,
+            Focus::Widget(t) => Some(t.clone()),
+        };
+        if let Some(tag) = focused_tag {
+            let mut ctx = WidgetCtx {
+                center,
+                focus: &mut ui.focus,
+            };
+            let outcome = match tag.as_ref() {
+                "search" => ui.search.handle_key(code, modifiers, &mut ctx),
+                "help" => ui.help.handle_key(code, modifiers, &mut ctx),
+                "wiki" => ui.wiki.handle_key(code, modifiers, &mut ctx),
+                _ => WidgetAction::Pass,
+            };
+            match outcome {
+                WidgetAction::Pass => {}
                 WidgetAction::Consumed => return InputEffect::Widget,
                 WidgetAction::Jump(location) => {
                     info!("widget: jumping to ({}, {})", location.lat, location.lon);
@@ -53,14 +71,17 @@ impl KeyboardHandler {
             }
         }
 
-        // Resolve via the keymap, then let widgets claim the action
-        // (SearchOpen, HelpToggle, WikiToggle), then fall through to
-        // core (Pan*, Zoom*, Quit, etc.).
+        // Keymap resolve → widgets claim action → core fallback.
         let action = self.keymap.resolve(code, modifiers);
-        for widget in ui.widgets_mut() {
-            if widget.handle_action(&action, center) {
-                return InputEffect::Widget;
-            }
+        let mut ctx = WidgetCtx {
+            center,
+            focus: &mut ui.focus,
+        };
+        let claimed = ui.search.handle_action(&action, &mut ctx)
+            || ui.help.handle_action(&action, &mut ctx)
+            || ui.wiki.handle_action(&action, &mut ctx);
+        if claimed {
+            return InputEffect::Widget;
         }
         if core.process_action(&action) {
             InputEffect::Map

@@ -174,7 +174,7 @@ impl App {
         // internally whether to act (e.g., place throttles to 5s).
         // Wiki is intentionally not notified — Google-Maps-style, the
         // article list stays pinned to the query that produced it.
-        if !self.ui.search.is_active() {
+        if !self.ui.focus.is_widget("search") {
             self.ui.info.on_map_moved(state.center);
         }
     }

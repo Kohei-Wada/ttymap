@@ -21,7 +21,7 @@ pub struct MouseHandler {
 impl MouseHandler {
     pub fn handle(&mut self, event: MouseEvent, core: &mut Core, ui: &mut UiState) -> InputEffect {
         // Search is modal — ignore mouse while its panel is open.
-        if ui.search.is_active() {
+        if ui.focus.is_widget("search") {
             return InputEffect::None;
         }
 

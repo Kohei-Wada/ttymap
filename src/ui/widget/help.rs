@@ -8,11 +8,11 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::core::Action;
-use crate::geo::LonLat;
 use crate::keymap::KeyMap;
+use crate::ui::focus::Focus;
 use crate::ui::theme::Theme;
 
-use super::{Widget, WidgetAction};
+use super::{Widget, WidgetAction, WidgetCtx};
 
 pub struct HelpWidget {
     active: bool,
@@ -31,10 +31,6 @@ impl HelpWidget {
             active: false,
             text: String::new(),
         }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.active
     }
 
     pub fn build(&mut self, keymap: &KeyMap) {
@@ -81,10 +77,6 @@ impl HelpWidget {
         self.text = lines.join("\n");
     }
 
-    pub fn toggle(&mut self) {
-        self.active = !self.active;
-    }
-
     pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &Theme) {
         if !self.active || map_inner.width < 20 || map_inner.height < 10 {
             return;
@@ -116,19 +108,23 @@ impl Widget for HelpWidget {
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        _center: LonLat,
+        ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction {
-        if self.active {
-            self.active = false;
-            WidgetAction::Consumed
-        } else {
-            WidgetAction::Pass
-        }
+        // Help is modal and consumes any key, releasing focus.
+        self.active = false;
+        *ctx.focus = Focus::Map;
+        WidgetAction::Consumed
     }
 
-    fn handle_action(&mut self, action: &Action, _center: LonLat) -> bool {
+    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
         if *action == Action::HelpToggle {
-            self.toggle();
+            if ctx.focus.is_widget("help") {
+                self.active = false;
+                *ctx.focus = Focus::Map;
+            } else {
+                self.active = true;
+                *ctx.focus = Focus::Widget("help".into());
+            }
             true
         } else {
             false

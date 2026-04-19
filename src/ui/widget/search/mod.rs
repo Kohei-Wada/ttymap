@@ -12,13 +12,13 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::core::Action;
-use crate::geo::LonLat;
 use crate::shared::nominatim::NominatimClient;
+use crate::ui::focus::Focus;
 
 use service::SearchService;
 use state::{Outcome, SearchState};
 
-use super::{Widget, WidgetAction};
+use super::{Widget, WidgetAction, WidgetCtx};
 
 pub use panel::render_panel;
 
@@ -35,10 +35,6 @@ impl SearchWidget {
         }
     }
 
-    pub fn is_active(&self) -> bool {
-        self.state.is_active()
-    }
-
     pub fn has_candidates(&self) -> bool {
         self.state.has_candidates()
     }
@@ -49,12 +45,14 @@ impl Widget for SearchWidget {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        _center: LonLat,
+        ctx: &mut WidgetCtx<'_>,
     ) -> WidgetAction {
+        let outcome = self.state.handle_key(code, modifiers);
+        // Any outcome that closes the panel also releases focus.
         if !self.state.is_active() {
-            return WidgetAction::Pass;
+            *ctx.focus = Focus::Map;
         }
-        match self.state.handle_key(code, modifiers) {
+        match outcome {
             Outcome::None | Outcome::Consumed => WidgetAction::Consumed,
             Outcome::Jump(loc) => WidgetAction::Jump(loc),
             Outcome::Submit(query) => {
@@ -64,9 +62,10 @@ impl Widget for SearchWidget {
         }
     }
 
-    fn handle_action(&mut self, action: &Action, _center: LonLat) -> bool {
+    fn handle_action(&mut self, action: &Action, ctx: &mut WidgetCtx<'_>) -> bool {
         if *action == Action::SearchOpen {
             self.state.open();
+            *ctx.focus = Focus::Widget("search".into());
             true
         } else {
             false
