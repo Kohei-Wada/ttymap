@@ -5,6 +5,8 @@
 //! registered [`ThemeId`] with the current one marked.
 
 use crate::color_palette::ThemeId;
+use crate::command::Command;
+use crate::ui::action::UiAction;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
 
@@ -59,7 +61,7 @@ impl PaletteProvider for ThemeProvider {
 
     fn execute(&mut self, idx: usize) -> PaletteAction {
         match self.filtered_theme_ids.get(idx) {
-            Some(&t) => PaletteAction::SetTheme(t),
+            Some(&t) => PaletteAction::Run(Command::Ui(UiAction::SetTheme(t))),
             None => PaletteAction::Close,
         }
     }

@@ -18,8 +18,7 @@ pub mod theme;
 pub use command::CommandProvider;
 pub use theme::ThemeProvider;
 
-use crate::color_palette::ThemeId;
-use crate::map::Action;
+use crate::command::Command;
 
 /// One row in the palette list.
 pub struct PaletteItem {
@@ -34,12 +33,8 @@ pub struct PaletteItem {
 pub enum PaletteAction {
     /// Dismiss the palette.
     Close,
-    /// Dispatch a map `Action` via `MapState::process_action`.
-    Run(Action),
-    /// Activate a plugin by tag (same as pressing its activation key).
-    Activate(String),
-    /// Switch the running theme.
-    SetTheme(ThemeId),
+    /// Run the given `Command` via `crate::command::dispatch`.
+    Run(Command),
     /// Swap to a different provider without closing the palette — the
     /// "sub-mode" transition. Query resets; focus stays.
     SwitchProvider(Box<dyn PaletteProvider>),

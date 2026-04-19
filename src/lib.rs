@@ -10,6 +10,11 @@
 /// Application event loop and terminal I/O orchestration.
 pub mod app;
 
+/// Central command vocabulary — the single enum every emission site
+/// (palette, plugins, future RPC) speaks and the one dispatcher that
+/// interprets it.
+pub(crate) mod command;
+
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;
 

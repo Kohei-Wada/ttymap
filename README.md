@@ -220,7 +220,7 @@ trait Plugin {
     fn visible(&self) -> bool;                     // is the panel on screen?
     fn handle_key(&mut self, code, mods, ctx) -> PluginAction;
     fn poll(&mut self) -> bool;                    // drain async work; redraw hint
-    fn pending_jump(&mut self) -> Option<LonLat>;  // async-emitted map jump
+    fn pending_command(&mut self) -> Option<Command>;  // async-emitted command (e.g. Jump)
     fn render(&self, f, area, theme);              // focused / visible panel
     fn footer_hints(&self) -> Vec<(&str, &str)>;
     fn paint_on_map(&self, p: &mut MapPainter);    // world-space primitives

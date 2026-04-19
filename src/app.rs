@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyModifiers};
 use log::{debug, info};
 use ratatui::DefaultTerminal;
 
+use crate::command::{self, Command, InputEffect};
 use crate::config::Config;
 use crate::input::keyboard::KeyboardHandler;
 use crate::input::mouse::MouseHandler;
@@ -16,18 +17,6 @@ use crate::map::styler::Styler;
 use crate::map::{MapState, MapStateOptions};
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::UiState;
-
-/// What a key or mouse event just changed. Drives how the main loop
-/// reacts: a widget-only change redraws immediately (the map frame is
-/// unchanged); a map change only requests a new render — the main
-/// loop will redraw when a fresh frame arrives, avoiding a
-/// stale-frame draw followed by a second fresh-frame draw.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum InputEffect {
-    None,
-    Plugin,
-    Map,
-}
 
 pub struct App {
     map: MapState,
@@ -91,20 +80,24 @@ impl App {
             }
 
             // Poll widgets with background fetches. A plugin may
-            // surface a deferred jump (e.g. the `here` plugin resolving
-            // a geoip lookup); apply the latest one after the loop so
-            // we can still `&mut self` for `request_draw`.
-            let mut async_jump: Option<crate::geo::LonLat> = None;
+            // surface a deferred `Command` (e.g. the `here` plugin
+            // resolving a geoip lookup into `Command::Jump`); apply
+            // the latest one after the loop so we can still
+            // `&mut self` for the dispatcher + `request_draw`.
+            let mut async_cmd: Option<Command> = None;
             for w in self.ui.widgets.iter_mut() {
                 w.poll();
-                if let Some(loc) = w.pending_jump() {
-                    async_jump = Some(loc);
+                if let Some(cmd) = w.pending_command() {
+                    async_cmd = Some(cmd);
                 }
             }
-            if let Some(loc) = async_jump {
-                info!("plugin async jump: ({}, {})", loc.lat, loc.lon);
-                self.map.jump_to(loc);
-                self.request_draw();
+            if let Some(cmd) = async_cmd {
+                info!("plugin async command: {:?}", cmd);
+                let effect =
+                    command::dispatch(cmd, &mut self.map, &mut self.ui, &self.render_handle);
+                if let InputEffect::Map = effect {
+                    self.request_draw();
+                }
             }
             self.ui.info.poll();
 

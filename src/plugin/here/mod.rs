@@ -3,13 +3,15 @@
 //! Headless: no popup, no key focus. Exists purely so the command
 //! palette can offer `Jump to current location`. Activation fires a
 //! background geoip lookup; when it returns the resolved coordinates
-//! are surfaced through [`Plugin::pending_jump`] and the main loop
-//! recenters the map. Shares `config.geoip_endpoint` /
-//! `config.geoip_timeout_ms` with the `--here` startup path.
+//! are surfaced through [`Plugin::pending_command`] as a
+//! `Command::Jump` and the main loop recenters the map. Shares
+//! `config.geoip_endpoint` / `config.geoip_timeout_ms` with the
+//! `--here` startup path.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::{info, warn};
 
+use crate::command::Command;
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
@@ -88,8 +90,8 @@ impl Plugin for HerePlugin {
         }
     }
 
-    fn pending_jump(&mut self) -> Option<LonLat> {
-        self.pending.take()
+    fn pending_command(&mut self) -> Option<Command> {
+        self.pending.take().map(Command::Jump)
     }
 }
 
@@ -98,10 +100,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pending_jump_is_taken_once() {
+    fn pending_command_is_taken_once() {
         let mut p = HerePlugin::new("about:blank".into(), 100);
         p.pending = Some(LonLat { lon: 1.0, lat: 2.0 });
-        assert_eq!(p.pending_jump(), Some(LonLat { lon: 1.0, lat: 2.0 }));
-        assert_eq!(p.pending_jump(), None);
+        assert_eq!(
+            p.pending_command(),
+            Some(Command::Jump(LonLat { lon: 1.0, lat: 2.0 }))
+        );
+        assert_eq!(p.pending_command(), None);
     }
 }

@@ -20,8 +20,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
+use crate::command::Command;
 use crate::keymap::KeyMap;
-use crate::map::Action;
 use crate::plugin::PluginRegistry;
 use crate::theme::UiTheme;
 
@@ -36,13 +36,9 @@ pub enum PaletteOutcome {
     None,
     /// Key consumed, palette redraws.
     Consumed,
-    /// User picked a map `Action` — dispatch through `map.process_action`.
-    Run(Action),
-    /// User picked a plugin activation — activate the plugin with this tag.
-    Activate(String),
-    /// User picked a theme switch — `app.rs` rebuilds the `Styler`,
-    /// swaps it into the render thread, and updates `UiState.theme`.
-    SetTheme(ThemeId),
+    /// User picked an item — run the associated `Command` through
+    /// `crate::command::dispatch`.
+    Run(Command),
 }
 
 pub struct CommandPalette {
@@ -95,9 +91,7 @@ impl CommandPalette {
                         self.state.open_with(next);
                         PaletteOutcome::Consumed
                     }
-                    PaletteAction::Run(a) => PaletteOutcome::Run(a),
-                    PaletteAction::Activate(tag) => PaletteOutcome::Activate(tag),
-                    PaletteAction::SetTheme(t) => PaletteOutcome::SetTheme(t),
+                    PaletteAction::Run(cmd) => PaletteOutcome::Run(cmd),
                 }
             }
         }

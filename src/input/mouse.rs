@@ -9,7 +9,7 @@
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::app::InputEffect;
+use crate::command::InputEffect;
 use crate::map::MapState;
 use crate::ui::UiState;
 

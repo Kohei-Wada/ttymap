@@ -8,51 +8,22 @@
 //! 3. `:` opens the command palette.
 //! 4. Plugin activation keys (`/`, `?`, `i`, …).
 //! 5. `KeyMap::resolve` → `map::Action` dispatch.
+//!
+//! Every state-change path (palette selection, plugin handle_key,
+//! activation key) funnels through [`crate::command::dispatch`] so
+//! palette and plugins share one vocabulary.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::info;
 
-use crate::app::InputEffect;
+use crate::command::{self, Command, InputEffect};
 use crate::focus::Focus;
-use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::MapState;
 use crate::map::render::thread::RenderHandle;
 use crate::plugin::{PluginAction, PluginCtx};
 use crate::ui::UiState;
 use crate::ui::palette::PaletteOutcome;
-
-/// Drive a plugin through an activation key press or palette
-/// `Activate(tag)` directive. Host owns focus transitions: plugins
-/// don't touch `FocusManager` on activate anymore — the host auto-takes
-/// for plugins whose `wants_focus()` returns true, and handles
-/// toggle-off when a visible plugin's activation key is pressed a
-/// second time.
-fn activate_plugin(tag: &str, ui: &mut UiState, center: LonLat) {
-    // Toggle-off: re-activating the currently-focused plugin closes it.
-    if ui.focus.is_plugin(tag) {
-        if let Some(w) = ui.widgets.get_mut(tag) {
-            w.close();
-        }
-        ui.focus.release();
-        return;
-    }
-
-    // Normal activation.
-    ui.focus.deactivate_focused(&mut ui.widgets, Some(tag));
-    ui.widgets.bring_to_front(tag);
-
-    let wants_focus = ui.widgets.get(tag).is_some_and(|w| w.wants_focus());
-
-    let mut ctx = PluginCtx { center };
-    if let Some(w) = ui.widgets.get_mut(tag) {
-        w.activate(&mut ctx);
-    }
-
-    if wants_focus {
-        ui.focus.take(tag.to_string());
-    }
-}
 
 /// Focus-first routing. Returns `Some(effect)` when the focused
 /// surface consumed the event, `None` when the host should fall
@@ -68,7 +39,7 @@ fn dispatch_focused(
     match ui.focus.current().clone() {
         Focus::Map => None,
         Focus::Palette => Some(dispatch_palette(code, modifiers, map, ui, render_handle)),
-        Focus::Plugin(tag) => dispatch_plugin(&tag, code, modifiers, map, ui),
+        Focus::Plugin(tag) => dispatch_plugin(&tag, code, modifiers, map, ui, render_handle),
     }
 }
 
@@ -81,7 +52,6 @@ fn dispatch_palette(
     ui: &mut UiState,
     render_handle: &RenderHandle,
 ) -> InputEffect {
-    let center = map.center();
     let outcome = ui.palette.handle_key(code, modifiers);
 
     // Auto-release: palette doesn't touch focus itself; if `is_visible()`
@@ -93,37 +63,23 @@ fn dispatch_palette(
 
     match outcome {
         PaletteOutcome::Consumed | PaletteOutcome::None => InputEffect::Plugin,
-        PaletteOutcome::Run(action) => {
-            info!("palette: running action {:?}", action);
-            if map.process_action(&action) {
-                InputEffect::Map
-            } else {
-                InputEffect::Plugin
-            }
-        }
-        PaletteOutcome::Activate(target_tag) => {
-            info!("palette: activating plugin {:?}", target_tag);
-            activate_plugin(&target_tag, ui, center);
-            InputEffect::Plugin
-        }
-        PaletteOutcome::SetTheme(new_id) => {
-            info!("palette: switching theme to {}", new_id.name());
-            ui.theme_id = new_id;
-            crate::theme::apply(new_id, &mut ui.theme, render_handle);
-            InputEffect::Map
+        PaletteOutcome::Run(cmd) => {
+            info!("palette: running {:?}", cmd);
+            command::dispatch(cmd, map, ui, render_handle)
         }
     }
 }
 
-/// Focused plugin gets the key. May consume, jump, or pass through.
-/// Host auto-releases focus when the plugin's `visible()` drops to
-/// false during handle_key.
+/// Focused plugin gets the key. May consume, emit a `Command`, or
+/// pass through. Host auto-releases focus when the plugin's
+/// `visible()` drops to false during handle_key.
 fn dispatch_plugin(
     tag: &str,
     code: KeyCode,
     modifiers: KeyModifiers,
     map: &mut MapState,
     ui: &mut UiState,
+    render_handle: &RenderHandle,
 ) -> Option<InputEffect> {
     let center = map.center();
     let mut ctx = PluginCtx { center };
@@ -141,10 +97,9 @@ fn dispatch_plugin(
     match outcome {
         PluginAction::Pass => None,
         PluginAction::Consumed => Some(InputEffect::Plugin),
-        PluginAction::Jump(location) => {
-            info!("widget: jumping to ({}, {})", location.lat, location.lon);
-            map.jump_to(location);
-            Some(InputEffect::Map)
+        PluginAction::Run(cmd) => {
+            info!("widget {:?}: running {:?}", tag, cmd);
+            Some(command::dispatch(cmd, map, ui, render_handle))
         }
     }
 }
@@ -196,16 +151,11 @@ impl KeyboardHandler {
         // [4] Plugin activation keys.
         if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
             let new_tag = tag.to_string();
-            activate_plugin(&new_tag, ui, map.center());
-            return InputEffect::Plugin;
+            return command::dispatch(Command::ActivatePlugin(new_tag), map, ui, render_handle);
         }
 
         // [5] Keymap resolve → map.
         let action = self.keymap.resolve(code, modifiers);
-        if map.process_action(&action) {
-            InputEffect::Map
-        } else {
-            InputEffect::None
-        }
+        command::dispatch(Command::Map(action), map, ui, render_handle)
     }
 }

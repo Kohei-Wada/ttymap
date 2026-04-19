@@ -6,6 +6,7 @@
 //! swapped in as the palette grows.
 
 use crate::color_palette::ThemeId;
+use crate::command::Command;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::plugin::PluginRegistry;
@@ -137,8 +138,8 @@ impl PaletteProvider for CommandProvider {
             return PaletteAction::Close;
         };
         match &self.all[entry_idx].kind {
-            Kind::Action(a) => PaletteAction::Run(a.clone()),
-            Kind::Activate(tag) => PaletteAction::Activate(tag.clone()),
+            Kind::Action(a) => PaletteAction::Run(Command::Map(a.clone())),
+            Kind::Activate(tag) => PaletteAction::Run(Command::ActivatePlugin(tag.clone())),
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))
             }
