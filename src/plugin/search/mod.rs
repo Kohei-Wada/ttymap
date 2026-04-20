@@ -13,7 +13,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::command::Command;
+use crate::app_msg::AppMsg;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
@@ -76,7 +76,7 @@ impl Plugin for SearchPlugin {
         // flipping to false and calls `ui.focus.release()`.
         match outcome {
             Outcome::None | Outcome::Consumed => PluginAction::Consumed,
-            Outcome::Jump(loc) => PluginAction::Run(Command::Jump(loc)),
+            Outcome::Jump(loc) => PluginAction::Run(AppMsg::Jump(loc)),
             Outcome::Submit(query) => {
                 self.service.search(&query);
                 PluginAction::Consumed

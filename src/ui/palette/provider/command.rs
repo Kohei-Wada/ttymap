@@ -6,7 +6,7 @@
 //! swapped in as the palette grows.
 
 use crate::color_palette::ThemeId;
-use crate::command::Command;
+use crate::app_msg::AppMsg;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::plugin::PluginRegistry;
@@ -43,7 +43,7 @@ impl CommandProvider {
         for action in Action::all_listed() {
             all.push(Entry {
                 label: action.label().to_string(),
-                hint: keymap.keys_for(&Command::Map(action.clone())).join(", "),
+                hint: keymap.keys_for(&AppMsg::Map(action.clone())).join(", "),
                 kind: Kind::Action(action.clone()),
             });
         }
@@ -119,8 +119,8 @@ impl PaletteProvider for CommandProvider {
             return PaletteAction::Close;
         };
         match &self.all[entry_idx].kind {
-            Kind::Action(a) => PaletteAction::Run(Command::Map(a.clone())),
-            Kind::Activate(tag) => PaletteAction::Run(Command::ActivatePlugin(tag.clone())),
+            Kind::Action(a) => PaletteAction::Run(AppMsg::Map(a.clone())),
+            Kind::Activate(tag) => PaletteAction::Run(AppMsg::ActivatePlugin(tag.clone())),
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))
             }

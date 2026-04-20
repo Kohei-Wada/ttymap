@@ -5,7 +5,7 @@
 //! to know about every concrete UI mutation. Today: theme switching;
 //! tomorrow: language / export / whatever needs a toplevel UI command.
 //!
-//! Wrapped by [`crate::command::Command::Ui`] so it rides the same
+//! Wrapped by [`crate::app_msg::AppMsg::Ui`] so it rides the same
 //! RPC surface as map actions and plugin activation. Application
 //! lives on [`UiState::apply`](crate::ui::UiState::apply) — the UI
 //! type owns the workflow; the dispatcher just calls it.

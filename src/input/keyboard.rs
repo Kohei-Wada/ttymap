@@ -1,25 +1,25 @@
 //! Keyboard input handler. Pure **translator**: raw key event →
-//! `Option<Command>`. The caller (`app.rs`) is the one that actually
+//! `Option<AppMsg>`. The caller (`app.rs`) is the one that actually
 //! dispatches the command, keeping keyboard / mouse / async-plugin
 //! paths symmetric.
 //!
 //! The routing decision tree:
 //!
-//! 1. **Focus-first** — `command::deliver_key_to_focused` hands the
+//! 1. **Focus-first** — `app_msg::deliver_key_to_focused` hands the
 //!    event to the currently focused surface (palette / plugin). If it
-//!    consumes or emits a `Command`, we're done.
-//! 2. **Tab / Shift-Tab** → `Command::CycleFocus(forward)`.
-//! 3. **`:`** → `Command::OpenPalette`.
-//! 4. **Plugin activation keys** → `Command::ActivatePlugin(tag)`.
-//! 5. **`KeyMap::resolve`** → whatever `Command` the binding produces.
+//!    consumes or emits a `AppMsg`, we're done.
+//! 2. **Tab / Shift-Tab** → `AppMsg::CycleFocus(forward)`.
+//! 3. **`:`** → `AppMsg::OpenPalette`.
+//! 4. **Plugin activation keys** → `AppMsg::ActivatePlugin(tag)`.
+//! 5. **`KeyMap::resolve`** → whatever `AppMsg` the binding produces.
 //!
 //! Focus writes and state dispatch never happen here — they're all in
 //! `command`. This layer only *reads* focus (indirectly, via
-//! `deliver_key_to_focused`) and produces `Command` values.
+//! `deliver_key_to_focused`) and produces `AppMsg` values.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::command::{Command, KeyDelivery};
+use crate::app_msg::{AppMsg, KeyDelivery};
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::Action;
@@ -42,19 +42,19 @@ impl KeyboardHandler {
     }
 
     /// Expose the keymap so `app.rs` can thread it into the
-    /// `DispatchCtx` it builds for `command::dispatch`.
+    /// `DispatchCtx` it builds for `app_msg::dispatch`.
     pub fn keymap(&self) -> &KeyMap {
         &self.keymap
     }
 
     /// Advance the `gg` sequence state machine and resolve via the
-    /// keymap. Returns the `Command` to dispatch, or `None` for a
+    /// keymap. Returns the `AppMsg` to dispatch, or `None` for a
     /// no-op (mid-sequence or unbound key).
-    fn resolve_with_sequence(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Command> {
+    fn resolve_with_sequence(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppMsg> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Some(Command::Map(Action::ZoomToWorld));
+                return Some(AppMsg::Map(Action::ZoomToWorld));
             }
             self.pending_g = true;
             return None;
@@ -63,18 +63,18 @@ impl KeyboardHandler {
         self.keymap.resolve(code, modifiers)
     }
 
-    /// Translate a raw key event into an optional `Command`. Side
+    /// Translate a raw key event into an optional `AppMsg`. Side
     /// effects are limited to focused-surface delivery (palette filter
     /// edit, plugin state update) and focus auto-release — both
-    /// performed inside `command::deliver_key_to_focused`. The caller
-    /// runs `command::dispatch` on the returned `Command`.
+    /// performed inside `app_msg::deliver_key_to_focused`. The caller
+    /// runs `app_msg::dispatch` on the returned `AppMsg`.
     pub fn handle(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         ui: &mut UiState,
         center: LonLat,
-    ) -> Option<Command> {
+    ) -> Option<AppMsg> {
         // Resolve sequence / keymap first so the mutable borrow of
         // self.keymap (for sequence state) ends before the controller
         // reads it.
@@ -87,22 +87,22 @@ impl KeyboardHandler {
             KeyDelivery::Passthrough => {}
         }
 
-        // [2] Focus cycling — Tab / Shift-Tab → Command::CycleFocus.
+        // [2] Focus cycling — Tab / Shift-Tab → AppMsg::CycleFocus.
         let forward_cycle = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
         let backward_cycle = code == KeyCode::BackTab
             || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
         if forward_cycle || backward_cycle {
-            return Some(Command::CycleFocus(forward_cycle));
+            return Some(AppMsg::CycleFocus(forward_cycle));
         }
 
         // [3] `:` opens the command palette (builtin, fixed key).
         if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
-            return Some(Command::OpenPalette);
+            return Some(AppMsg::OpenPalette);
         }
 
         // [4] Plugin activation keys.
         if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
-            return Some(Command::ActivatePlugin(tag.to_string()));
+            return Some(AppMsg::ActivatePlugin(tag.to_string()));
         }
 
         // [5] Keymap fallback.
@@ -116,8 +116,8 @@ mod tests {
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
 
-    fn map(action: Action) -> Command {
-        Command::Map(action)
+    fn map(action: Action) -> AppMsg {
+        AppMsg::Map(action)
     }
 
     #[test]

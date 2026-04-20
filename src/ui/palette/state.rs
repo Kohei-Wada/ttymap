@@ -121,7 +121,7 @@ impl PaletteState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::Command;
+    use crate::app_msg::AppMsg;
     use crate::map::Action;
     use crate::ui::palette::provider::{PaletteAction, PaletteItem, PaletteProvider};
 
@@ -176,7 +176,7 @@ mod tests {
             &self.items
         }
         fn execute(&mut self, _idx: usize) -> PaletteAction {
-            PaletteAction::Run(Command::Map(Action::None))
+            PaletteAction::Run(AppMsg::Map(Action::None))
         }
     }
 

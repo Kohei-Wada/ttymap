@@ -5,7 +5,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::command::{self, Command, DispatchCtx, InputEffect};
+use crate::app_msg::{self, AppMsg, DispatchCtx, InputEffect};
 use crate::config::Config;
 use crate::input::keyboard::KeyboardHandler;
 use crate::input::mouse::MouseHandler;
@@ -70,7 +70,7 @@ impl App {
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
 
         info!("event loop started");
-        self.dispatch(Command::Map(Action::Redraw));
+        self.dispatch(AppMsg::Map(Action::Redraw));
 
         while self.map.is_running() {
             self.ui.drain_frames(&self.render_handle);
@@ -98,7 +98,7 @@ impl App {
                             && key_event.code == KeyCode::Char('c')
                         {
                             info!("Ctrl-C received, quitting");
-                            self.dispatch(Command::Map(Action::Quit));
+                            self.dispatch(AppMsg::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
                             if let Some(cmd) = self.keyboard.handle(
@@ -113,7 +113,7 @@ impl App {
                     }
                     Event::Resize(cols, rows) => {
                         info!("resize: {}x{}", cols, rows);
-                        self.dispatch(Command::Resize(cols, rows));
+                        self.dispatch(AppMsg::Resize(cols, rows));
                     }
                     Event::Mouse(mouse) => {
                         if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
@@ -137,7 +137,7 @@ impl App {
     /// frame if the command changed map state. Single entry point for
     /// every `dispatch(...)` call site so the ctx bundle and
     /// post-dispatch redraw rule live in exactly one place.
-    fn dispatch(&mut self, cmd: Command) {
+    fn dispatch(&mut self, cmd: AppMsg) {
         let effect = {
             let mut ctx = DispatchCtx {
                 map: &mut self.map,
@@ -145,7 +145,7 @@ impl App {
                 render_handle: &self.render_handle,
                 keymap: self.keyboard.keymap(),
             };
-            command::dispatch(cmd, &mut ctx)
+            app_msg::dispatch(cmd, &mut ctx)
         };
         if matches!(effect, InputEffect::Map) && self.map.is_running() {
             let viewport = self.map.viewport();
