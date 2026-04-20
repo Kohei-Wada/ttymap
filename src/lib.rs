@@ -10,6 +10,11 @@
 /// Application event loop and terminal I/O orchestration.
 pub mod app;
 
+/// CLI subcommand implementations. Each subcommand lives in its own
+/// submodule; `main.rs` just parses the top-level enum and calls
+/// [`commands::Command::run`].
+pub mod commands;
+
 /// Central app-level message vocabulary — the single enum every
 /// emission site (palette, plugins, future RPC) speaks and the one
 /// dispatcher that interprets it.

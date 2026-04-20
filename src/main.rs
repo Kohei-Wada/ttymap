@@ -1,7 +1,6 @@
-use std::fs;
-
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use ttymap::app::App;
+use ttymap::commands::Command as Subcommand;
 use ttymap::config;
 
 #[derive(Parser)]
@@ -19,7 +18,7 @@ use ttymap::config;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Option<Subcommand>,
 
     /// Initial latitude
     #[arg(long, conflicts_with = "here")]
@@ -42,23 +41,17 @@ struct Cli {
     here: bool,
 }
 
-#[derive(Subcommand)]
-enum Command {
-    /// Clear the disk tile cache (~/.cache/ttymap/)
-    ClearCache,
-}
-
 fn main() {
     let cli = Cli::parse();
 
-    // Handle subcommands that don't need the full app
-    if let Some(cmd) = &cli.command {
-        match cmd {
-            Command::ClearCache => {
-                clear_cache();
-                return;
-            }
+    // Subcommands run a single task and exit without booting the full
+    // interactive app.
+    if let Some(cmd) = cli.command {
+        if let Err(e) = cmd.run() {
+            eprintln!("error: {e}");
+            std::process::exit(1);
         }
+        return;
     }
 
     match ttymap::logging::init() {
@@ -110,19 +103,5 @@ fn main() {
     let mut app = App::new(config);
     if let Err(e) = app.run() {
         eprintln!("Error: {e}");
-    }
-}
-
-fn clear_cache() {
-    let cache_dir =
-        directories::ProjectDirs::from("", "", "ttymap").map(|dirs| dirs.cache_dir().to_path_buf());
-
-    match cache_dir {
-        Some(dir) if dir.exists() => match fs::remove_dir_all(&dir) {
-            Ok(()) => println!("Cleared tile cache: {}", dir.display()),
-            Err(e) => eprintln!("Failed to clear cache: {e}"),
-        },
-        Some(dir) => println!("No cache to clear: {}", dir.display()),
-        None => eprintln!("Could not determine cache directory"),
     }
 }
