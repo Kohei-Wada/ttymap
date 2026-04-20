@@ -36,3 +36,54 @@ pub enum Action {
         zoom_in: bool,
     },
 }
+
+impl Action {
+    /// Human-readable label used by the command palette and the help
+    /// overlay. Mouse-only variants (`PanCells`, `ZoomAt`) and the
+    /// no-op `None` return `""` since they are not exposed in UI
+    /// listings. `label()` is the single source of truth; keep
+    /// exhaustive so adding a variant triggers a compile error here.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Action::None => "",
+            Action::Quit => "Quit",
+            Action::PanUp => "Pan up",
+            Action::PanDown => "Pan down",
+            Action::PanLeft => "Pan left",
+            Action::PanRight => "Pan right",
+            Action::PanLeftFast => "Pan left (fast)",
+            Action::PanRightFast => "Pan right (fast)",
+            Action::PanUpHalf => "Pan up (half)",
+            Action::PanDownHalf => "Pan down (half)",
+            Action::ZoomIn => "Zoom in",
+            Action::ZoomOut => "Zoom out",
+            Action::ZoomToWorld => "Zoom to world",
+            Action::ResetPosition => "Reset position",
+            Action::Redraw => "Redraw",
+            Action::PanCells(..) | Action::ZoomAt { .. } => "",
+        }
+    }
+
+    /// Every `Action` variant surfaced in UI listings (command palette,
+    /// help overlay). Excludes mouse-only variants and the no-op
+    /// `None`. Adding a new keymap-bindable variant means adding it
+    /// here.
+    pub fn all_listed() -> &'static [Action] {
+        &[
+            Action::PanLeft,
+            Action::PanRight,
+            Action::PanUp,
+            Action::PanDown,
+            Action::PanLeftFast,
+            Action::PanRightFast,
+            Action::PanUpHalf,
+            Action::PanDownHalf,
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::ZoomToWorld,
+            Action::ResetPosition,
+            Action::Redraw,
+            Action::Quit,
+        ]
+    }
+}

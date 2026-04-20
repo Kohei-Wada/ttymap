@@ -28,25 +28,6 @@ enum Kind {
     OpenThemeProvider(ThemeId),
 }
 
-/// Static list of `(label, Action)` covering every map-level action.
-/// Kept here (not in `map::Action`) because labels are a UI concern.
-const ACTIONS: &[(&str, Action)] = &[
-    ("Pan left", Action::PanLeft),
-    ("Pan right", Action::PanRight),
-    ("Pan up", Action::PanUp),
-    ("Pan down", Action::PanDown),
-    ("Pan left (fast)", Action::PanLeftFast),
-    ("Pan right (fast)", Action::PanRightFast),
-    ("Pan up (half)", Action::PanUpHalf),
-    ("Pan down (half)", Action::PanDownHalf),
-    ("Zoom in", Action::ZoomIn),
-    ("Zoom out", Action::ZoomOut),
-    ("Zoom to world", Action::ZoomToWorld),
-    ("Reset position", Action::ResetPosition),
-    ("Redraw", Action::Redraw),
-    ("Quit", Action::Quit),
-];
-
 pub struct CommandProvider {
     all: Vec<Entry>,
     /// Indices into `all` matching the current query, in display order.
@@ -59,9 +40,9 @@ impl CommandProvider {
     pub fn new(widgets: &PluginRegistry, keymap: &KeyMap, current_theme: ThemeId) -> Self {
         let mut all: Vec<Entry> = Vec::new();
 
-        for (label, action) in ACTIONS {
+        for action in Action::all_listed() {
             all.push(Entry {
-                label: (*label).to_string(),
+                label: action.label().to_string(),
                 hint: keymap.keys_for(&Command::Map(action.clone())).join(", "),
                 kind: Kind::Action(action.clone()),
             });

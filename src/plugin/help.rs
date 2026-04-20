@@ -1,7 +1,5 @@
 //! Help widget — displays keybinding help as a center overlay.
 
-use std::collections::HashMap;
-
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -43,38 +41,14 @@ impl HelpPlugin {
             .chain(other_plugins.iter().flat_map(|p| plugin_entries(*p)))
             .collect();
 
-        let mut action_keys: HashMap<&str, Vec<String>> = HashMap::new();
-
-        for (binding, cmd) in &keymap.bindings {
-            let label = command_label(cmd);
-            if label.is_empty() {
-                continue;
-            }
-            action_keys
-                .entry(label)
-                .or_default()
-                .push(binding.display());
-        }
-
-        let display_order: Vec<(&str, &str)> = vec![
-            ("Pan", "Pan left/right/up/down"),
-            ("Pan fast (horizontal)", "Fast pan left/right"),
-            ("Pan fast (vertical)", "Fast pan up/down"),
-            ("Zoom in", "Zoom in"),
-            ("Zoom out", "Zoom out"),
-            ("Zoom to world", "Zoom to world"),
-            ("Reset position", "Reset position"),
-            ("Quit", "Quit"),
-        ];
-
         let mut lines = Vec::new();
         lines.push(" A terminal-based map viewer — Mapbox vector tiles".to_string());
         lines.push(" rendered as Unicode Braille.".to_string());
         lines.push(String::new());
-        for (action_name, description) in &display_order {
-            if let Some(keys) = action_keys.get(action_name) {
-                let keys_str = keys.join(", ");
-                lines.push(format!(" {:<20} {}", keys_str, description));
+        for action in Action::all_listed() {
+            let keys = keymap.keys_for(&Command::Map(action.clone()));
+            if !keys.is_empty() {
+                lines.push(format!(" {:<20} {}", keys.join(", "), action.label()));
             }
         }
 
@@ -184,26 +158,3 @@ fn plugin_entries(p: &dyn Plugin) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Short label for a keymap-bound command. Today only `Command::Map`
-/// entries have help labels; other command kinds (palette-only,
-/// plugin activations) are surfaced elsewhere.
-fn command_label(cmd: &Command) -> &'static str {
-    match cmd {
-        Command::Map(a) => action_label(a),
-        _ => "",
-    }
-}
-
-fn action_label(action: &Action) -> &'static str {
-    match action {
-        Action::PanLeft | Action::PanRight | Action::PanUp | Action::PanDown => "Pan",
-        Action::PanLeftFast | Action::PanRightFast => "Pan fast (horizontal)",
-        Action::PanUpHalf | Action::PanDownHalf => "Pan fast (vertical)",
-        Action::ZoomIn => "Zoom in",
-        Action::ZoomOut => "Zoom out",
-        Action::ZoomToWorld => "Zoom to world",
-        Action::ResetPosition => "Reset position",
-        Action::Quit => "Quit",
-        _ => "",
-    }
-}
