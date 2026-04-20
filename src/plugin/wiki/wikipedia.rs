@@ -38,12 +38,16 @@ impl WikipediaClient {
         debug!("wiki: geosearch {}", url);
 
         let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
+            log::warn!("wiki: geosearch fetch failed near ({}, {})", lat, lon);
             return Vec::new();
         };
 
         let pages = match json.pointer("/query/geosearch") {
             Some(serde_json::Value::Array(arr)) => arr,
-            _ => return Vec::new(),
+            _ => {
+                log::warn!("wiki: geosearch response missing /query/geosearch array");
+                return Vec::new();
+            }
         };
 
         struct PageInfo {
@@ -98,6 +102,7 @@ impl WikipediaClient {
         debug!("wiki: extracts {}", url);
 
         let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
+            log::warn!("wiki: extracts fetch failed ({} titles)", titles.len());
             return std::collections::HashMap::new();
         };
 

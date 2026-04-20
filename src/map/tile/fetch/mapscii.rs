@@ -70,12 +70,12 @@ impl TileClient for MapsciiTileClient {
     /// Enqueue a tile for fetching. Skips if already queued or in-flight.
     fn enqueue(&self, key: &TileKey, priority: TilePriority) {
         {
-            let in_flight = self.shared.in_flight.lock().unwrap();
+            let in_flight = self.shared.in_flight.lock().expect("tile worker mutex poisoned");
             if in_flight.contains(key) {
                 return;
             }
         }
-        let mut queue = self.shared.queue.lock().unwrap();
+        let mut queue = self.shared.queue.lock().expect("tile worker mutex poisoned");
         queue.push(key.clone(), priority);
         drop(queue);
         self.shared.condvar.notify_one();
@@ -85,7 +85,7 @@ impl TileClient for MapsciiTileClient {
     /// A `TilePriority` with a large `zoom_diff` sinks the entry to the
     /// back, where overflow drop will evict it as new work arrives.
     fn update_view(&self, priority_fn: &dyn PriorityFn<TileKey, TilePriority>) {
-        let mut queue = self.shared.queue.lock().unwrap();
+        let mut queue = self.shared.queue.lock().expect("tile worker mutex poisoned");
         queue.reprioritize(priority_fn);
     }
 
@@ -106,13 +106,13 @@ impl Drop for MapsciiTileClient {
 fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http: &HttpClient) {
     loop {
         let key = {
-            let mut queue = shared.queue.lock().unwrap();
+            let mut queue = shared.queue.lock().expect("tile worker mutex poisoned");
             loop {
                 if shared.shutdown.load(Ordering::Relaxed) {
                     return;
                 }
                 if let Some(key) = queue.pop() {
-                    let mut in_flight = shared.in_flight.lock().unwrap();
+                    let mut in_flight = shared.in_flight.lock().expect("tile worker mutex poisoned");
                     if in_flight.contains(&key) {
                         drop(in_flight);
                         continue;
@@ -120,7 +120,10 @@ fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http
                     in_flight.insert(key.clone());
                     break key;
                 }
-                queue = shared.condvar.wait(queue).unwrap();
+                queue = shared
+                    .condvar
+                    .wait(queue)
+                    .expect("tile worker condvar poisoned");
             }
         };
 
@@ -130,7 +133,7 @@ fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http
         let bytes = http.get_bytes(&url);
 
         // Remove from in-flight
-        shared.in_flight.lock().unwrap().remove(&key);
+        shared.in_flight.lock().expect("tile worker mutex poisoned").remove(&key);
 
         // Send result (empty for failures → negative cache)
         let bytes = bytes.unwrap_or_default();
@@ -153,7 +156,7 @@ mod tests {
         let key = TileKey::new(0, 0, 0);
 
         // Manually mark as in-flight
-        client.shared.in_flight.lock().unwrap().insert(key.clone());
+        client.shared.in_flight.lock().expect("tile worker mutex poisoned").insert(key.clone());
 
         // Should skip (already in-flight)
         client.enqueue(
@@ -163,6 +166,6 @@ mod tests {
                 distance_sq: 0.0,
             },
         );
-        assert_eq!(client.shared.queue.lock().unwrap().len(), 0);
+        assert_eq!(client.shared.queue.lock().expect("tile worker mutex poisoned").len(), 0);
     }
 }

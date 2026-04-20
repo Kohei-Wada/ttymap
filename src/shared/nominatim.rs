@@ -51,6 +51,7 @@ impl NominatimClient {
         debug!("nominatim: search {}", url);
 
         let Some(json) = self.http.get_json::<Vec<serde_json::Value>>(&url) else {
+            log::warn!("nominatim: search fetch failed for \"{}\"", query);
             return Vec::new();
         };
 
