@@ -75,15 +75,7 @@ impl App {
         while self.map.is_running() {
             self.ui.drain_frames(&self.render_handle);
 
-            // Poll plugins for background work; latest pending command wins.
-            let mut async_cmd: Option<Command> = None;
-            for w in self.ui.widgets.iter_mut() {
-                w.poll();
-                if let Some(cmd) = w.pending_command() {
-                    async_cmd = Some(cmd);
-                }
-            }
-            if let Some(cmd) = async_cmd {
+            if let Some(cmd) = self.ui.poll_widgets() {
                 info!("plugin async command: {:?}", cmd);
                 self.dispatch(cmd);
             }

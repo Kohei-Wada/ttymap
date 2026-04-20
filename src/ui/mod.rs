@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
 
-use crate::command::KeyDelivery;
+use crate::command::{Command, KeyDelivery};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
 use crate::plugin::help::HelpPlugin;
@@ -105,6 +105,21 @@ impl UiState {
         while let Some(frame) = render_handle.try_recv_frame() {
             self.map_frame = Some(frame);
         }
+    }
+
+    /// Advance every plugin's async work by one tick. If multiple
+    /// plugins produced a `Command` this tick, the latest wins — only
+    /// one Command runs per tick to avoid cascading state changes
+    /// within a single frame.
+    pub fn poll_widgets(&mut self) -> Option<Command> {
+        let mut async_cmd: Option<Command> = None;
+        for w in self.widgets.iter_mut() {
+            w.poll();
+            if let Some(cmd) = w.pending_command() {
+                async_cmd = Some(cmd);
+            }
+        }
+        async_cmd
     }
 
     /// Apply a `UiAction`. Today: theme switch. Drives the render
