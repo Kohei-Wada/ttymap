@@ -63,8 +63,10 @@ impl RenderHandle {
         }
     }
 
-    pub fn request_draw(&self, state: RenderRequest) -> bool {
-        self.cmd_tx.send(RenderCommand::Draw(state)).is_ok()
+    pub fn request_draw(&self, state: RenderRequest) {
+        if self.cmd_tx.send(RenderCommand::Draw(state)).is_err() {
+            log::warn!("render thread channel closed on draw");
+        }
     }
 
     /// Pull the next completed frame from the render thread, if any.
@@ -110,19 +112,42 @@ impl Drop for RenderHandle {
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
+/// What a single `RenderCommand` leaves for the run loop to act on.
+/// Draw is deferred to the caller because the two callers treat it
+/// differently: the drain path keeps only the latest, the idle path
+/// renders immediately.
+enum CmdOutcome {
+    Continue,
+    Draw(RenderRequest),
+    Shutdown,
+}
+
+fn apply_cmd(cmd: RenderCommand, pipeline: &mut RenderPipeline) -> CmdOutcome {
+    match cmd {
+        RenderCommand::Draw(state) => CmdOutcome::Draw(state),
+        RenderCommand::Resize { width, height } => {
+            pipeline.resize(width, height);
+            CmdOutcome::Continue
+        }
+        RenderCommand::SetStyler(styler) => {
+            pipeline.set_styler(styler);
+            CmdOutcome::Continue
+        }
+        RenderCommand::Shutdown => CmdOutcome::Shutdown,
+    }
+}
+
 fn drain_commands(
     cmd_rx: &mpsc::Receiver<RenderCommand>,
     pipeline: &mut RenderPipeline,
 ) -> Result<Option<RenderRequest>, ()> {
     let mut latest_draw: Option<RenderRequest> = None;
 
-    loop {
-        match cmd_rx.try_recv() {
-            Ok(RenderCommand::Draw(state)) => latest_draw = Some(state),
-            Ok(RenderCommand::Resize { width, height }) => pipeline.resize(width, height),
-            Ok(RenderCommand::SetStyler(styler)) => pipeline.set_styler(styler),
-            Ok(RenderCommand::Shutdown) => return Err(()),
-            Err(_) => break,
+    while let Ok(cmd) = cmd_rx.try_recv() {
+        match apply_cmd(cmd, pipeline) {
+            CmdOutcome::Draw(state) => latest_draw = Some(state),
+            CmdOutcome::Continue => {}
+            CmdOutcome::Shutdown => return Err(()),
         }
     }
     Ok(latest_draw)
@@ -183,15 +208,16 @@ fn run_loop(
         // 4. Wait for commands
         const POLL_MS: u64 = 50;
         match cmd_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
-            Ok(RenderCommand::Draw(state)) => {
-                if !send_frame(&result_tx, pipeline.render(&state)) {
-                    return;
+            Ok(cmd) => match apply_cmd(cmd, &mut pipeline) {
+                CmdOutcome::Draw(state) => {
+                    if !send_frame(&result_tx, pipeline.render(&state)) {
+                        return;
+                    }
+                    last_state = Some(state);
                 }
-                last_state = Some(state);
-            }
-            Ok(RenderCommand::Resize { width, height }) => pipeline.resize(width, height),
-            Ok(RenderCommand::SetStyler(styler)) => pipeline.set_styler(styler),
-            Ok(RenderCommand::Shutdown) => break,
+                CmdOutcome::Continue => {}
+                CmdOutcome::Shutdown => break,
+            },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
