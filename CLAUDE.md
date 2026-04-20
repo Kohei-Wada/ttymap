@@ -34,7 +34,7 @@ The app uses a **three-thread model**:
 
 1. **Main thread** (`src/app.rs`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `command::dispatch` (`src/command.rs`).
 
-2. **Render thread** (`src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderCommand` messages (`Draw` / `Resize` / `SetStyler` / `Shutdown`) via `mpsc`, and sends completed `MapFrame`s back. Also polls the tile cache for completed fetches and re-renders when new tiles arrive.
+2. **Render thread** (`src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw(Viewport)` / `Resize` / `SetStyler` / `Shutdown`) via `mpsc`, and sends completed `MapFrame`s back. Also polls the tile cache for completed fetches and re-renders when new tiles arrive.
 
 3. **Tile fetch threads** (`src/map/tile/fetch/`): Each missing tile spawns a short-lived thread for HTTP fetch. Completed bytes are decoded into `DecodedTile` and delivered via `mpsc` for the render thread to pick up.
 
