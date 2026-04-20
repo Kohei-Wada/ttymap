@@ -50,9 +50,12 @@ impl NominatimClient {
         );
         debug!("nominatim: search {}", url);
 
-        let Some(json) = self.http.get_json::<Vec<serde_json::Value>>(&url) else {
-            log::warn!("nominatim: search fetch failed for \"{}\"", query);
-            return Vec::new();
+        let json = match self.http.get_json::<Vec<serde_json::Value>>(&url) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("nominatim: search fetch failed for \"{}\": {}", query, e);
+                return Vec::new();
+            }
         };
 
         json.iter()
@@ -76,7 +79,7 @@ impl NominatimClient {
         );
         debug!("nominatim: reverse {}", url);
 
-        let json: serde_json::Value = self.http.get_json(&url)?;
+        let json: serde_json::Value = self.http.get_json(&url).ok()?;
         let display_name = json.get("display_name")?.as_str()?.to_string();
         let address = json.get("address");
         let city = address

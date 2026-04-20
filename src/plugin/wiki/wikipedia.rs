@@ -37,9 +37,17 @@ impl WikipediaClient {
         );
         debug!("wiki: geosearch {}", url);
 
-        let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
-            log::warn!("wiki: geosearch fetch failed near ({}, {})", lat, lon);
-            return Vec::new();
+        let json = match self.http.get_json::<serde_json::Value>(&url) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!(
+                    "wiki: geosearch fetch failed near ({}, {}): {}",
+                    lat,
+                    lon,
+                    e
+                );
+                return Vec::new();
+            }
         };
 
         let pages = match json.pointer("/query/geosearch") {
@@ -101,9 +109,16 @@ impl WikipediaClient {
         );
         debug!("wiki: extracts {}", url);
 
-        let Some(json) = self.http.get_json::<serde_json::Value>(&url) else {
-            log::warn!("wiki: extracts fetch failed ({} titles)", titles.len());
-            return std::collections::HashMap::new();
+        let json = match self.http.get_json::<serde_json::Value>(&url) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!(
+                    "wiki: extracts fetch failed ({} titles): {}",
+                    titles.len(),
+                    e
+                );
+                return std::collections::HashMap::new();
+            }
         };
 
         let mut result = std::collections::HashMap::new();

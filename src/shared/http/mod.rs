@@ -7,6 +7,7 @@
 
 pub mod url;
 
+use std::fmt;
 use std::time::Duration;
 
 use log::debug;
@@ -19,6 +20,32 @@ const USER_AGENT: &str = concat!(
 );
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Classified failure from an HTTP fetch. Callers match on the variant
+/// to decide retry / negative-cache / surface-to-UI policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchError {
+    /// reqwest IO-level: timeout, DNS, connection refused, mid-body disconnect.
+    /// Usually transient — worth retrying with backoff.
+    Network(String),
+    /// Non-2xx HTTP status. May be permanent (404) or transient (503).
+    Http(u16),
+    /// Deserialisation failure (JSON / UTF-8). Usually indicates an
+    /// upstream schema change — retry will not help.
+    Parse(String),
+}
+
+impl fmt::Display for FetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Network(msg) => write!(f, "network: {msg}"),
+            Self::Http(code) => write!(f, "http {code}"),
+            Self::Parse(msg) => write!(f, "parse: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for FetchError {}
 
 #[derive(Clone)]
 pub struct HttpClient {
@@ -39,51 +66,70 @@ impl HttpClient {
         Self { inner, tag }
     }
 
-    /// GET + deserialize as JSON. Returns `None` and logs on any failure.
-    pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> Option<T> {
-        let response = match self.inner.get(url).send() {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("{}: {}: request error: {}", self.tag, url, e);
-                return None;
-            }
-        };
+    /// GET + deserialize as JSON. Low-level `debug!` is emitted per
+    /// failure so offline debugging has URL + tag context; callers
+    /// get a classified [`FetchError`] for policy decisions.
+    pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T, FetchError> {
+        let response = self.inner.get(url).send().map_err(|e| {
+            debug!("{}: {}: request error: {}", self.tag, url, e);
+            FetchError::Network(e.to_string())
+        })?;
         if !response.status().is_success() {
-            debug!("{}: {}: status {}", self.tag, url, response.status());
-            return None;
+            let status = response.status();
+            debug!("{}: {}: status {}", self.tag, url, status);
+            return Err(FetchError::Http(status.as_u16()));
         }
-        match response.json() {
-            Ok(j) => Some(j),
-            Err(e) => {
-                debug!("{}: {}: parse error: {}", self.tag, url, e);
-                None
-            }
-        }
+        response.json().map_err(|e| {
+            debug!("{}: {}: parse error: {}", self.tag, url, e);
+            FetchError::Parse(e.to_string())
+        })
     }
 
-    /// GET + raw bytes. Returns `None` and logs on any failure.
-    pub fn get_bytes(&self, url: &str) -> Option<Vec<u8>> {
-        let response = match self.inner.get(url).send() {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("{}: {}: request error: {}", self.tag, url, e);
-                return None;
-            }
-        };
+    /// GET + raw bytes. Body-streaming failures are reported as
+    /// [`FetchError::Network`] (mid-stream disconnects are networky).
+    pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>, FetchError> {
+        let response = self.inner.get(url).send().map_err(|e| {
+            debug!("{}: {}: request error: {}", self.tag, url, e);
+            FetchError::Network(e.to_string())
+        })?;
         if !response.status().is_success() {
-            debug!("{}: {}: status {}", self.tag, url, response.status());
-            return None;
+            let status = response.status();
+            debug!("{}: {}: status {}", self.tag, url, status);
+            return Err(FetchError::Http(status.as_u16()));
         }
-        match response.bytes() {
-            Ok(b) => Some(b.to_vec()),
-            Err(e) => {
-                debug!("{}: {}: body error: {}", self.tag, url, e);
-                None
-            }
-        }
+        response.bytes().map(|b| b.to_vec()).map_err(|e| {
+            debug!("{}: {}: body error: {}", self.tag, url, e);
+            FetchError::Network(e.to_string())
+        })
     }
 }
 
 fn builder() -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder().user_agent(USER_AGENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_error_display_network() {
+        assert_eq!(
+            FetchError::Network("timeout".into()).to_string(),
+            "network: timeout"
+        );
+    }
+
+    #[test]
+    fn fetch_error_display_http() {
+        assert_eq!(FetchError::Http(404).to_string(), "http 404");
+    }
+
+    #[test]
+    fn fetch_error_display_parse() {
+        assert_eq!(
+            FetchError::Parse("missing field".into()).to_string(),
+            "parse: missing field"
+        );
+    }
 }

@@ -20,7 +20,7 @@ pub fn lookup(endpoint: &str, timeout_ms: u64) -> Option<(f64, f64)> {
     let http = HttpClient::with_timeout("geoip", Duration::from_millis(timeout_ms));
     debug!("geoip: lookup {}", endpoint);
 
-    let json: serde_json::Value = http.get_json(endpoint)?;
+    let json: serde_json::Value = http.get_json(endpoint).ok()?;
 
     // Some endpoints (e.g. ipapi.co when rate-limited) return HTTP 200
     // with `{"error": true, "reason": "..."}`.

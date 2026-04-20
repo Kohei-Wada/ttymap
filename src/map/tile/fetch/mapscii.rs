@@ -157,7 +157,13 @@ fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http
         // HTTP fetch
         let url = format!("{}/{}.pbf", BASE_URL, key);
         debug!("worker: fetching {}", url);
-        let bytes = http.get_bytes(&url);
+        let bytes = match http.get_bytes(&url) {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!("tile: fetch failed for {}: {}", key, e);
+                Vec::new()
+            }
+        };
 
         // Remove from in-flight
         shared
@@ -167,7 +173,6 @@ fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http
             .remove(&key);
 
         // Send result (empty for failures → negative cache)
-        let bytes = bytes.unwrap_or_default();
         debug!("worker: fetched {} ({} bytes)", key, bytes.len());
         if tx.send((key, bytes)).is_err() {
             log::warn!("tile channel closed");
