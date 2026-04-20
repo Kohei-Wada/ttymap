@@ -54,6 +54,16 @@ impl UiTheme {
             .fg(self.accent)
             .add_modifier(Modifier::BOLD)
     }
+
+    /// Used for clickable / copyable URLs (OSC 8 or terminal-autodetect
+    /// links). Underlined to suggest hyperlink, `accent_alt` for a hue
+    /// that pops against the background.
+    pub fn link(&self) -> Style {
+        Style::default()
+            .fg(self.accent_alt)
+            .bg(self.bg)
+            .add_modifier(Modifier::UNDERLINED)
+    }
 }
 
 /// Runtime theme switch: build a fresh `Styler` for `new_id`, push it

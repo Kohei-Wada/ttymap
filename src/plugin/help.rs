@@ -3,6 +3,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::command::Command;
@@ -12,9 +13,25 @@ use crate::theme::UiTheme;
 
 use super::{Plugin, PluginAction, PluginCtx};
 
+/// A colored span of help text. Theme is applied at render time so
+/// theme switches update the colors without rebuilding the help
+/// structure.
+enum Seg {
+    /// Plain prose text.
+    Text(String),
+    /// Key name / binding (e.g. "h", "Tab", "gg"). Rendered with the
+    /// accent color so bindings stand out from their descriptions.
+    Key(String),
+    /// URL that modern terminals auto-detect for click-to-open.
+    /// Underlined to hint at clickability.
+    Url(String),
+}
+
+type HelpLine = Vec<Seg>;
+
 pub struct HelpPlugin {
     active: bool,
-    text: String,
+    lines: Vec<HelpLine>,
 }
 
 impl Default for HelpPlugin {
@@ -27,7 +44,7 @@ impl HelpPlugin {
     pub fn new() -> Self {
         Self {
             active: false,
-            text: String::new(),
+            lines: Vec::new(),
         }
     }
 
@@ -41,34 +58,51 @@ impl HelpPlugin {
             .chain(other_plugins.iter().flat_map(|p| plugin_entries(*p)))
             .collect();
 
-        let mut lines: Vec<String> = vec![
-            " A terminal-based map viewer — Mapbox vector tiles".to_string(),
-            " rendered as Unicode Braille.".to_string(),
-            " Inspired by and built on ideas from mapscii:".to_string(),
-            " https://github.com/rastapasta/mapscii".to_string(),
-            String::new(),
+        let mut lines: Vec<HelpLine> = vec![
+            text_line(" A terminal-based map viewer — Mapbox vector tiles"),
+            text_line(" rendered as Unicode Braille."),
+            text_line(" Inspired by and built on ideas from mapscii:"),
+            url_line("https://github.com/rastapasta/mapscii"),
+            Vec::new(),
         ];
         for action in Action::all_listed() {
             let keys = keymap.keys_for(&Command::Map(action.clone()));
             if !keys.is_empty() {
-                lines.push(format!(" {:<20} {}", keys.join(", "), action.label()));
+                lines.push(key_line(&keys.join(", "), action.label()));
             }
         }
 
-        lines.push(String::new());
-        lines.push(format!(" {:<20} {}", "gg", "Zoom to world"));
-        lines.push(format!(" {:<20} {}", "Tab/S-Tab", "Cycle focus"));
-        lines.push(format!(" {:<20} {}", ":", "Command palette"));
+        lines.push(Vec::new());
+        lines.push(key_line("gg", "Zoom to world"));
+        lines.push(key_line("Tab/S-Tab", "Cycle focus"));
+        lines.push(key_line(":", "Command palette"));
         for (key, description) in &entries {
-            lines.push(format!(" {:<20} {}", key, description));
+            lines.push(key_line(key, description));
         }
-        lines.push(String::new());
-        lines.push(format!(" {:<20} {}", "Drag / Scroll", "Pan / zoom (mouse)"));
-        lines.push(String::new());
-        lines.push(" Bug reports and pull requests welcome:".to_string());
-        lines.push(" https://github.com/Kohei-Wada/ttymap".to_string());
+        lines.push(Vec::new());
+        lines.push(key_line("Drag / Scroll", "Pan / zoom (mouse)"));
+        lines.push(Vec::new());
+        lines.push(text_line(" Bug reports and pull requests welcome:"));
+        lines.push(url_line("https://github.com/Kohei-Wada/ttymap"));
 
-        self.text = lines.join("\n");
+        self.lines = lines;
+    }
+
+    fn rendered_lines<'a>(&'a self, theme: &UiTheme) -> Vec<Line<'a>> {
+        self.lines
+            .iter()
+            .map(|segs| {
+                let spans: Vec<Span<'a>> = segs
+                    .iter()
+                    .map(|s| match s {
+                        Seg::Text(t) => Span::styled(t.as_str(), theme.text()),
+                        Seg::Key(k) => Span::styled(k.as_str(), theme.accent_style()),
+                        Seg::Url(u) => Span::styled(u.as_str(), theme.link()),
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
     }
 
     pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
@@ -76,11 +110,12 @@ impl HelpPlugin {
             return;
         }
 
+        let rendered = self.rendered_lines(theme);
+
         // Fit content with breathing room, but cap at ~80% of the map
         // area so the popup doesn't dominate the viewport.
-        let lines: Vec<&str> = self.text.lines().collect();
-        let content_width = lines.iter().map(|l| l.len() as u16).max().unwrap_or(30) + 6;
-        let content_height = lines.len() as u16 + 2;
+        let content_width = rendered.iter().map(|l| l.width() as u16).max().unwrap_or(30) + 6;
+        let content_height = rendered.len() as u16 + 2;
 
         let max_width = map_inner.width.saturating_sub(4).max(20);
         let max_height = map_inner.height.saturating_sub(2).max(10);
@@ -94,9 +129,7 @@ impl HelpPlugin {
         f.render_widget(Clear, area);
 
         let block = theme.panel("help").title_alignment(Alignment::Center);
-        let widget = Paragraph::new(self.text.as_str())
-            .style(theme.text())
-            .block(block);
+        let widget = Paragraph::new(rendered).style(theme.text()).block(block);
         f.render_widget(widget, area);
     }
 }
@@ -161,3 +194,22 @@ fn plugin_entries(p: &dyn Plugin) -> Vec<(String, String)> {
         .collect()
 }
 
+// ── Line builders ──────────────────────────────────────────────────────────────
+
+fn text_line(s: &str) -> HelpLine {
+    vec![Seg::Text(s.to_string())]
+}
+
+fn url_line(url: &str) -> HelpLine {
+    vec![Seg::Text(" ".to_string()), Seg::Url(url.to_string())]
+}
+
+/// `" <key padded to 20>  <label>"` — matches the original plain-text
+/// layout but splits the key into its own span so it can be colored.
+fn key_line(key: &str, label: &str) -> HelpLine {
+    vec![
+        Seg::Text(" ".to_string()),
+        Seg::Key(format!("{:<20}", key)),
+        Seg::Text(format!(" {}", label)),
+    ]
+}
