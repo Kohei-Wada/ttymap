@@ -98,6 +98,15 @@ impl UiState {
     // by the type that holds all three. The controller just picks
     // which workflow a given `Command` maps to.
 
+    /// Pull every frame the render thread has produced since the last
+    /// tick, keeping the most recent. The receiver lives on
+    /// `RenderHandle`; this method is where the UI layer reads from it.
+    pub fn drain_frames(&mut self, render_handle: &RenderHandle) {
+        while let Some(frame) = render_handle.try_recv_frame() {
+            self.map_frame = Some(frame);
+        }
+    }
+
     /// Apply a `UiAction`. Today: theme switch. Drives the render
     /// thread's styler through `render_handle`.
     pub fn apply(&mut self, action: UiAction, render_handle: &RenderHandle) {

@@ -11,7 +11,7 @@ use crate::input::keyboard::KeyboardHandler;
 use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
-use crate::map::render::thread::{RenderHandle, RenderResult};
+use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
 use crate::shared::nominatim::NominatimClient;
@@ -73,10 +73,7 @@ impl App {
         self.dispatch(Command::Map(Action::Redraw));
 
         while self.map.is_running() {
-            // Drain frames the render thread has produced since the last tick.
-            while let Ok(RenderResult::Frame(frame)) = self.render_handle.result_rx.try_recv() {
-                self.ui.map_frame = Some(frame);
-            }
+            self.ui.drain_frames(&self.render_handle);
 
             // Poll plugins for background work; latest pending command wins.
             let mut async_cmd: Option<Command> = None;

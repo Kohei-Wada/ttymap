@@ -27,7 +27,7 @@ pub enum RenderResult {
 
 pub struct RenderHandle {
     cmd_tx: mpsc::Sender<RenderCommand>,
-    pub result_rx: mpsc::Receiver<RenderResult>,
+    result_rx: mpsc::Receiver<RenderResult>,
     should_quit: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -65,6 +65,15 @@ impl RenderHandle {
 
     pub fn request_draw(&self, state: RenderRequest) -> bool {
         self.cmd_tx.send(RenderCommand::Draw(state)).is_ok()
+    }
+
+    /// Pull the next completed frame from the render thread, if any.
+    /// Non-blocking: returns `None` when the queue is empty.
+    pub fn try_recv_frame(&self) -> Option<MapFrame> {
+        match self.result_rx.try_recv() {
+            Ok(RenderResult::Frame(frame)) => Some(frame),
+            Err(_) => None,
+        }
     }
 
     pub fn request_resize(&self, width: usize, height: usize) {
