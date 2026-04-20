@@ -1,24 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PropertyValue {
-    /// String values use `Arc<str>` so tiles can intern a layer's key
-    /// and value pool once and hand out cheap refcount clones to each
-    /// feature instead of paying a per-tag heap allocation.
-    String(Arc<str>),
-    Number(f64),
-    Bool(bool),
-}
-
-impl PropertyValue {
-    pub fn as_f64(&self) -> Option<f64> {
-        match self {
-            PropertyValue::Number(n) => Some(*n),
-            _ => None,
-        }
-    }
-}
+use crate::map::tile::PropertyValue;
 
 #[derive(Debug, Clone)]
 pub enum Filter {

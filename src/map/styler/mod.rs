@@ -5,7 +5,9 @@ mod preset_dark;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use filter::{Filter, PropertyValue};
+use filter::Filter;
+
+use crate::map::tile::PropertyValue;
 
 use crate::color_palette::{ColorPalette, ThemeId};
 

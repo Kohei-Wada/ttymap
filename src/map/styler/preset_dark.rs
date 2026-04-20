@@ -1,7 +1,7 @@
 use crate::color_palette::ColorPalette;
 
 use super::filter::Filter;
-use super::filter::PropertyValue as PV;
+use crate::map::tile::PropertyValue as PV;
 use super::{StyleRule, StyleType};
 
 fn s(v: &str) -> PV {

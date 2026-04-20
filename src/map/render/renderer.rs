@@ -15,7 +15,8 @@ use super::canvas::Canvas;
 use super::frame::MapFrame;
 use super::view::VisibleTile;
 use crate::map::styler::{StyleRule, StyleType, Styler};
-use crate::map::tile::decode::{Feature, TilePoint, extract_label, extract_sort};
+use crate::map::tile::decode::{Feature, TilePoint};
+use crate::map::tile::property::{extract_label, extract_sort};
 
 /// Pre-collected tile data ready for rendering.
 pub struct TileData {

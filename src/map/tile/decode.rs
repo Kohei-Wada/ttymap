@@ -5,7 +5,7 @@ use std::sync::Arc;
 use prost::Message;
 use rstar::{AABB, RTree, RTreeObject};
 
-use crate::map::styler::filter::PropertyValue;
+use super::property::PropertyValue;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/vector_tile.rs"));
@@ -175,34 +175,6 @@ fn proto_value_to_pv(v: &proto::tile::Value) -> Option<PropertyValue> {
         .or(v.uint_value.map(|n| n as f64))
         .or(v.sint_value.map(|n| n as f64))?;
     Some(PropertyValue::Number(num))
-}
-
-// ── Label extractor ────────────────────────────────────────────────────────────
-
-/// Pick a display label from a feature's properties using the requested
-/// language (falling back to `name_en`, then `name`, then `house_num`).
-pub fn extract_label(props: &HashMap<Arc<str>, PropertyValue>, language: &str) -> Option<String> {
-    let lang_key = format!("name_{}", language);
-    for key in &[lang_key.as_str(), "name_en", "name", "house_num"] {
-        if let Some(PropertyValue::String(s)) = props.get(*key)
-            && !s.is_empty()
-        {
-            return Some(s.to_string());
-        }
-    }
-    None
-}
-
-// ── Sort value extractor ───────────────────────────────────────────────────────
-
-/// Sort key used to order labels (smaller = drawn first, so higher priority).
-pub fn extract_sort(props: &HashMap<Arc<str>, PropertyValue>) -> i64 {
-    if let Some(v) = props.get("localrank").or_else(|| props.get("scalerank"))
-        && let Some(n) = v.as_f64()
-    {
-        return n as i64;
-    }
-    0
 }
 
 // ── Bounds calculator ──────────────────────────────────────────────────────────
