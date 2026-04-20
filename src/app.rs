@@ -70,13 +70,7 @@ impl App {
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
 
         info!("event loop started");
-
-        // Initial draw.
-        let state = self.map.render_request();
-        self.render_handle.request_draw(state);
-        if !self.ui.focus.is_plugin("search") {
-            self.ui.info.on_map_moved(state.center);
-        }
+        self.dispatch(Command::Map(Action::Redraw));
 
         while self.map.is_running() {
             // Drain frames the render thread has produced since the last tick.
