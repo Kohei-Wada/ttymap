@@ -24,19 +24,50 @@ pub struct TileData {
     pub layers: Vec<(String, Vec<Feature>)>,
 }
 
+/// Scratch buffers reused across `draw_non_symbol` calls within a
+/// single frame. Collecting them here avoids per-ring heap
+/// allocations and keeps the draw helper's signature short.
+///
+/// - `line` holds a single scaled ring for the polyline path.
+/// - `rings` is a pool of inner Vecs for the fill path; each feature
+///   may contain multiple rings and we reuse slots across features.
+/// - `clipped` receives the Sutherland–Hodgman-clipped polygon
+///   produced by `Canvas::clip_polygon_into`.
+struct Scratches {
+    line: Vec<(i32, i32)>,
+    rings: Vec<Vec<(i32, i32)>>,
+    clipped: Vec<Vec<(i32, i32)>>,
+}
+
+impl Scratches {
+    fn new() -> Self {
+        Self {
+            line: Vec::new(),
+            rings: Vec::new(),
+            clipped: Vec::new(),
+        }
+    }
+}
+
+/// Per-call draw context bundling everything `draw_non_symbol` needs
+/// to mutate (`canvas`, `scratches`) and the viewport dimensions it
+/// reads. Constructed fresh per feature so the borrow only covers one
+/// call and doesn't fight the `&self.styler` borrow held by the
+/// enclosing rule loop.
+struct DrawCtx<'a> {
+    canvas: &'a mut Canvas,
+    scratches: &'a mut Scratches,
+    width: usize,
+    height: usize,
+}
+
 pub struct Renderer {
     canvas: Canvas,
     styler: Arc<Styler>,
     language: String,
     width: usize,
     height: usize,
-    // Scratch buffers reused across scale_ring calls to avoid per-ring
-    // heap allocations. `scratch_line` holds a single scaled ring for the
-    // polyline path; `scratch_rings` is a pool of inner Vecs for the fill
-    // path (each feature may contain multiple rings).
-    scratch_line: Vec<(i32, i32)>,
-    scratch_rings: Vec<Vec<(i32, i32)>>,
-    scratch_clipped: Vec<Vec<(i32, i32)>>,
+    scratches: Scratches,
 }
 
 /// A symbol feature that survived the first pass. Holds the resolved
@@ -57,9 +88,7 @@ impl Renderer {
             language,
             width,
             height,
-            scratch_line: Vec::new(),
-            scratch_rings: Vec::new(),
-            scratch_clipped: Vec::new(),
+            scratches: Scratches::new(),
         }
     }
 
@@ -148,18 +177,13 @@ impl Renderer {
                             sort: extract_sort(&feature.properties),
                         });
                     } else {
-                        Self::draw_non_symbol(
-                            &mut self.canvas,
-                            &mut self.scratch_line,
-                            &mut self.scratch_rings,
-                            &mut self.scratch_clipped,
-                            &td.vis,
-                            feature,
-                            rule,
-                            tile_size,
-                            self.width,
-                            self.height,
-                        );
+                        let mut ctx = DrawCtx {
+                            canvas: &mut self.canvas,
+                            scratches: &mut self.scratches,
+                            width: self.width,
+                            height: self.height,
+                        };
+                        Self::draw_non_symbol(&mut ctx, &td.vis, feature, rule, tile_size);
                     }
                 }
             }
@@ -237,52 +261,48 @@ impl Renderer {
     }
 
     /// Draw Line / Fill features. `StyleType::Symbol` is handled separately.
-    #[allow(clippy::too_many_arguments)]
     fn draw_non_symbol(
-        canvas: &mut Canvas,
-        scratch_line: &mut Vec<(i32, i32)>,
-        scratch_rings: &mut Vec<Vec<(i32, i32)>>,
-        scratch_clipped: &mut Vec<Vec<(i32, i32)>>,
+        ctx: &mut DrawCtx,
         vis: &VisibleTile,
         feature: &Feature,
         rule: &StyleRule,
         scale_denom: f64,
-        width: usize,
-        height: usize,
     ) {
         let extent = 4096.0_f64;
         let scale = extent / scale_denom;
+        let (width, height) = (ctx.width, ctx.height);
 
         match rule.style_type {
             StyleType::Line => {
                 for ring in feature.points.iter() {
-                    Self::scale_ring_into(scratch_line, vis, ring, scale, width, height, true);
-                    if scratch_line.len() >= 2 {
-                        canvas.polyline(scratch_line, rule.color);
-                    }
-                }
-            }
-            StyleType::Fill => {
-                // Reuse scratch_rings as a pool: ensure enough inner Vecs,
-                // scale each ring into a slot, then compact surviving rings
-                // (len >= 3) to the front.
-                while scratch_rings.len() < feature.points.len() {
-                    scratch_rings.push(Vec::new());
-                }
-                let mut kept = 0;
-                for (i, ring) in feature.points.iter().enumerate() {
                     Self::scale_ring_into(
-                        &mut scratch_rings[i],
+                        &mut ctx.scratches.line,
                         vis,
                         ring,
                         scale,
                         width,
                         height,
-                        false,
+                        true,
                     );
-                    if scratch_rings[i].len() >= 3 {
+                    if ctx.scratches.line.len() >= 2 {
+                        ctx.canvas.polyline(&ctx.scratches.line, rule.color);
+                    }
+                }
+            }
+            StyleType::Fill => {
+                // Reuse scratches.rings as a pool: ensure enough inner
+                // Vecs, scale each ring into a slot, then compact
+                // surviving rings (len >= 3) to the front.
+                let rings = &mut ctx.scratches.rings;
+                while rings.len() < feature.points.len() {
+                    rings.push(Vec::new());
+                }
+                let mut kept = 0;
+                for (i, ring) in feature.points.iter().enumerate() {
+                    Self::scale_ring_into(&mut rings[i], vis, ring, scale, width, height, false);
+                    if rings[i].len() >= 3 {
                         if kept != i {
-                            scratch_rings.swap(kept, i);
+                            rings.swap(kept, i);
                         }
                         kept += 1;
                     }
@@ -290,10 +310,12 @@ impl Renderer {
                 if kept == 0 {
                     return;
                 }
-                let clipped_count =
-                    canvas.clip_polygon_into(&scratch_rings[..kept], scratch_clipped);
+                let clipped_count = ctx
+                    .canvas
+                    .clip_polygon_into(&rings[..kept], &mut ctx.scratches.clipped);
                 if clipped_count > 0 {
-                    canvas.polygon(&scratch_clipped[..clipped_count], rule.color);
+                    ctx.canvas
+                        .polygon(&ctx.scratches.clipped[..clipped_count], rule.color);
                 }
             }
             StyleType::Symbol => {}
