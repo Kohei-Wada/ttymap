@@ -14,12 +14,57 @@ fn n(v: f64) -> PV {
 
 pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
     vec![
-        // 1. landuse_hospital
+        // 1. landuse_overlay_national_park
+        StyleRule {
+            source_layer: "landuse_overlay".into(),
+            style_type: StyleType::Fill,
+            color: p.landuse_overlay,
+            filter: Filter::Eq("class".into(), s("national_park")),
+            min_zoom: None,
+            max_zoom: None,
+        },
+        // 2. landuse_park
+        StyleRule {
+            source_layer: "landuse".into(),
+            style_type: StyleType::Fill,
+            color: p.landuse_park,
+            filter: Filter::Eq("class".into(), s("park")),
+            min_zoom: None,
+            max_zoom: None,
+        },
+        // 3. landuse_cemetery
+        StyleRule {
+            source_layer: "landuse".into(),
+            style_type: StyleType::Line,
+            color: p.landuse_cemetery,
+            filter: Filter::Eq("class".into(), s("cemetery")),
+            min_zoom: None,
+            max_zoom: None,
+        },
+        // 4. landuse_hospital
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Fill,
             color: p.landuse_hospital,
             filter: Filter::Eq("class".into(), s("hospital")),
+            min_zoom: None,
+            max_zoom: None,
+        },
+        // 5. landuse_school
+        StyleRule {
+            source_layer: "landuse".into(),
+            style_type: StyleType::Line,
+            color: p.landuse_school,
+            filter: Filter::Eq("class".into(), s("school")),
+            min_zoom: None,
+            max_zoom: None,
+        },
+        // 6. landuse_wood
+        StyleRule {
+            source_layer: "landuse".into(),
+            style_type: StyleType::Line,
+            color: p.landuse_wood,
+            filter: Filter::Eq("class".into(), s("wood")),
             min_zoom: None,
             max_zoom: None,
         },
