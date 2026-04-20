@@ -41,10 +41,13 @@ impl HelpPlugin {
             .chain(other_plugins.iter().flat_map(|p| plugin_entries(*p)))
             .collect();
 
-        let mut lines = Vec::new();
-        lines.push(" A terminal-based map viewer — Mapbox vector tiles".to_string());
-        lines.push(" rendered as Unicode Braille.".to_string());
-        lines.push(String::new());
+        let mut lines: Vec<String> = vec![
+            " A terminal-based map viewer — Mapbox vector tiles".to_string(),
+            " rendered as Unicode Braille.".to_string(),
+            " Inspired by and built on ideas from mapscii:".to_string(),
+            " https://github.com/rastapasta/mapscii".to_string(),
+            String::new(),
+        ];
         for action in Action::all_listed() {
             let keys = keymap.keys_for(&Command::Map(action.clone()));
             if !keys.is_empty() {
