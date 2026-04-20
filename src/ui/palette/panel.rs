@@ -69,6 +69,7 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
     }
 
     let table = Table::new(table_rows, [Constraint::Min(10), Constraint::Length(16)])
+        .style(theme.text())
         .highlight_symbol("> ")
         .row_highlight_style(theme.selected())
         .column_spacing(1);
