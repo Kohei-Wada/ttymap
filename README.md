@@ -31,12 +31,6 @@ cargo run -- --here                               # jump to IP-based current loc
 cargo run -- --style bright                       # bright theme
 ```
 
-**Subcommands:**
-
-```bash
-ttymap clear-cache                                # clear disk tile cache
-```
-
 **Headless snapshot** (`snap` / `snapshot`) — render a single frame as ANSI text and write it to stdout or a file. Pipe-friendly for dashboards, cron jobs, README illustrations, email attachments:
 
 ```bash
@@ -129,7 +123,6 @@ src/
 │
 ├── commands/         one file per CLI subcommand (main.rs stays thin)
 │   ├── mod.rs        Command enum (#[derive(Subcommand)]) + run() dispatch
-│   ├── clear_cache.rs  `ttymap clear-cache`
 │   └── snap.rs       `ttymap snap` / `snapshot` — headless single-frame renderer
 │
 ├── focus.rs          FocusManager — event-driven focus transitions
