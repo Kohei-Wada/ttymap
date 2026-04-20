@@ -18,32 +18,44 @@ cargo test test_name     # run a single test
 cargo clippy             # lint
 ```
 
-The build step compiles `proto/vector_tile.proto` using protox (no system protoc required). The generated Rust code is included at runtime via `include!(concat!(env!("OUT_DIR"), "/vector_tile.rs"))` in `src/tile.rs`.
+The build step compiles `proto/vector_tile.proto` using protox (no system protoc required). The generated Rust code is included at runtime via `include!(concat!(env!("OUT_DIR"), "/vector_tile.rs"))` in `src/map/tile/decode.rs`.
+
+## Design philosophy
+
+See [docs/design.md](docs/design.md) for load-bearing design decisions:
+- **When to emit a `Command` vs a direct method call** — user intent goes through `command::dispatch`; internal data flow (frame arrival, widget polling) does not.
+- **Controller split: by feature, not by domain** — if `command.rs` grows large.
+- **Cleanup via `Drop`, not manual** — `RenderHandle`'s thread shutdown is handled by its Drop impl.
+- **Frames are completed products** — main thread displays, does not compute.
 
 ## Architecture
 
 The app uses a **three-thread model**:
 
-1. **Main thread** (`app.rs`): Runs the event loop — processes keyboard/resize events via crossterm, manages map state (center, zoom), and writes completed frames to stdout. Uses 16ms poll timeout for responsive input.
+1. **Main thread** (`src/app.rs`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `command::dispatch` (`src/command.rs`).
 
-2. **Render thread** (`render_thread.rs`): Receives `MapState` snapshots via `mpsc` channel, renders frames, and sends back completed frame strings. Communicates through `RenderHandle` with a busy flag (`AtomicBool`) — if the render thread is busy when a new draw is requested, the request is deferred (`pending_redraw`). Also polls for completed tile fetches every 50ms and re-renders when new tiles arrive.
+2. **Render thread** (`src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderCommand` messages (`Draw` / `Resize` / `SetStyler` / `Shutdown`) via `mpsc`, and sends completed `MapFrame`s back. Also polls the tile cache for completed fetches and re-renders when new tiles arrive.
 
-3. **Tile fetch threads** (`tile_source.rs`): Each missing tile spawns a one-off thread for HTTP fetch. Completed tiles are sent back via `mpsc` channel to be polled by the render thread.
+3. **Tile fetch threads** (`src/map/tile/fetch/`): Each missing tile spawns a short-lived thread for HTTP fetch. Completed bytes are decoded into `DecodedTile` and delivered via `mpsc` for the render thread to pick up.
 
 ### Rendering pipeline
 
-`MapState` → `Renderer::draw_state()` → visible tiles → spatial query (R-tree) → draw features by layer order (fills/lines first, then symbols sorted by priority) → `Canvas` → `BrailleBuffer::frame()` → ANSI escape string
+`RenderRequest` → `RenderPipeline::render()` → visible tiles → spatial query (R-tree) → draw features by layer order (fills/lines first, then symbols sorted by priority) → `Canvas` → `MapFrame` (grid of `MapCell { ch, fg, bg }`) → main thread paints via ratatui.
 
 Key modules:
-- **`renderer.rs`**: Orchestrates tile fetching, spatial queries, and drawing. Determines visible tiles from center/zoom, queries each tile layer's R-tree for on-screen features, draws non-symbol features first then symbols sorted by `sort` key.
-- **`tile.rs`**: Decodes protobuf MVT tiles into `DecodedTile` with per-layer R-trees (`rstar`) for spatial indexing. Applies style rules during decode.
-- **`canvas.rs` / `braille.rs`**: 2×4 pixel Braille rendering. Each terminal cell maps to 8 sub-pixels. Supports polyline (with line width via Bresenham), polygon fill (via `earcutr` triangulation), and text overlay. Colors use ANSI 256-color palette.
-- **`styler/`**: Defines map styles as Rust data structures with style presets (Dark/Bright). Each preset provides layer rules (filter expressions, color/width by zoom level). Applied during tile decode to produce styled `Feature` objects.
-- **`tile_source.rs`**: Two-tier cache (LRU memory cache of 16 tiles + optional disk cache via `directories` crate). Background HTTP fetches with in-flight dedup.
-- **`geo.rs`**: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
-- **`input.rs`**: Vim-style key handling with modes (Normal, Search `/`, Command `:`). Supports count prefixes for pan (e.g., `5j`).
-- **`label.rs`**: Collision-free label placement buffer.
-- **`layer.rs`**: Marker layer for A/B point distance measurement.
+- **`src/map/render/renderer.rs`**: Orchestrates tile fetching, spatial queries, and drawing. Determines visible tiles from center/zoom, queries each tile layer's R-tree for on-screen features, draws non-symbol features first then symbols sorted by `sort` key.
+- **`src/map/tile/decode.rs`**: Decodes protobuf MVT tiles into `DecodedTile` with per-layer R-trees (`rstar`) for spatial indexing. Applies style rules during decode.
+- **`src/map/render/canvas.rs` / `braille.rs`**: 2×4 pixel Braille rendering. Each terminal cell maps to 8 sub-pixels. Supports polyline (with line width via Bresenham), polygon fill (via `earcutr` triangulation), and text overlay. Colors use the xterm-256 palette.
+- **`src/map/render/frame.rs`**: `MapFrame` — the completed grid of `MapCell { ch, fg, bg }` plus the view (center/zoom) it was rendered at, so overlays can project coordinates against the same frame regardless of staleness.
+- **`src/map/styler/`**: Defines map styles as Rust data structures with style presets (Dark/Bright). Each preset provides layer rules (filter expressions, color by zoom level). Applied during tile decode to produce styled `Feature` objects.
+- **`src/color_palette.rs`**: Centralized xterm-256 color values per theme. `ColorPalette` is consumed by both the styler (map colors) and `src/theme.rs` (UI chrome colors).
+- **`src/map/tile/cache.rs` / `src/map/tile/fetch/`**: Two-tier cache (LRU memory cache + optional on-disk cache via `directories` crate) and pluggable HTTP clients, with in-flight dedup.
+- **`src/command.rs`**: App-level command vocabulary and central `dispatch` router. Single side-effect boundary for user-intent state changes. See [docs/design.md](docs/design.md) for the Command-vs-direct-API judgment rules.
+- **`src/ui/`**: UI state (`UiState`), plugin registry, command palette, overlays, and `draw()`. Workflow methods (palette open, focus cycle, plugin activate, frame drain) live on `UiState`.
+- **`src/geo.rs`**: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
+- **`src/input/`**: Keyboard / mouse handlers. Keyboard supports count prefixes for pan (e.g., `5j`); `:` opens the command palette, `/` opens the search plugin.
+- **`src/map/render/label.rs`**: Collision-free label placement buffer.
+- **`src/plugin/`**: Plugins (wiki, search, help, here) — composable UI panels with async work via `poll()`.
 
 ## Rust Edition
 
