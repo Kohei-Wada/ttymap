@@ -67,10 +67,69 @@ impl RenderPipeline {
         self.tile_cache.is_fetch_idle()
     }
 
-    /// Prefetch surrounding tiles (call when idle).
+    /// Prefetch tiles around the current view so pan / zoom feels
+    /// instant instead of flashing black while HTTP fetches run.
+    ///
+    /// Three layers:
+    /// 1. Pan ring at the current zoom (inherited from
+    ///    `tile_cache::prefetch` — a 2-tile ring around the center).
+    /// 2. **Every visible tile's four children at z+1**, so a
+    ///    zoom-in lands on already-warm tiles wherever the user is
+    ///    looking (not just near the center).
+    /// 3. **Every visible tile's parent at z-1** (deduped because
+    ///    adjacent tiles share a parent), so zoom-out is also warm.
     pub fn prefetch(&mut self, vp: &Viewport) {
+        // Current-zoom pan ring + center-tile z±1 (kept as-is).
         self.tile_cache
             .prefetch(vp.center.lon, vp.center.lat, vp.zoom);
+
+        let visible = visible_tiles(
+            vp.center.lon,
+            vp.center.lat,
+            vp.zoom,
+            self.renderer.width(),
+            self.renderer.height(),
+        );
+
+        let z = crate::geo::base_zoom(vp.zoom);
+
+        // z+1: every visible tile's four children.
+        if z < 14 {
+            let child_z = z + 1;
+            let child_grid = (1u64 << child_z) as i32;
+            for vt in &visible {
+                let bx = vt.x * 2;
+                let by = vt.y * 2;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let ty = by + dy;
+                        if ty < 0 || ty >= child_grid {
+                            continue;
+                        }
+                        let tx = (bx + dx).rem_euclid(child_grid);
+                        self.tile_cache.get_tile(child_z, tx, ty);
+                    }
+                }
+            }
+        }
+
+        // z-1: parent of every visible tile (adjacent tiles share
+        // parents, so dedupe).
+        if z > 0 {
+            let parent_z = z - 1;
+            let parent_grid = (1u64 << parent_z) as i32;
+            let mut seen: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+            for vt in &visible {
+                let py = vt.y / 2;
+                let px = vt.x.div_euclid(2).rem_euclid(parent_grid);
+                if py < 0 || py >= parent_grid {
+                    continue;
+                }
+                if seen.insert((px, py)) {
+                    self.tile_cache.get_tile(parent_z, px, py);
+                }
+            }
+        }
     }
 
     /// Resize the renderer canvas.
