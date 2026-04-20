@@ -167,7 +167,7 @@ impl App {
 /// stays visible alongside the rest of app wiring. Also snapshots the
 /// client's attribution string before boxing, so the UI can display it
 /// without needing a live handle to the (moved) client.
-fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
+pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
     use crate::map::tile::fetch::TileClient;
     let (tx, rx) = std::sync::mpsc::channel();
     let client = crate::map::tile::fetch::MapsciiTileClient::new(tx);

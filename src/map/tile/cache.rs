@@ -97,6 +97,13 @@ impl TileCache {
         });
     }
 
+    /// Whether the fetch backend has finished all outstanding work.
+    /// `true` means the queue is empty and no tiles are in-flight —
+    /// there will be no more tile arrivals without a new request.
+    pub fn is_fetch_idle(&self) -> bool {
+        self.client.is_idle()
+    }
+
     /// Drain completed HTTP fetches: decode, save to disk, insert to memory.
     pub fn poll_completed(&mut self) -> bool {
         let mut any_new = false;
@@ -276,6 +283,9 @@ mod tests {
             fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
             fn attribution(&self) -> &str {
                 "mock"
+            }
+            fn is_idle(&self) -> bool {
+                true
             }
         }
 

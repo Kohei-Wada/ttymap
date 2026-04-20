@@ -92,6 +92,16 @@ impl TileClient for MapsciiTileClient {
     fn attribution(&self) -> &str {
         ATTRIBUTION
     }
+
+    fn is_idle(&self) -> bool {
+        let queue = self.shared.queue.lock().expect("tile worker mutex poisoned");
+        let in_flight = self
+            .shared
+            .in_flight
+            .lock()
+            .expect("tile worker mutex poisoned");
+        queue.is_empty() && in_flight.is_empty()
+    }
 }
 
 impl Drop for MapsciiTileClient {

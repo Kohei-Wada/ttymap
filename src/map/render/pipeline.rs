@@ -61,6 +61,12 @@ impl RenderPipeline {
         self.tile_cache.poll_completed()
     }
 
+    /// Whether the tile backend has finished all outstanding fetches.
+    /// See [`crate::map::tile::cache::TileCache::is_fetch_idle`].
+    pub fn is_tile_fetch_idle(&self) -> bool {
+        self.tile_cache.is_fetch_idle()
+    }
+
     /// Prefetch surrounding tiles (call when idle).
     pub fn prefetch(&mut self, vp: &Viewport) {
         self.tile_cache

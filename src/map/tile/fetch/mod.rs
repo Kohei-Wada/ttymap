@@ -31,4 +31,10 @@ pub trait TileClient: Send + Sync {
     /// overlay (#42). OSM-derived sources return
     /// `"© OpenStreetMap contributors"`.
     fn attribution(&self) -> &str;
+
+    /// Whether the client has finished all outstanding fetches.
+    /// Returns `true` when no tiles are queued **and** no tiles are
+    /// in-flight. Used by headless callers (`ttymap snap`) to decide
+    /// when a frame is safe to commit.
+    fn is_idle(&self) -> bool;
 }

@@ -85,6 +85,10 @@ impl<T: PartialEq, P: PartialOrd> PriorityQueue<T, P> {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl<T: PartialEq, P: PartialOrd> Default for PriorityQueue<T, P> {

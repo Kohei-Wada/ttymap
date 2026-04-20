@@ -44,6 +44,10 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
+    // Logging initialised up-front so both subcommands and the
+    // interactive app write to ~/.local/state/ttymap/ttymap.log.
+    ttymap::logging::init().ok();
+
     // Subcommands run a single task and exit without booting the full
     // interactive app.
     if let Some(cmd) = cli.command {
@@ -52,11 +56,6 @@ fn main() {
             std::process::exit(1);
         }
         return;
-    }
-
-    match ttymap::logging::init() {
-        Ok(path) => eprintln!("logging to {}", path.display()),
-        Err(e) => eprintln!("warning: could not initialize logging: {e}"),
     }
 
     // Load config file first, then override with CLI args

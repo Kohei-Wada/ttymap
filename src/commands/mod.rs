@@ -12,17 +12,23 @@ use std::io;
 use clap::Subcommand;
 
 pub mod clear_cache;
+pub mod snap;
 
 #[derive(Subcommand)]
 pub enum Command {
     /// Clear the disk tile cache (~/.cache/ttymap/).
     ClearCache,
+
+    /// Render a single map snapshot as ANSI text (headless).
+    #[command(alias = "snapshot")]
+    Snap(snap::SnapArgs),
 }
 
 impl Command {
     pub fn run(self) -> io::Result<()> {
         match self {
             Self::ClearCache => clear_cache::run(),
+            Self::Snap(args) => snap::run(args),
         }
     }
 }
