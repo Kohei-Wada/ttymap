@@ -136,8 +136,7 @@ impl App {
             }
         }
 
-        info!("event loop ended, shutting down render thread");
-        self.render_handle.shutdown();
+        info!("event loop ended");
         crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
         ratatui::restore();
         info!("terminal restored, exiting");
