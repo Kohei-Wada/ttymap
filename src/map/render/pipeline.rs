@@ -1,5 +1,5 @@
 //! Render pipeline — owns tile cache and renderer.
-//! Encapsulates the full data flow: RenderRequest → tile fetch → draw → frame string.
+//! Encapsulates the full data flow: Viewport → tile fetch → draw → MapFrame.
 //! thread.rs calls pipeline methods without knowing the internals.
 
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use rstar::AABB;
 use super::frame::MapFrame;
 use super::renderer::{Renderer, TileData};
 use super::view::{VisibleTile, visible_tiles};
-use crate::map::RenderRequest;
+use crate::map::Viewport;
 use crate::map::styler::Styler;
 use crate::map::tile::{Feature, TileCache};
 
@@ -36,23 +36,22 @@ impl RenderPipeline {
         }
     }
 
-    /// Process a RenderRequest into a MapFrame.
-    /// Returns None if no tiles are available yet.
-    pub fn render(&mut self, state: &RenderRequest) -> Option<MapFrame> {
-        let z = crate::geo::base_zoom(state.zoom);
-        self.tile_cache
-            .set_view(state.center.lon, state.center.lat, z);
+    /// Process a `Viewport` into a `MapFrame`.
+    /// Returns `None` if no tiles are available yet.
+    pub fn render(&mut self, vp: &Viewport) -> Option<MapFrame> {
+        let z = crate::geo::base_zoom(vp.zoom);
+        self.tile_cache.set_view(vp.center.lon, vp.center.lat, z);
         let visible = visible_tiles(
-            state.center.lon,
-            state.center.lat,
-            state.zoom,
+            vp.center.lon,
+            vp.center.lat,
+            vp.zoom,
             self.renderer.width(),
             self.renderer.height(),
         );
-        let tile_data = self.collect_tile_data(&visible, state.zoom);
-        self.renderer.draw(&tile_data, state.zoom).map(|mut f| {
-            f.center = state.center;
-            f.zoom = state.zoom;
+        let tile_data = self.collect_tile_data(&visible, vp.zoom);
+        self.renderer.draw(&tile_data, vp.zoom).map(|mut f| {
+            f.center = vp.center;
+            f.zoom = vp.zoom;
             f
         })
     }
@@ -63,9 +62,9 @@ impl RenderPipeline {
     }
 
     /// Prefetch surrounding tiles (call when idle).
-    pub fn prefetch(&mut self, state: &RenderRequest) {
+    pub fn prefetch(&mut self, vp: &Viewport) {
         self.tile_cache
-            .prefetch(state.center.lon, state.center.lat, state.zoom);
+            .prefetch(vp.center.lon, vp.center.lat, vp.zoom);
     }
 
     /// Resize the renderer canvas.

@@ -18,4 +18,4 @@ pub mod styler;
 pub mod tile;
 
 pub use action::Action;
-pub use state::{MapState, MapStateOptions, RenderRequest};
+pub use state::{MapState, MapStateOptions, Viewport};

@@ -148,14 +148,14 @@ impl App {
             command::dispatch(cmd, &mut ctx)
         };
         if matches!(effect, InputEffect::Map) && self.map.is_running() {
-            let state = self.map.render_request();
-            self.render_handle.request_draw(state);
+            let viewport = self.map.viewport();
+            self.render_handle.request_draw(viewport);
             // Notify passive widgets that the map recentered. They decide
             // internally whether to act (e.g., place throttles to 5s).
             // Wiki is intentionally not notified — Google-Maps-style, the
             // article list stays pinned to the query that produced it.
             if !self.ui.focus.is_plugin("search") {
-                self.ui.overlay.on_map_moved(state.center);
+                self.ui.overlay.on_map_moved(viewport.center);
             }
         }
     }

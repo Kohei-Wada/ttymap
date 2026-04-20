@@ -3,9 +3,12 @@ use log::debug;
 use super::action::Action;
 use crate::geo::{self, LonLat};
 
-/// Snapshot of the map view handed to the render pipeline.
+/// Snapshot of the visible map region handed to the render pipeline:
+/// where the camera is pointing (`center`, `zoom`) and the canvas
+/// dimensions that frame it. Produced by [`MapState::viewport`] and
+/// wrapped in `RenderTask::Draw` for the render thread to consume.
 #[derive(Clone, Copy)]
-pub struct RenderRequest {
+pub struct Viewport {
     pub center: LonLat,
     pub zoom: f64,
     pub width: usize,
@@ -155,8 +158,8 @@ impl MapState {
         self.zoom = self.zoom.clamp(self.min_zoom, self.max_zoom);
     }
 
-    pub fn render_request(&self) -> RenderRequest {
-        RenderRequest {
+    pub fn viewport(&self) -> Viewport {
+        Viewport {
             center: self.center,
             zoom: self.zoom,
             width: self.width,

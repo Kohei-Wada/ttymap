@@ -11,11 +11,11 @@ use log::{debug, error, info};
 
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
-use crate::map::RenderRequest;
+use crate::map::Viewport;
 use crate::map::styler::Styler;
 
 pub enum RenderCommand {
-    Draw(RenderRequest),
+    Draw(Viewport),
     Resize { width: usize, height: usize },
     SetStyler(Arc<Styler>),
     Shutdown,
@@ -63,8 +63,8 @@ impl RenderHandle {
         }
     }
 
-    pub fn request_draw(&self, state: RenderRequest) {
-        if self.cmd_tx.send(RenderCommand::Draw(state)).is_err() {
+    pub fn request_draw(&self, viewport: Viewport) {
+        if self.cmd_tx.send(RenderCommand::Draw(viewport)).is_err() {
             log::warn!("render thread channel closed on draw");
         }
     }
@@ -118,13 +118,13 @@ impl Drop for RenderHandle {
 /// renders immediately.
 enum CmdOutcome {
     Continue,
-    Draw(RenderRequest),
+    Draw(Viewport),
     Shutdown,
 }
 
 fn apply_cmd(cmd: RenderCommand, pipeline: &mut RenderPipeline) -> CmdOutcome {
     match cmd {
-        RenderCommand::Draw(state) => CmdOutcome::Draw(state),
+        RenderCommand::Draw(viewport) => CmdOutcome::Draw(viewport),
         RenderCommand::Resize { width, height } => {
             pipeline.resize(width, height);
             CmdOutcome::Continue
@@ -140,12 +140,12 @@ fn apply_cmd(cmd: RenderCommand, pipeline: &mut RenderPipeline) -> CmdOutcome {
 fn drain_commands(
     cmd_rx: &mpsc::Receiver<RenderCommand>,
     pipeline: &mut RenderPipeline,
-) -> Result<Option<RenderRequest>, ()> {
-    let mut latest_draw: Option<RenderRequest> = None;
+) -> Result<Option<Viewport>, ()> {
+    let mut latest_draw: Option<Viewport> = None;
 
     while let Ok(cmd) = cmd_rx.try_recv() {
         match apply_cmd(cmd, pipeline) {
-            CmdOutcome::Draw(state) => latest_draw = Some(state),
+            CmdOutcome::Draw(viewport) => latest_draw = Some(viewport),
             CmdOutcome::Continue => {}
             CmdOutcome::Shutdown => return Err(()),
         }
@@ -168,7 +168,7 @@ fn run_loop(
     should_quit: Arc<AtomicBool>,
     mut pipeline: RenderPipeline,
 ) {
-    let mut last_state: Option<RenderRequest> = None;
+    let mut last_viewport: Option<Viewport> = None;
     info!("render thread started");
 
     loop {
@@ -176,44 +176,44 @@ fn run_loop(
             break;
         }
 
-        // 1. Drain commands — newest state wins
+        // 1. Drain commands — newest viewport wins
         match drain_commands(&cmd_rx, &mut pipeline) {
             Err(()) => break,
-            Ok(Some(state)) => {
-                debug!("render: drawing (zoom={:.1})", state.zoom);
-                if !send_frame(&result_tx, pipeline.render(&state)) {
+            Ok(Some(viewport)) => {
+                debug!("render: drawing (zoom={:.1})", viewport.zoom);
+                if !send_frame(&result_tx, pipeline.render(&viewport)) {
                     return;
                 }
-                last_state = Some(state);
+                last_viewport = Some(viewport);
                 continue;
             }
             Ok(None) => {}
         }
 
         // 2. Poll tile completions
-        if let Some(ref state) = last_state
+        if let Some(ref viewport) = last_viewport
             && pipeline.poll_tiles()
         {
-            if !send_frame(&result_tx, pipeline.render(state)) {
+            if !send_frame(&result_tx, pipeline.render(viewport)) {
                 return;
             }
             continue;
         }
 
         // 3. Idle — prefetch
-        if let Some(ref state) = last_state {
-            pipeline.prefetch(state);
+        if let Some(ref viewport) = last_viewport {
+            pipeline.prefetch(viewport);
         }
 
         // 4. Wait for commands
         const POLL_MS: u64 = 50;
         match cmd_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
             Ok(cmd) => match apply_cmd(cmd, &mut pipeline) {
-                CmdOutcome::Draw(state) => {
-                    if !send_frame(&result_tx, pipeline.render(&state)) {
+                CmdOutcome::Draw(viewport) => {
+                    if !send_frame(&result_tx, pipeline.render(&viewport)) {
                         return;
                     }
-                    last_state = Some(state);
+                    last_viewport = Some(viewport);
                 }
                 CmdOutcome::Continue => {}
                 CmdOutcome::Shutdown => break,
