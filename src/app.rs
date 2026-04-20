@@ -80,7 +80,7 @@ impl App {
                 self.dispatch(cmd);
             }
 
-            self.ui.info.poll();
+            self.ui.overlay.poll();
 
             terminal.draw(|f| crate::ui::draw(f, &self.ui))?;
 
@@ -155,7 +155,7 @@ impl App {
             // Wiki is intentionally not notified — Google-Maps-style, the
             // article list stays pinned to the query that produced it.
             if !self.ui.focus.is_plugin("search") {
-                self.ui.info.on_map_moved(state.center);
+                self.ui.overlay.on_map_moved(state.center);
             }
         }
     }

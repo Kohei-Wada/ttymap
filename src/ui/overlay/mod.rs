@@ -14,10 +14,12 @@ use crate::theme::UiTheme;
 
 pub mod attribution;
 pub mod info;
+pub mod manager;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;
 pub use info::InfoOverlay;
+pub use manager::OverlayManager;
 pub use scale_bar::ScaleBarOverlay;
 
 /// A drawable layer stamped on top of the rendered map.

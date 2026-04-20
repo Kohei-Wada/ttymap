@@ -14,7 +14,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use overlay::{AttributionOverlay, InfoOverlay, MapOverlay, ScaleBarOverlay};
+use overlay::OverlayManager;
 
 use crate::command::{Command, KeyDelivery};
 use crate::geo::LonLat;
@@ -41,14 +41,13 @@ pub struct UiState {
     pub widgets: PluginRegistry,
     /// Command palette — builtin, not a plugin. See `ui::palette` for why.
     pub palette: CommandPalette,
-    pub info: InfoOverlay,
+    pub overlay: OverlayManager,
     pub map_frame: Option<MapFrame>,
     /// Source of truth for the active theme on the main thread. Paired
     /// with `theme` (the derived UI color set); both get refreshed by
     /// `theme::apply` on a runtime theme switch.
     pub theme_id: crate::color_palette::ThemeId,
     pub theme: UiTheme,
-    pub attribution: Option<String>,
 }
 
 impl UiState {
@@ -83,11 +82,10 @@ impl UiState {
             focus: FocusManager::new(),
             widgets,
             palette: CommandPalette::new(),
-            info: InfoOverlay::new(nominatim),
+            overlay: OverlayManager::new(nominatim, attribution),
             map_frame: None,
             theme_id,
             theme: UiTheme::from_palette(palette),
-            attribution,
         }
     }
 
@@ -273,16 +271,11 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
             }
         }
 
-        // Built-in overlays (info / attribution / scale-bar) stay as
-        // typed fields: they're part of the map-viewer identity, not
-        // plugin extensions.
-        let attribution = AttributionOverlay {
-            text: ui.attribution.as_deref().unwrap_or(""),
-        };
-        let overlays: [&dyn MapOverlay; 3] = [&ui.info, &ScaleBarOverlay, &attribution];
-        for overlay in overlays {
-            overlay.render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
-        }
+        // Built-in overlays (info / attribution / scale-bar). The
+        // manager owns their state and paint order so the caller
+        // doesn't distinguish between them.
+        ui.overlay
+            .render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
     }
 
     // Render every visible plugin panel. Non-modal plugins (wiki,

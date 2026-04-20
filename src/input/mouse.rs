@@ -21,8 +21,8 @@ pub struct MouseHandler {
 }
 
 impl MouseHandler {
-    /// Consume a raw mouse event. Updates cursor readout on
-    /// `InfoOverlay` as a side effect, and returns an optional
+    /// Consume a raw mouse event. Updates the cursor readout through
+    /// the overlay manager as a side effect, and returns an optional
     /// `Command` for the main loop to dispatch. `None` means "handled
     /// locally (cursor move, click tracking, modal gate) — no state
     /// change for the dispatcher".
@@ -32,7 +32,7 @@ impl MouseHandler {
             return None;
         }
 
-        ui.info.set_cursor((event.column, event.row));
+        ui.overlay.set_cursor((event.column, event.row));
         self.resolve(event)
     }
 
