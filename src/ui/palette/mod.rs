@@ -45,8 +45,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::color_palette::ThemeId;
 use crate::app_msg::AppMsg;
+use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
 use crate::theme::UiTheme;

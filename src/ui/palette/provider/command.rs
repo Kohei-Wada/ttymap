@@ -5,8 +5,8 @@
 //! opened via `:`. Other providers (theme, search, wiki, …) will be
 //! swapped in as the palette grows.
 
-use crate::color_palette::ThemeId;
 use crate::app_msg::AppMsg;
+use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::plugin::PluginRegistry;

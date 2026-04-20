@@ -22,13 +22,43 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 
 ## Usage
 
+**Interactive:**
+
 ```bash
 cargo run                                         # default position
 cargo run -- --lat 35.68 --lon 139.76 --zoom 10   # Tokyo
 cargo run -- --here                               # jump to IP-based current location on startup
 cargo run -- --style bright                       # bright theme
+```
+
+**Subcommands:**
+
+```bash
 ttymap clear-cache                                # clear disk tile cache
 ```
+
+**Headless snapshot** (`snap` / `snapshot`) — render a single frame as ANSI text and write it to stdout or a file. Pipe-friendly for dashboards, cron jobs, README illustrations, email attachments:
+
+```bash
+# Tokyo to stdout (defaults to the current terminal size)
+ttymap snap --lat 35.68 --lon 139.76 --zoom 12
+
+# Write to a file
+ttymap snap --lat 35.68 --lon 139.76 --zoom 12 -o tokyo.ans
+cat tokyo.ans                                    # replay later
+
+# IP-geolocated center, explicit size
+ttymap snap --here --cols 120 --rows 40
+
+# Bright theme, bigger canvas, longer fetch timeout for slow networks
+ttymap snap --lat 48.86 --lon 2.35 --zoom 14 \
+    --style bright --cols 160 --rows 50 --timeout-ms 15000
+
+# Alias
+ttymap snapshot --lat 40.71 --lon -74.01 --zoom 12 > nyc.ans
+```
+
+`snap` emits raw xterm-256 ANSI escape codes; `cat` the file into any compatible terminal, or pipe directly (`ttymap snap … | less -R`).
 
 ### Keybindings
 
@@ -90,28 +120,33 @@ Keybindings are customizable via `~/.config/ttymap/config.toml`.
 
 ```
 src/
-├── main.rs           CLI entry + subcommands
+├── main.rs           CLI entry + interactive-mode composition
 ├── lib.rs            crate root
 ├── app.rs            App struct, event loop, composition root
-├── command.rs        Command enum + dispatch (the controller) + DispatchCtx
+├── app_msg.rs        AppMsg enum + dispatch (the controller) + DispatchCtx
 ├── config.rs         TOML config + CLI overrides
 ├── logging.rs        XDG state log
+│
+├── commands/         one file per CLI subcommand (main.rs stays thin)
+│   ├── mod.rs        Command enum (#[derive(Subcommand)]) + run() dispatch
+│   ├── clear_cache.rs  `ttymap clear-cache`
+│   └── snap.rs       `ttymap snap` / `snapshot` — headless single-frame renderer
 │
 ├── focus.rs          FocusManager — event-driven focus transitions
 ├── painter.rs        MapPainter — plugins' world-space drawing API
 ├── theme.rs          UiTheme + runtime theme switch
-├── keymap.rs         KeyBinding → Command table + user overrides
+├── keymap.rs         KeyBinding → AppMsg table + user overrides
 ├── geo.rs            Web Mercator, MapProjection, distance
 ├── color_palette.rs  xterm-256 color tables (ThemeId + DARK/BRIGHT)
 │
-├── input/            pure translators: raw event → Option<Command>
+├── input/            pure translators: raw event → Option<AppMsg>
 │   ├── mod.rs
 │   ├── keyboard.rs   focus-first routing + gg sequence + keymap fallback
-│   └── mouse.rs      drag/scroll → Command::Map(PanCells/ZoomAt)
+│   └── mouse.rs      drag/scroll → AppMsg::Map(PanCells/ZoomAt)
 │
 ├── map/              domain — viewport state + rendering pipeline
 │   ├── action.rs     Action enum (discrete + mouse-continuous variants)
-│   ├── state.rs      MapState, MapStateOptions, RenderRequest
+│   ├── state.rs      MapState, MapStateOptions, Viewport
 │   ├── render/       tiles → MapFrame on a dedicated thread
 │   │   ├── pipeline.rs   RenderPipeline
 │   │   ├── thread.rs     RenderHandle
@@ -167,43 +202,43 @@ src/
 ### Layering
 
 - **`map/`** — domain state. Knows nothing about UI or plugins. `Action` carries every map-level mutation, including mouse-emitted continuous variants (`PanCells`, `ZoomAt`); plugin activation and UI state are separate concerns.
-- **`command.rs`** — the **controller**. One `Command` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
-- **`input/`** — pure translators. `keyboard.rs` / `mouse.rs` turn raw events into `Option<Command>` and return it to `app.rs`; they never call `dispatch` themselves and never touch domain state directly. Symmetric with async plugin polling.
+- **`app_msg.rs`** — the **controller**. One `AppMsg` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
+- **`input/`** — pure translators. `keyboard.rs` / `mouse.rs` turn raw events into `Option<AppMsg>` and return it to `app.rs`; they never call `dispatch` themselves and never touch domain state directly. Symmetric with async plugin polling.
 - **`focus.rs`** — `FocusManager` driven by `FocusEvent`s (`PaletteOpened`, `PluginActivated(tag)`, …). Callers emit *what happened*; the manager decides the transition (wants_focus gating, auto-release, prev-slot restoration). All focus writes live here.
 - **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
 - **`ui/palette/`** — command palette. A **builtin coordinator**, not a `Plugin`. Plugins contribute functionality; palette aggregates over the plugin registry + keymap + theme to present a picker. Folding it into `Plugin` would widen `PluginCtx` to grant every plugin access to the registry and reduce the self-contained-widget contract to a naming convention. The asymmetry is deliberate — see `src/ui/palette/mod.rs` for the full rationale.
-- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `Command`s via `PluginAction::Run(cmd)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
+- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppMsg`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
 
 ### Input flow
 
 ```
 raw event
   ↓ input layer (keyboard / mouse / async poll)
-  ↓ Option<Command>          ← pure translation, no state mutation
+  ↓ Option<AppMsg>          ← pure translation, no state mutation
   ↓
 app.rs: self.dispatch(cmd)
   ↓
-command::dispatch(cmd, &mut ctx)    ← single state mutator
+app_msg::dispatch(cmd, &mut ctx)    ← single state mutator
   ↓
-    Command::Map(a)            → ctx.map.process_action(&a)
-    Command::Jump(loc)         → ctx.map.jump_to(loc)
-    Command::Ui(a)             → ctx.ui.apply(a, render_handle)
-    Command::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
-    Command::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
-    Command::OpenPalette       → ctx.ui.open_palette(keymap)
-    Command::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
+    AppMsg::Map(a)            → ctx.map.process_action(&a)
+    AppMsg::Jump(loc)         → ctx.map.jump_to(loc)
+    AppMsg::Ui(a)             → ctx.ui.apply(a, render_handle)
+    AppMsg::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
+    AppMsg::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
+    AppMsg::OpenPalette       → ctx.ui.open_palette(keymap)
+    AppMsg::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
 ```
 
 The keyboard translator's decision tree:
 
 ```
 key event
-  ↓ keyboard.handle() → Option<Command>:
+  ↓ keyboard.handle() → Option<AppMsg>:
     [1] focused surface delivery via ui.deliver_key() — consumes, runs, or passes through
-    [2] Tab / Shift-Tab        → Command::CycleFocus(forward)
-    [3] `:`                    → Command::OpenPalette
-    [4] plugin activation key  → Command::ActivatePlugin(tag)
-    [5] keymap.resolve()       → whatever Command the binding produces
+    [2] Tab / Shift-Tab        → AppMsg::CycleFocus(forward)
+    [3] `:`                    → AppMsg::OpenPalette
+    [4] plugin activation key  → AppMsg::ActivatePlugin(tag)
+    [5] keymap.resolve()       → whatever AppMsg the binding produces
        (with gg sequence state on the handler)
 ```
 
@@ -211,10 +246,10 @@ Mouse is similar:
 
 ```
 mouse event
-  ↓ mouse.handle(event, &mut ui) → Option<Command>:
+  ↓ mouse.handle(event, &mut ui) → Option<AppMsg>:
     search focused?       → None (ignored)
-    drag (left)           → Command::Map(Action::PanCells(dx, dy))
-    scroll up / down      → Command::Map(Action::ZoomAt { anchor_*, zoom_in })
+    drag (left)           → AppMsg::Map(Action::PanCells(dx, dy))
+    scroll up / down      → AppMsg::Map(Action::ZoomAt { anchor_*, zoom_in })
     (cursor readout side effect on InfoOverlay always)
 ```
 
@@ -232,7 +267,7 @@ main thread (ratatui draw):
     5. footer hints from the focused plugin (or default)
 ```
 
-Rendering is decoupled from fetching. The render thread produces a `MapFrame` from the current `RenderRequest`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
+Rendering is decoupled from fetching. The render thread produces a `MapFrame` from the current `Viewport`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
 
 ### Focus model
 
@@ -250,7 +285,7 @@ trait Plugin {
     fn visible(&self) -> bool;                     // is the panel on screen?
     fn handle_key(&mut self, code, mods, ctx) -> PluginAction;
     fn poll(&mut self) -> bool;                    // drain async work; redraw hint
-    fn pending_command(&mut self) -> Option<Command>;  // async-emitted command (e.g. Jump)
+    fn pending_command(&mut self) -> Option<AppMsg>;  // async-emitted message (e.g. Jump)
     fn render(&self, f, area, theme);              // focused / visible panel
     fn footer_hints(&self) -> Vec<(&str, &str)>;
     fn paint_on_map(&self, p: &mut MapPainter);    // world-space primitives

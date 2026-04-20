@@ -4,8 +4,8 @@ use std::fs;
 use std::io;
 
 pub fn run() -> io::Result<()> {
-    let cache_dir = directories::ProjectDirs::from("", "", "ttymap")
-        .map(|dirs| dirs.cache_dir().to_path_buf());
+    let cache_dir =
+        directories::ProjectDirs::from("", "", "ttymap").map(|dirs| dirs.cache_dir().to_path_buf());
 
     match cache_dir {
         Some(dir) if dir.exists() => match fs::remove_dir_all(&dir) {

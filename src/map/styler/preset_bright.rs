@@ -1,8 +1,8 @@
 use crate::color_palette::ColorPalette;
 
 use super::filter::Filter;
-use crate::map::tile::PropertyValue as PV;
 use super::{StyleRule, StyleType};
+use crate::map::tile::PropertyValue as PV;
 
 fn s(v: &str) -> PV {
     PV::String(std::sync::Arc::from(v))

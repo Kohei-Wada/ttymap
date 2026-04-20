@@ -114,7 +114,12 @@ impl HelpPlugin {
 
         // Fit content with breathing room, but cap at ~80% of the map
         // area so the popup doesn't dominate the viewport.
-        let content_width = rendered.iter().map(|l| l.width() as u16).max().unwrap_or(30) + 6;
+        let content_width = rendered
+            .iter()
+            .map(|l| l.width() as u16)
+            .max()
+            .unwrap_or(30)
+            + 6;
         let content_height = rendered.len() as u16 + 2;
 
         let max_width = map_inner.width.saturating_sub(4).max(20);

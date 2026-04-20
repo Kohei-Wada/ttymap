@@ -4,8 +4,8 @@
 //! entry (or, in the future, a `:theme` shortcut). Lists every
 //! registered [`ThemeId`] with the current one marked.
 
-use crate::color_palette::ThemeId;
 use crate::app_msg::AppMsg;
+use crate::color_palette::ThemeId;
 use crate::ui::action::UiAction;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
