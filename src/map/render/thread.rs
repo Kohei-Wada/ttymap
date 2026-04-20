@@ -21,13 +21,9 @@ pub enum RenderCommand {
     Shutdown,
 }
 
-pub enum RenderResult {
-    Frame(MapFrame),
-}
-
 pub struct RenderHandle {
     cmd_tx: mpsc::Sender<RenderCommand>,
-    result_rx: mpsc::Receiver<RenderResult>,
+    frame_rx: mpsc::Receiver<MapFrame>,
     should_quit: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -35,13 +31,13 @@ pub struct RenderHandle {
 impl RenderHandle {
     pub fn spawn(pipeline: RenderPipeline) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (result_tx, result_rx) = mpsc::channel();
+        let (frame_tx, frame_rx) = mpsc::channel();
         let should_quit = Arc::new(AtomicBool::new(false));
         let should_quit_clone = should_quit.clone();
 
         let thread = thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_loop(cmd_rx, result_tx, should_quit_clone, pipeline);
+                run_loop(cmd_rx, frame_tx, should_quit_clone, pipeline);
             }));
             if let Err(e) = result {
                 let msg = if let Some(s) = e.downcast_ref::<String>() {
@@ -57,7 +53,7 @@ impl RenderHandle {
 
         RenderHandle {
             cmd_tx,
-            result_rx,
+            frame_rx,
             should_quit,
             thread: Some(thread),
         }
@@ -72,10 +68,7 @@ impl RenderHandle {
     /// Pull the next completed frame from the render thread, if any.
     /// Non-blocking: returns `None` when the queue is empty.
     pub fn try_recv_frame(&self) -> Option<MapFrame> {
-        match self.result_rx.try_recv() {
-            Ok(RenderResult::Frame(frame)) => Some(frame),
-            Err(_) => None,
-        }
+        self.frame_rx.try_recv().ok()
     }
 
     pub fn request_resize(&self, width: usize, height: usize) {
@@ -153,9 +146,9 @@ fn drain_commands(
     Ok(latest_draw)
 }
 
-fn send_frame(result_tx: &mpsc::Sender<RenderResult>, frame: Option<MapFrame>) -> bool {
+fn send_frame(frame_tx: &mpsc::Sender<MapFrame>, frame: Option<MapFrame>) -> bool {
     if let Some(frame) = frame
-        && result_tx.send(RenderResult::Frame(frame)).is_err()
+        && frame_tx.send(frame).is_err()
     {
         return false; // channel closed
     }
@@ -164,7 +157,7 @@ fn send_frame(result_tx: &mpsc::Sender<RenderResult>, frame: Option<MapFrame>) -
 
 fn run_loop(
     cmd_rx: mpsc::Receiver<RenderCommand>,
-    result_tx: mpsc::Sender<RenderResult>,
+    frame_tx: mpsc::Sender<MapFrame>,
     should_quit: Arc<AtomicBool>,
     mut pipeline: RenderPipeline,
 ) {
@@ -181,7 +174,7 @@ fn run_loop(
             Err(()) => break,
             Ok(Some(viewport)) => {
                 debug!("render: drawing (zoom={:.1})", viewport.zoom);
-                if !send_frame(&result_tx, pipeline.render(&viewport)) {
+                if !send_frame(&frame_tx, pipeline.render(&viewport)) {
                     return;
                 }
                 last_viewport = Some(viewport);
@@ -194,7 +187,7 @@ fn run_loop(
         if let Some(ref viewport) = last_viewport
             && pipeline.poll_tiles()
         {
-            if !send_frame(&result_tx, pipeline.render(viewport)) {
+            if !send_frame(&frame_tx, pipeline.render(viewport)) {
                 return;
             }
             continue;
@@ -210,7 +203,7 @@ fn run_loop(
         match cmd_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
             Ok(cmd) => match apply_cmd(cmd, &mut pipeline) {
                 CmdOutcome::Draw(viewport) => {
-                    if !send_frame(&result_tx, pipeline.render(&viewport)) {
+                    if !send_frame(&frame_tx, pipeline.render(&viewport)) {
                         return;
                     }
                     last_viewport = Some(viewport);
