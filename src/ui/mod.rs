@@ -71,14 +71,9 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     let map_area = chunks[0];
     let footer_area = chunks[1];
 
-    let border_color = if matches!(ui.focus.current(), Focus::Background) {
-        theme.accent
-    } else {
-        theme.muted_color
-    };
     let map_block = Block::new()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(theme.accent))
         .title(" world ");
     let map_inner = map_block.inner(map_area);
     f.render_widget(map_block, map_area);
