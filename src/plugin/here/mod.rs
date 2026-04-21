@@ -16,7 +16,7 @@ use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
 
-use crate::app_command::{Effect, SurfaceCtx};
+use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 
 use super::Plugin;
 
@@ -64,19 +64,6 @@ impl Plugin for HerePlugin {
         self.job.spawn(move || geoip::lookup(&endpoint, timeout));
     }
 
-    fn visible(&self) -> bool {
-        false
-    }
-
-    fn handle_key(
-        &mut self,
-        _code: KeyCode,
-        _modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
-        Effect::Pass
-    }
-
     fn poll(&mut self) -> bool {
         match self.job.poll() {
             Some(Some((lat, lon))) => {
@@ -94,6 +81,20 @@ impl Plugin for HerePlugin {
 
     fn pending_command(&mut self) -> Option<AppCommand> {
         self.pending.take().map(AppCommand::Jump)
+    }
+}
+
+/// Headless: takes no keys (`wants_focus()=false` so it never gets
+/// any), and is never visible. Default `FocusSurface` impls would
+/// suffice but we spell them out explicitly for clarity.
+impl FocusSurface for HerePlugin {
+    fn handle_key(
+        &mut self,
+        _code: KeyCode,
+        _modifiers: KeyModifiers,
+        _ctx: SurfaceCtx,
+    ) -> Effect {
+        Effect::Pass
     }
 }
 

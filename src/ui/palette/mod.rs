@@ -81,10 +81,6 @@ impl CommandPalette {
         }
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.active
-    }
-
     /// Open the palette with the default [`CommandProvider`]. The host
     /// is responsible for taking palette focus afterwards — the palette
     /// does not touch `FocusManager` itself (mirrors the plugin rule).
@@ -130,6 +126,10 @@ impl CommandPalette {
 /// (the responder chain stops here — never falls through to the
 /// background). Item selection produces `Effect::Run(AppCommand)`.
 impl FocusSurface for CommandPalette {
+    fn is_visible(&self) -> bool {
+        self.active
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,

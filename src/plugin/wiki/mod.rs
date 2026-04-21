@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::app_command::{AppCommand, Effect, SurfaceCtx};
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;
@@ -125,17 +125,71 @@ impl Plugin for WikiPlugin {
         self.close_state();
     }
 
-    fn visible(&self) -> bool {
-        self.active
+    fn poll(&mut self) -> bool {
+        if let Some(articles) = self.service.poll() {
+            debug!("wiki: received {} articles", articles.len());
+            self.set_articles(articles);
+            true
+        } else {
+            false
+        }
     }
 
-    /// Non-modal key dispatch. Returns `Effect::Pass` for keys the
-    /// wiki panel doesn't recognise so the background responder gets
-    /// a chance — but only when the panel is open. Closed panel =
-    /// `Pass` for everything.
-    ///
-    /// Focus release is host-driven: if `visible()` flips to false
-    /// (e.g. Esc closed the list) `ui::router` releases for us.
+    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.is_detail_open() {
+            vec![
+                ("C-n/C-p", "prev/next"),
+                ("Enter/Esc", "back"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("?", "help"),
+            ]
+        } else {
+            vec![
+                ("C-n/C-p", "select"),
+                ("Enter", "open"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("/", "search"),
+                ("?", "help"),
+            ]
+        }
+    }
+
+    fn paint_on_map(&self, p: &mut crate::painter::MapPainter<'_>) {
+        if !self.active {
+            return;
+        }
+        let (primary, accent) = {
+            let theme = p.theme();
+            (theme.accent, theme.accent_alt)
+        };
+        for (i, a) in self.articles.iter().enumerate() {
+            let fg = if i == self.selected { accent } else { primary };
+            p.point(
+                crate::geo::LonLat {
+                    lon: a.lon,
+                    lat: a.lat,
+                },
+                '●',
+                fg,
+            );
+        }
+    }
+}
+
+/// Non-modal key dispatch. Returns `Effect::Pass` for keys the wiki
+/// panel doesn't recognise so the background responder gets a chance
+/// — but only when the panel is open. Closed panel = `Pass` for
+/// everything.
+///
+/// Focus release is host-driven: if `is_visible()` flips to false
+/// (e.g. Esc closed the list) `ui::router` releases for us.
+impl FocusSurface for WikiPlugin {
     fn handle_key(
         &mut self,
         code: KeyCode,
@@ -232,59 +286,7 @@ impl Plugin for WikiPlugin {
         Effect::Pass
     }
 
-    fn poll(&mut self) -> bool {
-        if let Some(articles) = self.service.poll() {
-            debug!("wiki: received {} articles", articles.len());
-            self.set_articles(articles);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
-    }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.is_detail_open() {
-            vec![
-                ("C-n/C-p", "prev/next"),
-                ("Enter/Esc", "back"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("?", "help"),
-            ]
-        } else {
-            vec![
-                ("C-n/C-p", "select"),
-                ("Enter", "open"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("/", "search"),
-                ("?", "help"),
-            ]
-        }
-    }
-
-    fn paint_on_map(&self, p: &mut crate::painter::MapPainter<'_>) {
-        if !self.active {
-            return;
-        }
-        let (primary, accent) = {
-            let theme = p.theme();
-            (theme.accent, theme.accent_alt)
-        };
-        for (i, a) in self.articles.iter().enumerate() {
-            let fg = if i == self.selected { accent } else { primary };
-            p.point(
-                crate::geo::LonLat {
-                    lon: a.lon,
-                    lat: a.lat,
-                },
-                '●',
-                fg,
-            );
-        }
+    fn is_visible(&self) -> bool {
+        self.active
     }
 }

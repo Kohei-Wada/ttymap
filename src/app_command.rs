@@ -99,10 +99,15 @@ pub struct SurfaceCtx {
     pub center: LonLat,
 }
 
-/// Anything the router can deliver a focused-surface key event to.
+/// Uniform interface for anything that can claim focus. The router
+/// hands a key event to whichever surface the [`FocusManager`]
+/// (crate::focus::FocusManager) currently identifies as focused, then
+/// reads `is_visible` to detect "the surface closed itself" and
+/// auto-release focus accordingly.
+///
 /// Implemented by [`CommandPalette`](crate::ui::palette::CommandPalette)
-/// and every [`Plugin`](crate::plugin::Plugin) (via a blanket adapter
-/// in `plugin/mod.rs` that wraps their existing `handle_key`).
+/// and — via the `Plugin: FocusSurface` supertrait — by every
+/// [`Plugin`](crate::plugin::Plugin).
 pub trait FocusSurface {
     fn handle_key(
         &mut self,
@@ -110,6 +115,13 @@ pub trait FocusSurface {
         modifiers: crossterm::event::KeyModifiers,
         ctx: SurfaceCtx,
     ) -> Effect;
+
+    /// Whether this surface is currently on screen / interactive.
+    /// Default `false` — for surfaces that never become visible
+    /// (e.g. headless plugins like `here`).
+    fn is_visible(&self) -> bool {
+        false
+    }
 }
 
 /// Bundle of borrows every dispatcher entry point needs. Bundling

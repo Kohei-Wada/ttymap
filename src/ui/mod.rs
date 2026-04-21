@@ -166,20 +166,21 @@ impl UiState {
             Focus::Modal(id) => id,
         };
 
-        // Palette is not in the plugin registry — special-case its
-        // delivery. Every other modal id is looked up as a plugin.
-        let (effect, still_visible) = if id == palette::SURFACE_ID {
-            let effect = self.palette.handle_key(code, modifiers, ctx);
-            (effect, self.palette.is_visible())
-        } else {
-            let effect = match self.widgets.get_mut(id.as_ref()) {
-                Some(p) => p.handle_key(code, modifiers, ctx),
-                None => Effect::Pass,
+        // Both palette and plugins implement FocusSurface — uniform
+        // dispatch. The palette branch is the only special case left
+        // (it's not in the plugin registry; the registry only holds
+        // plugins).
+        let (effect, still_visible) = {
+            let surface: &mut dyn FocusSurface = if id == palette::SURFACE_ID {
+                &mut self.palette
+            } else {
+                match self.widgets.get_mut(id.as_ref()) {
+                    Some(p) => p,
+                    None => return Some(Effect::Pass),
+                }
             };
-            let still_visible = self
-                .widgets
-                .get(id.as_ref())
-                .is_some_and(|w| w.visible());
+            let effect = surface.handle_key(code, modifiers, ctx);
+            let still_visible = surface.is_visible();
             (effect, still_visible)
         };
 
@@ -235,7 +236,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     // modal plugins (search/help) self-close on deactivate so they
     // only render while focused.
     for w in ui.widgets.iter() {
-        if w.visible() {
+        if w.is_visible() {
             w.render(f, map_inner, theme);
         }
     }
@@ -285,7 +286,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
         ("?", "help"),
     ];
     // Tab only cycles when at least one plugin window is visible.
-    if ui.widgets.iter().any(|w| w.visible()) {
+    if ui.widgets.iter().any(|w| w.is_visible()) {
         hints.push(("Tab/S-Tab", "focus"));
     }
     hints.push(("q", "quit"));
@@ -329,12 +330,12 @@ mod tests {
         let ctx = SurfaceCtx { center: ZERO };
         let search = ui.widgets.get_mut("search").unwrap();
         search.activate(ctx);
-        assert!(search.visible());
+        assert!(search.is_visible());
         assert!(search.wants_focus());
 
         search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, ctx);
         search.handle_key(KeyCode::Esc, KeyModifiers::NONE, ctx);
-        assert!(!search.visible());
+        assert!(!search.is_visible());
     }
 
     #[test]

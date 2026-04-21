@@ -121,7 +121,7 @@ impl FocusManager {
 
         let visible: Vec<String> = widgets
             .iter()
-            .filter(|w| w.visible())
+            .filter(|w| w.is_visible())
             .map(|w| w.tag().to_string())
             .collect();
 

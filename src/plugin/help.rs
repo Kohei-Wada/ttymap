@@ -11,7 +11,7 @@ use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
 
-use crate::app_command::{Effect, SurfaceCtx};
+use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 
 use super::Plugin;
 
@@ -163,28 +163,30 @@ impl Plugin for HelpPlugin {
         self.active = false;
     }
 
-    fn visible(&self) -> bool {
-        self.active
-    }
-
-    fn handle_key(
-        &mut self,
-        _code: KeyCode,
-        _modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
-        // Modal: any key closes. Host detects `visible()=false` and
-        // releases focus.
-        self.active = false;
-        Effect::Consumed
-    }
-
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         HelpPlugin::render(self, f, area, theme);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("any key", "close")]
+    }
+}
+
+/// Help is fully modal: any key closes the panel. The host notices
+/// `is_visible()=false` and releases focus accordingly.
+impl FocusSurface for HelpPlugin {
+    fn handle_key(
+        &mut self,
+        _code: KeyCode,
+        _modifiers: KeyModifiers,
+        _ctx: SurfaceCtx,
+    ) -> Effect {
+        self.active = false;
+        Effect::Consumed
+    }
+
+    fn is_visible(&self) -> bool {
+        self.active
     }
 }
 

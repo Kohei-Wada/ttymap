@@ -17,20 +17,24 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, Effect, SurfaceCtx};
+use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;
 
 /// Interactive widget dispatched from the keyboard handler.
 ///
-/// Widgets decide which keys and actions they consume; the keyboard
-/// handler iterates them in priority order and never inspects
-/// per-widget types. Focus transitions are entirely host-owned — the
-/// host takes focus for an activating plugin whose `wants_focus`
-/// returns true, and releases it when `visible()` flips to false
-/// after a key event.
-pub trait Plugin {
+/// Widgets decide which keys and actions they consume; the router
+/// hands events to the focused widget through the
+/// [`FocusSurface`](crate::app_command::FocusSurface) supertrait and
+/// never inspects per-widget types. Focus transitions are entirely
+/// host-owned — the host takes focus for an activating plugin whose
+/// `wants_focus` returns true, and releases it when `is_visible()`
+/// flips to false after a key event.
+///
+/// `Plugin: FocusSurface` so the registry can be addressed via
+/// `&mut dyn FocusSurface` for uniform key delivery.
+pub trait Plugin: FocusSurface {
     /// Stable identifier used by the registry and `Focus::Modal`.
     /// Built-ins return a `&'static str`; plugins supply their own.
     fn tag(&self) -> &str;
@@ -76,26 +80,6 @@ pub trait Plugin {
     fn close(&mut self) {
         self.deactivate();
     }
-
-    /// Whether this plugin's window is currently on screen. The main
-    /// draw loop renders every plugin that reports `true`, regardless
-    /// of focus — so non-modal panels (weather, status, wiki) can
-    /// stay visible while the user is doing something else.
-    fn visible(&self) -> bool {
-        false
-    }
-
-    /// Raw key event while this widget holds focus. The handler is
-    /// only called when the dispatcher routes to it — widgets do not
-    /// need to self-gate. Return `Effect::Pass` only when the key is
-    /// deliberately delegated back to the global keymap (e.g. the
-    /// wiki panel, which passes non-nav keys through).
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ctx: SurfaceCtx,
-    ) -> Effect;
 
     /// Drain any async/background work. Returns `true` if state
     /// changed and the app should redraw.

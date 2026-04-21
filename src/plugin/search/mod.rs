@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, Effect, SurfaceCtx};
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
 
@@ -79,15 +79,35 @@ impl Plugin for SearchPlugin {
         self.close();
     }
 
-    fn visible(&self) -> bool {
-        self.active
+    fn poll(&mut self) -> bool {
+        if let Some(results) = self.service.poll() {
+            self.candidates = results;
+            self.selected = 0;
+            true
+        } else {
+            false
+        }
     }
 
-    /// Modal key dispatch. While candidates are showing the popup is
-    /// in "results mode" (Up/Down/Enter pick a hit, Esc cancels);
-    /// otherwise it's in "input mode" (typing edits the query, Enter
-    /// submits a forward-geocode). Focus release is host-driven —
-    /// `ui::router` notices `visible()=false` and releases for us.
+    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.has_candidates() {
+            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
+        } else {
+            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
+        }
+    }
+}
+
+/// Modal key dispatch. While candidates are showing the popup is in
+/// "results mode" (Up/Down/Enter pick a hit, Esc cancels); otherwise
+/// it's in "input mode" (typing edits the query, Enter submits a
+/// forward-geocode). Focus release is host-driven — `ui::router`
+/// notices `is_visible()=false` and releases for us.
+impl FocusSurface for SearchPlugin {
     fn handle_key(
         &mut self,
         code: KeyCode,
@@ -161,25 +181,7 @@ impl Plugin for SearchPlugin {
         }
     }
 
-    fn poll(&mut self) -> bool {
-        if let Some(results) = self.service.poll() {
-            self.candidates = results;
-            self.selected = 0;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
-    }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.has_candidates() {
-            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
-        } else {
-            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
-        }
+    fn is_visible(&self) -> bool {
+        self.active
     }
 }
