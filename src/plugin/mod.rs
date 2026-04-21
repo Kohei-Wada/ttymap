@@ -57,7 +57,7 @@ pub struct PluginCtx {
 /// returns true, and releases it when `visible()` flips to false
 /// after a key event.
 pub trait Plugin {
-    /// Stable identifier used by the registry and `Focus::Plugin`.
+    /// Stable identifier used by the registry and `Focus::Modal`.
     /// Built-ins return a `&'static str`; plugins supply their own.
     fn tag(&self) -> &str;
 

@@ -1,60 +1,68 @@
 //! `Focus` — single source of truth for which surface has exclusive
 //! keyboard focus. Read by the dispatcher and layout code; transitions
 //! happen via [`FocusManager::on`] which interprets [`FocusEvent`]s
-//! emitted by `UiState` as palette / plugin state changes.
+//! emitted by `UiState`.
 //!
 //! **Event-driven, not commanded**: callers don't tell focus *what* to
 //! do (`take`, `release`), they tell focus *what happened* in the rest
-//! of the UI (`PaletteOpened`, `PluginActivated(tag)`, …) and focus
-//! decides how to react. The transition rules (wants_focus gating,
-//! auto-release on close, prev-slot restoration) live in one place —
-//! here — instead of scattered across `UiState` methods.
+//! of the UI (`Claimed(id)`, `Released(id)`) and focus decides how to
+//! react. The transition rules (auto-release on close, prev-slot
+//! restoration) live in one place — here — instead of scattered.
+//!
+//! **Surfaces are opaque ids**: the manager does not distinguish
+//! palette from plugin from any future modal (dialog, notification
+//! tray); they all flow through the same `Modal(SurfaceId)` variant
+//! and `Claimed/Released` events. The `wants_focus` gating policy
+//! lives at the call site (e.g. `UiState::activate_plugin`), not here.
 
 use std::borrow::Cow;
 
 use crate::plugin::PluginRegistry;
 
+/// Identifier for a focus-claiming surface. `palette`, plugin tags
+/// (`search`, `wiki`, …), and any future modal share the same shape.
+pub type SurfaceId = Cow<'static, str>;
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Focus {
+    /// Default state — no surface has claimed input. The
+    /// [`BackgroundResponder`](crate::ui::router::background::BackgroundResponder)
+    /// handles keys.
     #[default]
-    Map,
-    Plugin(Cow<'static, str>),
-    /// Command palette — a builtin, not in `PluginRegistry`. Modelled
-    /// as its own variant because the palette inherently coordinates
-    /// across plugins and doesn't fit the self-contained widget
-    /// contract `Plugin` imposes.
-    Palette,
+    Background,
+    /// A modal surface (palette, focused plugin, or any future modal)
+    /// has claimed input. The router delivers keys to it before
+    /// falling through to the background.
+    Modal(SurfaceId),
 }
 
 impl Focus {
-    pub fn is_plugin(&self, tag: &str) -> bool {
-        matches!(self, Focus::Plugin(t) if t == tag)
+    /// Whether the named surface is the current focus owner. Works
+    /// for any modal id — palette, plugin tag, or other.
+    pub fn is_modal(&self, id: &str) -> bool {
+        matches!(self, Focus::Modal(t) if t == id)
     }
 }
 
 /// Events the rest of the UI emits at focus-relevant moments. The
-/// manager interprets each event against its current state and the
-/// plugin registry to decide the transition.
+/// manager interprets each event against its current state to decide
+/// the transition.
+#[derive(Debug, Clone, PartialEq)]
 pub enum FocusEvent {
-    /// Palette's provider was activated — it is now modal and visible.
-    PaletteOpened,
-    /// Palette's `is_visible()` flipped to false (Esc / Enter / item
-    /// picked). If focus is on the palette, releases it.
-    PaletteClosed,
-    /// Plugin with this tag just had `activate()` called and is ready
-    /// to run. Focus takes it iff the plugin's `wants_focus()` is true.
-    PluginActivated(String),
-    /// Plugin with this tag closed (either `handle_key` dropped
-    /// `visible()` or it was toggled off). If focus is on this plugin,
-    /// releases it.
-    PluginClosed(String),
+    /// Surface with this id is asking for focus. The caller is
+    /// responsible for any "wants focus" gating before emitting (the
+    /// manager unconditionally honours the claim).
+    Claimed(SurfaceId),
+    /// Surface with this id closed (key handler dropped its
+    /// visibility, or the user toggled it off). If focus is on this
+    /// surface, the manager releases it.
+    Released(SurfaceId),
 }
 
 /// Coordinates focus transitions. Inner `Focus` is private so every
 /// transition goes through [`on`] (or [`cycle`]), letting the
-/// manager keep the `prev` slot in sync. `prev` is how `release`
-/// restores the focus a plugin held before the current one grabbed it
-/// instead of always dropping back to the map.
+/// manager keep the `prev` slot in sync. `prev` restores the focus
+/// the previous claimer had instead of always dropping to background.
 #[derive(Default)]
 pub struct FocusManager {
     current: Focus,
@@ -72,31 +80,21 @@ impl FocusManager {
         &self.current
     }
 
-    pub fn is_plugin(&self, tag: &str) -> bool {
-        self.current.is_plugin(tag)
+    /// Whether the named surface is the current focus owner. Sugar
+    /// over [`Focus::is_modal`].
+    pub fn is_modal(&self, id: &str) -> bool {
+        self.current.is_modal(id)
     }
 
     /// React to a UI state change. See [`FocusEvent`] for the vocab.
     pub fn on(&mut self, event: FocusEvent, widgets: &mut PluginRegistry) {
         match event {
-            FocusEvent::PaletteOpened => {
-                self.deactivate_current(widgets, None);
-                self.transition_to(Focus::Palette);
+            FocusEvent::Claimed(id) => {
+                self.deactivate_current(widgets, Some(&id));
+                self.transition_to(Focus::Modal(id));
             }
-            FocusEvent::PaletteClosed => {
-                if matches!(self.current, Focus::Palette) {
-                    self.release();
-                }
-            }
-            FocusEvent::PluginActivated(tag) => {
-                let wants_focus = widgets.get(&tag).is_some_and(|w| w.wants_focus());
-                if wants_focus {
-                    self.deactivate_current(widgets, Some(&tag));
-                    self.transition_to(Focus::Plugin(tag.into()));
-                }
-            }
-            FocusEvent::PluginClosed(tag) => {
-                if self.current.is_plugin(&tag) {
+            FocusEvent::Released(id) => {
+                if self.current.is_modal(&id) {
                     self.release();
                 }
             }
@@ -104,15 +102,20 @@ impl FocusManager {
     }
 
     /// Cycle focus to the next (or previous) visible plugin, wrapping
-    /// through Map. Tab is an explicit user intent, not a reactive
-    /// transition, so it stays a dedicated method instead of riding
-    /// `on`. Returns `true` if focus moved. Map → visible[0] → … →
-    /// visible[last] → Map (reverse swaps the ends).
+    /// through Background. Tab is an explicit user intent, not a
+    /// reactive transition, so it stays a dedicated method instead of
+    /// riding `on`. Returns `true` if focus moved.
+    /// Background → visible[0] → … → visible[last] → Background
+    /// (reverse swaps the ends).
     pub fn cycle(&mut self, widgets: &mut PluginRegistry, forward: bool) -> bool {
-        // Palette is modal and outside the plugin cycle; user must close
-        // it first. (In practice palette.handle_key consumes Tab too, so
-        // this branch is defensive.)
-        if matches!(self.current, Focus::Palette) {
+        // Non-plugin modals (palette, future dialogs) are outside the
+        // plugin cycle — user must close them first. Detected by
+        // looking up the current id in the plugin registry; if it's
+        // not there, it's a non-plugin modal. (palette.handle_key
+        // also consumes Tab, so this branch is mostly defensive.)
+        if let Focus::Modal(id) = &self.current
+            && widgets.get(id.as_ref()).is_none()
+        {
             return false;
         }
 
@@ -127,28 +130,27 @@ impl FocusManager {
         }
 
         let next: Option<String> = match &self.current {
-            // From Map, enter at the appropriate end of the list.
-            Focus::Map => Some(if forward {
+            // From Background, enter at the appropriate end of the list.
+            Focus::Background => Some(if forward {
                 visible.first().unwrap().clone()
             } else {
                 visible.last().unwrap().clone()
             }),
-            Focus::Palette => unreachable!("handled by early return above"),
-            Focus::Plugin(cur) => {
+            Focus::Modal(cur) => {
                 let cur_str = cur.as_ref();
                 match visible.iter().position(|t| t == cur_str) {
                     Some(i) if forward => {
                         if i + 1 < visible.len() {
                             Some(visible[i + 1].clone())
                         } else {
-                            None // past last → Map
+                            None // past last → Background
                         }
                     }
                     Some(i) => {
                         if i > 0 {
                             Some(visible[i - 1].clone())
                         } else {
-                            None // before first → Map
+                            None // before first → Background
                         }
                     }
                     // Current focus not visible — enter the list at the edge.
@@ -163,17 +165,17 @@ impl FocusManager {
 
         self.deactivate_current(widgets, None);
         self.transition_to(match next {
-            Some(tag) => Focus::Plugin(tag.into()),
-            None => Focus::Map,
+            Some(tag) => Focus::Modal(tag.into()),
+            None => Focus::Background,
         });
         true
     }
 
     // ── Internals ─────────────────────────────────────────────────
 
-    /// Restore the remembered predecessor (or map if none).
+    /// Restore the remembered predecessor (or background if none).
     fn release(&mut self) {
-        self.current = std::mem::replace(&mut self.prev, Focus::Map);
+        self.current = std::mem::replace(&mut self.prev, Focus::Background);
     }
 
     /// Record a transition, pushing the outgoing focus into `prev`.
@@ -187,12 +189,12 @@ impl FocusManager {
 
     /// Run `deactivate` on the currently-focused plugin unless the
     /// caller is about to re-activate the same one (toggle case).
-    /// Modal plugins close themselves through `deactivate`; non-modal
-    /// plugins leave their panel visible. The policy lives in each
-    /// plugin; this method just invokes it at the right moment.
-    fn deactivate_current(&self, widgets: &mut PluginRegistry, keep_tag: Option<&str>) {
-        if let Focus::Plugin(prev) = &self.current
-            && keep_tag != Some(prev.as_ref())
+    /// Non-plugin modals (e.g. palette) aren't in the registry so the
+    /// `widgets.get_mut` lookup returns `None` and nothing happens —
+    /// they self-clean through their own visibility flow.
+    fn deactivate_current(&self, widgets: &mut PluginRegistry, keep_id: Option<&str>) {
+        if let Focus::Modal(prev) = &self.current
+            && keep_id != Some(prev.as_ref())
             && let Some(p) = widgets.get_mut(prev.as_ref())
         {
             p.deactivate();

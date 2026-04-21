@@ -28,7 +28,7 @@ impl MouseHandler {
     /// change for the dispatcher".
     pub fn handle(&mut self, event: MouseEvent, ui: &mut UiState) -> Option<AppCommand> {
         // Search is modal — ignore mouse while its panel is open.
-        if ui.focus.is_plugin("search") {
+        if ui.focus.is_modal("search") {
             return None;
         }
 

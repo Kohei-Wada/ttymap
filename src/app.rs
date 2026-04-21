@@ -173,7 +173,7 @@ impl App {
             // internally whether to act (e.g., place throttles to 5s).
             // Wiki is intentionally not notified — Google-Maps-style, the
             // article list stays pinned to the query that produced it.
-            if !self.ui.focus.is_plugin("search") {
+            if !self.ui.focus.is_modal("search") {
                 self.ui.overlay.on_map_moved(viewport.center);
             }
         }

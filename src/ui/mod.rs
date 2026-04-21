@@ -93,13 +93,16 @@ impl UiState {
     }
 
     /// Open the command palette with its default provider. Palette
-    /// becomes visible; the focus manager takes focus in response to
-    /// the `PaletteOpened` event. The current `theme_id` is taken as
-    /// a parameter (theme lives on `App`, not `UiState`) so the
-    /// palette can highlight the active entry in its theme picker.
+    /// becomes visible; the focus manager records the claim. The
+    /// current `theme_id` is taken as a parameter (theme lives on
+    /// `App`, not `UiState`) so the palette can highlight the active
+    /// entry in its theme picker.
     pub fn open_palette(&mut self, keymap: &KeyMap, theme_id: ThemeId) {
         self.palette.activate(&self.widgets, keymap, theme_id);
-        self.focus.on(FocusEvent::PaletteOpened, &mut self.widgets);
+        self.focus.on(
+            FocusEvent::Claimed(palette::SURFACE_ID.into()),
+            &mut self.widgets,
+        );
     }
 
     /// Cycle keyboard focus across visible plugins. `true` = forward
@@ -115,29 +118,36 @@ impl UiState {
     /// palette selection, or external command). Re-activating a
     /// currently-focused plugin toggles it off. For first-time
     /// activation, brings the plugin to the front and calls its
-    /// `activate` hook; the focus manager reacts to `PluginActivated`
-    /// and takes focus iff the plugin's `wants_focus` is true.
+    /// `activate` hook. The `wants_focus` gate lives here (not in
+    /// the focus manager) — we only emit `Claimed` if the plugin
+    /// actually asks for focus, so headless plugins (like `here`)
+    /// don't steal it.
     pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
         // Toggle-off: re-activating the currently-focused plugin closes it.
-        if self.focus.is_plugin(tag) {
+        if self.focus.is_modal(tag) {
             if let Some(w) = self.widgets.get_mut(tag) {
                 w.close();
             }
             self.focus
-                .on(FocusEvent::PluginClosed(tag.to_string()), &mut self.widgets);
+                .on(FocusEvent::Released(tag.to_string().into()), &mut self.widgets);
             return;
         }
 
         // Normal activation.
         self.widgets.bring_to_front(tag);
         let mut ctx = PluginCtx { center };
-        if let Some(w) = self.widgets.get_mut(tag) {
+        let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
             w.activate(&mut ctx);
+            w.wants_focus()
+        } else {
+            return;
+        };
+        if wants_focus {
+            self.focus.on(
+                FocusEvent::Claimed(tag.to_string().into()),
+                &mut self.widgets,
+            );
         }
-        self.focus.on(
-            FocusEvent::PluginActivated(tag.to_string()),
-            &mut self.widgets,
-        );
     }
 
     /// Hand a key to the currently-focused surface and apply the
@@ -151,41 +161,40 @@ impl UiState {
         modifiers: KeyModifiers,
         ctx: SurfaceCtx,
     ) -> Option<Effect> {
-        match self.focus.current().clone() {
-            Focus::Map => None,
-            Focus::Palette => {
-                // Inherent and trait both have a `handle_key`; spell out
-                // the trait so the SurfaceCtx-taking impl is selected.
-                let effect = <CommandPalette as FocusSurface>::handle_key(
-                    &mut self.palette,
-                    code,
-                    modifiers,
-                    ctx,
-                );
-                if !self.palette.is_visible() {
-                    self.focus
-                        .on(FocusEvent::PaletteClosed, &mut self.widgets);
-                }
-                Some(effect)
-            }
-            Focus::Plugin(tag) => {
-                let effect = match self.widgets.get_mut(tag.as_ref()) {
-                    Some(boxed) => crate::plugin::deliver(boxed, code, modifiers, ctx),
-                    None => Effect::Pass,
-                };
-                let still_visible = self
-                    .widgets
-                    .get(tag.as_ref())
-                    .is_some_and(|w| w.visible());
-                if !still_visible {
-                    self.focus.on(
-                        FocusEvent::PluginClosed(tag.to_string()),
-                        &mut self.widgets,
-                    );
-                }
-                Some(effect)
-            }
+        let id = match self.focus.current().clone() {
+            Focus::Background => return None,
+            Focus::Modal(id) => id,
+        };
+
+        // Palette is not in the plugin registry — special-case its
+        // delivery. Every other modal id is looked up as a plugin.
+        let (effect, still_visible) = if id == palette::SURFACE_ID {
+            // Inherent and trait both have a `handle_key`; spell out
+            // the trait so the SurfaceCtx-taking impl is selected.
+            let effect = <CommandPalette as FocusSurface>::handle_key(
+                &mut self.palette,
+                code,
+                modifiers,
+                ctx,
+            );
+            (effect, self.palette.is_visible())
+        } else {
+            let effect = match self.widgets.get_mut(id.as_ref()) {
+                Some(p) => crate::plugin::deliver(p, code, modifiers, ctx),
+                None => Effect::Pass,
+            };
+            let still_visible = self
+                .widgets
+                .get(id.as_ref())
+                .is_some_and(|w| w.visible());
+            (effect, still_visible)
+        };
+
+        if !still_visible {
+            self.focus
+                .on(FocusEvent::Released(id), &mut self.widgets);
         }
+        Some(effect)
     }
 }
 
@@ -197,7 +206,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     let map_area = chunks[0];
     let footer_area = chunks[1];
 
-    let map_focused = !ui.focus.is_plugin("search");
+    let map_focused = !ui.focus.is_modal("search");
     let border_color = if map_focused {
         theme.accent
     } else {
@@ -266,14 +275,13 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused surface provides its own context-sensitive hints.
-    match ui.focus.current() {
-        Focus::Palette => return ui.palette.footer_hints(),
-        Focus::Plugin(tag) => {
-            if let Some(w) = ui.widgets.get(tag.as_ref()) {
-                return w.footer_hints();
-            }
+    if let Focus::Modal(id) = ui.focus.current() {
+        if id == palette::SURFACE_ID {
+            return ui.palette.footer_hints();
         }
-        Focus::Map => {}
+        if let Some(w) = ui.widgets.get(id.as_ref()) {
+            return w.footer_hints();
+        }
     }
     let mut hints = vec![
         ("hjkl", "pan"),
@@ -311,7 +319,7 @@ mod tests {
     #[test]
     fn test_ui_state_initial() {
         let ui = make_ui();
-        assert_eq!(ui.focus.current(), &Focus::Map);
+        assert_eq!(ui.focus.current(), &Focus::Background);
         assert!(ui.map_frame.is_none());
     }
 
@@ -319,7 +327,7 @@ mod tests {
     fn test_ui_state_search_lifecycle() {
         use crate::plugin::PluginCtx;
         let ui = &mut make_ui();
-        assert_eq!(ui.focus.current(), &Focus::Map);
+        assert_eq!(ui.focus.current(), &Focus::Background);
 
         // Plugin.activate / handle_key no longer touch focus — the
         // host (`ui::router::activate_plugin` + the focused-plugin

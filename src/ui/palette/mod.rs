@@ -21,10 +21,10 @@
 //! typed special cases keyed on `tag == "palette"`.
 //!
 //! The cost of keeping it a builtin (one special field on `UiState`,
-//! one `Focus::Palette` variant, two `FocusEvent::Palette*` events,
-//! one `AppCommand::OpenPalette` arm) is localised and tagged. The cost
-//! of unification would be spread across the `Plugin` trait contract.
-//! The current asymmetry is chosen.
+//! one well-known `SURFACE_ID = "palette"`, one `AppCommand::OpenPalette`
+//! arm, one special-case branch in `UiState::deliver_to_focused_surface`)
+//! is localised and tagged. The cost of unification would be spread
+//! across the `Plugin` trait contract. The current asymmetry is chosen.
 //!
 //! # Mechanics
 //!
@@ -33,9 +33,10 @@
 //! providers when the user picks a "sub-mode" command (e.g. "Theme"
 //! switches to [`ThemeProvider`](provider::ThemeProvider)). The
 //! palette never touches `FocusManager`; focus transitions are
-//! driven by `UiState::open_palette` emitting `FocusEvent::PaletteOpened`
-//! and by the delivery path emitting `FocusEvent::PaletteClosed` when
-//! `is_visible()` flips to false.
+//! driven by `UiState::open_palette` emitting
+//! `FocusEvent::Claimed(SURFACE_ID)` and by the delivery path
+//! emitting `FocusEvent::Released(SURFACE_ID)` when `is_visible()`
+//! flips to false.
 
 pub mod panel;
 pub mod provider;
@@ -53,6 +54,11 @@ use crate::theme::UiTheme;
 
 use provider::{CommandProvider, PaletteAction};
 use state::{Outcome, PaletteState};
+
+/// `SurfaceId` for the palette in the focus system. Owned here so
+/// the palette is the source of truth for its own identifier; other
+/// modules import from this constant rather than hardcoding "palette".
+pub const SURFACE_ID: &str = "palette";
 
 /// What `handle_key` wants `ui::router` to do after the keystroke.
 #[derive(Debug, Clone, PartialEq)]
