@@ -1,12 +1,12 @@
-//! Keyboard input handler. Pure **translator**: raw key event →
-//! `Option<AppMsg>`. The caller (`app.rs`) is the one that actually
-//! dispatches the command, keeping keyboard / mouse / async-plugin
-//! paths symmetric.
+//! UI key router — focus-aware translation from raw key events into
+//! `Option<AppMsg>`. Sits between the input layer (which only adapts
+//! crossterm events) and `app_msg::dispatch` (which only routes intent
+//! to a single domain method per arm).
 //!
-//! Key routing is expressed as an ordered table of [`Stage`]s
-//! ([`ROUTING`]). Each stage produces one of {`Consumed`, `Run(cmd)`,
-//! `Pass`}; the first non-`Pass` stage wins. To add or reorder a
-//! stage: edit [`ROUTING`] and [`apply_stage`].
+//! Routing is expressed as an ordered table of [`Stage`]s ([`ROUTING`]).
+//! Each stage produces one of `{Consumed, Run(cmd), Pass}`; the first
+//! non-`Pass` stage wins. To add or reorder a stage: edit [`ROUTING`]
+//! and [`apply_stage`].
 //!
 //! Focus writes and state dispatch never happen here — they're all in
 //! `app_msg::dispatch` / `UiState`. This layer only *reads* focus
@@ -54,15 +54,14 @@ enum StageOutcome {
     Pass,
 }
 
-pub struct KeyboardHandler {
+pub struct KeyRouter {
     keymap: KeyMap,
-    /// First-`g`-of-`gg` flag. Lives on the handler (not the keymap)
-    /// because multi-key sequences are an input-layer concern — the
-    /// keymap itself is a pure lookup table.
+    /// First-`g`-of-`gg` flag. Multi-key sequences are a router
+    /// concern — the keymap itself is a pure lookup table.
     pending_g: bool,
 }
 
-impl KeyboardHandler {
+impl KeyRouter {
     pub fn new(keymap: KeyMap) -> Self {
         Self {
             keymap,
@@ -97,7 +96,7 @@ impl KeyboardHandler {
     /// edit, plugin state update) and focus auto-release — both
     /// performed inside `UiState::deliver_key`. The caller runs
     /// `app_msg::dispatch` on the returned `AppMsg`.
-    pub fn handle(
+    pub fn route_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
@@ -176,20 +175,20 @@ mod tests {
 
     #[test]
     fn gg_produces_zoom_to_world_on_second_g() {
-        let mut kb = KeyboardHandler::new(KeyMap::default());
-        assert_eq!(kb.resolve_with_sequence(KeyCode::Char('g'), NONE), None);
+        let mut r = KeyRouter::new(KeyMap::default());
+        assert_eq!(r.resolve_with_sequence(KeyCode::Char('g'), NONE), None);
         assert_eq!(
-            kb.resolve_with_sequence(KeyCode::Char('g'), NONE),
+            r.resolve_with_sequence(KeyCode::Char('g'), NONE),
             Some(map(Action::ZoomToWorld))
         );
     }
 
     #[test]
     fn gg_sequence_broken_by_other_key() {
-        let mut kb = KeyboardHandler::new(KeyMap::default());
-        kb.resolve_with_sequence(KeyCode::Char('g'), NONE);
-        kb.resolve_with_sequence(KeyCode::Char('h'), NONE); // breaks
-        assert_eq!(kb.resolve_with_sequence(KeyCode::Char('g'), NONE), None);
+        let mut r = KeyRouter::new(KeyMap::default());
+        r.resolve_with_sequence(KeyCode::Char('g'), NONE);
+        r.resolve_with_sequence(KeyCode::Char('h'), NONE); // breaks
+        assert_eq!(r.resolve_with_sequence(KeyCode::Char('g'), NONE), None);
     }
 
     /// The routing table is the public contract of this module;

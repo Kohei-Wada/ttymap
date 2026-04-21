@@ -1,7 +1,7 @@
 //! UI widgets — self-contained components with their own state and rendering.
 //!
 //! Interactive widgets (search, help, wiki) implement the [`Plugin`]
-//! trait so `keyboard.rs` can dispatch events to them uniformly without
+//! trait so `ui::router` can dispatch events to them uniformly without
 //! hard-coding the per-widget `Action` mapping. Focus is owned by the
 //! host — plugins don't mutate `FocusManager` directly. The host takes
 //! focus on activation (auto, gated by `wants_focus`) and releases it

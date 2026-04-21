@@ -7,7 +7,6 @@ use log::{debug, info};
 
 use crate::app_msg::{self, AppMsg, DispatchCtx, InputEffect};
 use crate::config::Config;
-use crate::input::keyboard::KeyboardHandler;
 use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
@@ -21,10 +20,11 @@ use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::UiState;
+use crate::ui::router::KeyRouter;
 
 pub struct App {
     map: MapState,
-    keyboard: KeyboardHandler,
+    router: KeyRouter,
     render_handle: RenderHandle,
     ui: UiState,
     mouse: MouseHandler,
@@ -60,11 +60,11 @@ impl App {
             height,
         );
         let render_handle = RenderHandle::spawn(pipeline);
-        let keyboard = KeyboardHandler::new(keymap);
+        let router = KeyRouter::new(keymap);
 
         App {
             map,
-            keyboard,
+            router,
             render_handle,
             ui,
             mouse: MouseHandler::default(),
@@ -107,7 +107,7 @@ impl App {
                             self.dispatch(AppMsg::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
-                            if let Some(cmd) = self.keyboard.handle(
+                            if let Some(cmd) = self.router.route_key(
                                 key_event.code,
                                 key_event.modifiers,
                                 &mut self.ui,
@@ -149,7 +149,7 @@ impl App {
                 map: &mut self.map,
                 ui: &mut self.ui,
                 render_handle: &self.render_handle,
-                keymap: self.keyboard.keymap(),
+                keymap: self.router.keymap(),
             };
             app_msg::dispatch(cmd, &mut ctx)
         };

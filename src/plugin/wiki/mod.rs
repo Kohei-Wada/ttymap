@@ -90,7 +90,7 @@ impl Plugin for WikiPlugin {
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
         // Focus release is host-driven: if `visible()` flips to false
-        // (e.g. Esc closed the list), keyboard.rs releases for us.
+        // (e.g. Esc closed the list), ui::router releases for us.
         match outcome {
             KeyOutcome::None => PluginAction::Pass,
             KeyOutcome::Consumed => PluginAction::Consumed,

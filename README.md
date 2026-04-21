@@ -132,9 +132,8 @@ src/
 ├── geo.rs            Web Mercator, MapProjection, distance
 ├── color_palette.rs  xterm-256 color tables (ThemeId + DARK/BRIGHT)
 │
-├── input/            pure translators: raw event → Option<AppMsg>
+├── input/            pure device-event adapters
 │   ├── mod.rs
-│   ├── keyboard.rs   focus-first routing + gg sequence + keymap fallback
 │   └── mouse.rs      drag/scroll → AppMsg::Map(PanCells/ZoomAt)
 │
 ├── map/              domain — viewport state + rendering pipeline
@@ -174,6 +173,7 @@ src/
     ├── mod.rs        UiState + draw() + workflow methods (open_palette, …)
     ├── action.rs     UiAction enum (UI-level commands, e.g. SetTheme)
     ├── map_view.rs   MapFrame ratatui adapter
+    ├── router.rs     KeyRouter — focus-first routing + gg sequence + keymap fallback
     │
     ├── palette/      command palette (builtin coordinator — see mod.rs)
     │   ├── mod.rs    CommandPalette + PaletteOutcome
@@ -196,11 +196,11 @@ src/
 
 - **`map/`** — domain state. Knows nothing about UI or plugins. `Action` carries every map-level mutation, including mouse-emitted continuous variants (`PanCells`, `ZoomAt`); plugin activation and UI state are separate concerns.
 - **`app_msg.rs`** — the **controller**. One `AppMsg` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
-- **`input/`** — pure translators. `keyboard.rs` / `mouse.rs` turn raw events into `Option<AppMsg>` and return it to `app.rs`; they never call `dispatch` themselves and never touch domain state directly. Symmetric with async plugin polling.
+- **`input/`** — pure device-event adapters. `mouse.rs` turns raw events into `Option<AppMsg>` and returns it to `app.rs`. Focus-aware key routing is one layer up in `ui::router` (focus-first routing + gg sequence + keymap fallback). Neither calls `dispatch` themselves nor touches domain state directly. Symmetric with async plugin polling.
 - **`focus.rs`** — `FocusManager` driven by `FocusEvent`s (`PaletteOpened`, `PluginActivated(tag)`, …). Callers emit *what happened*; the manager decides the transition (wants_focus gating, auto-release, prev-slot restoration). All focus writes live here.
 - **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
 - **`ui/palette/`** — command palette. A **builtin coordinator**, not a `Plugin`. Plugins contribute functionality; palette aggregates over the plugin registry + keymap + theme to present a picker. Folding it into `Plugin` would widen `PluginCtx` to grant every plugin access to the registry and reduce the self-contained-widget contract to a naming convention. The asymmetry is deliberate — see `src/ui/palette/mod.rs` for the full rationale.
-- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The keyboard handler dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppMsg`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
+- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The router (`ui::router`) dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppMsg`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
 
 ### Input flow
 

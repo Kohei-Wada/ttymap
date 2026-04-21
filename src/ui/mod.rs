@@ -4,6 +4,7 @@ pub mod action;
 pub mod map_view;
 pub mod overlay;
 pub mod palette;
+pub mod router;
 
 use std::sync::Arc;
 
@@ -351,7 +352,7 @@ mod tests {
         assert_eq!(ui.focus.current(), &Focus::Map);
 
         // Plugin.activate / handle_key no longer touch focus — the
-        // host (`keyboard::activate_plugin` + the focused-plugin
+        // host (`ui::router::activate_plugin` + the focused-plugin
         // dispatch loop) owns every focus transition. Here we just
         // verify the plugin's own state machine: open on activate,
         // close on Esc.

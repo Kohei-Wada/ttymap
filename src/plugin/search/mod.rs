@@ -72,7 +72,7 @@ impl Plugin for SearchPlugin {
         _ctx: &mut PluginCtx,
     ) -> PluginAction {
         let outcome = self.state.handle_key(code, modifiers);
-        // Focus release is host-driven: keyboard.rs detects `visible()`
+        // Focus release is host-driven: ui::router detects `visible()`
         // flipping to false and calls `ui.focus.release()`.
         match outcome {
             Outcome::None | Outcome::Consumed => PluginAction::Consumed,

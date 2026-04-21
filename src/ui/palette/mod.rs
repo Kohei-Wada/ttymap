@@ -54,7 +54,7 @@ use crate::theme::UiTheme;
 use provider::{CommandProvider, PaletteAction};
 use state::{Outcome, PaletteState};
 
-/// What `handle_key` wants `keyboard.rs` to do after the keystroke.
+/// What `handle_key` wants `ui::router` to do after the keystroke.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaletteOutcome {
     /// Key did not map to anything the palette cares about. Palette is
