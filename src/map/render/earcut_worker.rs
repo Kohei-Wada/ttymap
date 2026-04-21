@@ -43,38 +43,42 @@ impl EarcutWorker {
         Self { req_tx, resp_rx }
     }
 
-    /// Triangulate, giving up after `timeout`. Returns `None` on timeout
-    /// or panic — the caller should skip the polygon. On timeout the
-    /// worker is replaced; the old one keeps running until earcut
-    /// returns (or forever).
+    /// Triangulate, giving up after `timeout`. Returns the bare indices
+    /// on success or a typed error so the caller can attach polygon
+    /// context to a warn-level log on `TimedOut`. On timeout the worker
+    /// is replaced; the old one keeps running until earcut returns (or
+    /// forever).
     pub fn triangulate(
         &mut self,
         verts: Vec<[f64; 2]>,
         holes: Vec<usize>,
         timeout: Duration,
-    ) -> Option<Vec<usize>> {
+    ) -> Result<Vec<usize>, TriangulateError> {
         if self.req_tx.send(Req { verts, holes }).is_err() {
             // Worker died (panic in our framing code, not earcut). Restart.
             *self = Self::new();
-            return None;
+            return Err(TriangulateError::WorkerDied);
         }
         match self.resp_rx.recv_timeout(timeout) {
-            Ok(indices) => Some(indices),
+            Ok(indices) => Ok(indices),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                log::warn!(
-                    "earcut: timed out after {:?}, abandoning worker",
-                    timeout
-                );
                 *self = Self::new();
-                None
+                Err(TriangulateError::TimedOut)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                log::warn!("earcut: worker disconnected, restarting");
                 *self = Self::new();
-                None
+                Err(TriangulateError::WorkerDied)
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum TriangulateError {
+    /// earcut did not finish within the deadline; old worker abandoned.
+    TimedOut,
+    /// Worker thread is gone (panic in framing code, channel closed).
+    WorkerDied,
 }
 
 impl Default for EarcutWorker {
@@ -95,6 +99,16 @@ mod tests {
             .triangulate(verts, vec![], Duration::from_millis(100))
             .expect("simple triangle should triangulate");
         assert_eq!(indices.len(), 3);
+    }
+
+    #[test]
+    fn timeout_returns_typed_error() {
+        let mut w = EarcutWorker::new();
+        // Zero-duration timeout will fire before the worker can respond
+        // even on trivial input — easy way to exercise the timeout path.
+        let verts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let result = w.triangulate(verts, vec![], Duration::from_millis(0));
+        assert!(matches!(result, Err(TriangulateError::TimedOut)));
     }
 
     #[test]

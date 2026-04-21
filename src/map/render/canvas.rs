@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use super::braille::BrailleBuffer;
-use super::earcut_worker::EarcutWorker;
+use super::earcut_worker::{EarcutWorker, TriangulateError};
 use super::frame::MapFrame;
 use super::geom::{BresenhamIter, clip_line, sutherland_hodgman_into};
 use super::label::LabelBuffer;
@@ -137,8 +137,26 @@ impl Canvas {
             self.scratch_hole_indices.clone(),
             POLYGON_TRIANGULATE_TIMEOUT,
         ) {
-            Some(v) if !v.is_empty() => v,
-            _ => return,
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => return,
+            Err(TriangulateError::TimedOut) => {
+                // Capture polygon shape so a future fixture / regression
+                // test can target the same pathological input.
+                let ring_sizes: Vec<usize> = rings.iter().map(|r| r.len()).collect();
+                log::warn!(
+                    "polygon dropped: earcut timed out after {:?} \
+                     (rings={}, ring_sizes={:?}, total_verts={})",
+                    POLYGON_TRIANGULATE_TIMEOUT,
+                    rings.len(),
+                    ring_sizes,
+                    total_vertices,
+                );
+                return;
+            }
+            Err(TriangulateError::WorkerDied) => {
+                log::warn!("polygon dropped: earcut worker died");
+                return;
+            }
         };
 
         let mut i = 0;
