@@ -46,7 +46,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
@@ -59,19 +59,6 @@ use state::{Outcome, PaletteState};
 /// the palette is the source of truth for its own identifier; other
 /// modules import from this constant rather than hardcoding "palette".
 pub const SURFACE_ID: &str = "palette";
-
-/// What `handle_key` wants `ui::router` to do after the keystroke.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PaletteOutcome {
-    /// Key did not map to anything the palette cares about. Palette is
-    /// still visible; caller treats it as consumed so focus stays.
-    None,
-    /// Key consumed, palette redraws.
-    Consumed,
-    /// User picked an item — run the associated `AppCommand` through
-    /// `crate::app_command::dispatch`.
-    Run(AppCommand),
-}
 
 pub struct CommandPalette {
     state: PaletteState,
@@ -102,33 +89,6 @@ impl CommandPalette {
         self.state.open_with(provider);
     }
 
-    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> PaletteOutcome {
-        let outcome = self.state.handle_key(code, modifiers);
-        match outcome {
-            Outcome::None => PaletteOutcome::None,
-            Outcome::Consumed => PaletteOutcome::Consumed,
-            Outcome::Run(idx) => {
-                let action = self
-                    .state
-                    .provider
-                    .as_mut()
-                    .map(|p| p.execute(idx))
-                    .unwrap_or(PaletteAction::Close);
-                match action {
-                    PaletteAction::Close => PaletteOutcome::Consumed,
-                    PaletteAction::SwitchProvider(next) => {
-                        // Provider-to-provider transition: stay active,
-                        // reopen palette with the new provider. Host
-                        // sees `is_visible()` still true, keeps focus.
-                        self.state.open_with(next);
-                        PaletteOutcome::Consumed
-                    }
-                    PaletteAction::Run(cmd) => PaletteOutcome::Run(cmd),
-                }
-            }
-        }
-    }
-
     pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
@@ -143,10 +103,9 @@ impl CommandPalette {
     }
 }
 
-/// Adapter onto the new responder-chain trait (#64 PR-A). Modal:
-/// every key while the palette is focused is treated as consumed
-/// (`PaletteOutcome::None` would otherwise fall through to the
-/// background — wrong for a modal popup).
+/// The palette is modal: every key while it is focused is `Consumed`
+/// (the responder chain stops here — never falls through to the
+/// background). Item selection produces `Effect::Run(AppCommand)`.
 impl FocusSurface for CommandPalette {
     fn handle_key(
         &mut self,
@@ -154,11 +113,27 @@ impl FocusSurface for CommandPalette {
         modifiers: KeyModifiers,
         _ctx: SurfaceCtx,
     ) -> Effect {
-        // Inherent method (arity 3) takes precedence over this trait
-        // method (arity 4) — call site disambiguates by argument count.
-        match self.handle_key(code, modifiers) {
-            PaletteOutcome::None | PaletteOutcome::Consumed => Effect::Consumed,
-            PaletteOutcome::Run(cmd) => Effect::Run(cmd),
+        match self.state.handle_key(code, modifiers) {
+            Outcome::None | Outcome::Consumed => Effect::Consumed,
+            Outcome::Run(idx) => {
+                let action = self
+                    .state
+                    .provider
+                    .as_mut()
+                    .map(|p| p.execute(idx))
+                    .unwrap_or(PaletteAction::Close);
+                match action {
+                    PaletteAction::Close => Effect::Consumed,
+                    PaletteAction::SwitchProvider(next) => {
+                        // Provider-to-provider transition: stay active,
+                        // reopen palette with the new provider. Host
+                        // sees `is_visible()` still true, keeps focus.
+                        self.state.open_with(next);
+                        Effect::Consumed
+                    }
+                    PaletteAction::Run(cmd) => Effect::Run(cmd),
+                }
+            }
         }
     }
 }

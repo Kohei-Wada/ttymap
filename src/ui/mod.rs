@@ -169,14 +169,7 @@ impl UiState {
         // Palette is not in the plugin registry — special-case its
         // delivery. Every other modal id is looked up as a plugin.
         let (effect, still_visible) = if id == palette::SURFACE_ID {
-            // Inherent and trait both have a `handle_key`; spell out
-            // the trait so the SurfaceCtx-taking impl is selected.
-            let effect = <CommandPalette as FocusSurface>::handle_key(
-                &mut self.palette,
-                code,
-                modifiers,
-                ctx,
-            );
+            let effect = self.palette.handle_key(code, modifiers, ctx);
             (effect, self.palette.is_visible())
         } else {
             let effect = match self.widgets.get_mut(id.as_ref()) {
