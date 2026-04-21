@@ -55,9 +55,9 @@ impl App {
         let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
         let activations = widgets.activations();
         let background = BackgroundResponder::new(keymap, activations);
-        let focus = FocusManager::new(CommandPalette::new(), widgets, background);
-        let ui = UiState::new(nominatim, attribution, focus);
         let theme_id = ThemeId::from_name(&config.style);
+        let focus = FocusManager::new(CommandPalette::new(theme_id), widgets, background);
+        let ui = UiState::new(nominatim, attribution, focus);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline =

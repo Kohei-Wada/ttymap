@@ -20,11 +20,11 @@
 //! (`SwitchProvider`, Tab-cycle exclusion) would turn into stringly-
 //! typed special cases keyed on `tag == "palette"`.
 //!
-//! The cost of keeping it a builtin (one special field on `UiState`,
-//! one well-known `SURFACE_ID = "palette"`, one `AppCommand::OpenPalette`
-//! arm, one special-case branch in `UiState::deliver_to_focused_surface`)
-//! is localised and tagged. The cost of unification would be spread
-//! across the `Plugin` trait contract. The current asymmetry is chosen.
+//! The cost of keeping it a builtin (one special field on
+//! `FocusManager`, one well-known `SURFACE_ID = "palette"`, one
+//! special-case branch in `FocusManager::open`) is localised and
+//! tagged. The cost of unification would be spread across the
+//! `Plugin` trait contract. The current asymmetry is chosen.
 //!
 //! # Mechanics
 //!
@@ -33,10 +33,20 @@
 //! providers when the user picks a "sub-mode" command (e.g. "Theme"
 //! switches to [`ThemeProvider`](provider::ThemeProvider)). The
 //! palette never touches `FocusManager`; focus transitions are
-//! driven by `UiState::open_palette` emitting
-//! `FocusEvent::Claimed(SURFACE_ID)` and by the delivery path
-//! emitting `FocusEvent::Released(SURFACE_ID)` when `is_visible()`
-//! flips to false.
+//! driven by `FocusManager::open` (which the router invokes when a
+//! surface returns `Effect::Open(SURFACE_ID)`) and the auto-release
+//! path (`is_visible()` flipping to false).
+//!
+//! # Why the palette caches `ThemeId`
+//!
+//! The default [`CommandProvider`] needs the active theme to render
+//! the "Theme" sub-mode entry's "(current)" hint. Rather than threading
+//! `ThemeId` through `FocusManager::open` on every palette open, the
+//! palette stores it as a field updated via [`set_theme_id`]: the
+//! `Ui(SetTheme)` dispatch arm pushes the new value, so the next
+//! palette open seeds its provider from the cache. This keeps
+//! `FocusManager::open(id, ctx)` shape uniform across surfaces — no
+//! palette-specific argument leaks into the focus API.
 
 pub mod panel;
 pub mod provider;
@@ -63,29 +73,36 @@ pub struct CommandPalette {
     pub(super) active: bool,
     pub(super) selected: usize,
     pub(super) provider: Option<Box<dyn PaletteProvider>>,
-}
-
-impl Default for CommandPalette {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Active theme id, kept in sync by the `Ui(SetTheme)` dispatch
+    /// arm via [`set_theme_id`]. Read by [`activate`] when seeding the
+    /// default provider so the theme-picker entry shows "(current)".
+    theme_id: ThemeId,
 }
 
 impl CommandPalette {
-    pub fn new() -> Self {
+    pub fn new(initial_theme: ThemeId) -> Self {
         Self {
             query: String::new(),
             active: false,
             selected: 0,
             provider: None,
+            theme_id: initial_theme,
         }
+    }
+
+    /// Push the active theme id from the dispatch layer. Cached for
+    /// the next palette open; does not touch `active` / `provider`
+    /// (the currently-displayed list is whatever was built at open
+    /// time — switching theme via the palette closes it anyway).
+    pub fn set_theme_id(&mut self, id: ThemeId) {
+        self.theme_id = id;
     }
 
     /// Open the palette with the default [`CommandProvider`]. The host
     /// is responsible for taking palette focus afterwards — the palette
     /// does not touch `FocusManager` itself (mirrors the plugin rule).
-    pub fn activate(&mut self, widgets: &PluginRegistry, keymap: &KeyMap, current_theme: ThemeId) {
-        let provider = Box::new(CommandProvider::new(widgets, keymap, current_theme));
+    pub fn activate(&mut self, widgets: &PluginRegistry, keymap: &KeyMap) {
+        let provider = Box::new(CommandProvider::new(widgets, keymap, self.theme_id));
         self.open_with(provider);
     }
 
@@ -167,6 +184,7 @@ impl FocusSurface for CommandPalette {
                         Effect::Consumed
                     }
                     PaletteAction::Run(cmd) => Effect::Run(cmd),
+                    PaletteAction::Open(id) => Effect::Open(id),
                 }
             }
             _ if up => {
@@ -277,7 +295,7 @@ mod tests {
     }
 
     fn palette_with(labels: &[&str]) -> CommandPalette {
-        let mut p = CommandPalette::new();
+        let mut p = CommandPalette::new(ThemeId::default());
         p.open_with(Box::new(FakeProvider::new(labels)));
         p
     }

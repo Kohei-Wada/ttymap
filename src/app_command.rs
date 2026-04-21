@@ -7,10 +7,17 @@
 //! same vocabulary.
 //!
 //! This is the **Command pattern** (GoF): a closed enum of imperative
-//! intents (`Pan`, `OpenPalette`, `ActivatePlugin`), each with exactly
-//! one handler. *Not* an event/message bus — there is no broadcast and
-//! no subscriber registration. Emitter → router (`dispatch`) → one
-//! domain method per arm.
+//! intents (`Map`, `Jump`, `CycleFocus`), each with exactly one
+//! handler. *Not* an event/message bus — there is no broadcast and no
+//! subscriber registration. Emitter → router (`dispatch`) → one domain
+//! method per arm.
+//!
+//! Surface activation (palette open, plugin activate) intentionally
+//! does *not* live here — those are focus transitions, expressed as
+//! [`Effect::Open(SurfaceId)`] returned by a [`FocusSurface`] and
+//! handled by [`FocusManager::open`](crate::focus::FocusManager::open)
+//! directly. Keeping them off `AppCommand` means the focus state
+//! machine isn't coupled to the dispatch table.
 //!
 //! [`dispatch`] is a **thin router**: each arm maps an `AppCommand` to a
 //! single method on the domain type that owns the relevant state
@@ -42,15 +49,9 @@ pub enum AppCommand {
     Jump(LonLat),
     /// Mutate UI-level state (theme, future language / export / ...).
     Ui(UiAction),
-    /// Activate a plugin by its registered tag — same semantics as
-    /// pressing the plugin's activation key.
-    ActivatePlugin(String),
     /// Cycle focus across visible plugins. `true` = forward (Tab),
     /// `false` = backward (Shift-Tab).
     CycleFocus(bool),
-    /// Open the command palette with its default provider. No-op if
-    /// already open.
-    OpenPalette,
     /// Terminal resized — update the map viewport and the render
     /// thread's canvas dimensions. Arguments are the new terminal
     /// size in cells.
@@ -73,20 +74,31 @@ pub enum InputEffect {
     Map,
 }
 
-/// Outcome of handing a key to a [`FocusSurface`] in the responder
-/// chain. The router walks responders (focused surface →
-/// [`BackgroundResponder`](crate::ui::router::background::BackgroundResponder))
-/// until something other than `Pass` comes back.
+/// Identifier for a focus-claiming surface (palette id, plugin tag,
+/// any future modal). Defined here — alongside [`Effect::Open`] —
+/// so `Effect` can name it without depending on [`crate::focus`].
+pub type SurfaceId = std::borrow::Cow<'static, str>;
+
+/// Outcome of handing a key to a [`FocusSurface`]. The router walks
+/// responders (focused surface →
+/// [`BackgroundResponder`](crate::background::BackgroundResponder)
+/// — which is itself the focused surface when no modal claims focus).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// Surface is not interested. Try the next responder in the chain
-    /// (focused → background).
+    /// Surface is not interested. The router treats this as a no-op
+    /// (since `focused_surface_mut` always returns *some* surface,
+    /// there is nowhere else to fall through to).
     Pass,
     /// Surface absorbed the key. No `AppCommand` to run.
     Consumed,
     /// Surface wants the host to run a command. The router returns it
     /// to `App::dispatch` for execution.
     Run(AppCommand),
+    /// Surface wants the focus manager to open / activate the named
+    /// id and transfer focus to it. Router calls `focus.open(id, ctx)`
+    /// which handles per-surface activation (palette setup, plugin
+    /// `wants_focus` gating) + focus transition.
+    Open(SurfaceId),
 }
 
 /// Read-only context passed into [`FocusSurface::handle_key`]. Carries
@@ -137,9 +149,10 @@ pub struct DispatchCtx<'a> {
     pub ui: &'a mut UiState,
     pub render_handle: &'a RenderHandle,
     /// Active theme — owned by `App`, mutated in-place by the
-    /// `Ui(SetTheme)` arm. Read by `OpenPalette` (palette highlights
-    /// the active theme entry) and used to derive `ui_theme` /
-    /// render-thread `Styler` on a runtime switch.
+    /// `Ui(SetTheme)` arm. Pushed into the palette's internal cache
+    /// (so the palette can highlight the active theme entry without
+    /// taking it as a constructor arg) and used to derive `ui_theme`
+    /// / render-thread `Styler` on a runtime switch.
     pub theme_id: &'a mut ThemeId,
     /// Derived UI colour set — kept in sync with `theme_id` by the
     /// `Ui(SetTheme)` arm. App passes a `&UiTheme` view of this into
@@ -166,20 +179,12 @@ pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             apply_ui_action(action, ctx);
             InputEffect::Map
         }
-        AppCommand::ActivatePlugin(tag) => {
-            ctx.ui.focus.activate_plugin(&tag, ctx.map.center());
-            InputEffect::Plugin
-        }
         AppCommand::CycleFocus(forward) => {
             if ctx.ui.focus.cycle(forward) {
                 InputEffect::Plugin
             } else {
                 InputEffect::None
             }
-        }
-        AppCommand::OpenPalette => {
-            ctx.ui.focus.open_palette(*ctx.theme_id);
-            InputEffect::Plugin
         }
         AppCommand::Resize(cols, rows) => {
             ctx.map.resize(cols, rows);
@@ -191,8 +196,10 @@ pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
 }
 
 /// Apply a `UiAction` — today, theme switch. Owns the derivation:
-/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render). Both
-/// live at `App` level; this arm mutates them in place via the ctx.
+/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render) + the
+/// palette's cached theme id (so its theme-picker entry shows the new
+/// "(current)" marker on next open). All three sites live at `App`
+/// level; this arm mutates them in place via the ctx.
 fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
     match action {
         UiAction::SetTheme(new_id) => {
@@ -200,6 +207,7 @@ fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
             let styler = Arc::new(Styler::new(new_id));
             *ctx.ui_theme = UiTheme::from_palette(styler.palette());
             ctx.render_handle.set_styler(styler);
+            ctx.ui.focus.palette_mut().set_theme_id(new_id);
         }
     }
 }

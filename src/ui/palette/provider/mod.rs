@@ -18,7 +18,7 @@ pub mod theme;
 pub use command::CommandProvider;
 pub use theme::ThemeProvider;
 
-use crate::app_command::AppCommand;
+use crate::app_command::{AppCommand, SurfaceId};
 
 /// One row in the palette list.
 pub struct PaletteItem {
@@ -35,6 +35,11 @@ pub enum PaletteAction {
     Close,
     /// Run the given `AppCommand` via `crate::app_command::dispatch`.
     Run(AppCommand),
+    /// Open / activate the named surface (typically a plugin tag).
+    /// The palette translates this to `Effect::Open(id)` so the focus
+    /// transition flows through the same path as a key-driven
+    /// activation from the background — no `AppCommand` round-trip.
+    Open(SurfaceId),
     /// Swap to a different provider without closing the palette — the
     /// "sub-mode" transition. Query resets; focus stays.
     SwitchProvider(Box<dyn PaletteProvider>),

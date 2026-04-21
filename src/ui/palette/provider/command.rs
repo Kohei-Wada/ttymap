@@ -120,7 +120,7 @@ impl PaletteProvider for CommandProvider {
         };
         match &self.all[entry_idx].kind {
             Kind::Action(a) => PaletteAction::Run(AppCommand::Map(a.clone())),
-            Kind::Activate(tag) => PaletteAction::Run(AppCommand::ActivatePlugin(tag.clone())),
+            Kind::Activate(tag) => PaletteAction::Open(tag.clone().into()),
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))
             }

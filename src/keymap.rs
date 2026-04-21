@@ -2,11 +2,14 @@
 //! handler, plus the TOML-deserialisable `KeybindingOverrides` shape
 //! used by config to customise it.
 //!
-//! The keymap speaks the same `AppCommand` vocabulary as the palette and
-//! plugins — every key binding resolves to a `AppCommand` that rides
-//! through `app_command::dispatch`. Today all defaults are `AppCommand::Map`
-//! wrappers, but nothing prevents binding a key to `AppCommand::Ui(...)`
-//! or `AppCommand::ActivatePlugin(...)` in the future.
+//! The keymap speaks the same `AppCommand` vocabulary as the palette
+//! and plugins — every key binding resolves to a `AppCommand` that
+//! rides through `app_command::dispatch`. Today all defaults are
+//! `AppCommand::Map` wrappers, but nothing prevents binding a key to
+//! `AppCommand::Ui(...)` or `AppCommand::CycleFocus(...)` in the
+//! future. (Surface activations like opening the palette or a plugin
+//! are *not* `AppCommand`s — those are `Effect::Open(SurfaceId)`
+//! returned by the `BackgroundResponder` directly.)
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::Deserialize;

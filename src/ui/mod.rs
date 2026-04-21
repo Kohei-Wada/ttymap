@@ -175,6 +175,7 @@ mod tests {
 
     fn make_ui() -> UiState {
         use crate::background::BackgroundResponder;
+        use crate::color_palette::ThemeId;
         use crate::keymap::KeyMap;
         use crate::plugin::search::SearchPlugin;
         use crate::ui::palette::CommandPalette;
@@ -183,7 +184,11 @@ mod tests {
         widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
         let activations = widgets.activations();
         let background = BackgroundResponder::new(KeyMap::default(), activations);
-        let focus = FocusManager::new(CommandPalette::new(), widgets, background);
+        let focus = FocusManager::new(
+            CommandPalette::new(ThemeId::default()),
+            widgets,
+            background,
+        );
         UiState::new(nominatim, None, focus)
     }
 
@@ -204,9 +209,9 @@ mod tests {
         const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
 
         // Plugin.activate / handle_key never touch focus — the host
-        // (`FocusManager::activate_plugin` + the focused-surface
-        // delivery loop) owns every focus transition. Verify just the
-        // plugin's own state machine: open on activate, close on Esc.
+        // (`FocusManager::open` + the focused-surface delivery loop)
+        // owns every focus transition. Verify just the plugin's own
+        // state machine: open on activate, close on Esc.
         let nominatim = Arc::new(NominatimClient::new());
         let mut search = SearchPlugin::new(nominatim);
         let ctx = SurfaceCtx { center: ZERO };

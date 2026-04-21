@@ -21,6 +21,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, KeyMap};
 use crate::map::Action;
+use crate::ui::palette;
 
 pub struct BackgroundResponder {
     keymap: KeyMap,
@@ -101,11 +102,11 @@ impl FocusSurface for BackgroundResponder {
         }
 
         if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
-            return Effect::Run(AppCommand::OpenPalette);
+            return Effect::Open(palette::SURFACE_ID.into());
         }
 
         if let Some(tag) = self.activation_tag(code, modifiers) {
-            return Effect::Run(AppCommand::ActivatePlugin(tag.to_string()));
+            return Effect::Open(tag.to_string().into());
         }
 
         if let Some(cmd) = keymap_cmd {

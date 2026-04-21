@@ -2,9 +2,9 @@
 //! plugin registry, background responder) and tracks which one
 //! currently has keyboard focus. The router asks
 //! [`focused_surface_mut`] to find out where to send keys; everything
-//! else (palette open, plugin activation, focus cycle, async polling)
-//! is a method on this type so the focus / widgets / palette state
-//! stay consistent without external coordination.
+//! else (surface open / activation, focus cycle, async polling) is a
+//! method on this type so the focus / widgets / palette state stay
+//! consistent without external coordination.
 //!
 //! **No `None` for the router**: when no modal claims focus,
 //! `focused_surface_mut` returns the [`BackgroundResponder`] —
@@ -14,22 +14,16 @@
 //!
 //! **Surfaces are opaque ids**: the manager does not distinguish
 //! palette from plugin from any future modal (dialog, notification
-//! tray); they all flow through the `Modal(SurfaceId)` variant. The
-//! `wants_focus` gating policy lives at the call site (e.g.
-//! `activate_plugin`), not inside the focus state machine.
+//! tray); they all flow through the `Modal(SurfaceId)` variant.
+//! `FocusManager::open(id, ctx)` is the single entry point a surface
+//! uses (via `Effect::Open`) to ask for activation + focus transition.
+//! The palette-vs-plugin asymmetry is hidden inside `open` (palette
+//! is a builtin, plugins go through `wants_focus` gating).
 
-use std::borrow::Cow;
-
-use crate::app_command::{AppCommand, FocusSurface};
+use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx, SurfaceId};
 use crate::background::BackgroundResponder;
-use crate::color_palette::ThemeId;
-use crate::geo::LonLat;
 use crate::plugin::PluginRegistry;
 use crate::ui::palette::{self, CommandPalette};
-
-/// Identifier for a focus-claiming surface. `palette`, plugin tags
-/// (`search`, `wiki`, …), and any future modal share the same shape.
-pub type SurfaceId = Cow<'static, str>;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Focus {
@@ -132,43 +126,63 @@ impl FocusManager {
         &self.palette
     }
 
-    // ── Workflow API ─────────────────────────────────────────────────
-
-    /// Open the command palette with the default provider and take
-    /// focus. The palette's provider needs `widgets` (for activation
-    /// lists), `keymap` (for key hints — pulled from the background
-    /// responder), and `theme_id` (for the theme picker entry).
-    pub fn open_palette(&mut self, theme_id: ThemeId) {
-        self.palette
-            .activate(&self.widgets, self.background.keymap(), theme_id);
-        self.transition_to(Focus::Modal(palette::SURFACE_ID.into()));
+    /// Mutable accessor — used by the `Ui(SetTheme)` dispatch arm to
+    /// push a new theme id into the palette's cache. Returning `&mut`
+    /// (rather than a dedicated `set_palette_theme`) keeps the
+    /// manager's surface narrow: it doesn't grow a method per
+    /// palette-internal field.
+    pub fn palette_mut(&mut self) -> &mut CommandPalette {
+        &mut self.palette
     }
 
-    /// Drive a plugin through an activation request. Re-activating a
-    /// currently-focused plugin toggles it off. Otherwise brings the
-    /// plugin to the front, calls its `activate` hook, and takes focus
-    /// iff `wants_focus` returns true (so headless plugins like `here`
-    /// don't steal it).
-    pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
-        if self.is_modal(tag) {
-            // Toggle-off: re-activating the currently-focused plugin closes it.
-            if let Some(w) = self.widgets.get_mut(tag) {
+    // ── Workflow API ─────────────────────────────────────────────────
+
+    /// Open / activate the named surface and transfer focus to it.
+    /// Single entry point invoked by the router on `Effect::Open(id)`.
+    ///
+    /// Behaviour by id:
+    /// - **`palette`** (builtin): activate with the cached theme id and
+    ///   take focus unconditionally.
+    /// - **plugin tag**: bring to front, call the plugin's `activate`
+    ///   hook with `ctx.center`, take focus iff `wants_focus()` is
+    ///   true (headless plugins like `here` don't steal focus).
+    /// - **already-focused**: toggle-off — close the plugin or release
+    ///   palette focus.
+    /// - **unknown id**: no-op (defensive — registries shouldn't
+    ///   shrink at runtime).
+    pub fn open(&mut self, id: SurfaceId, ctx: SurfaceCtx) {
+        if self.is_modal(&id) {
+            // Toggle-off: re-opening the currently-focused surface
+            // closes it. Plugins get their `close` hook; the palette
+            // self-closes on its own Esc path so this branch only
+            // runs for plugins (palette never re-emits Open while
+            // it's focused).
+            if let Some(w) = self.widgets.get_mut(id.as_ref()) {
                 w.close();
             }
-            self.release_if_holding(tag);
+            self.release();
             return;
         }
 
-        self.widgets.bring_to_front(tag);
-        let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
-            w.activate(center);
+        if id == palette::SURFACE_ID {
+            self.palette
+                .activate(&self.widgets, self.background.keymap());
+            self.deactivate_current(None);
+            self.transition_to(Focus::Modal(id));
+            return;
+        }
+
+        // Plugin path.
+        self.widgets.bring_to_front(id.as_ref());
+        let wants_focus = if let Some(w) = self.widgets.get_mut(id.as_ref()) {
+            w.activate(ctx.center);
             w.wants_focus()
         } else {
             return;
         };
         if wants_focus {
-            self.deactivate_current(Some(tag));
-            self.transition_to(Focus::Modal(tag.to_string().into()));
+            self.deactivate_current(Some(id.as_ref()));
+            self.transition_to(Focus::Modal(id));
         }
     }
 
@@ -254,12 +268,6 @@ impl FocusManager {
     /// Restore the remembered predecessor (or background if none).
     fn release(&mut self) {
         self.current = std::mem::replace(&mut self.prev, Focus::Background);
-    }
-
-    fn release_if_holding(&mut self, id: &str) {
-        if self.current.is_modal(id) {
-            self.release();
-        }
     }
 
     fn transition_to(&mut self, new: Focus) {

@@ -24,8 +24,13 @@ use crate::geo::LonLat;
 /// flipped to false (modal surfaces only — the background is always
 /// visible). Returns the `AppCommand` to dispatch (if any).
 ///
-/// Pure delegation: the router doesn't know whether the surface is
-/// the palette, a focused plugin, or the background responder.
+/// `Effect::Open(id)` is handled in-line by calling
+/// [`FocusManager::open`] — focus transitions don't need to round-trip
+/// through `app_command::dispatch`, so they don't appear in the
+/// returned `Option<AppCommand>`.
+///
+/// Pure delegation otherwise: the router doesn't know whether the
+/// surface is the palette, a focused plugin, or the background.
 pub fn route_key(
     focus: &mut FocusManager,
     code: KeyCode,
@@ -44,6 +49,10 @@ pub fn route_key(
     }
     match effect {
         Effect::Run(cmd) => Some(cmd),
+        Effect::Open(id) => {
+            focus.open(id, ctx);
+            None
+        }
         Effect::Consumed | Effect::Pass => None,
     }
 }
