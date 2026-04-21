@@ -101,12 +101,20 @@ pub enum Effect {
     Open(SurfaceId),
 }
 
-/// Read-only context passed into [`FocusSurface::handle_key`]. Carries
-/// the bits of shared state a surface needs but does not own (today:
-/// the current map center, used by plugins for geo-relative actions).
+/// Read-only snapshot of app-level state passed into surface
+/// lifecycle hooks ([`FocusSurface::handle_key`] and
+/// [`Plugin::activate`](crate::plugin::Plugin::activate)). Lets a
+/// surface read shared state it does not own — geo-aware plugins use
+/// `center` for "act here" actions, the palette uses `theme_id` to
+/// seed its theme-picker entry — without the dispatcher having to
+/// know which surface needs what.
+///
+/// Kept `Copy` (every field is `Copy`) so call sites can hand it out
+/// freely without lifetime gymnastics.
 #[derive(Debug, Clone, Copy)]
 pub struct SurfaceCtx {
     pub center: LonLat,
+    pub theme_id: ThemeId,
 }
 
 /// Uniform interface for anything that can claim focus. The router
@@ -115,7 +123,7 @@ pub struct SurfaceCtx {
 /// reads `is_visible` to detect "the surface closed itself" and
 /// auto-release focus accordingly.
 ///
-/// Implemented by [`CommandPalette`](crate::ui::palette::CommandPalette)
+/// Implemented by [`CommandPalette`](crate::plugin::palette::CommandPalette)
 /// and — via the `Plugin: FocusSurface` supertrait — by every
 /// [`Plugin`](crate::plugin::Plugin).
 pub trait FocusSurface {
@@ -202,10 +210,12 @@ pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
 }
 
 /// Apply a `UiAction` — today, theme switch. Owns the derivation:
-/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render) + the
-/// palette's cached theme id (so its theme-picker entry shows the new
-/// "(current)" marker on next open). All three sites live at `App`
-/// level; this arm mutates them in place via the ctx.
+/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render). Both
+/// live at `App` level; this arm mutates them in place via the ctx.
+///
+/// No surface-level push is needed — surfaces that care about the
+/// current theme (the palette's theme-picker entry) read it via
+/// [`SurfaceCtx::theme_id`] when their `activate` hook runs.
 fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
     match action {
         UiAction::SetTheme(new_id) => {
@@ -213,7 +223,6 @@ fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
             let styler = Arc::new(Styler::new(new_id));
             *ctx.ui_theme = UiTheme::from_palette(styler.palette());
             ctx.render_handle.set_styler(styler);
-            ctx.ui.focus.palette_mut().set_theme_id(new_id);
         }
     }
 }

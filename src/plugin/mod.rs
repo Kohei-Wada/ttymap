@@ -9,6 +9,7 @@
 
 pub mod help;
 pub mod here;
+pub mod palette;
 pub mod search;
 pub mod wiki;
 
@@ -16,7 +17,7 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, FocusSurface};
+use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;
@@ -60,11 +61,12 @@ pub trait Plugin: FocusSurface {
     }
 
     /// Called when one of this widget's `activation_keys` is pressed —
-    /// or when the palette invokes the plugin. `center` is the current
-    /// map center (used by location-aware plugins like `wiki` for
-    /// initial fetch). The host owns focus transitions; plugins only
-    /// update their own state here.
-    fn activate(&mut self, _center: crate::geo::LonLat) {}
+    /// or when the palette invokes the plugin. The supplied
+    /// [`SurfaceCtx`] is a read-only snapshot of app-level state
+    /// (`center` for geo-aware plugins, `theme_id` for the palette's
+    /// theme picker). Plugins update only their own state; the host
+    /// owns focus transitions.
+    fn activate(&mut self, _ctx: SurfaceCtx) {}
 
     /// Called when focus moves to a different plugin via another
     /// plugin's activation key. Modal plugins (search, help) close

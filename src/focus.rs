@@ -1,10 +1,9 @@
-//! `FocusManager` — owns every surface that can handle keys (palette,
-//! plugin registry, background responder) and tracks which one
-//! currently has keyboard focus. The router asks
-//! [`focused_surface_mut`] to find out where to send keys; everything
-//! else (surface open / activation, focus cycle, async polling) is a
-//! method on this type so the focus / widgets / palette state stay
-//! consistent without external coordination.
+//! `FocusManager` — owns the plugin registry + the [`BackgroundResponder`]
+//! and tracks which surface currently has keyboard focus. The router
+//! asks [`focused_surface_mut`] to find out where to send keys;
+//! everything else (surface open / activation, focus cycle, async
+//! polling) is a method on this type so the focus / widgets state
+//! stays consistent without external coordination.
 //!
 //! **No `None` for the router**: when no modal claims focus,
 //! `focused_surface_mut` returns the [`BackgroundResponder`] —
@@ -12,18 +11,18 @@
 //! keys). The router stays a one-call dispatcher and never special-
 //! cases the background.
 //!
-//! **Surfaces are opaque ids**: the manager does not distinguish
-//! palette from plugin from any future modal (dialog, notification
-//! tray); they all flow through the `Modal(SurfaceId)` variant.
-//! `FocusManager::open(id, ctx)` is the single entry point a surface
-//! uses (via `Effect::Open`) to ask for activation + focus transition.
-//! The palette-vs-plugin asymmetry is hidden inside `open` (palette
-//! is a builtin, plugins go through `wants_focus` gating).
+//! **Surfaces are opaque ids**: every focusable surface — palette,
+//! search, wiki, help, any future modal — is a [`Plugin`] in the
+//! registry, addressed by [`SurfaceId`]. The manager is symmetric
+//! across them; the only special surface is the background, which
+//! has its own `Focus::Background` variant precisely because it is
+//! the resting state, not a destination.
+//!
+//! [`Plugin`]: crate::plugin::Plugin
 
 use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx, SurfaceId};
 use crate::background::BackgroundResponder;
 use crate::plugin::PluginRegistry;
-use crate::ui::palette::{self, CommandPalette};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Focus {
@@ -31,8 +30,8 @@ pub enum Focus {
     /// [`BackgroundResponder`] handles keys.
     #[default]
     Background,
-    /// A modal surface (palette, focused plugin, or any future modal)
-    /// has claimed input.
+    /// A modal surface (focused plugin or any future modal) has
+    /// claimed input.
     Modal(SurfaceId),
 }
 
@@ -43,47 +42,41 @@ impl Focus {
     }
 }
 
-/// Owns palette + plugins + background + focus state. Single point of
-/// authority for "who has keyboard focus and what surfaces exist".
-/// `prev` restores the focus the previous claimer had instead of
-/// always dropping to background.
+/// Owns plugins + background + focus state. Single point of authority
+/// for "who has keyboard focus and what surfaces exist". `prev`
+/// restores the focus the previous claimer had instead of always
+/// dropping to background.
 pub struct FocusManager {
     current: Focus,
     prev: Focus,
-    palette: CommandPalette,
     widgets: PluginRegistry,
     background: BackgroundResponder,
 }
 
 impl FocusManager {
-    /// Construct from pre-built palette + plugin registry +
-    /// background responder. All three are wired at the composition
-    /// root (`App::new`).
-    pub fn new(
-        palette: CommandPalette,
-        widgets: PluginRegistry,
-        background: BackgroundResponder,
-    ) -> Self {
+    /// Construct from a pre-built plugin registry + background
+    /// responder. Both are wired at the composition root (`App::new`).
+    /// The palette is registered inside `widgets` like every other
+    /// plugin.
+    pub fn new(widgets: PluginRegistry, background: BackgroundResponder) -> Self {
         Self {
             current: Focus::Background,
             prev: Focus::Background,
-            palette,
             widgets,
             background,
         }
     }
 
     /// **The router's primary API**: return the surface that should
-    /// receive the next key event. Always `Some` — when no modal
-    /// claims focus, the background responder is returned.
+    /// receive the next key event. Always returns *some* surface —
+    /// when no modal claims focus, the background responder is
+    /// returned.
     pub fn focused_surface_mut(&mut self) -> &mut dyn FocusSurface {
         match &self.current {
             Focus::Background => &mut self.background,
             Focus::Modal(id) => {
                 let id = id.clone();
-                if id == palette::SURFACE_ID {
-                    &mut self.palette
-                } else if let Some(p) = self.widgets.get_mut(id.as_ref()) {
+                if let Some(p) = self.widgets.get_mut(id.as_ref()) {
                     p
                 } else {
                     // Modal id refers to a plugin that is no longer
@@ -95,7 +88,6 @@ impl FocusManager {
             }
         }
     }
-
 
     /// Release the currently-held modal focus (if any). Called by the
     /// router after `handle_key` when the surface reports
@@ -122,21 +114,8 @@ impl FocusManager {
         &self.widgets
     }
 
-    pub fn palette(&self) -> &CommandPalette {
-        &self.palette
-    }
-
-    /// Mutable accessor — used by the `Ui(SetTheme)` dispatch arm to
-    /// push a new theme id into the palette's cache. Returning `&mut`
-    /// (rather than a dedicated `set_palette_theme`) keeps the
-    /// manager's surface narrow: it doesn't grow a method per
-    /// palette-internal field.
-    pub fn palette_mut(&mut self) -> &mut CommandPalette {
-        &mut self.palette
-    }
-
     /// Background responder — used by the router to fall through
-    /// global keys (`:` / activation keys / keymap fallback) when the
+    /// global keys (activation keys / keymap fallback) when the
     /// currently-focused modal surface returns [`Effect::Pass`]. The
     /// background is also the focused surface when no modal claims
     /// focus, so a key handed to it twice (focused-modal Pass → here)
@@ -152,22 +131,19 @@ impl FocusManager {
     /// Single entry point invoked by the router on `Effect::Open(id)`.
     ///
     /// Behaviour by id:
-    /// - **`palette`** (builtin): activate with the cached theme id and
-    ///   take focus unconditionally.
-    /// - **plugin tag**: bring to front, call the plugin's `activate`
-    ///   hook with `ctx.center`, take focus iff `wants_focus()` is
-    ///   true (headless plugins like `here` don't steal focus).
-    /// - **already-focused**: toggle-off — close the plugin or release
-    ///   palette focus.
+    /// - **already-focused**: toggle-off — call the plugin's `close`
+    ///   hook and release focus. Defensive fallback for plugins that
+    ///   don't self-handle their activation key (palette uses Esc;
+    ///   wiki absorbs `i` directly).
+    /// - **registered plugin**: bring to front, call its `activate`
+    ///   hook with the supplied `ctx` snapshot (geo-aware plugins
+    ///   read `ctx.center`, palette reads `ctx.theme_id`), take focus
+    ///   iff `wants_focus()` is true (headless plugins like `here`
+    ///   don't steal focus).
     /// - **unknown id**: no-op (defensive — registries shouldn't
     ///   shrink at runtime).
     pub fn open(&mut self, id: SurfaceId, ctx: SurfaceCtx) {
         if self.is_modal(&id) {
-            // Toggle-off: re-opening the currently-focused surface
-            // closes it. Plugins get their `close` hook; the palette
-            // self-closes on its own Esc path so this branch only
-            // runs for plugins (palette never re-emits Open while
-            // it's focused).
             if let Some(w) = self.widgets.get_mut(id.as_ref()) {
                 w.close();
             }
@@ -175,18 +151,9 @@ impl FocusManager {
             return;
         }
 
-        if id == palette::SURFACE_ID {
-            self.palette
-                .activate(&self.widgets, self.background.keymap());
-            self.deactivate_current(None);
-            self.transition_to(Focus::Modal(id));
-            return;
-        }
-
-        // Plugin path.
         self.widgets.bring_to_front(id.as_ref());
         let wants_focus = if let Some(w) = self.widgets.get_mut(id.as_ref()) {
-            w.activate(ctx.center);
+            w.activate(ctx);
             w.wants_focus()
         } else {
             return;
@@ -200,16 +167,13 @@ impl FocusManager {
     /// Cycle focus to the next (or previous) visible plugin, wrapping
     /// through Background. Returns `true` if focus moved.
     /// Background → visible[0] → … → visible[last] → Background
-    /// (reverse swaps the ends). Non-plugin modals (palette, future
-    /// dialogs) are outside the cycle — user must close them first.
+    /// (reverse swaps the ends).
+    ///
+    /// Visibility-based filtering keeps the palette out naturally:
+    /// the palette is only visible when opened, and once opened it
+    /// already holds focus, so cycle is never invoked from
+    /// `Background` while palette is also visible.
     pub fn cycle(&mut self, forward: bool) -> bool {
-        // Non-plugin modals are detected by absence from the registry.
-        if let Focus::Modal(id) = &self.current
-            && self.widgets.get(id.as_ref()).is_none()
-        {
-            return false;
-        }
-
         let visible: Vec<String> = self
             .widgets
             .iter()

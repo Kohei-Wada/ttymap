@@ -71,7 +71,7 @@ impl Plugin for SearchPlugin {
         vec!["/"]
     }
 
-    fn activate(&mut self, _center: crate::geo::LonLat) {
+    fn activate(&mut self, _ctx: SurfaceCtx) {
         self.open();
     }
 

@@ -23,6 +23,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::color_palette::ThemeId;
 use crate::focus::{Focus, FocusManager};
 use crate::geo::LonLat;
 
@@ -31,8 +32,9 @@ pub fn route_key(
     code: KeyCode,
     modifiers: KeyModifiers,
     center: LonLat,
+    theme_id: ThemeId,
 ) -> Option<AppCommand> {
-    let ctx = SurfaceCtx { center };
+    let ctx = SurfaceCtx { center, theme_id };
     let was_modal = !matches!(focus.current(), Focus::Background);
 
     let (effect, still_visible) = {

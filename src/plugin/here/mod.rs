@@ -57,7 +57,7 @@ impl Plugin for HerePlugin {
         false
     }
 
-    fn activate(&mut self, _center: LonLat) {
+    fn activate(&mut self, _ctx: SurfaceCtx) {
         let endpoint = self.endpoint.clone();
         let timeout = self.timeout_ms;
         info!("here: starting geoip lookup");

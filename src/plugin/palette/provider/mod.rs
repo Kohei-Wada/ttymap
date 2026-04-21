@@ -15,7 +15,7 @@
 pub mod command;
 pub mod theme;
 
-pub use command::CommandProvider;
+pub use command::{CommandProvider, CommandProviderSeed};
 pub use theme::ThemeProvider;
 
 use crate::app_command::{AppCommand, SurfaceId};

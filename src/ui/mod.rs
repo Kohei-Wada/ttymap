@@ -3,7 +3,6 @@
 pub mod action;
 pub mod map_view;
 pub mod overlay;
-pub mod palette;
 pub mod router;
 
 use std::sync::Arc;
@@ -16,7 +15,6 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::app_command::FocusSurface;
 use crate::focus::{Focus, FocusManager};
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
@@ -25,12 +23,12 @@ use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
 /// Thin container for UI-level state. Owns:
-/// - [`FocusManager`] (the focus state and every focusable surface — palette + plugins)
+/// - [`FocusManager`] (the focus state + every focusable surface, including palette as a builtin plugin)
 /// - [`OverlayManager`] (info / attribution / scale-bar)
 /// - the latest map frame snapshot
 ///
-/// All focus / palette / plugin workflows live on `FocusManager`;
-/// `UiState` holds the references and forwards `drain_frames`.
+/// All focus / plugin workflows live on `FocusManager`; `UiState`
+/// holds the references and forwards `drain_frames`.
 ///
 /// **Theme is intentionally not here.** Theme is a cross-cutting
 /// concern (UI colours + map render styler) and lives on `App` as the
@@ -106,18 +104,14 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
 
     // Render every visible plugin panel. Non-modal plugins (wiki,
     // weather, …) can stay on screen even while focus is elsewhere;
-    // modal plugins (search/help) self-close on deactivate so they
-    // only render while focused.
+    // modal plugins (search/help/palette) self-close on deactivate so
+    // they only render while focused. Registration order = paint
+    // order — palette is registered last so it draws on top of any
+    // simultaneously visible plugin panel.
     for w in ui.focus.widgets().iter() {
         if w.is_visible() {
             w.render(f, map_inner, theme);
         }
-    }
-
-    // Palette draws on top of every plugin when visible (it's modal
-    // and coordinates over them).
-    if ui.focus.palette().is_visible() {
-        ui.focus.palette().render(f, map_inner, theme);
     }
 
     let hints = build_hints(ui);
@@ -142,13 +136,10 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused surface provides its own context-sensitive hints.
-    if let Focus::Modal(id) = ui.focus.current() {
-        if id == palette::SURFACE_ID {
-            return ui.focus.palette().footer_hints();
-        }
-        if let Some(w) = ui.focus.widgets().get(id.as_ref()) {
-            return w.footer_hints();
-        }
+    if let Focus::Modal(id) = ui.focus.current()
+        && let Some(w) = ui.focus.widgets().get(id.as_ref())
+    {
+        return w.footer_hints();
     }
     let mut hints = vec![
         ("hjkl", "pan"),
@@ -175,20 +166,14 @@ mod tests {
 
     fn make_ui() -> UiState {
         use crate::background::BackgroundResponder;
-        use crate::color_palette::ThemeId;
         use crate::keymap::KeyMap;
         use crate::plugin::search::SearchPlugin;
-        use crate::ui::palette::CommandPalette;
         let nominatim = Arc::new(NominatimClient::new());
         let mut widgets = PluginRegistry::new();
         widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
         let activations = widgets.activations();
         let background = BackgroundResponder::new(KeyMap::default(), activations);
-        let focus = FocusManager::new(
-            CommandPalette::new(ThemeId::default()),
-            widgets,
-            background,
-        );
+        let focus = FocusManager::new(widgets, background);
         UiState::new(nominatim, None, focus)
     }
 
@@ -201,7 +186,8 @@ mod tests {
 
     #[test]
     fn search_plugin_open_then_close_on_esc() {
-        use crate::app_command::SurfaceCtx;
+        use crate::app_command::{FocusSurface, SurfaceCtx};
+        use crate::color_palette::ThemeId;
         use crate::plugin::Plugin;
         use crate::plugin::search::SearchPlugin;
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -214,9 +200,12 @@ mod tests {
         // state machine: open on activate, close on Esc.
         let nominatim = Arc::new(NominatimClient::new());
         let mut search = SearchPlugin::new(nominatim);
-        let ctx = SurfaceCtx { center: ZERO };
+        let ctx = SurfaceCtx {
+            center: ZERO,
+            theme_id: ThemeId::Dark,
+        };
 
-        search.activate(ZERO);
+        search.activate(ctx);
         assert!(search.is_visible());
         assert!(search.wants_focus());
 

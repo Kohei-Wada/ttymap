@@ -24,7 +24,7 @@ use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
-use crate::ui::palette::CommandPalette;
+use crate::plugin::palette::CommandPalette;
 use crate::ui::router;
 
 pub struct App {
@@ -52,11 +52,11 @@ impl App {
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
+        let theme_id = ThemeId::from_name(&config.style);
         let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
         let activations = widgets.activations();
         let background = BackgroundResponder::new(keymap, activations);
-        let theme_id = ThemeId::from_name(&config.style);
-        let focus = FocusManager::new(CommandPalette::new(theme_id), widgets, background);
+        let focus = FocusManager::new(widgets, background);
         let ui = UiState::new(nominatim, attribution, focus);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
@@ -126,6 +126,7 @@ impl App {
                                 key_event.code,
                                 key_event.modifiers,
                                 self.map.center(),
+                                self.theme_id,
                             ) {
                                 self.dispatch(cmd);
                             }
@@ -203,10 +204,12 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
     )
 }
 
-/// Composition root for plugins: instantiates the four built-in
-/// plugins, lets `HelpPlugin` introspect the others' activation keys,
-/// and returns a populated registry. Lives here (not in `UiState::new`)
-/// so adding a new plugin doesn't require touching the UI module.
+/// Composition root for plugins: instantiates the five built-in
+/// plugins (`search`, `help`, `wiki`, `here`, `palette`), lets the
+/// two introspection-driven ones (`help`, `palette`) walk the others
+/// for their entries, and returns a populated registry. Lives here
+/// (not in `UiState::new`) so adding a new plugin doesn't require
+/// touching the UI module.
 fn build_plugin_registry(
     config: &Config,
     nominatim: Arc<NominatimClient>,
@@ -216,18 +219,24 @@ fn build_plugin_registry(
     let mut help = HelpPlugin::new();
     let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
     let here = HerePlugin::new(config.geoip_endpoint.clone(), config.geoip_timeout_ms);
+    let mut palette = CommandPalette::new();
 
-    // Help introspects the other plugins to list their activation
-    // keys, so it must build after they're constructed. Palette is a
-    // builtin (see `ui::palette`) so help references it directly via
-    // a hardcoded line rather than a `Plugin` trait object.
+    // Help and palette both walk sibling plugins to capture their
+    // descriptions / activation keys. Both must be built before
+    // they're moved into the registry. Help still hardcodes its
+    // palette line because palette has no description (it opts out
+    // of being listed inside itself / inside help).
     help.build(keymap, &[&search, &wiki]);
+    palette.build(keymap, &[&search, &help, &wiki, &here]);
 
     let mut widgets = PluginRegistry::new();
-    // Registration order = dispatch priority for action broadcasts.
+    // Registration order = paint order in `ui::draw` (later entries
+    // draw on top). Palette goes last so its popup overlays any
+    // simultaneously visible plugin panel.
     widgets.register(Box::new(search));
     widgets.register(Box::new(help));
     widgets.register(Box::new(wiki));
     widgets.register(Box::new(here));
+    widgets.register(Box::new(palette));
     widgets
 }

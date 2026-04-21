@@ -1,30 +1,25 @@
 //! Command palette — `:`-triggered popup, a **universal picker**.
 //!
-//! # Deliberately not a `Plugin` — do not "unify"
+//! # Builtin plugin
 //!
-//! Plugins and the palette look similar at a distance (both react to
-//! key events, both draw popups), but they're different categories:
+//! Palette is registered as a built-in [`Plugin`] alongside `search`,
+//! `wiki`, `help`, `here`. It uses the same activation pipeline
+//! (`activation_keys = [":"]` → `BackgroundResponder` →
+//! `Effect::Open("palette")` → `FocusManager::open`) and lives in the
+//! same registry. The asymmetry that previously justified treating it
+//! as a special field on `FocusManager` was largely cosmetic: the
+//! provider already walked `&PluginRegistry`, so the "plugins don't
+//! see each other" invariant was already broken at the provider
+//! layer. Folding palette in lets us delete a special branch in
+//! `FocusManager::open`, the `palette` / `palette_mut` accessors, and
+//! the `id == SURFACE_ID` check in `ui::draw`.
 //!
-//! - **Plugin** = a component that *contributes* functionality (one
-//!   feature, self-contained state, small activation key surface).
-//! - **Palette** = a *coordinator* that aggregates over the plugin
-//!   registry + keymap + theme state to present a unified picker.
-//!   Its whole job is to read other subsystems' state.
-//!
-//! Folding palette into the `Plugin` trait would work mechanically —
-//! with a wider `SurfaceCtx<'a>` carrying `&PluginRegistry`, `&KeyMap`,
-//! `ThemeId` — but it would erase that semantic distinction: every
-//! plugin would gain permission to enumerate the registry (the "plugins
-//! don't see each other" invariant weakens from `pub(crate)` structure
-//! to a naming convention), and palette-specific concepts
-//! (`SwitchProvider`, Tab-cycle exclusion) would turn into stringly-
-//! typed special cases keyed on `tag == "palette"`.
-//!
-//! The cost of keeping it a builtin (one special field on
-//! `FocusManager`, one well-known `SURFACE_ID = "palette"`, one
-//! special-case branch in `FocusManager::open`) is localised and
-//! tagged. The cost of unification would be spread across the
-//! `Plugin` trait contract. The current asymmetry is chosen.
+//! What palette **does** keep that no other plugin needs:
+//! - introspects sibling plugins at startup (via [`build`]) — same
+//!   pattern as `HelpPlugin::build`. The captured snapshot is then
+//!   combined per-open with the current theme id (read from
+//!   [`SurfaceCtx::theme_id`] in `activate`) to seed the
+//!   "Theme" sub-mode entry's "(current)" hint.
 //!
 //! # Mechanics
 //!
@@ -32,21 +27,10 @@
 //! [`PaletteProvider`](provider::PaletteProvider). The palette swaps
 //! providers when the user picks a "sub-mode" command (e.g. "Theme"
 //! switches to [`ThemeProvider`](provider::ThemeProvider)). The
-//! palette never touches `FocusManager`; focus transitions are
-//! driven by `FocusManager::open` (which the router invokes when a
-//! surface returns `Effect::Open(SURFACE_ID)`) and the auto-release
-//! path (`is_visible()` flipping to false).
-//!
-//! # Why the palette caches `ThemeId`
-//!
-//! The default [`CommandProvider`] needs the active theme to render
-//! the "Theme" sub-mode entry's "(current)" hint. Rather than threading
-//! `ThemeId` through `FocusManager::open` on every palette open, the
-//! palette stores it as a field updated via [`set_theme_id`]: the
-//! `Ui(SetTheme)` dispatch arm pushes the new value, so the next
-//! palette open seeds its provider from the cache. This keeps
-//! `FocusManager::open(id, ctx)` shape uniform across surfaces — no
-//! palette-specific argument leaks into the focus API.
+//! palette never touches `FocusManager`; focus transitions are driven
+//! by `FocusManager::open` (which the router invokes when a surface
+//! returns `Effect::Open(SURFACE_ID)`) and the auto-release path
+//! (`is_visible()` flipping to false after `handle_key`).
 
 pub mod panel;
 pub mod provider;
@@ -58,10 +42,11 @@ use ratatui::layout::Rect;
 use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
-use crate::plugin::PluginRegistry;
 use crate::theme::UiTheme;
 
-use provider::{CommandProvider, PaletteAction, PaletteProvider};
+use super::Plugin;
+
+use provider::{CommandProvider, CommandProviderSeed, PaletteAction, PaletteProvider};
 
 /// `SurfaceId` for the palette in the focus system. Owned here so
 /// the palette is the source of truth for its own identifier; other
@@ -73,45 +58,42 @@ pub struct CommandPalette {
     pub(super) active: bool,
     pub(super) selected: usize,
     pub(super) provider: Option<Box<dyn PaletteProvider>>,
-    /// Active theme id, kept in sync by the `Ui(SetTheme)` dispatch
-    /// arm via [`set_theme_id`]. Read by [`activate`] when seeding the
-    /// default provider so the theme-picker entry shows "(current)".
-    theme_id: ThemeId,
+    /// Static portion of the default provider's entry list — captured
+    /// at startup by [`build`]. Empty until `build` runs; activating
+    /// before `build` shows only the dynamic Theme entry.
+    seed: CommandProviderSeed,
+}
+
+impl Default for CommandPalette {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CommandPalette {
-    pub fn new(initial_theme: ThemeId) -> Self {
+    pub fn new() -> Self {
         Self {
             query: String::new(),
             active: false,
             selected: 0,
             provider: None,
-            theme_id: initial_theme,
+            seed: CommandProviderSeed::default(),
         }
     }
 
-    /// Push the active theme id from the dispatch layer. Cached for
-    /// the next palette open; does not touch `active` / `provider`
-    /// (the currently-displayed list is whatever was built at open
-    /// time — switching theme via the palette closes it anyway).
-    pub fn set_theme_id(&mut self, id: ThemeId) {
-        self.theme_id = id;
+    /// Capture the static portion of the default provider's entry
+    /// list (map actions + every visible plugin's activation entry).
+    /// Called once at startup after sibling plugins are constructed
+    /// — same two-stage pattern as `HelpPlugin::build`. Re-running it
+    /// is safe (overwrites the snapshot) but unnecessary because
+    /// plugin metadata doesn't change at runtime.
+    pub fn build(&mut self, keymap: &KeyMap, plugins: &[&dyn Plugin]) {
+        self.seed = CommandProvider::snapshot(plugins, keymap);
     }
 
-    /// Open the palette with the default [`CommandProvider`]. The host
-    /// is responsible for taking palette focus afterwards — the palette
-    /// does not touch `FocusManager` itself (mirrors the plugin rule).
-    pub fn activate(&mut self, widgets: &PluginRegistry, keymap: &KeyMap) {
-        let provider = Box::new(CommandProvider::new(widgets, keymap, self.theme_id));
+    fn open_default(&mut self, theme_id: ThemeId) {
+        let provider = Box::new(CommandProvider::build(&self.seed, theme_id));
         self.open_with(provider);
-    }
-
-    pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
-    }
-
-    pub fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
     }
 
     fn open_with(&mut self, provider: Box<dyn PaletteProvider>) {
@@ -136,6 +118,48 @@ impl CommandPalette {
         if self.selected >= n {
             self.selected = n.saturating_sub(1);
         }
+    }
+}
+
+impl Plugin for CommandPalette {
+    fn tag(&self) -> &str {
+        SURFACE_ID
+    }
+
+    /// Empty description — the palette opts out of being listed
+    /// inside itself / inside the help overlay (it would be
+    /// recursive / redundant).
+    fn description(&self) -> &str {
+        ""
+    }
+
+    fn activation_keys(&self) -> Vec<&'static str> {
+        vec![":"]
+    }
+
+    /// Open with the default [`CommandProvider`]. The palette is
+    /// location-agnostic so it ignores `ctx.center`; it reads
+    /// `ctx.theme_id` to seed the theme-picker entry's "(current)"
+    /// hint, which is the only place the active theme leaks into
+    /// the palette. The host (`FocusManager::open`) takes focus
+    /// after this returns.
+    fn activate(&mut self, ctx: SurfaceCtx) {
+        self.open_default(ctx.theme_id);
+    }
+
+    /// Modal: any focus transfer (Tab, another plugin's activation
+    /// key) closes the palette completely rather than leaving its
+    /// popup orphaned on screen.
+    fn deactivate(&mut self) {
+        self.active = false;
+    }
+
+    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
     }
 }
 
@@ -232,11 +256,12 @@ mod tests {
     use crate::app_command::AppCommand;
     use crate::geo::LonLat;
     use crate::map::Action;
-    use crate::ui::palette::provider::PaletteItem;
+    use crate::plugin::palette::provider::PaletteItem;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: SurfaceCtx = SurfaceCtx {
         center: LonLat { lon: 0.0, lat: 0.0 },
+        theme_id: ThemeId::Dark,
     };
 
     /// Minimal provider: lists the labels we give it, substring filter,
@@ -295,7 +320,7 @@ mod tests {
     }
 
     fn palette_with(labels: &[&str]) -> CommandPalette {
-        let mut p = CommandPalette::new(ThemeId::default());
+        let mut p = CommandPalette::new();
         p.open_with(Box::new(FakeProvider::new(labels)));
         p
     }

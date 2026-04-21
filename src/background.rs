@@ -1,17 +1,18 @@
 //! Background responder — the host's "default" key handler when no
 //! palette / plugin has focus.
 //!
-//! Conceptually a peer of [`CommandPalette`](crate::ui::palette::CommandPalette)
+//! Conceptually a peer of [`CommandPalette`](crate::plugin::palette::CommandPalette)
 //! and the plugin registry: each is a "thing that handles keys", just
 //! at a different focus state. Owned by [`FocusManager`](crate::focus::FocusManager),
 //! returned from `focused_surface_mut` whenever no modal surface holds
 //! focus — so the router never sees a `None` and never special-cases
 //! the background.
 //!
-//! Owns the four global key behaviours:
+//! Owns the three global key behaviours:
 //! - Tab / Shift-Tab → cycle focus across visible plugins
-//! - `:` → open the command palette
-//! - plugin activation keys (`/`, `i`, `?`, …) → activate
+//! - plugin activation keys (`:`, `/`, `i`, `?`, …) → activate
+//!   (palette is a builtin plugin, so `:` flows through this path
+//!   like every other activation key)
 //! - keymap fallback (h/j/k/l/q/0/+/-/…) → map action
 //!
 //! Plus the `gg` multi-key sequence state machine.
@@ -21,7 +22,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, KeyMap};
 use crate::map::Action;
-use crate::ui::palette;
 
 pub struct BackgroundResponder {
     keymap: KeyMap,
@@ -43,10 +43,6 @@ impl BackgroundResponder {
             activations,
             pending_g: false,
         }
-    }
-
-    pub fn keymap(&self) -> &KeyMap {
-        &self.keymap
     }
 
     fn activation_tag(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&str> {
@@ -101,10 +97,10 @@ impl FocusSurface for BackgroundResponder {
             return Effect::Run(AppCommand::CycleFocus(forward));
         }
 
-        if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
-            return Effect::Open(palette::SURFACE_ID.into());
-        }
-
+        // `:` is no longer a special-case here — palette is a builtin
+        // plugin with `activation_keys() = [":"]`, so the activation
+        // table below catches it through the same lookup as `/`, `i`,
+        // `?`. Keeps the surface count to one.
         if let Some(tag) = self.activation_tag(code, modifiers) {
             return Effect::Open(tag.to_string().into());
         }
@@ -136,6 +132,7 @@ mod tests {
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: SurfaceCtx = SurfaceCtx {
         center: LonLat { lon: 0.0, lat: 0.0 },
+        theme_id: crate::color_palette::ThemeId::Dark,
     };
 
     fn map(action: Action) -> AppCommand {
