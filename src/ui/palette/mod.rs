@@ -45,7 +45,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::AppCommand;
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
@@ -134,5 +134,25 @@ impl CommandPalette {
     // Used by panel.rs (same module tree).
     pub(in crate::ui::palette) fn state(&self) -> &PaletteState {
         &self.state
+    }
+}
+
+/// Adapter onto the new responder-chain trait (#64 PR-A). Modal:
+/// every key while the palette is focused is treated as consumed
+/// (`PaletteOutcome::None` would otherwise fall through to the
+/// background — wrong for a modal popup).
+impl FocusSurface for CommandPalette {
+    fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        _ctx: SurfaceCtx,
+    ) -> Effect {
+        // Inherent method (arity 3) takes precedence over this trait
+        // method (arity 4) — call site disambiguates by argument count.
+        match self.handle_key(code, modifiers) {
+            PaletteOutcome::None | PaletteOutcome::Consumed => Effect::Consumed,
+            PaletteOutcome::Run(cmd) => Effect::Run(cmd),
+        }
     }
 }
