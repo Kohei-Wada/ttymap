@@ -41,13 +41,7 @@ impl RenderPipeline {
     pub fn render(&mut self, vp: &Viewport) -> Option<MapFrame> {
         let z = crate::geo::base_zoom(vp.zoom);
         self.tile_cache.set_view(vp.center.lon, vp.center.lat, z);
-        let visible = visible_tiles(
-            vp.center.lon,
-            vp.center.lat,
-            vp.zoom,
-            self.renderer.width(),
-            self.renderer.height(),
-        );
+        let visible = self.visible_tiles_for(vp);
         let tile_data = self.collect_tile_data(&visible, vp.zoom);
         self.renderer.draw(&tile_data, vp.zoom).map(|mut f| {
             f.center = vp.center;
@@ -83,13 +77,7 @@ impl RenderPipeline {
         self.tile_cache
             .prefetch(vp.center.lon, vp.center.lat, vp.zoom);
 
-        let visible = visible_tiles(
-            vp.center.lon,
-            vp.center.lat,
-            vp.zoom,
-            self.renderer.width(),
-            self.renderer.height(),
-        );
+        let visible = self.visible_tiles_for(vp);
 
         let z = crate::geo::base_zoom(vp.zoom);
 
@@ -145,6 +133,21 @@ impl RenderPipeline {
     }
 
     // ── Private ──────────────────────────────────────────────────────────
+
+    /// Compute the set of visible tiles for a viewport against the
+    /// renderer's current canvas. Centralised so `render` and
+    /// `prefetch` share the same call shape (both consume the same
+    /// function of the same inputs, just in different iterations of
+    /// the render-thread loop).
+    fn visible_tiles_for(&self, vp: &Viewport) -> Vec<VisibleTile> {
+        visible_tiles(
+            vp.center.lon,
+            vp.center.lat,
+            vp.zoom,
+            self.renderer.width(),
+            self.renderer.height(),
+        )
+    }
 
     /// Collect features from tile cache for visible tiles.
     /// Bridge between tile subsystem and renderer.
