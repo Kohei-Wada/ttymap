@@ -6,12 +6,10 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::app_command::AppCommand;
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
-
-use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 
 use super::Plugin;
 
@@ -31,23 +29,15 @@ enum Seg {
 
 type HelpLine = Vec<Seg>;
 
+#[derive(Default)]
 pub struct HelpPlugin {
     active: bool,
     lines: Vec<HelpLine>,
 }
 
-impl Default for HelpPlugin {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HelpPlugin {
     pub fn new() -> Self {
-        Self {
-            active: false,
-            lines: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Build the help text. `other_plugins` is inspected for each
@@ -106,8 +96,31 @@ impl HelpPlugin {
             })
             .collect()
     }
+}
 
-    pub fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+impl Plugin for HelpPlugin {
+    fn tag(&self) -> &str {
+        "help"
+    }
+
+    fn description(&self) -> &str {
+        "Toggle help"
+    }
+
+    fn activation_keys(&self) -> Vec<&'static str> {
+        vec!["?"]
+    }
+
+    fn activate(&mut self, _ctx: SurfaceCtx) {
+        self.active = true;
+    }
+
+    fn deactivate(&mut self) {
+        // Modal: losing focus means closing.
+        self.active = false;
+    }
+
+    fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
         if map_inner.width < 20 || map_inner.height < 10 {
             return;
         }
@@ -138,33 +151,6 @@ impl HelpPlugin {
         let block = theme.panel("help").title_alignment(Alignment::Center);
         let widget = Paragraph::new(rendered).style(theme.text()).block(block);
         f.render_widget(widget, area);
-    }
-}
-
-impl Plugin for HelpPlugin {
-    fn tag(&self) -> &str {
-        "help"
-    }
-
-    fn description(&self) -> &str {
-        "Toggle help"
-    }
-
-    fn activation_keys(&self) -> Vec<&'static str> {
-        vec!["?"]
-    }
-
-    fn activate(&mut self, _ctx: SurfaceCtx) {
-        self.active = true;
-    }
-
-    fn deactivate(&mut self) {
-        // Modal: losing focus means closing.
-        self.active = false;
-    }
-
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        HelpPlugin::render(self, f, area, theme);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
