@@ -12,13 +12,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::theme::UiTheme;
 
 use super::WikiPlugin;
-use super::state::WikiState;
 use super::wikipedia::WikiArticle;
 
 /// Render the wiki side panel (list or detail view) if active.
 pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
-    let state = &widget.state;
-    if !state.active || map_inner.width < 30 || map_inner.height < 6 {
+    if !widget.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
 
@@ -36,15 +34,15 @@ pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: 
 
     let content_width = (panel_width as usize).saturating_sub(4).max(10);
 
-    if let Some(ref article) = state.detail {
+    if let Some(ref article) = widget.detail {
         render_detail(f, area, content_width, article, theme);
     } else {
-        render_list(state, f, area, panel_height, content_width, theme);
+        render_list(widget, f, area, panel_height, content_width, theme);
     }
 }
 
 fn render_list(
-    state: &WikiState,
+    widget: &WikiPlugin,
     f: &mut Frame,
     area: Rect,
     panel_height: u16,
@@ -53,7 +51,7 @@ fn render_list(
 ) {
     let block = theme.panel("wiki (Enter: open)");
 
-    if state.articles.is_empty() {
+    if widget.articles.is_empty() {
         let widget = Paragraph::new("  Loading...")
             .style(theme.muted())
             .block(block);
@@ -66,7 +64,7 @@ fn render_list(
     let mut selected_top: u16 = 0;
     let mut selected_height: u16 = 1;
 
-    for (i, article) in state.articles.iter().enumerate() {
+    for (i, article) in widget.articles.iter().enumerate() {
         let article_start = lines.len() as u16;
 
         if i > 0 {
@@ -76,7 +74,7 @@ fn render_list(
             )));
         }
 
-        let is_selected = i == state.selected;
+        let is_selected = i == widget.selected;
         let dist = crate::geo::format_distance(article.dist_m);
         let title_style = if is_selected {
             Style::default().fg(theme.accent_alt)

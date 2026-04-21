@@ -5,7 +5,6 @@
 
 pub mod panel;
 mod service;
-mod state;
 
 use std::sync::Arc;
 
@@ -13,32 +12,49 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::AppCommand;
-use crate::shared::nominatim::NominatimClient;
+use crate::app_command::{AppCommand, Effect, SurfaceCtx};
+use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
 
 use service::SearchService;
-use state::{Outcome, SearchState};
-
-use crate::app_command::{Effect, SurfaceCtx};
 
 use super::Plugin;
 
 pub struct SearchPlugin {
-    pub(in crate::plugin::search) state: SearchState,
+    pub(in crate::plugin::search) query: String,
+    pub(in crate::plugin::search) active: bool,
+    pub(in crate::plugin::search) candidates: Vec<SearchResult>,
+    pub(in crate::plugin::search) selected: usize,
     service: SearchService,
 }
 
 impl SearchPlugin {
     pub fn new(nominatim: Arc<NominatimClient>) -> Self {
         Self {
-            state: SearchState::new(),
+            query: String::new(),
+            active: false,
+            candidates: Vec::new(),
+            selected: 0,
             service: SearchService::new(nominatim),
         }
     }
 
     pub fn has_candidates(&self) -> bool {
-        self.state.has_candidates()
+        !self.candidates.is_empty()
+    }
+
+    fn open(&mut self) {
+        self.query.clear();
+        self.candidates.clear();
+        self.selected = 0;
+        self.active = true;
+    }
+
+    fn close(&mut self) {
+        self.query.clear();
+        self.candidates.clear();
+        self.selected = 0;
+        self.active = false;
     }
 }
 
@@ -56,39 +72,99 @@ impl Plugin for SearchPlugin {
     }
 
     fn activate(&mut self, _ctx: SurfaceCtx) {
-        self.state.open();
+        self.open();
     }
 
     fn deactivate(&mut self) {
-        self.state.close();
+        self.close();
     }
 
     fn visible(&self) -> bool {
-        self.state.is_active()
+        self.active
     }
 
+    /// Modal key dispatch. While candidates are showing the popup is
+    /// in "results mode" (Up/Down/Enter pick a hit, Esc cancels);
+    /// otherwise it's in "input mode" (typing edits the query, Enter
+    /// submits a forward-geocode). Focus release is host-driven —
+    /// `ui::router` notices `visible()=false` and releases for us.
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         _ctx: SurfaceCtx,
     ) -> Effect {
-        let outcome = self.state.handle_key(code, modifiers);
-        // Focus release is host-driven: ui::router detects `visible()`
-        // flipping to false and calls `ui.focus.release()`.
-        match outcome {
-            Outcome::None | Outcome::Consumed => Effect::Consumed,
-            Outcome::Jump(loc) => Effect::Run(AppCommand::Jump(loc)),
-            Outcome::Submit(query) => {
-                self.service.search(&query);
+        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+
+        if self.has_candidates() {
+            let up = matches!(code, KeyCode::Up | KeyCode::Char('k'))
+                || (ctrl && code == KeyCode::Char('p'));
+            let down = matches!(code, KeyCode::Down | KeyCode::Char('j'))
+                || (ctrl && code == KeyCode::Char('n'));
+
+            return if code == KeyCode::Esc {
+                self.active = false;
+                self.candidates.clear();
+                Effect::Consumed
+            } else if code == KeyCode::Enter {
+                self.active = false;
+                let loc = self.candidates[self.selected].location;
+                self.candidates.clear();
+                Effect::Run(AppCommand::Jump(loc))
+            } else if up {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                Effect::Consumed
+            } else if down {
+                if self.selected + 1 < self.candidates.len() {
+                    self.selected += 1;
+                }
+                Effect::Consumed
+            } else {
+                Effect::Consumed
+            };
+        }
+
+        match code {
+            KeyCode::Esc => {
+                self.active = false;
                 Effect::Consumed
             }
+            KeyCode::Enter => {
+                if self.query.is_empty() {
+                    self.active = false;
+                } else {
+                    self.service.search(&self.query);
+                }
+                Effect::Consumed
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                Effect::Consumed
+            }
+            KeyCode::Char('h') if ctrl => {
+                self.query.pop();
+                Effect::Consumed
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.query.clear();
+                Effect::Consumed
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                Effect::Consumed
+            }
+            // Modal: any other key is consumed (don't fall through to
+            // the background while the search popup is up).
+            _ => Effect::Consumed,
         }
     }
 
     fn poll(&mut self) -> bool {
         if let Some(results) = self.service.poll() {
-            self.state.set_candidates(results);
+            self.candidates = results;
+            self.selected = 0;
             true
         } else {
             false
