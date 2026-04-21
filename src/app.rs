@@ -24,13 +24,14 @@ use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
-use crate::ui::router;
+use crate::ui::router::key::KeyRouter;
 use crate::ui::router::mouse::MouseRouter;
 
 pub struct App {
     map: MapState,
     render_handle: RenderHandle,
     ui: UiState,
+    key: KeyRouter,
     mouse: MouseRouter,
     /// Active theme — single source of truth for the running app.
     /// `ui_theme` is its derived UI-colour cache; the render thread
@@ -79,6 +80,7 @@ impl App {
             map,
             render_handle,
             ui,
+            key: KeyRouter,
             mouse: MouseRouter::default(),
             theme_id,
             ui_theme,
@@ -125,7 +127,8 @@ impl App {
                                 center: self.map.center(),
                                 theme_id: self.theme_id,
                             };
-                            if let Some(cmd) = router::route_key(&mut self.ui.focus, key_event, ctx)
+                            if let Some(cmd) =
+                                self.key.route_key(&mut self.ui.focus, key_event, ctx)
                             {
                                 self.dispatch(cmd);
                             }
