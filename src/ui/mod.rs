@@ -17,11 +17,11 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::app_command::{AppCommand, KeyDelivery};
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
-use crate::plugin::{PluginAction, PluginCtx, PluginRegistry};
-use crate::ui::palette::{CommandPalette, PaletteOutcome};
+use crate::plugin::{PluginCtx, PluginRegistry};
+use crate::ui::palette::CommandPalette;
 
 use crate::color_palette::ThemeId;
 use crate::focus::{Focus, FocusEvent, FocusManager};
@@ -140,64 +140,51 @@ impl UiState {
         );
     }
 
-    /// Route a raw key event to the currently-focused surface. Owns
-    /// every focus write the delivery touches — auto-release on
-    /// palette / plugin close lives here. Returns what the caller
-    /// should do with the event (`Passthrough` = fall through to the
-    /// input layer's fallback chain).
-    pub fn deliver_key(
+    /// Hand a key to the currently-focused surface and apply the
+    /// auto-release invariant (palette/plugin closing during
+    /// `handle_key` drops focus). Returns the surface's `Effect`, or
+    /// `None` when no surface has focus — the router then falls
+    /// through to the [`BackgroundResponder`].
+    pub fn deliver_to_focused_surface(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        center: LonLat,
-    ) -> KeyDelivery {
+        ctx: SurfaceCtx,
+    ) -> Option<Effect> {
         match self.focus.current().clone() {
-            Focus::Map => KeyDelivery::Passthrough,
-            Focus::Palette => self.deliver_to_palette(code, modifiers),
-            Focus::Plugin(tag) => self.deliver_to_plugin(&tag, code, modifiers, center),
-        }
-    }
-
-    /// Deliver a key to the palette. Emits `PaletteClosed` if
-    /// `handle_key` dropped visibility (e.g. Esc / Enter); the focus
-    /// manager auto-releases in response.
-    fn deliver_to_palette(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyDelivery {
-        let outcome = self.palette.handle_key(code, modifiers);
-        if !self.palette.is_visible() {
-            self.focus.on(FocusEvent::PaletteClosed, &mut self.widgets);
-        }
-        match outcome {
-            PaletteOutcome::Consumed | PaletteOutcome::None => KeyDelivery::Consumed,
-            PaletteOutcome::Run(cmd) => KeyDelivery::Run(cmd),
-        }
-    }
-
-    /// Deliver a key to a focused plugin. Emits `PluginClosed` if
-    /// `visible()` dropped during `handle_key`; the focus manager
-    /// auto-releases in response. `Pass` means "not my key" →
-    /// `Passthrough` so the host falls through to the global fallback
-    /// chain.
-    fn deliver_to_plugin(
-        &mut self,
-        tag: &str,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        center: LonLat,
-    ) -> KeyDelivery {
-        let mut ctx = PluginCtx { center };
-        let outcome = match self.widgets.get_mut(tag) {
-            Some(w) => w.handle_key(code, modifiers, &mut ctx),
-            None => PluginAction::Pass,
-        };
-        let still_visible = self.widgets.get(tag).is_some_and(|w| w.visible());
-        if !still_visible {
-            self.focus
-                .on(FocusEvent::PluginClosed(tag.to_string()), &mut self.widgets);
-        }
-        match outcome {
-            PluginAction::Pass => KeyDelivery::Passthrough,
-            PluginAction::Consumed => KeyDelivery::Consumed,
-            PluginAction::Run(cmd) => KeyDelivery::Run(cmd),
+            Focus::Map => None,
+            Focus::Palette => {
+                // Inherent and trait both have a `handle_key`; spell out
+                // the trait so the SurfaceCtx-taking impl is selected.
+                let effect = <CommandPalette as FocusSurface>::handle_key(
+                    &mut self.palette,
+                    code,
+                    modifiers,
+                    ctx,
+                );
+                if !self.palette.is_visible() {
+                    self.focus
+                        .on(FocusEvent::PaletteClosed, &mut self.widgets);
+                }
+                Some(effect)
+            }
+            Focus::Plugin(tag) => {
+                let effect = match self.widgets.get_mut(tag.as_ref()) {
+                    Some(boxed) => crate::plugin::deliver(boxed, code, modifiers, ctx),
+                    None => Effect::Pass,
+                };
+                let still_visible = self
+                    .widgets
+                    .get(tag.as_ref())
+                    .is_some_and(|w| w.visible());
+                if !still_visible {
+                    self.focus.on(
+                        FocusEvent::PluginClosed(tag.to_string()),
+                        &mut self.widgets,
+                    );
+                }
+                Some(effect)
+            }
         }
     }
 }

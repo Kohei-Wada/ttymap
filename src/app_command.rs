@@ -74,34 +74,10 @@ pub enum InputEffect {
     Map,
 }
 
-/// Outcome of handing a raw key event to the focused surface via
-/// [`UiState::deliver_key`](crate::ui::UiState::deliver_key). The
-/// host routes on this: `Passthrough` falls through to the global
-/// fallback chain; `Consumed` is absorbed by the surface; `Run` is an
-/// `AppCommand` for the caller to dispatch next.
-///
-/// **Status:** kept temporarily to feed the existing 5-stage router.
-/// Replaced by [`Effect`] in #64 PR-B once the router is collapsed
-/// into a pure responder chain.
-pub enum KeyDelivery {
-    /// Focus had no claim (`Focus::Map`) or the focused plugin
-    /// returned `Pass`. Caller should try the global fallback chain.
-    Passthrough,
-    /// Focused surface consumed the key; no `AppCommand` to run.
-    Consumed,
-    /// Focused surface emitted an `AppCommand` — caller should
-    /// `dispatch` it.
-    Run(AppCommand),
-}
-
-/// Outcome of handing a key to a [`FocusSurface`] in the new responder
-/// chain (#64 PR-A). Each surface returns one of these; the router
-/// (PR-B) walks responders until something other than `Pass` comes
-/// back.
-///
-/// Replaces the older [`KeyDelivery`] / [`PluginAction`](crate::plugin::PluginAction)
-/// pair with a single, surface-agnostic vocabulary.
-#[allow(dead_code)] // wired up in #64 PR-B
+/// Outcome of handing a key to a [`FocusSurface`] in the responder
+/// chain. The router walks responders (focused surface →
+/// [`BackgroundResponder`](crate::ui::router::background::BackgroundResponder))
+/// until something other than `Pass` comes back.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Surface is not interested. Try the next responder in the chain
@@ -118,7 +94,6 @@ pub enum Effect {
 /// the bits of shared state a surface needs but does not own (today:
 /// the current map center, used by plugins for geo-relative actions).
 /// Grow as new surface needs appear.
-#[allow(dead_code)] // wired up in #64 PR-B
 #[derive(Debug, Clone, Copy)]
 pub struct SurfaceCtx {
     pub center: LonLat,
@@ -126,13 +101,8 @@ pub struct SurfaceCtx {
 
 /// Anything the router can deliver a focused-surface key event to.
 /// Implemented by [`CommandPalette`](crate::ui::palette::CommandPalette)
-/// and every [`Plugin`](crate::plugin::Plugin) (via thin adapters that
-/// wrap their existing `handle_key` outcomes).
-///
-/// **Status (#64 PR-A):** trait introduced in parallel with the existing
-/// `KeyDelivery` / `PluginAction` paths. The router still goes through
-/// `UiState::deliver_key`. PR-B collapses everything onto this trait.
-#[allow(dead_code)] // wired up in #64 PR-B
+/// and every [`Plugin`](crate::plugin::Plugin) (via a blanket adapter
+/// in `plugin/mod.rs` that wraps their existing `handle_key`).
 pub trait FocusSurface {
     fn handle_key(
         &mut self,

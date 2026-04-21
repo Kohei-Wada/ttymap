@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::{AppCommand, Effect, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
@@ -156,27 +156,24 @@ pub trait Plugin {
     fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
 }
 
-/// Blanket adapter onto the responder-chain trait (#64 PR-A): every
-/// `Plugin` is a `FocusSurface` whose `Effect` is the 1:1 mapping of
-/// its `PluginAction`. Lets the new router treat plugins, palette, and
-/// any future modal uniformly. `?Sized` so `dyn Plugin` (held by the
-/// registry) also picks the impl up.
-impl<P: Plugin + ?Sized> FocusSurface for P {
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ctx: SurfaceCtx,
-    ) -> Effect {
-        let mut plugin_ctx = PluginCtx { center: ctx.center };
-        // UFCS — `<P as Plugin>::handle_key` (4 args) shares arity with
-        // this trait method, so we name the source trait explicitly.
-        let action = <Self as Plugin>::handle_key(self, code, modifiers, &mut plugin_ctx);
-        match action {
-            PluginAction::Pass => Effect::Pass,
-            PluginAction::Consumed => Effect::Consumed,
-            PluginAction::Run(cmd) => Effect::Run(cmd),
-        }
+/// Adapter onto the responder-chain `Effect` for any `Plugin` held in
+/// the registry. Reaching `dyn Plugin`'s blanket `FocusSurface` impl
+/// through trait-object dispatch needs trait upcasting (separate
+/// vtable), so the router calls this helper instead — semantically
+/// the same as `FocusSurface::handle_key`, mechanically a direct
+/// `Plugin::handle_key` call wrapped in the `PluginAction → Effect`
+/// mapping.
+pub fn deliver(
+    plugin: &mut dyn Plugin,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    ctx: SurfaceCtx,
+) -> Effect {
+    let mut plugin_ctx = PluginCtx { center: ctx.center };
+    match plugin.handle_key(code, modifiers, &mut plugin_ctx) {
+        PluginAction::Pass => Effect::Pass,
+        PluginAction::Consumed => Effect::Consumed,
+        PluginAction::Run(cmd) => Effect::Run(cmd),
     }
 }
 
