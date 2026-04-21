@@ -135,6 +135,17 @@ impl FocusManager {
         &mut self.palette
     }
 
+    /// Background responder — used by the router to fall through
+    /// global keys (`:` / activation keys / keymap fallback) when the
+    /// currently-focused modal surface returns [`Effect::Pass`]. The
+    /// background is also the focused surface when no modal claims
+    /// focus, so a key handed to it twice (focused-modal Pass → here)
+    /// can't happen: this accessor is only useful in the *modal-Pass*
+    /// branch.
+    pub fn background_mut(&mut self) -> &mut BackgroundResponder {
+        &mut self.background
+    }
+
     // ── Workflow API ─────────────────────────────────────────────────
 
     /// Open / activate the named surface and transfer focus to it.

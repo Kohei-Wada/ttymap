@@ -119,8 +119,13 @@ impl FocusSurface for BackgroundResponder {
         Effect::Pass
     }
 
-    // Default `is_visible` = true is correct for the background
-    // responder: it's always available, never released.
+    /// The background is the one surface that is *always* available —
+    /// it is the resting state of the focus manager and is never
+    /// released. Overrides the trait default (`false`) which is the
+    /// safe assumption for everything else.
+    fn is_visible(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

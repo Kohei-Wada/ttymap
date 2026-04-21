@@ -128,11 +128,17 @@ pub trait FocusSurface {
 
     /// Whether this surface is currently on screen / interactive.
     /// The router checks this after `handle_key` to detect "the
-    /// surface closed itself" and auto-release focus. Default `true`
-    /// for the always-available background; modal surfaces (palette,
-    /// plugins) override based on their own visibility flag.
+    /// surface closed itself" and auto-release focus; `FocusManager`
+    /// also reads it for cycle eligibility (only visible surfaces
+    /// participate in Tab cycle).
+    ///
+    /// Default `false` — the safe assumption for any new surface is
+    /// "not yet shown". The only surface that opts in to "always
+    /// visible" is [`BackgroundResponder`](crate::background::BackgroundResponder),
+    /// which is never released and never appears in the cycle list
+    /// (it's the resting state, not a destination).
     fn is_visible(&self) -> bool {
-        true
+        false
     }
 }
 

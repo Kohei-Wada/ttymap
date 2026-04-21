@@ -85,8 +85,9 @@ impl Plugin for HerePlugin {
 }
 
 /// Headless: takes no keys (`wants_focus()=false` so it never gets
-/// any), and is never visible. Default `FocusSurface` impls would
-/// suffice but we spell them out explicitly for clarity.
+/// any), and is never visible (so Tab cycle skips it and the footer
+/// is never asked for here-specific hints). Spelt out explicitly
+/// even though both match the trait defaults.
 impl FocusSurface for HerePlugin {
     fn handle_key(
         &mut self,
@@ -95,6 +96,10 @@ impl FocusSurface for HerePlugin {
         _ctx: SurfaceCtx,
     ) -> Effect {
         Effect::Pass
+    }
+
+    fn is_visible(&self) -> bool {
+        false
     }
 }
 

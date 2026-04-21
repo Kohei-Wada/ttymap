@@ -200,6 +200,16 @@ impl FocusSurface for WikiPlugin {
             return Effect::Pass;
         }
 
+        // Self-toggle on the activation key. Surfaces own their own
+        // lifecycle: pressing `i` again while the panel has focus
+        // closes it directly (no round-trip through the background
+        // responder + `FocusManager::open` toggle path). The router
+        // auto-releases focus when `is_visible()` flips to false.
+        if code == KeyCode::Char('i') && modifiers == KeyModifiers::NONE {
+            self.close_state();
+            return Effect::Consumed;
+        }
+
         // Refresh is available even when the list is empty (e.g.
         // initial load returned nothing and the user wants to retry).
         if code == KeyCode::Char('r') {
