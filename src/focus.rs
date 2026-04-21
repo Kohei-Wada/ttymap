@@ -1,24 +1,29 @@
-//! `FocusManager` — owns every focusable surface (the command palette
-//! and every plugin) and tracks which one currently has keyboard
-//! focus. The router asks `focused_surface_mut` to find out who to
-//! deliver a key event to; everything else (cycling, activation,
-//! palette open) is a method on this type so the focus / widget /
-//! palette state stay consistent without external coordination.
+//! `FocusManager` — owns every surface that can handle keys (palette,
+//! plugin registry, background responder) and tracks which one
+//! currently has keyboard focus. The router asks
+//! [`focused_surface_mut`] to find out where to send keys; everything
+//! else (palette open, plugin activation, focus cycle, async polling)
+//! is a method on this type so the focus / widgets / palette state
+//! stay consistent without external coordination.
+//!
+//! **No `None` for the router**: when no modal claims focus,
+//! `focused_surface_mut` returns the [`BackgroundResponder`] —
+//! it is itself a [`FocusSurface`] (always visible, handles global
+//! keys). The router stays a one-call dispatcher and never special-
+//! cases the background.
 //!
 //! **Surfaces are opaque ids**: the manager does not distinguish
 //! palette from plugin from any future modal (dialog, notification
-//! tray); they all flow through the same `Modal(SurfaceId)` variant.
-//! The `wants_focus` gating policy lives at the call site (e.g.
+//! tray); they all flow through the `Modal(SurfaceId)` variant. The
+//! `wants_focus` gating policy lives at the call site (e.g.
 //! `activate_plugin`), not inside the focus state machine.
 
 use std::borrow::Cow;
 
-use crossterm::event::{KeyCode, KeyModifiers};
-
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::{AppCommand, FocusSurface};
+use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
-use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
 use crate::ui::palette::{self, CommandPalette};
 
@@ -29,13 +34,11 @@ pub type SurfaceId = Cow<'static, str>;
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Focus {
     /// Default state — no surface has claimed input. The
-    /// [`BackgroundResponder`](crate::ui::router::background::BackgroundResponder)
-    /// handles keys.
+    /// [`BackgroundResponder`] handles keys.
     #[default]
     Background,
     /// A modal surface (palette, focused plugin, or any future modal)
-    /// has claimed input. The router delivers keys to it before
-    /// falling through to the background.
+    /// has claimed input.
     Modal(SurfaceId),
 }
 
@@ -46,27 +49,66 @@ impl Focus {
     }
 }
 
-/// Owns palette + plugins + focus state. Single point of authority
-/// for "who has keyboard focus and what surfaces exist". `prev`
-/// restores the focus the previous claimer had instead of always
-/// dropping to background.
+/// Owns palette + plugins + background + focus state. Single point of
+/// authority for "who has keyboard focus and what surfaces exist".
+/// `prev` restores the focus the previous claimer had instead of
+/// always dropping to background.
 pub struct FocusManager {
     current: Focus,
     prev: Focus,
     palette: CommandPalette,
     widgets: PluginRegistry,
+    background: BackgroundResponder,
 }
 
 impl FocusManager {
-    /// Construct from a pre-built palette + plugin registry. Both
-    /// are wired at the composition root (`App::new`) so the focus
-    /// manager doesn't need to know how to create them.
-    pub fn new(palette: CommandPalette, widgets: PluginRegistry) -> Self {
+    /// Construct from pre-built palette + plugin registry +
+    /// background responder. All three are wired at the composition
+    /// root (`App::new`).
+    pub fn new(
+        palette: CommandPalette,
+        widgets: PluginRegistry,
+        background: BackgroundResponder,
+    ) -> Self {
         Self {
             current: Focus::Background,
             prev: Focus::Background,
             palette,
             widgets,
+            background,
+        }
+    }
+
+    /// **The router's primary API**: return the surface that should
+    /// receive the next key event. Always `Some` — when no modal
+    /// claims focus, the background responder is returned.
+    pub fn focused_surface_mut(&mut self) -> &mut dyn FocusSurface {
+        match &self.current {
+            Focus::Background => &mut self.background,
+            Focus::Modal(id) => {
+                let id = id.clone();
+                if id == palette::SURFACE_ID {
+                    &mut self.palette
+                } else if let Some(p) = self.widgets.get_mut(id.as_ref()) {
+                    p
+                } else {
+                    // Modal id refers to a plugin that is no longer
+                    // registered (defensive — the registry shouldn't
+                    // shrink at runtime). Fall back to background so
+                    // the router still has a surface to talk to.
+                    &mut self.background
+                }
+            }
+        }
+    }
+
+
+    /// Release the currently-held modal focus (if any). Called by the
+    /// router after `handle_key` when the surface reports
+    /// `is_visible() == false`. No-op for `Focus::Background`.
+    pub fn release_focused(&mut self) {
+        if matches!(&self.current, Focus::Modal(_)) {
+            self.release();
         }
     }
 
@@ -80,8 +122,7 @@ impl FocusManager {
         self.current.is_modal(id)
     }
 
-    // ── Field accessors (for draw, background-responder activation
-    // lookup, async polling) ─────────────────────────────────────────
+    // ── Field accessors (for draw, async polling) ────────────────────
 
     pub fn widgets(&self) -> &PluginRegistry {
         &self.widgets
@@ -91,41 +132,15 @@ impl FocusManager {
         &self.palette
     }
 
-    // ── The router's primary API ─────────────────────────────────────
-
-    /// Hand a key to the focused surface. Applies the auto-release
-    /// invariant (if `is_visible()` flips to false during `handle_key`,
-    /// release focus). Returns `None` when no surface is focused —
-    /// the caller should then fall through to the background responder.
-    pub fn deliver_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ctx: SurfaceCtx,
-    ) -> Option<Effect> {
-        let id = match &self.current {
-            Focus::Background => return None,
-            Focus::Modal(id) => id.clone(),
-        };
-        let (effect, still_visible) = {
-            let surface = self.surface_mut(&id)?;
-            let effect = surface.handle_key(code, modifiers, ctx);
-            let still_visible = surface.is_visible();
-            (effect, still_visible)
-        };
-        if !still_visible {
-            self.release_if_holding(&id);
-        }
-        Some(effect)
-    }
-
     // ── Workflow API ─────────────────────────────────────────────────
 
     /// Open the command palette with the default provider and take
-    /// focus. Provider build needs `widgets` (for activation lists),
-    /// `keymap` (for key hints), `theme_id` (for the theme picker).
-    pub fn open_palette(&mut self, keymap: &KeyMap, theme_id: ThemeId) {
-        self.palette.activate(&self.widgets, keymap, theme_id);
+    /// focus. The palette's provider needs `widgets` (for activation
+    /// lists), `keymap` (for key hints — pulled from the background
+    /// responder), and `theme_id` (for the theme picker entry).
+    pub fn open_palette(&mut self, theme_id: ThemeId) {
+        self.palette
+            .activate(&self.widgets, self.background.keymap(), theme_id);
         self.transition_to(Focus::Modal(palette::SURFACE_ID.into()));
     }
 
@@ -145,9 +160,8 @@ impl FocusManager {
         }
 
         self.widgets.bring_to_front(tag);
-        let ctx = SurfaceCtx { center };
         let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
-            w.activate(ctx);
+            w.activate(center);
             w.wants_focus()
         } else {
             return;
@@ -195,17 +209,16 @@ impl FocusManager {
                         if i + 1 < visible.len() {
                             Some(visible[i + 1].clone())
                         } else {
-                            None // past last → Background
+                            None
                         }
                     }
                     Some(i) => {
                         if i > 0 {
                             Some(visible[i - 1].clone())
                         } else {
-                            None // before first → Background
+                            None
                         }
                     }
-                    // Current focus not visible — enter the list at the edge.
                     None => Some(if forward {
                         visible.first().unwrap().clone()
                     } else {
@@ -224,9 +237,7 @@ impl FocusManager {
     }
 
     /// Advance every plugin's async work by one tick. If multiple
-    /// plugins produced a `AppCommand` this tick, the latest wins —
-    /// only one AppCommand runs per tick to avoid cascading state
-    /// changes within a single frame.
+    /// plugins produced a `AppCommand` this tick, the latest wins.
     pub fn poll_widgets(&mut self) -> Option<AppCommand> {
         let mut async_cmd: Option<AppCommand> = None;
         for w in self.widgets.iter_mut() {
@@ -240,17 +251,6 @@ impl FocusManager {
 
     // ── Internals ────────────────────────────────────────────────────
 
-    fn surface_mut(&mut self, id: &SurfaceId) -> Option<&mut dyn FocusSurface> {
-        if id == palette::SURFACE_ID {
-            Some(&mut self.palette)
-        } else {
-            match self.widgets.get_mut(id.as_ref()) {
-                Some(p) => Some(p),
-                None => None,
-            }
-        }
-    }
-
     /// Restore the remembered predecessor (or background if none).
     fn release(&mut self) {
         self.current = std::mem::replace(&mut self.prev, Focus::Background);
@@ -262,20 +262,12 @@ impl FocusManager {
         }
     }
 
-    /// Record a transition, pushing the outgoing focus into `prev`.
-    /// No-op when the target already matches current (guards against
-    /// self-reactivation clobbering a useful `prev`).
     fn transition_to(&mut self, new: Focus) {
         if new != self.current {
             self.prev = std::mem::replace(&mut self.current, new);
         }
     }
 
-    /// Run `deactivate` on the currently-focused plugin unless the
-    /// caller is about to re-activate the same one (toggle case).
-    /// Non-plugin modals (e.g. palette) aren't in the registry so the
-    /// `widgets.get_mut` lookup returns `None` and nothing happens —
-    /// they self-clean through their own visibility flow.
     fn deactivate_current(&mut self, keep_id: Option<&str>) {
         if let Focus::Modal(prev) = &self.current {
             let prev_str = prev.clone();

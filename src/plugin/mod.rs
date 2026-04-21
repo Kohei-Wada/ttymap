@@ -12,12 +12,11 @@ pub mod here;
 pub mod search;
 pub mod wiki;
 
-use crossterm::event::{KeyCode, KeyModifiers};
 use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx};
+use crate::app_command::{AppCommand, FocusSurface};
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;
@@ -61,9 +60,11 @@ pub trait Plugin: FocusSurface {
     }
 
     /// Called when one of this widget's `activation_keys` is pressed —
-    /// or when the palette invokes the plugin. The host owns focus
-    /// transitions; plugins only update their own state here.
-    fn activate(&mut self, _ctx: SurfaceCtx) {}
+    /// or when the palette invokes the plugin. `center` is the current
+    /// map center (used by location-aware plugins like `wiki` for
+    /// initial fetch). The host owns focus transitions; plugins only
+    /// update their own state here.
+    fn activate(&mut self, _center: crate::geo::LonLat) {}
 
     /// Called when focus moves to a different plugin via another
     /// plugin's activation key. Modal plugins (search, help) close
@@ -115,43 +116,43 @@ pub trait Plugin: FocusSurface {
 }
 
 /// Ordered registry of interactive widgets. Built-ins register at app
-/// startup; plugins register as they're loaded. Activation-key
-/// bindings declared by each widget are indexed here so the keyboard
-/// handler can look them up without knowing any widget name.
+/// startup; plugins register as they're loaded.
 pub struct PluginRegistry {
     widgets: IndexMap<String, Box<dyn Plugin>>,
-    activations: Vec<(KeyBinding, String)>,
 }
 
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             widgets: IndexMap::new(),
-            activations: Vec::new(),
         }
     }
 
     /// Register a widget. The tag comes from `Plugin::tag`; a
-    /// duplicate tag replaces the prior entry. Each activation key
-    /// the widget declares is recorded for later lookup.
+    /// duplicate tag replaces the prior entry.
     pub fn register(&mut self, w: Box<dyn Plugin>) {
         let tag = w.tag().to_string();
-        for key_str in w.activation_keys() {
-            match parse_key_binding(key_str) {
-                Some(binding) => self.activations.push((binding, tag.clone())),
-                None => log::warn!("invalid activation key {:?} for widget {:?}", key_str, tag),
-            }
-        }
         self.widgets.insert(tag, w);
     }
 
-    /// Return the tag of the widget that claims this key, if any.
-    pub fn activation_tag(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&str> {
-        let clean_mods = modifiers & !KeyModifiers::SHIFT;
-        self.activations
-            .iter()
-            .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
-            .map(|(_, tag)| tag.as_str())
+    /// Snapshot every plugin's activation keys as `(KeyBinding, tag)`
+    /// pairs. Built once at startup to feed
+    /// [`BackgroundResponder`](crate::background::BackgroundResponder),
+    /// which owns the activation lookup so the responder doesn't need
+    /// a registry borrow at delivery time.
+    pub fn activations(&self) -> Vec<(KeyBinding, String)> {
+        let mut out = Vec::new();
+        for (tag, w) in &self.widgets {
+            for key_str in w.activation_keys() {
+                match parse_key_binding(key_str) {
+                    Some(binding) => out.push((binding, tag.clone())),
+                    None => {
+                        log::warn!("invalid activation key {:?} for widget {:?}", key_str, tag)
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Move the plugin with this tag to the end of iteration order.

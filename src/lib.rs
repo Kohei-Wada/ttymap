@@ -33,6 +33,12 @@ pub mod map;
 /// through it before falling back to global handlers.
 pub(crate) mod focus;
 
+/// Background responder — handles keys when no surface has focus
+/// (Tab cycle, `:` palette, plugin activation, keymap fallback, gg).
+/// Owned by `FocusManager`; peer of `CommandPalette` and
+/// `PluginRegistry` in the focus model.
+pub(crate) mod background;
+
 /// UI color set (Theme) + runtime theme-switch helper. Lives at the
 /// crate root because it's a **plugin-facing service** — plugins read
 /// colors from it during `render()`, so putting it under `ui/` would

@@ -1,0 +1,163 @@
+//! Background responder — the host's "default" key handler when no
+//! palette / plugin has focus.
+//!
+//! Conceptually a peer of [`CommandPalette`](crate::ui::palette::CommandPalette)
+//! and the plugin registry: each is a "thing that handles keys", just
+//! at a different focus state. Owned by [`FocusManager`](crate::focus::FocusManager),
+//! returned from `focused_surface_mut` whenever no modal surface holds
+//! focus — so the router never sees a `None` and never special-cases
+//! the background.
+//!
+//! Owns the four global key behaviours:
+//! - Tab / Shift-Tab → cycle focus across visible plugins
+//! - `:` → open the command palette
+//! - plugin activation keys (`/`, `i`, `?`, …) → activate
+//! - keymap fallback (h/j/k/l/q/0/+/-/…) → map action
+//!
+//! Plus the `gg` multi-key sequence state machine.
+
+use crossterm::event::{KeyCode, KeyModifiers};
+
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::keymap::{KeyBinding, KeyMap};
+use crate::map::Action;
+
+pub struct BackgroundResponder {
+    keymap: KeyMap,
+    /// `(KeyBinding, plugin_tag)` pairs harvested from every plugin's
+    /// `activation_keys()` at startup. Owned here so the responder
+    /// can look up activations without borrowing the plugin registry
+    /// at delivery time.
+    activations: Vec<(KeyBinding, String)>,
+    /// First-`g` flag of the `gg` sequence. Lives here (not in
+    /// `KeyMap`) because multi-key sequencing is a responder concern;
+    /// the keymap itself is a stateless lookup table.
+    pending_g: bool,
+}
+
+impl BackgroundResponder {
+    pub fn new(keymap: KeyMap, activations: Vec<(KeyBinding, String)>) -> Self {
+        Self {
+            keymap,
+            activations,
+            pending_g: false,
+        }
+    }
+
+    pub fn keymap(&self) -> &KeyMap {
+        &self.keymap
+    }
+
+    fn activation_tag(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&str> {
+        let clean_mods = modifiers & !KeyModifiers::SHIFT;
+        self.activations
+            .iter()
+            .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
+            .map(|(_, tag)| tag.as_str())
+    }
+
+    /// Advance the `gg` state machine and resolve via the keymap.
+    /// Used internally by `handle_key`; called unconditionally so any
+    /// non-`g` keypress resets `pending_g`.
+    fn resolve_keymap(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> Option<AppCommand> {
+        if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
+            if self.pending_g {
+                self.pending_g = false;
+                return Some(AppCommand::Map(Action::ZoomToWorld));
+            }
+            self.pending_g = true;
+            return None;
+        }
+        self.pending_g = false;
+        self.keymap.resolve(code, modifiers)
+    }
+}
+
+/// `BackgroundResponder` is a `FocusSurface` (`is_visible` = true,
+/// always available) so the router can deliver keys to it through the
+/// same `&mut dyn FocusSurface` channel as palette / plugin. It needs
+/// `widgets` from `SurfaceCtx` to resolve plugin activation keys.
+impl FocusSurface for BackgroundResponder {
+    fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        _ctx: SurfaceCtx,
+    ) -> Effect {
+        // Always advance the gg state first — vim semantics: any
+        // non-`g` key (including focus-transition triggers like Tab,
+        // `:`, activation keys) resets `pending_g`.
+        let keymap_cmd = self.resolve_keymap(code, modifiers);
+
+        let forward = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
+        let backward = code == KeyCode::BackTab
+            || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
+        if forward || backward {
+            return Effect::Run(AppCommand::CycleFocus(forward));
+        }
+
+        if code == KeyCode::Char(':') && modifiers == KeyModifiers::NONE {
+            return Effect::Run(AppCommand::OpenPalette);
+        }
+
+        if let Some(tag) = self.activation_tag(code, modifiers) {
+            return Effect::Run(AppCommand::ActivatePlugin(tag.to_string()));
+        }
+
+        if let Some(cmd) = keymap_cmd {
+            return Effect::Run(cmd);
+        }
+
+        // First `g` of `gg` and unrecognised keys both land here. The
+        // background is always "visible" so the router treats this as
+        // a no-op (no AppCommand, no auto-release).
+        Effect::Pass
+    }
+
+    // Default `is_visible` = true is correct for the background
+    // responder: it's always available, never released.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geo::LonLat;
+
+    const NONE: KeyModifiers = KeyModifiers::NONE;
+    const CTX: SurfaceCtx = SurfaceCtx {
+        center: LonLat { lon: 0.0, lat: 0.0 },
+    };
+
+    fn map(action: Action) -> AppCommand {
+        AppCommand::Map(action)
+    }
+
+    fn bg() -> BackgroundResponder {
+        BackgroundResponder::new(KeyMap::default(), Vec::new())
+    }
+
+    #[test]
+    fn gg_produces_zoom_to_world_on_second_g() {
+        let mut bg = bg();
+        // 1st g: nothing fires, pending_g latched.
+        assert_eq!(bg.handle_key(KeyCode::Char('g'), NONE, CTX), Effect::Pass);
+        // 2nd g: ZoomToWorld.
+        assert_eq!(
+            bg.handle_key(KeyCode::Char('g'), NONE, CTX),
+            Effect::Run(map(Action::ZoomToWorld))
+        );
+    }
+
+    #[test]
+    fn gg_sequence_broken_by_other_key() {
+        let mut bg = bg();
+        bg.handle_key(KeyCode::Char('g'), NONE, CTX);
+        bg.handle_key(KeyCode::Char('h'), NONE, CTX); // breaks
+        // Now pending_g was reset; this g latches afresh, doesn't fire.
+        assert_eq!(bg.handle_key(KeyCode::Char('g'), NONE, CTX), Effect::Pass);
+    }
+}

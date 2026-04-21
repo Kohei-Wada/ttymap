@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
-use crate::keymap::KeyMap;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState};
@@ -93,7 +92,6 @@ pub enum Effect {
 /// Read-only context passed into [`FocusSurface::handle_key`]. Carries
 /// the bits of shared state a surface needs but does not own (today:
 /// the current map center, used by plugins for geo-relative actions).
-/// Grow as new surface needs appear.
 #[derive(Debug, Clone, Copy)]
 pub struct SurfaceCtx {
     pub center: LonLat,
@@ -117,10 +115,12 @@ pub trait FocusSurface {
     ) -> Effect;
 
     /// Whether this surface is currently on screen / interactive.
-    /// Default `false` — for surfaces that never become visible
-    /// (e.g. headless plugins like `here`).
+    /// The router checks this after `handle_key` to detect "the
+    /// surface closed itself" and auto-release focus. Default `true`
+    /// for the always-available background; modal surfaces (palette,
+    /// plugins) override based on their own visibility flag.
     fn is_visible(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -136,10 +136,6 @@ pub struct DispatchCtx<'a> {
     pub map: &'a mut MapState,
     pub ui: &'a mut UiState,
     pub render_handle: &'a RenderHandle,
-    /// Read by `OpenPalette` (key hints in the default provider) and
-    /// available to future messages that want to reason about key
-    /// bindings. Other arms leave it alone.
-    pub keymap: &'a KeyMap,
     /// Active theme — owned by `App`, mutated in-place by the
     /// `Ui(SetTheme)` arm. Read by `OpenPalette` (palette highlights
     /// the active theme entry) and used to derive `ui_theme` /
@@ -182,7 +178,7 @@ pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             }
         }
         AppCommand::OpenPalette => {
-            ctx.ui.focus.open_palette(ctx.keymap, *ctx.theme_id);
+            ctx.ui.focus.open_palette(*ctx.theme_id);
             InputEffect::Plugin
         }
         AppCommand::Resize(cols, rows) => {

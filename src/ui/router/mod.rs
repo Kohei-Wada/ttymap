@@ -1,72 +1,49 @@
-//! UI key router — pure responder-chain dispatcher.
+//! UI key router — pure delegation.
 //!
-//! The router asks the focus state (via `UiState`) "who has the key?"
-//! and forwards. If the focused surface returns `Effect::Pass` (or
-//! there is no focused surface), the [`BackgroundResponder`] takes
-//! over and resolves global keys.
+//! The router asks [`FocusManager`](crate::focus::FocusManager) for
+//! the current [`FocusSurface`](crate::app_command::FocusSurface) and
+//! sends the key event to it. That's it. The router doesn't know
+//! whether the surface is the palette, a focused plugin, or the
+//! background responder — `focused_surface_mut` always returns
+//! something, and the auto-release invariant lives on the focus
+//! manager via `release_focused`.
 //!
-//! This module performs **no translation**. Per-key matching (Tab,
-//! `:`, plugin activation, keymap lookup, gg) lives in
-//! [`BackgroundResponder`]; per-surface matching lives in each
-//! `FocusSurface` implementation.
-
-pub mod background;
+//! Stateless: kept as a struct rather than a free function so the
+//! call shape `self.router.route_key(...)` matches the keyboard
+//! adapter's call shape and leaves room for future per-router state
+//! (e.g. routing telemetry).
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::app_command::{AppCommand, Effect, SurfaceCtx};
+use crate::focus::FocusManager;
 use crate::geo::LonLat;
-use crate::keymap::KeyMap;
-use crate::ui::UiState;
 
-use background::BackgroundResponder;
-
-pub struct KeyRouter {
-    background: BackgroundResponder,
-}
-
-impl KeyRouter {
-    pub fn new(keymap: KeyMap) -> Self {
-        Self {
-            background: BackgroundResponder::new(keymap),
-        }
+/// Send the key to whichever surface `focus` currently identifies as
+/// focused. After the surface returns, release focus if `is_visible`
+/// flipped to false (modal surfaces only — the background is always
+/// visible). Returns the `AppCommand` to dispatch (if any).
+///
+/// Pure delegation: the router doesn't know whether the surface is
+/// the palette, a focused plugin, or the background responder.
+pub fn route_key(
+    focus: &mut FocusManager,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    center: LonLat,
+) -> Option<AppCommand> {
+    let ctx = SurfaceCtx { center };
+    let (effect, still_visible) = {
+        let surface = focus.focused_surface_mut();
+        let effect = surface.handle_key(code, modifiers, ctx);
+        let still_visible = surface.is_visible();
+        (effect, still_visible)
+    };
+    if !still_visible {
+        focus.release_focused();
     }
-
-    /// Expose the keymap so `app.rs` can thread it into `DispatchCtx`
-    /// for the palette's key-hint renderer.
-    pub fn keymap(&self) -> &KeyMap {
-        self.background.keymap()
-    }
-
-    /// Walk the responder chain: focused surface → background.
-    /// Returns the `AppCommand` to dispatch (if any).
-    pub fn route_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ui: &mut UiState,
-        center: LonLat,
-    ) -> Option<AppCommand> {
-        // Always advance the gg state machine first — vim semantics:
-        // any key anywhere (focused surface or background) breaks `gg`.
-        let keymap_fallback = self.background.resolve_keymap(code, modifiers);
-
-        let ctx = SurfaceCtx { center };
-
-        if let Some(effect) = ui.focus.deliver_key(code, modifiers, ctx) {
-            match effect {
-                Effect::Consumed => return None,
-                Effect::Run(cmd) => return Some(cmd),
-                Effect::Pass => {} // fall through to background
-            }
-        }
-
-        match self
-            .background
-            .handle_key(code, modifiers, ui, keymap_fallback)
-        {
-            Effect::Run(cmd) => Some(cmd),
-            Effect::Consumed | Effect::Pass => None,
-        }
+    match effect {
+        Effect::Run(cmd) => Some(cmd),
+        Effect::Consumed | Effect::Pass => None,
     }
 }

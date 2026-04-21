@@ -174,12 +174,16 @@ mod tests {
     use crate::plugin::PluginRegistry;
 
     fn make_ui() -> UiState {
+        use crate::background::BackgroundResponder;
+        use crate::keymap::KeyMap;
         use crate::plugin::search::SearchPlugin;
         use crate::ui::palette::CommandPalette;
         let nominatim = Arc::new(NominatimClient::new());
         let mut widgets = PluginRegistry::new();
         widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
-        let focus = FocusManager::new(CommandPalette::new(), widgets);
+        let activations = widgets.activations();
+        let background = BackgroundResponder::new(KeyMap::default(), activations);
+        let focus = FocusManager::new(CommandPalette::new(), widgets, background);
         UiState::new(nominatim, None, focus)
     }
 
@@ -207,7 +211,7 @@ mod tests {
         let mut search = SearchPlugin::new(nominatim);
         let ctx = SurfaceCtx { center: ZERO };
 
-        search.activate(ctx);
+        search.activate(ZERO);
         assert!(search.is_visible());
         assert!(search.wants_focus());
 

@@ -6,8 +6,10 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::app_command::{self, AppCommand, DispatchCtx, InputEffect};
+use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::config::Config;
+use crate::focus::FocusManager;
 use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
@@ -19,16 +21,14 @@ use crate::plugin::help::HelpPlugin;
 use crate::plugin::here::HerePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
-use crate::focus::FocusManager;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::palette::CommandPalette;
-use crate::ui::router::KeyRouter;
+use crate::ui::router;
 
 pub struct App {
     map: MapState,
-    router: KeyRouter,
     render_handle: RenderHandle,
     ui: UiState,
     mouse: MouseHandler,
@@ -53,7 +53,9 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
-        let focus = FocusManager::new(CommandPalette::new(), widgets);
+        let activations = widgets.activations();
+        let background = BackgroundResponder::new(keymap, activations);
+        let focus = FocusManager::new(CommandPalette::new(), widgets, background);
         let ui = UiState::new(nominatim, attribution, focus);
         let theme_id = ThemeId::from_name(&config.style);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
@@ -72,11 +74,9 @@ impl App {
             height,
         );
         let render_handle = RenderHandle::spawn(pipeline);
-        let router = KeyRouter::new(keymap);
 
         App {
             map,
-            router,
             render_handle,
             ui,
             mouse: MouseHandler::default(),
@@ -121,10 +121,10 @@ impl App {
                             self.dispatch(AppCommand::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
-                            if let Some(cmd) = self.router.route_key(
+                            if let Some(cmd) = router::route_key(
+                                &mut self.ui.focus,
                                 key_event.code,
                                 key_event.modifiers,
-                                &mut self.ui,
                                 self.map.center(),
                             ) {
                                 self.dispatch(cmd);
@@ -163,7 +163,6 @@ impl App {
                 map: &mut self.map,
                 ui: &mut self.ui,
                 render_handle: &self.render_handle,
-                keymap: self.router.keymap(),
                 theme_id: &mut self.theme_id,
                 ui_theme: &mut self.ui_theme,
             };

@@ -107,14 +107,14 @@ impl Plugin for WikiPlugin {
         vec!["i"]
     }
 
-    fn activate(&mut self, ctx: SurfaceCtx) {
+    fn activate(&mut self, center: LonLat) {
         // Non-modal: visible and focus are independent. Host drives
         // focus; here we only manage panel state. If the panel is
         // already visible, leave state alone — host may be reclaiming
         // focus (case 3) or closing via `close()` on toggle-off.
         if !self.active {
             self.open();
-            self.refresh(ctx.center);
+            self.refresh(center);
         }
     }
 
