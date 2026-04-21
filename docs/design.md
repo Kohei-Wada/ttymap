@@ -20,9 +20,9 @@ stays as a direct method call.
 
 `app_command::dispatch` is the **single side-effect boundary** for
 app-level state changes. Every `AppCommand` arm reads/writes exactly the
-state it needs through the `DispatchCtx` bundle, and the post-dispatch
-rule (`InputEffect::Map → request redraw`) lives in one place. This
-gives us:
+state it needs through the `DispatchCtx` bundle, and arms whose effect
+changed the map frame call `request_map_redraw(ctx)` inline to
+request a fresh frame and notify passive widgets. This gives us:
 
 - One place to audit what can happen to app state
 - One place where the redraw-after-map-change invariant lives
@@ -40,8 +40,7 @@ Emit an `AppCommand` if **all** of the following are true:
    something to happen). It's not a completion notification.
 2. The effect is meaningful at app level — it changes what the app is
    doing, not just a worker's internal state.
-3. Triggering the post-dispatch redraw rule is correct (or harmless).
-4. Frequency is low enough that the dispatch overhead doesn't matter.
+3. Frequency is low enough that the dispatch overhead doesn't matter.
 
 Current examples:
 
@@ -49,9 +48,10 @@ Current examples:
 | ------------------- | ------------------------------- | -------------------------------------- |
 | `Map(Action::Pan…)` | keymap, mouse drag              | User intent → map state change         |
 | `Map(Action::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
-| `Map(Action::Redraw)` | initial draw                  | Forces post-dispatch redraw rule to fire |
+| `Map(Action::Redraw)` | initial draw                  | Forces an unconditional fresh frame    |
 | `Resize(w, h)`      | crossterm `Resize` event        | Cross-cutting: map state + render canvas |
 | `Ui(SetTheme)`      | palette entry                   | Cross-cutting: UI theme + render styler |
+| `Ui(CursorMoved)`   | mouse router (every event)      | Overlay readout through the same boundary |
 | `Jump(LonLat)`      | search result, geoip plugin     | Plugin async → map state change        |
 | `ActivatePlugin`    | keymap, palette                 | UI transition, same intent from 2 sources |
 | `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
@@ -66,8 +66,8 @@ Use a plain method call when **any** of the following is true:
 2. It's **periodic maintenance** (widget `poll()` tick, throttle timer).
 3. It's **high-frequency** (many per second) and dispatch overhead
    would dominate.
-4. Routing through the post-dispatch redraw rule would be **wrong**
-   (infinite loop) or **pointless** (nothing else changes in response).
+4. Routing through the dispatcher would be **wrong** (infinite loop
+   with completion notifications).
 
 Current examples:
 
@@ -86,17 +86,15 @@ tempting — everything goes through the same pipeline, right? It breaks:
 ```
 frame arrives → AppCommand::FrameArrived
              → dispatch → map_frame = Some(f)
-             → InputEffect::Map → request_draw (post-dispatch rule)
-             → render thread renders a frame
+             → request_map_redraw → render thread renders a frame
              → frame arrives → AppCommand::FrameArrived
              → dispatch → map_frame = Some(f)
-             → InputEffect::Map → request_draw
-             → …
+             → request_map_redraw → …
 ```
 
-To avoid this you'd have to return `InputEffect::None` just for that
-arm, which defeats the uniformity the pipeline buys you. A direct
-`ui.drain_frames(…)` call sidesteps the rule entirely and is the right
+To avoid this you'd have to carve out a special no-redraw arm, which
+defeats the uniformity the pipeline buys you. A direct
+`ui.drain_frames(…)` call sidesteps the loop entirely and is the right
 shape.
 
 ### The decision question

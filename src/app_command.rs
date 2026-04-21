@@ -58,22 +58,6 @@ pub enum AppCommand {
     Resize(u16, u16),
 }
 
-/// What a key or mouse event just changed. Drives how the main loop
-/// reacts: a widget-only change redraws immediately (the map frame is
-/// unchanged); a map change only requests a new render — the main
-/// loop will redraw when a fresh frame arrives, avoiding a
-/// stale-frame draw followed by a second fresh-frame draw.
-///
-/// Lives on `app_command` (not `app`) because it's the common return type
-/// of every dispatch path — keyboard handler, dispatcher, mouse
-/// handler all share it.
-#[derive(Clone, Copy, PartialEq)]
-pub enum InputEffect {
-    None,
-    Plugin,
-    Map,
-}
-
 /// Identifier for a focus-claiming surface (palette id, plugin tag,
 /// any future modal). Defined here — alongside [`Effect::Open`] —
 /// so `Effect` can name it without depending on [`crate::focus`].
@@ -184,55 +168,63 @@ pub struct DispatchCtx<'a> {
     pub ui_theme: &'a mut UiTheme,
 }
 
-/// Apply an `AppCommand` to the app. Thin router: each arm delegates to a
-/// single domain method that encapsulates the transition.
-pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
+/// Apply an `AppCommand` to the app. Thin router: each arm delegates
+/// to a single domain method that encapsulates the transition, and is
+/// responsible for requesting a map redraw via [`request_map_redraw`]
+/// when its effect changed the map frame. This keeps the "what
+/// changed?" knowledge local to each arm instead of leaking out
+/// through a separate return value.
+pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) {
     match cmd {
         AppCommand::Map(action) => {
             if ctx.map.process_action(&action) {
-                InputEffect::Map
-            } else {
-                InputEffect::None
+                request_map_redraw(ctx);
             }
         }
         AppCommand::Jump(loc) => {
             ctx.map.jump_to(loc);
-            InputEffect::Map
+            request_map_redraw(ctx);
         }
-        AppCommand::Ui(action) => {
-            apply_ui_action(action, ctx);
-            InputEffect::Map
+        AppCommand::Ui(UiAction::SetTheme(new_id)) => {
+            // `SetTheme` re-derives both the UI colour cache and the
+            // map styler from the new theme id. The render thread
+            // gets the styler via message; we re-render so the change
+            // is visible without waiting for another map event. The
+            // palette's theme-picker entry reads `theme_id` via
+            // `SurfaceCtx` on activation, so no surface-level push.
+            *ctx.theme_id = new_id;
+            let styler = Arc::new(Styler::new(new_id));
+            *ctx.ui_theme = UiTheme::from_palette(styler.palette());
+            ctx.render_handle.set_styler(styler);
+            request_map_redraw(ctx);
+        }
+        AppCommand::Ui(UiAction::CursorMoved(col, row)) => {
+            ctx.ui.overlay.set_cursor((col, row));
         }
         AppCommand::CycleFocus(forward) => {
-            if ctx.ui.focus.cycle(forward) {
-                InputEffect::Plugin
-            } else {
-                InputEffect::None
-            }
+            ctx.ui.focus.cycle(forward);
         }
         AppCommand::Resize(cols, rows) => {
             ctx.map.resize(cols, rows);
             ctx.render_handle
                 .request_resize(ctx.map.width(), ctx.map.height());
-            InputEffect::Map
+            request_map_redraw(ctx);
         }
     }
 }
 
-/// Apply a `UiAction` — today, theme switch. Owns the derivation:
-/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render). Both
-/// live at `App` level; this arm mutates them in place via the ctx.
+/// Request a fresh map frame from the render thread and notify
+/// passive widgets that the map recentered. Called by the dispatch
+/// arms whose command actually changed the map frame. No-op after
+/// shutdown (`map.is_running() == false`).
 ///
-/// No surface-level push is needed — surfaces that care about the
-/// current theme (the palette's theme-picker entry) read it via
-/// [`SurfaceCtx::theme_id`] when their `activate` hook runs.
-fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
-    match action {
-        UiAction::SetTheme(new_id) => {
-            *ctx.theme_id = new_id;
-            let styler = Arc::new(Styler::new(new_id));
-            *ctx.ui_theme = UiTheme::from_palette(styler.palette());
-            ctx.render_handle.set_styler(styler);
-        }
+/// Wiki is intentionally not notified — Google-Maps-style, the
+/// article list stays pinned to the query that produced it.
+fn request_map_redraw(ctx: &mut DispatchCtx<'_>) {
+    if !ctx.map.is_running() {
+        return;
     }
+    let viewport = ctx.map.viewport();
+    ctx.render_handle.request_draw(viewport);
+    ctx.ui.overlay.on_map_moved(viewport.center);
 }

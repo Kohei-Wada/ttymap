@@ -1,8 +1,8 @@
-//! UI key router.
+//! UI input routers — keyboard (this file) and mouse (`mouse` module).
 //!
-//! The router asks [`FocusManager`](crate::focus::FocusManager) for
-//! the current [`FocusSurface`](crate::app_command::FocusSurface) and
-//! sends the key event to it. That's the primary path. The one
+//! **Key routing**: asks [`FocusManager`](crate::focus::FocusManager)
+//! for the current [`FocusSurface`](crate::app_command::FocusSurface)
+//! and sends the key event to it. That's the primary path. The one
 //! exception is the **`Effect::Pass` fall-through**: a non-modal
 //! plugin (e.g. wiki — visible *and* focused, but doesn't recognise
 //! every key) returns `Pass` for keys it doesn't handle, and the
@@ -19,6 +19,14 @@
 //! [`FocusManager::open`] — focus transitions don't round-trip
 //! through `app_command::dispatch`, so they don't appear in the
 //! returned `Option<AppCommand>`.
+//!
+//! **Mouse routing**: see [`mouse::MouseRouter`] — stateful (drag
+//! tracking), stateless on focus. The two paths intentionally do not
+//! share a dispatcher: keys are modal/captured, mouse is
+//! observer+target, and unifying them has been a regret in other
+//! Rust TUI apps (gitui).
+
+pub mod mouse;
 
 use crossterm::event::KeyEvent;
 

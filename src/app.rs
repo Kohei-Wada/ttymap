@@ -5,12 +5,11 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::app_command::{self, AppCommand, DispatchCtx, InputEffect, SurfaceCtx};
+use crate::app_command::{self, AppCommand, DispatchCtx, SurfaceCtx};
 use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::config::Config;
 use crate::focus::FocusManager;
-use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
@@ -26,12 +25,13 @@ use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::router;
+use crate::ui::router::mouse::MouseRouter;
 
 pub struct App {
     map: MapState,
     render_handle: RenderHandle,
     ui: UiState,
-    mouse: MouseHandler,
+    mouse: MouseRouter,
     /// Active theme — single source of truth for the running app.
     /// `ui_theme` is its derived UI-colour cache; the render thread
     /// receives a corresponding `Styler` via message on switch.
@@ -79,7 +79,7 @@ impl App {
             map,
             render_handle,
             ui,
-            mouse: MouseHandler::default(),
+            mouse: MouseRouter::default(),
             theme_id,
             ui_theme,
         }
@@ -136,7 +136,7 @@ impl App {
                         self.dispatch(AppCommand::Resize(cols, rows));
                     }
                     Event::Mouse(mouse) => {
-                        if let Some(cmd) = self.mouse.handle(mouse, &mut self.ui) {
+                        for cmd in self.mouse.route_mouse(mouse) {
                             self.dispatch(cmd);
                         }
                     }
@@ -153,30 +153,21 @@ impl App {
         Ok(())
     }
 
-    /// Run a command through the controller, then request a new map
-    /// frame if the command changed map state. Single entry point for
-    /// every `dispatch(...)` call site so the ctx bundle and
-    /// post-dispatch redraw rule live in exactly one place.
+    /// Run a command through the controller. Thin wrapper that builds
+    /// the `DispatchCtx` bundle from the app's borrowed fields and
+    /// hands it to [`app_command::dispatch`]. The dispatch arms own
+    /// their own "did the map change? request a redraw" decision via
+    /// [`app_command::request_map_redraw`], so this wrapper has no
+    /// post-dispatch logic of its own.
     fn dispatch(&mut self, cmd: AppCommand) {
-        let effect = {
-            let mut ctx = DispatchCtx {
-                map: &mut self.map,
-                ui: &mut self.ui,
-                render_handle: &self.render_handle,
-                theme_id: &mut self.theme_id,
-                ui_theme: &mut self.ui_theme,
-            };
-            app_command::dispatch(cmd, &mut ctx)
+        let mut ctx = DispatchCtx {
+            map: &mut self.map,
+            ui: &mut self.ui,
+            render_handle: &self.render_handle,
+            theme_id: &mut self.theme_id,
+            ui_theme: &mut self.ui_theme,
         };
-        if matches!(effect, InputEffect::Map) && self.map.is_running() {
-            let viewport = self.map.viewport();
-            self.render_handle.request_draw(viewport);
-            // Notify passive widgets that the map recentered. They decide
-            // internally whether to act (e.g., place throttles to 5s).
-            // Wiki is intentionally not notified — Google-Maps-style, the
-            // article list stays pinned to the query that produced it.
-            self.ui.overlay.on_map_moved(viewport.center);
-        }
+        app_command::dispatch(cmd, &mut ctx);
     }
 }
 

@@ -18,4 +18,8 @@ pub enum UiAction {
     /// Switch the running theme. Rebuilds the styler (on the render
     /// thread) and the UI color set.
     SetTheme(ThemeId),
+    /// Mouse cursor moved to the given terminal cell. Emitted by the
+    /// mouse router on every event so the overlay cursor readout goes
+    /// through `dispatch` like every other user-intent state change.
+    CursorMoved(u16, u16),
 }

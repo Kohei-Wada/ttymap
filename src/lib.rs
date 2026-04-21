@@ -50,11 +50,6 @@ pub(crate) mod theme;
 /// for the same cycle-avoidance reason as `theme`.
 pub(crate) mod painter;
 
-/// Input dispatchers — keyboard (focus-first + keymap fallback) and
-/// mouse (modal-gated map interaction). Kept intentionally separate
-/// inside this module; see `input/mod.rs` for rationale.
-pub(crate) mod input;
-
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
 

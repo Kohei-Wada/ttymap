@@ -1,34 +1,45 @@
-//! Mouse input handler. Translates raw crossterm `MouseEvent`s into
-//! `AppCommand`s (and a cursor-tracking side effect), then hands them
-//! back to the main loop for `app_command::dispatch`.
+//! Mouse router — translates raw crossterm `MouseEvent`s into a
+//! sequence of `AppCommand`s for the main loop to dispatch.
 //!
-//! Key and mouse paths stay intentionally separate — they have
-//! different semantics (keys are modal/captured, mouse is
-//! observer+target) and unifying them has been a documented regret in
-//! other Rust TUI apps (gitui). But they now share the same `AppCommand`
-//! vocabulary on the output side: drag → `AppCommand::Map(PanCells)`,
-//! scroll → `AppCommand::Map(ZoomAt { ... })`.
+//! Sibling of [`super::route_key`] under `ui::router`. Key and mouse
+//! paths stay intentionally separate — they have different semantics
+//! (keys are modal/captured, mouse is observer+target) and unifying
+//! them has been a documented regret in other Rust TUI apps (gitui).
+//! They share the `AppCommand` vocabulary on the output side: every
+//! event emits a leading `Ui(CursorMoved)`; drag additionally emits
+//! `Map(PanCells)`; scroll emits `Map(ZoomAt { ... })`.
+//!
+//! Unlike [`super::route_key`], this is stateful (drag tracking) so
+//! it lives as a `MouseRouter` struct owned by `App`. The router
+//! never touches `UiState` directly — cursor-readout updates flow
+//! through `AppCommand::Ui(UiAction::CursorMoved)` like every other
+//! user-intent state change.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app_command::AppCommand;
 use crate::map::Action;
-use crate::ui::UiState;
+use crate::ui::action::UiAction;
 
 #[derive(Default)]
-pub struct MouseHandler {
+pub struct MouseRouter {
     drag_from: Option<(u16, u16)>,
 }
 
-impl MouseHandler {
-    /// Consume a raw mouse event. Updates the cursor readout through
-    /// the overlay manager as a side effect, and returns an optional
-    /// `AppCommand` for the main loop to dispatch. `None` means "handled
-    /// locally (cursor move, click tracking, modal gate) — no state
-    /// change for the dispatcher".
-    pub fn handle(&mut self, event: MouseEvent, ui: &mut UiState) -> Option<AppCommand> {
-        ui.overlay.set_cursor((event.column, event.row));
-        self.resolve(event)
+impl MouseRouter {
+    /// Translate a raw mouse event into zero or more `AppCommand`s.
+    /// Every event emits a leading `Ui(CursorMoved)` for the overlay
+    /// readout; the `resolve` stage appends any additional command
+    /// (drag → pan, scroll → zoom).
+    pub fn route_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
+        let mut cmds = vec![AppCommand::Ui(UiAction::CursorMoved(
+            event.column,
+            event.row,
+        ))];
+        if let Some(cmd) = self.resolve(event) {
+            cmds.push(cmd);
+        }
+        cmds
     }
 
     fn resolve(&mut self, event: MouseEvent) -> Option<AppCommand> {
