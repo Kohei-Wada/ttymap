@@ -39,8 +39,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 use crate::color_palette::ThemeId;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::theme::UiTheme;
 

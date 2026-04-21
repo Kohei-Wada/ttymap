@@ -12,7 +12,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::AppCommand;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
 

@@ -12,11 +12,10 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use log::{info, warn};
 
 use crate::app_command::AppCommand;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
-
-use crate::app_command::{Effect, FocusSurface, SurfaceCtx};
 
 use super::Plugin;
 

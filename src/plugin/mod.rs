@@ -17,7 +17,8 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx};
+use crate::app_command::AppCommand;
+use crate::focus::{FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;

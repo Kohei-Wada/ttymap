@@ -1,15 +1,22 @@
-//! `FocusManager` — owns the plugin registry + the [`BackgroundResponder`]
-//! and tracks which surface currently has keyboard focus. The router
-//! asks [`focused_surface_mut`] to find out where to send keys;
-//! everything else (surface open / activation, focus cycle, async
-//! polling) is a method on this type so the focus / widgets state
-//! stays consistent without external coordination.
+//! Focus state machine + focus-claiming surface contract.
+//!
+//! Two concerns live here, split across submodules:
+//!
+//! - [`surface`] — the [`FocusSurface`] trait and the small types its
+//!   contract names ([`Effect`], [`SurfaceId`], [`SurfaceCtx`]).
+//!   Anything that can claim keyboard focus implements this.
+//! - This module — [`Focus`] (the state machine's state) and
+//!   [`FocusManager`] (its owner, plus the plugin registry and the
+//!   [`BackgroundResponder`]).
+//!
+//! External callers import freely via `crate::focus::*` — the
+//! submodule split is a file-organisation detail.
 //!
 //! **No `None` for the router**: when no modal claims focus,
-//! `focused_surface_mut` returns the [`BackgroundResponder`] —
-//! it is itself a [`FocusSurface`] (always visible, handles global
-//! keys). The router stays a one-call dispatcher and never special-
-//! cases the background.
+//! [`FocusManager::focused_surface_mut`] returns the
+//! [`BackgroundResponder`] — it is itself a [`FocusSurface`] (always
+//! visible, handles global keys). The router stays a one-call
+//! dispatcher and never special-cases the background.
 //!
 //! **Surfaces are opaque ids**: every focusable surface — palette,
 //! search, wiki, help, any future modal — is a [`Plugin`] in the
@@ -20,7 +27,11 @@
 //!
 //! [`Plugin`]: crate::plugin::Plugin
 
-use crate::app_command::{AppCommand, FocusSurface, SurfaceCtx, SurfaceId};
+pub mod surface;
+
+pub use surface::{Effect, FocusSurface, SurfaceCtx, SurfaceId};
+
+use crate::app_command::AppCommand;
 use crate::background::BackgroundResponder;
 use crate::plugin::PluginRegistry;
 

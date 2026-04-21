@@ -19,7 +19,8 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::AppCommand;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, KeyMap};
 use crate::map::Action;
 

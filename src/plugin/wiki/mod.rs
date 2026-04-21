@@ -15,7 +15,8 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::AppCommand;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;

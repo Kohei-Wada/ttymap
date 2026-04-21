@@ -5,11 +5,11 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::app_command::{self, AppCommand, DispatchCtx, SurfaceCtx};
+use crate::app_command::{self, AppCommand, DispatchCtx};
 use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::config::Config;
-use crate::focus::FocusManager;
+use crate::focus::{FocusManager, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;

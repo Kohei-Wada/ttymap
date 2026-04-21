@@ -30,8 +30,8 @@ pub mod mouse;
 
 use crossterm::event::KeyEvent;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
-use crate::focus::{Focus, FocusManager};
+use crate::app_command::AppCommand;
+use crate::focus::{Effect, Focus, FocusManager, FocusSurface, SurfaceCtx};
 
 /// Route a key event to the focused surface. `ctx` is the read-only
 /// app-state snapshot the surface receives (built once per event by

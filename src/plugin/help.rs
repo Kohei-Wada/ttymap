@@ -6,7 +6,8 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::app_command::AppCommand;
+use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;

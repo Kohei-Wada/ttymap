@@ -18,7 +18,8 @@ pub mod theme;
 pub use command::{CommandProvider, CommandProviderSeed};
 pub use theme::ThemeProvider;
 
-use crate::app_command::{AppCommand, SurfaceId};
+use crate::app_command::AppCommand;
+use crate::focus::SurfaceId;
 
 /// One row in the palette list.
 pub struct PaletteItem {

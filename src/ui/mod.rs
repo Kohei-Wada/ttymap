@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn search_plugin_open_then_close_on_esc() {
-        use crate::app_command::{FocusSurface, SurfaceCtx};
         use crate::color_palette::ThemeId;
+        use crate::focus::{FocusSurface, SurfaceCtx};
         use crate::plugin::Plugin;
         use crate::plugin::search::SearchPlugin;
         use crossterm::event::{KeyCode, KeyModifiers};
