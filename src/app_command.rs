@@ -171,18 +171,18 @@ pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             InputEffect::Map
         }
         AppCommand::ActivatePlugin(tag) => {
-            ctx.ui.activate_plugin(&tag, ctx.map.center());
+            ctx.ui.focus.activate_plugin(&tag, ctx.map.center());
             InputEffect::Plugin
         }
         AppCommand::CycleFocus(forward) => {
-            if ctx.ui.cycle_focus(forward) {
+            if ctx.ui.focus.cycle(forward) {
                 InputEffect::Plugin
             } else {
                 InputEffect::None
             }
         }
         AppCommand::OpenPalette => {
-            ctx.ui.open_palette(ctx.keymap, *ctx.theme_id);
+            ctx.ui.focus.open_palette(ctx.keymap, *ctx.theme_id);
             InputEffect::Plugin
         }
         AppCommand::Resize(cols, rows) => {

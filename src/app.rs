@@ -19,9 +19,11 @@ use crate::plugin::help::HelpPlugin;
 use crate::plugin::here::HerePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
+use crate::focus::FocusManager;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
+use crate::ui::palette::CommandPalette;
 use crate::ui::router::KeyRouter;
 
 pub struct App {
@@ -51,7 +53,8 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
-        let ui = UiState::new(nominatim, attribution, widgets);
+        let focus = FocusManager::new(CommandPalette::new(), widgets);
+        let ui = UiState::new(nominatim, attribution, focus);
         let theme_id = ThemeId::from_name(&config.style);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
@@ -92,7 +95,7 @@ impl App {
         while self.map.is_running() {
             self.ui.drain_frames(&self.render_handle);
 
-            if let Some(cmd) = self.ui.poll_widgets() {
+            if let Some(cmd) = self.ui.focus.poll_widgets() {
                 info!("plugin async command: {:?}", cmd);
                 self.dispatch(cmd);
             }

@@ -8,7 +8,6 @@ pub mod router;
 
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
@@ -17,21 +16,21 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
-use crate::geo::LonLat;
-use crate::map::render::thread::RenderHandle;
-use crate::plugin::PluginRegistry;
-use crate::ui::palette::CommandPalette;
-
-use crate::color_palette::ThemeId;
-use crate::focus::{Focus, FocusEvent, FocusManager};
-use crate::keymap::KeyMap;
+use crate::app_command::FocusSurface;
+use crate::focus::{Focus, FocusManager};
 use crate::map::render::frame::MapFrame;
+use crate::map::render::thread::RenderHandle;
 use crate::painter::MapPainter;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
-/// Holds all UI widget state. Passed to `draw()`.
+/// Thin container for UI-level state. Owns:
+/// - [`FocusManager`] (the focus state and every focusable surface — palette + plugins)
+/// - [`OverlayManager`] (info / attribution / scale-bar)
+/// - the latest map frame snapshot
+///
+/// All focus / palette / plugin workflows live on `FocusManager`;
+/// `UiState` holds the references and forwards `drain_frames`.
 ///
 /// **Theme is intentionally not here.** Theme is a cross-cutting
 /// concern (UI colours + map render styler) and lives on `App` as the
@@ -39,9 +38,6 @@ use crate::theme::UiTheme;
 /// parameter on `draw()`. See `docs/design.md` for the rationale.
 pub struct UiState {
     pub focus: FocusManager,
-    pub widgets: PluginRegistry,
-    /// Command palette — builtin, not a plugin. See `ui::palette` for why.
-    pub palette: CommandPalette,
     pub overlay: OverlayManager,
     pub map_frame: Option<MapFrame>,
 }
@@ -50,23 +46,14 @@ impl UiState {
     pub fn new(
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
-        widgets: PluginRegistry,
+        focus: FocusManager,
     ) -> Self {
         Self {
-            focus: FocusManager::new(),
-            widgets,
-            palette: CommandPalette::new(),
+            focus,
             overlay: OverlayManager::new(nominatim, attribution),
             map_frame: None,
         }
     }
-
-    // ── Workflow methods ──────────────────────────────────────────
-    //
-    // Multi-step UI transitions live here (not on the controller) so
-    // the invariants between `focus`, `palette`, `widgets` are owned
-    // by the type that holds all three. The controller just picks
-    // which workflow a given `AppCommand` maps to.
 
     /// Pull every frame the render thread has produced since the last
     /// tick, keeping the most recent. The receiver lives on
@@ -75,120 +62,6 @@ impl UiState {
         while let Some(frame) = render_handle.try_recv_frame() {
             self.map_frame = Some(frame);
         }
-    }
-
-    /// Advance every plugin's async work by one tick. If multiple
-    /// plugins produced a `AppCommand` this tick, the latest wins — only
-    /// one AppCommand runs per tick to avoid cascading state changes
-    /// within a single frame.
-    pub fn poll_widgets(&mut self) -> Option<AppCommand> {
-        let mut async_cmd: Option<AppCommand> = None;
-        for w in self.widgets.iter_mut() {
-            w.poll();
-            if let Some(cmd) = w.pending_command() {
-                async_cmd = Some(cmd);
-            }
-        }
-        async_cmd
-    }
-
-    /// Open the command palette with its default provider. Palette
-    /// becomes visible; the focus manager records the claim. The
-    /// current `theme_id` is taken as a parameter (theme lives on
-    /// `App`, not `UiState`) so the palette can highlight the active
-    /// entry in its theme picker.
-    pub fn open_palette(&mut self, keymap: &KeyMap, theme_id: ThemeId) {
-        self.palette.activate(&self.widgets, keymap, theme_id);
-        self.focus.on(
-            FocusEvent::Claimed(palette::SURFACE_ID.into()),
-            &mut self.widgets,
-        );
-    }
-
-    /// Cycle keyboard focus across visible plugins. `true` = forward
-    /// (Tab), `false` = backward (Shift-Tab). Returns whether the
-    /// focus actually moved. Tab is an explicit user intent, not a
-    /// reactive state change, so it stays a dedicated method rather
-    /// than riding `FocusEvent`.
-    pub fn cycle_focus(&mut self, forward: bool) -> bool {
-        self.focus.cycle(&mut self.widgets, forward)
-    }
-
-    /// Drive a plugin through an activation request (activation key,
-    /// palette selection, or external command). Re-activating a
-    /// currently-focused plugin toggles it off. For first-time
-    /// activation, brings the plugin to the front and calls its
-    /// `activate` hook. The `wants_focus` gate lives here (not in
-    /// the focus manager) — we only emit `Claimed` if the plugin
-    /// actually asks for focus, so headless plugins (like `here`)
-    /// don't steal it.
-    pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
-        // Toggle-off: re-activating the currently-focused plugin closes it.
-        if self.focus.is_modal(tag) {
-            if let Some(w) = self.widgets.get_mut(tag) {
-                w.close();
-            }
-            self.focus
-                .on(FocusEvent::Released(tag.to_string().into()), &mut self.widgets);
-            return;
-        }
-
-        // Normal activation.
-        self.widgets.bring_to_front(tag);
-        let ctx = SurfaceCtx { center };
-        let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
-            w.activate(ctx);
-            w.wants_focus()
-        } else {
-            return;
-        };
-        if wants_focus {
-            self.focus.on(
-                FocusEvent::Claimed(tag.to_string().into()),
-                &mut self.widgets,
-            );
-        }
-    }
-
-    /// Hand a key to the currently-focused surface and apply the
-    /// auto-release invariant (palette/plugin closing during
-    /// `handle_key` drops focus). Returns the surface's `Effect`, or
-    /// `None` when no surface has focus — the router then falls
-    /// through to the [`BackgroundResponder`].
-    pub fn deliver_to_focused_surface(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ctx: SurfaceCtx,
-    ) -> Option<Effect> {
-        let id = match self.focus.current().clone() {
-            Focus::Background => return None,
-            Focus::Modal(id) => id,
-        };
-
-        // Both palette and plugins implement FocusSurface — uniform
-        // dispatch. The palette branch is the only special case left
-        // (it's not in the plugin registry; the registry only holds
-        // plugins).
-        let (effect, still_visible) = {
-            let surface: &mut dyn FocusSurface = if id == palette::SURFACE_ID {
-                &mut self.palette
-            } else {
-                match self.widgets.get_mut(id.as_ref()) {
-                    Some(p) => p,
-                    None => return Some(Effect::Pass),
-                }
-            };
-            let effect = surface.handle_key(code, modifiers, ctx);
-            let still_visible = surface.is_visible();
-            (effect, still_visible)
-        };
-
-        if !still_visible {
-            self.focus
-                .on(FocusEvent::Released(id), &mut self.widgets);
-        }
-        Some(effect)
     }
 }
 
@@ -219,7 +92,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
         // via a single `MapPainter` exposed by the UI framework.
         {
             let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, theme);
-            for w in ui.widgets.iter() {
+            for w in ui.focus.widgets().iter() {
                 w.paint_on_map(&mut painter);
             }
         }
@@ -235,7 +108,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     // weather, …) can stay on screen even while focus is elsewhere;
     // modal plugins (search/help) self-close on deactivate so they
     // only render while focused.
-    for w in ui.widgets.iter() {
+    for w in ui.focus.widgets().iter() {
         if w.is_visible() {
             w.render(f, map_inner, theme);
         }
@@ -243,8 +116,8 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
 
     // Palette draws on top of every plugin when visible (it's modal
     // and coordinates over them).
-    if ui.palette.is_visible() {
-        ui.palette.render(f, map_inner, theme);
+    if ui.focus.palette().is_visible() {
+        ui.focus.palette().render(f, map_inner, theme);
     }
 
     let hints = build_hints(ui);
@@ -271,9 +144,9 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
     // Focused surface provides its own context-sensitive hints.
     if let Focus::Modal(id) = ui.focus.current() {
         if id == palette::SURFACE_ID {
-            return ui.palette.footer_hints();
+            return ui.focus.palette().footer_hints();
         }
-        if let Some(w) = ui.widgets.get(id.as_ref()) {
+        if let Some(w) = ui.focus.widgets().get(id.as_ref()) {
             return w.footer_hints();
         }
     }
@@ -286,7 +159,7 @@ fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
         ("?", "help"),
     ];
     // Tab only cycles when at least one plugin window is visible.
-    if ui.widgets.iter().any(|w| w.is_visible()) {
+    if ui.focus.widgets().iter().any(|w| w.is_visible()) {
         hints.push(("Tab/S-Tab", "focus"));
     }
     hints.push(("q", "quit"));
@@ -298,16 +171,16 @@ mod tests {
     use super::*;
     use crate::geo::LonLat;
     use crate::map::render::frame::{MapCell, MapFrame};
-    use crossterm::event::{KeyCode, KeyModifiers};
-
-    const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
+    use crate::plugin::PluginRegistry;
 
     fn make_ui() -> UiState {
         use crate::plugin::search::SearchPlugin;
+        use crate::ui::palette::CommandPalette;
         let nominatim = Arc::new(NominatimClient::new());
         let mut widgets = PluginRegistry::new();
         widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
-        UiState::new(nominatim, None, widgets)
+        let focus = FocusManager::new(CommandPalette::new(), widgets);
+        UiState::new(nominatim, None, focus)
     }
 
     #[test]
@@ -318,17 +191,22 @@ mod tests {
     }
 
     #[test]
-    fn test_ui_state_search_lifecycle() {
-        let ui = &mut make_ui();
-        assert_eq!(ui.focus.current(), &Focus::Background);
+    fn search_plugin_open_then_close_on_esc() {
+        use crate::app_command::SurfaceCtx;
+        use crate::plugin::Plugin;
+        use crate::plugin::search::SearchPlugin;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
-        // Plugin.activate / handle_key no longer touch focus — the
-        // host (`ui::router::activate_plugin` + the focused-plugin
-        // dispatch loop) owns every focus transition. Here we just
-        // verify the plugin's own state machine: open on activate,
-        // close on Esc.
+        const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
+
+        // Plugin.activate / handle_key never touch focus — the host
+        // (`FocusManager::activate_plugin` + the focused-surface
+        // delivery loop) owns every focus transition. Verify just the
+        // plugin's own state machine: open on activate, close on Esc.
+        let nominatim = Arc::new(NominatimClient::new());
+        let mut search = SearchPlugin::new(nominatim);
         let ctx = SurfaceCtx { center: ZERO };
-        let search = ui.widgets.get_mut("search").unwrap();
+
         search.activate(ctx);
         assert!(search.is_visible());
         assert!(search.wants_focus());
@@ -351,7 +229,7 @@ mod tests {
             }],
             cols: 1,
             rows: 1,
-            center: crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+            center: LonLat { lon: 0.0, lat: 0.0 },
             zoom: 0.0,
         });
         assert!(ui.map_frame.is_some());

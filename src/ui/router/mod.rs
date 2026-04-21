@@ -53,7 +53,7 @@ impl KeyRouter {
 
         let ctx = SurfaceCtx { center };
 
-        if let Some(effect) = ui.deliver_to_focused_surface(code, modifiers, ctx) {
+        if let Some(effect) = ui.focus.deliver_key(code, modifiers, ctx) {
             match effect {
                 Effect::Consumed => return None,
                 Effect::Run(cmd) => return Some(cmd),

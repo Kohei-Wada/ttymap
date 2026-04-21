@@ -91,7 +91,7 @@ impl BackgroundResponder {
             return Effect::Run(AppCommand::OpenPalette);
         }
 
-        if let Some(tag) = ui.widgets.activation_tag(code, modifiers) {
+        if let Some(tag) = ui.focus.widgets().activation_tag(code, modifiers) {
             return Effect::Run(AppCommand::ActivatePlugin(tag.to_string()));
         }
 

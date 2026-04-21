@@ -1,23 +1,26 @@
-//! `Focus` — single source of truth for which surface has exclusive
-//! keyboard focus. Read by the dispatcher and layout code; transitions
-//! happen via [`FocusManager::on`] which interprets [`FocusEvent`]s
-//! emitted by `UiState`.
-//!
-//! **Event-driven, not commanded**: callers don't tell focus *what* to
-//! do (`take`, `release`), they tell focus *what happened* in the rest
-//! of the UI (`Claimed(id)`, `Released(id)`) and focus decides how to
-//! react. The transition rules (auto-release on close, prev-slot
-//! restoration) live in one place — here — instead of scattered.
+//! `FocusManager` — owns every focusable surface (the command palette
+//! and every plugin) and tracks which one currently has keyboard
+//! focus. The router asks `focused_surface_mut` to find out who to
+//! deliver a key event to; everything else (cycling, activation,
+//! palette open) is a method on this type so the focus / widget /
+//! palette state stay consistent without external coordination.
 //!
 //! **Surfaces are opaque ids**: the manager does not distinguish
 //! palette from plugin from any future modal (dialog, notification
-//! tray); they all flow through the same `Modal(SurfaceId)` variant
-//! and `Claimed/Released` events. The `wants_focus` gating policy
-//! lives at the call site (e.g. `UiState::activate_plugin`), not here.
+//! tray); they all flow through the same `Modal(SurfaceId)` variant.
+//! The `wants_focus` gating policy lives at the call site (e.g.
+//! `activate_plugin`), not inside the focus state machine.
 
 use std::borrow::Cow;
 
+use crossterm::event::{KeyCode, KeyModifiers};
+
+use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
+use crate::color_palette::ThemeId;
+use crate::geo::LonLat;
+use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
+use crate::ui::palette::{self, CommandPalette};
 
 /// Identifier for a focus-claiming surface. `palette`, plugin tags
 /// (`search`, `wiki`, …), and any future modal share the same shape.
@@ -37,89 +40,139 @@ pub enum Focus {
 }
 
 impl Focus {
-    /// Whether the named surface is the current focus owner. Works
-    /// for any modal id — palette, plugin tag, or other.
+    /// Whether the named surface is the current focus owner.
     pub fn is_modal(&self, id: &str) -> bool {
         matches!(self, Focus::Modal(t) if t == id)
     }
 }
 
-/// Events the rest of the UI emits at focus-relevant moments. The
-/// manager interprets each event against its current state to decide
-/// the transition.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FocusEvent {
-    /// Surface with this id is asking for focus. The caller is
-    /// responsible for any "wants focus" gating before emitting (the
-    /// manager unconditionally honours the claim).
-    Claimed(SurfaceId),
-    /// Surface with this id closed (key handler dropped its
-    /// visibility, or the user toggled it off). If focus is on this
-    /// surface, the manager releases it.
-    Released(SurfaceId),
-}
-
-/// Coordinates focus transitions. Inner `Focus` is private so every
-/// transition goes through [`on`] (or [`cycle`]), letting the
-/// manager keep the `prev` slot in sync. `prev` restores the focus
-/// the previous claimer had instead of always dropping to background.
-#[derive(Default)]
+/// Owns palette + plugins + focus state. Single point of authority
+/// for "who has keyboard focus and what surfaces exist". `prev`
+/// restores the focus the previous claimer had instead of always
+/// dropping to background.
 pub struct FocusManager {
     current: Focus,
     prev: Focus,
+    palette: CommandPalette,
+    widgets: PluginRegistry,
 }
 
 impl FocusManager {
-    pub fn new() -> Self {
-        Self::default()
+    /// Construct from a pre-built palette + plugin registry. Both
+    /// are wired at the composition root (`App::new`) so the focus
+    /// manager doesn't need to know how to create them.
+    pub fn new(palette: CommandPalette, widgets: PluginRegistry) -> Self {
+        Self {
+            current: Focus::Background,
+            prev: Focus::Background,
+            palette,
+            widgets,
+        }
     }
 
-    /// Read-only access to the current focus for pattern matching and
-    /// equality checks.
+    // ── State queries ────────────────────────────────────────────────
+
     pub fn current(&self) -> &Focus {
         &self.current
     }
 
-    /// Whether the named surface is the current focus owner. Sugar
-    /// over [`Focus::is_modal`].
     pub fn is_modal(&self, id: &str) -> bool {
         self.current.is_modal(id)
     }
 
-    /// React to a UI state change. See [`FocusEvent`] for the vocab.
-    pub fn on(&mut self, event: FocusEvent, widgets: &mut PluginRegistry) {
-        match event {
-            FocusEvent::Claimed(id) => {
-                self.deactivate_current(widgets, Some(&id));
-                self.transition_to(Focus::Modal(id));
+    // ── Field accessors (for draw, background-responder activation
+    // lookup, async polling) ─────────────────────────────────────────
+
+    pub fn widgets(&self) -> &PluginRegistry {
+        &self.widgets
+    }
+
+    pub fn palette(&self) -> &CommandPalette {
+        &self.palette
+    }
+
+    // ── The router's primary API ─────────────────────────────────────
+
+    /// Hand a key to the focused surface. Applies the auto-release
+    /// invariant (if `is_visible()` flips to false during `handle_key`,
+    /// release focus). Returns `None` when no surface is focused —
+    /// the caller should then fall through to the background responder.
+    pub fn deliver_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        ctx: SurfaceCtx,
+    ) -> Option<Effect> {
+        let id = match &self.current {
+            Focus::Background => return None,
+            Focus::Modal(id) => id.clone(),
+        };
+        let (effect, still_visible) = {
+            let surface = self.surface_mut(&id)?;
+            let effect = surface.handle_key(code, modifiers, ctx);
+            let still_visible = surface.is_visible();
+            (effect, still_visible)
+        };
+        if !still_visible {
+            self.release_if_holding(&id);
+        }
+        Some(effect)
+    }
+
+    // ── Workflow API ─────────────────────────────────────────────────
+
+    /// Open the command palette with the default provider and take
+    /// focus. Provider build needs `widgets` (for activation lists),
+    /// `keymap` (for key hints), `theme_id` (for the theme picker).
+    pub fn open_palette(&mut self, keymap: &KeyMap, theme_id: ThemeId) {
+        self.palette.activate(&self.widgets, keymap, theme_id);
+        self.transition_to(Focus::Modal(palette::SURFACE_ID.into()));
+    }
+
+    /// Drive a plugin through an activation request. Re-activating a
+    /// currently-focused plugin toggles it off. Otherwise brings the
+    /// plugin to the front, calls its `activate` hook, and takes focus
+    /// iff `wants_focus` returns true (so headless plugins like `here`
+    /// don't steal it).
+    pub fn activate_plugin(&mut self, tag: &str, center: LonLat) {
+        if self.is_modal(tag) {
+            // Toggle-off: re-activating the currently-focused plugin closes it.
+            if let Some(w) = self.widgets.get_mut(tag) {
+                w.close();
             }
-            FocusEvent::Released(id) => {
-                if self.current.is_modal(&id) {
-                    self.release();
-                }
-            }
+            self.release_if_holding(tag);
+            return;
+        }
+
+        self.widgets.bring_to_front(tag);
+        let ctx = SurfaceCtx { center };
+        let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
+            w.activate(ctx);
+            w.wants_focus()
+        } else {
+            return;
+        };
+        if wants_focus {
+            self.deactivate_current(Some(tag));
+            self.transition_to(Focus::Modal(tag.to_string().into()));
         }
     }
 
     /// Cycle focus to the next (or previous) visible plugin, wrapping
-    /// through Background. Tab is an explicit user intent, not a
-    /// reactive transition, so it stays a dedicated method instead of
-    /// riding `on`. Returns `true` if focus moved.
+    /// through Background. Returns `true` if focus moved.
     /// Background → visible[0] → … → visible[last] → Background
-    /// (reverse swaps the ends).
-    pub fn cycle(&mut self, widgets: &mut PluginRegistry, forward: bool) -> bool {
-        // Non-plugin modals (palette, future dialogs) are outside the
-        // plugin cycle — user must close them first. Detected by
-        // looking up the current id in the plugin registry; if it's
-        // not there, it's a non-plugin modal. (palette.handle_key
-        // also consumes Tab, so this branch is mostly defensive.)
+    /// (reverse swaps the ends). Non-plugin modals (palette, future
+    /// dialogs) are outside the cycle — user must close them first.
+    pub fn cycle(&mut self, forward: bool) -> bool {
+        // Non-plugin modals are detected by absence from the registry.
         if let Focus::Modal(id) = &self.current
-            && widgets.get(id.as_ref()).is_none()
+            && self.widgets.get(id.as_ref()).is_none()
         {
             return false;
         }
 
-        let visible: Vec<String> = widgets
+        let visible: Vec<String> = self
+            .widgets
             .iter()
             .filter(|w| w.is_visible())
             .map(|w| w.tag().to_string())
@@ -130,7 +183,6 @@ impl FocusManager {
         }
 
         let next: Option<String> = match &self.current {
-            // From Background, enter at the appropriate end of the list.
             Focus::Background => Some(if forward {
                 visible.first().unwrap().clone()
             } else {
@@ -163,7 +215,7 @@ impl FocusManager {
             }
         };
 
-        self.deactivate_current(widgets, None);
+        self.deactivate_current(None);
         self.transition_to(match next {
             Some(tag) => Focus::Modal(tag.into()),
             None => Focus::Background,
@@ -171,11 +223,43 @@ impl FocusManager {
         true
     }
 
-    // ── Internals ─────────────────────────────────────────────────
+    /// Advance every plugin's async work by one tick. If multiple
+    /// plugins produced a `AppCommand` this tick, the latest wins —
+    /// only one AppCommand runs per tick to avoid cascading state
+    /// changes within a single frame.
+    pub fn poll_widgets(&mut self) -> Option<AppCommand> {
+        let mut async_cmd: Option<AppCommand> = None;
+        for w in self.widgets.iter_mut() {
+            w.poll();
+            if let Some(cmd) = w.pending_command() {
+                async_cmd = Some(cmd);
+            }
+        }
+        async_cmd
+    }
+
+    // ── Internals ────────────────────────────────────────────────────
+
+    fn surface_mut(&mut self, id: &SurfaceId) -> Option<&mut dyn FocusSurface> {
+        if id == palette::SURFACE_ID {
+            Some(&mut self.palette)
+        } else {
+            match self.widgets.get_mut(id.as_ref()) {
+                Some(p) => Some(p),
+                None => None,
+            }
+        }
+    }
 
     /// Restore the remembered predecessor (or background if none).
     fn release(&mut self) {
         self.current = std::mem::replace(&mut self.prev, Focus::Background);
+    }
+
+    fn release_if_holding(&mut self, id: &str) {
+        if self.current.is_modal(id) {
+            self.release();
+        }
     }
 
     /// Record a transition, pushing the outgoing focus into `prev`.
@@ -192,12 +276,14 @@ impl FocusManager {
     /// Non-plugin modals (e.g. palette) aren't in the registry so the
     /// `widgets.get_mut` lookup returns `None` and nothing happens —
     /// they self-clean through their own visibility flow.
-    fn deactivate_current(&self, widgets: &mut PluginRegistry, keep_id: Option<&str>) {
-        if let Focus::Modal(prev) = &self.current
-            && keep_id != Some(prev.as_ref())
-            && let Some(p) = widgets.get_mut(prev.as_ref())
-        {
-            p.deactivate();
+    fn deactivate_current(&mut self, keep_id: Option<&str>) {
+        if let Focus::Modal(prev) = &self.current {
+            let prev_str = prev.clone();
+            if keep_id != Some(prev_str.as_ref())
+                && let Some(p) = self.widgets.get_mut(prev_str.as_ref())
+            {
+                p.deactivate();
+            }
         }
     }
 }
