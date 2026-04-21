@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::app_msg::{self, AppMsg, DispatchCtx, InputEffect};
+use crate::color_palette::ThemeId;
 use crate::config::Config;
 use crate::input::mouse::MouseHandler;
 use crate::keymap::KeyMap;
@@ -19,6 +20,7 @@ use crate::plugin::here::HerePlugin;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
+use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::router::KeyRouter;
 
@@ -28,6 +30,11 @@ pub struct App {
     render_handle: RenderHandle,
     ui: UiState,
     mouse: MouseHandler,
+    /// Active theme — single source of truth for the running app.
+    /// `ui_theme` is its derived UI-colour cache; the render thread
+    /// receives a corresponding `Styler` via message on switch.
+    theme_id: ThemeId,
+    ui_theme: UiTheme,
 }
 
 impl App {
@@ -44,8 +51,10 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
-        let ui = UiState::new(&config, nominatim, attribution, widgets);
-        let styler = Arc::new(Styler::new(ui.theme_id));
+        let ui = UiState::new(nominatim, attribution, widgets);
+        let theme_id = ThemeId::from_name(&config.style);
+        let ui_theme = UiTheme::from_palette(theme_id.palette());
+        let styler = Arc::new(Styler::new(theme_id));
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
         let map = MapState::new(
@@ -68,6 +77,8 @@ impl App {
             render_handle,
             ui,
             mouse: MouseHandler::default(),
+            theme_id,
+            ui_theme,
         }
     }
 
@@ -88,7 +99,7 @@ impl App {
 
             self.ui.overlay.poll();
 
-            terminal.draw(|f| crate::ui::draw(f, &self.ui))?;
+            terminal.draw(|f| crate::ui::draw(f, &self.ui, &self.ui_theme))?;
 
             // Drain the whole input queue in one pass. First poll blocks up to
             // 4 ms so render-thread frame arrivals (which don't wake the event
@@ -150,6 +161,8 @@ impl App {
                 ui: &mut self.ui,
                 render_handle: &self.render_handle,
                 keymap: self.router.keymap(),
+                theme_id: &mut self.theme_id,
+                ui_theme: &mut self.ui_theme,
             };
             app_msg::dispatch(cmd, &mut ctx)
         };

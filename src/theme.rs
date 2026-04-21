@@ -1,13 +1,9 @@
 //! UI theme — converts palette u8 values to ratatui styles.
 
-use std::sync::Arc;
-
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
 
-use crate::color_palette::{ColorPalette, ThemeId};
-use crate::map::render::thread::RenderHandle;
-use crate::map::styler::Styler;
+use crate::color_palette::ColorPalette;
 
 /// Computed UI theme from a ColorPalette.
 pub struct UiTheme {
@@ -66,11 +62,3 @@ impl UiTheme {
     }
 }
 
-/// Runtime theme switch: build a fresh `Styler` for `new_id`, push it
-/// into the render thread, and refresh the passed-in UI `UiTheme` in
-/// place. The caller keeps its own `theme_id` source of truth in sync.
-pub fn apply(new_id: ThemeId, ui_theme: &mut UiTheme, render_handle: &RenderHandle) {
-    let styler = Arc::new(Styler::new(new_id));
-    render_handle.set_styler(styler.clone());
-    *ui_theme = UiTheme::from_palette(styler.palette());
-}

@@ -21,10 +21,9 @@ use crate::app_msg::{AppMsg, KeyDelivery};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
 use crate::plugin::{PluginAction, PluginCtx, PluginRegistry};
-use crate::ui::action::UiAction;
 use crate::ui::palette::{CommandPalette, PaletteOutcome};
 
-use crate::config::Config;
+use crate::color_palette::ThemeId;
 use crate::focus::{Focus, FocusEvent, FocusManager};
 use crate::keymap::KeyMap;
 use crate::map::render::frame::MapFrame;
@@ -33,6 +32,11 @@ use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
 /// Holds all UI widget state. Passed to `draw()`.
+///
+/// **Theme is intentionally not here.** Theme is a cross-cutting
+/// concern (UI colours + map render styler) and lives on `App` as the
+/// single source of truth; UI rendering receives `&UiTheme` as a
+/// parameter on `draw()`. See `docs/design.md` for the rationale.
 pub struct UiState {
     pub focus: FocusManager,
     pub widgets: PluginRegistry,
@@ -40,31 +44,20 @@ pub struct UiState {
     pub palette: CommandPalette,
     pub overlay: OverlayManager,
     pub map_frame: Option<MapFrame>,
-    /// Source of truth for the active theme on the main thread. Paired
-    /// with `theme` (the derived UI color set); both get refreshed by
-    /// `theme::apply` on a runtime theme switch.
-    pub theme_id: crate::color_palette::ThemeId,
-    pub theme: UiTheme,
 }
 
 impl UiState {
     pub fn new(
-        config: &Config,
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
         widgets: PluginRegistry,
     ) -> Self {
-        let theme_id = crate::color_palette::ThemeId::from_name(&config.style);
-        let palette = theme_id.palette();
-
         Self {
             focus: FocusManager::new(),
             widgets,
             palette: CommandPalette::new(),
             overlay: OverlayManager::new(nominatim, attribution),
             map_frame: None,
-            theme_id,
-            theme: UiTheme::from_palette(palette),
         }
     }
 
@@ -99,22 +92,12 @@ impl UiState {
         async_cmd
     }
 
-    /// Apply a `UiAction`. Today: theme switch. Drives the render
-    /// thread's styler through `render_handle`.
-    pub fn apply(&mut self, action: UiAction, render_handle: &RenderHandle) {
-        match action {
-            UiAction::SetTheme(new_id) => {
-                self.theme_id = new_id;
-                crate::theme::apply(new_id, &mut self.theme, render_handle);
-            }
-        }
-    }
-
     /// Open the command palette with its default provider. Palette
     /// becomes visible; the focus manager takes focus in response to
-    /// the `PaletteOpened` event.
-    pub fn open_palette(&mut self, keymap: &KeyMap) {
-        let theme_id = self.theme_id;
+    /// the `PaletteOpened` event. The current `theme_id` is taken as
+    /// a parameter (theme lives on `App`, not `UiState`) so the
+    /// palette can highlight the active entry in its theme picker.
+    pub fn open_palette(&mut self, keymap: &KeyMap, theme_id: ThemeId) {
         self.palette.activate(&self.widgets, keymap, theme_id);
         self.focus.on(FocusEvent::PaletteOpened, &mut self.widgets);
     }
@@ -219,8 +202,9 @@ impl UiState {
     }
 }
 
-/// Draw the full screen. `app.rs` delegates all rendering here.
-pub fn draw(f: &mut Frame, ui: &UiState) {
+/// Draw the full screen. `app.rs` delegates all rendering here and
+/// passes the active `UiTheme` (owned by `App`).
+pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
     let map_area = chunks[0];
@@ -228,9 +212,9 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
 
     let map_focused = !ui.focus.is_plugin("search");
     let border_color = if map_focused {
-        ui.theme.accent
+        theme.accent
     } else {
-        ui.theme.muted_color
+        theme.muted_color
     };
     let map_block = Block::new()
         .borders(Borders::ALL)
@@ -244,7 +228,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         // Widgets paint world-space primitives (markers, labels, …)
         // via a single `MapPainter` exposed by the UI framework.
         {
-            let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, &ui.theme);
+            let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, theme);
             for w in ui.widgets.iter() {
                 w.paint_on_map(&mut painter);
             }
@@ -254,7 +238,7 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         // manager owns their state and paint order so the caller
         // doesn't distinguish between them.
         ui.overlay
-            .render(f.buffer_mut(), map_inner, map_frame, &ui.theme);
+            .render(f.buffer_mut(), map_inner, map_frame, theme);
     }
 
     // Render every visible plugin panel. Non-modal plugins (wiki,
@@ -263,18 +247,18 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
     // only render while focused.
     for w in ui.widgets.iter() {
         if w.visible() {
-            w.render(f, map_inner, &ui.theme);
+            w.render(f, map_inner, theme);
         }
     }
 
     // Palette draws on top of every plugin when visible (it's modal
     // and coordinates over them).
     if ui.palette.is_visible() {
-        ui.palette.render(f, map_inner, &ui.theme);
+        ui.palette.render(f, map_inner, theme);
     }
 
     let hints = build_hints(ui);
-    let sep = Span::styled("  ", Style::default().fg(ui.theme.muted_color));
+    let sep = Span::styled("  ", Style::default().fg(theme.muted_color));
     let mut spans: Vec<Span> = Vec::new();
     for (i, (key, desc)) in hints.iter().enumerate() {
         if i > 0 {
@@ -282,11 +266,11 @@ pub fn draw(f: &mut Frame, ui: &UiState) {
         }
         spans.push(Span::styled(
             format!(" {} ", key),
-            Style::default().fg(ui.theme.bg).bg(ui.theme.accent),
+            Style::default().fg(theme.bg).bg(theme.accent),
         ));
         spans.push(Span::styled(
             format!(" {}", desc),
-            Style::default().fg(ui.theme.muted_color),
+            Style::default().fg(theme.muted_color),
         ));
     }
     let footer = Paragraph::new(Line::from(spans));
@@ -331,11 +315,10 @@ mod tests {
 
     fn make_ui() -> UiState {
         use crate::plugin::search::SearchPlugin;
-        let config = Config::default();
         let nominatim = Arc::new(NominatimClient::new());
         let mut widgets = PluginRegistry::new();
         widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
-        UiState::new(&config, nominatim, None, widgets)
+        UiState::new(nominatim, None, widgets)
     }
 
     #[test]

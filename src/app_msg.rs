@@ -13,10 +13,15 @@
 //! Adding a new message = one new `AppMsg` variant + one match arm +
 //! the domain method it calls.
 
+use std::sync::Arc;
+
+use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
 use crate::keymap::KeyMap;
 use crate::map::render::thread::RenderHandle;
+use crate::map::styler::Styler;
 use crate::map::{Action, MapState};
+use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::action::UiAction;
 
@@ -95,6 +100,15 @@ pub struct DispatchCtx<'a> {
     /// available to future messages that want to reason about key
     /// bindings. Other arms leave it alone.
     pub keymap: &'a KeyMap,
+    /// Active theme — owned by `App`, mutated in-place by the
+    /// `Ui(SetTheme)` arm. Read by `OpenPalette` (palette highlights
+    /// the active theme entry) and used to derive `ui_theme` /
+    /// render-thread `Styler` on a runtime switch.
+    pub theme_id: &'a mut ThemeId,
+    /// Derived UI colour set — kept in sync with `theme_id` by the
+    /// `Ui(SetTheme)` arm. App passes a `&UiTheme` view of this into
+    /// `ui::draw`.
+    pub ui_theme: &'a mut UiTheme,
 }
 
 /// Apply an `AppMsg` to the app. Thin router: each arm delegates to a
@@ -113,7 +127,7 @@ pub fn dispatch(msg: AppMsg, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             InputEffect::Map
         }
         AppMsg::Ui(action) => {
-            ctx.ui.apply(action, ctx.render_handle);
+            apply_ui_action(action, ctx);
             InputEffect::Map
         }
         AppMsg::ActivatePlugin(tag) => {
@@ -128,7 +142,7 @@ pub fn dispatch(msg: AppMsg, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             }
         }
         AppMsg::OpenPalette => {
-            ctx.ui.open_palette(ctx.keymap);
+            ctx.ui.open_palette(ctx.keymap, *ctx.theme_id);
             InputEffect::Plugin
         }
         AppMsg::Resize(cols, rows) => {
@@ -136,6 +150,20 @@ pub fn dispatch(msg: AppMsg, ctx: &mut DispatchCtx<'_>) -> InputEffect {
             ctx.render_handle
                 .request_resize(ctx.map.width(), ctx.map.height());
             InputEffect::Map
+        }
+    }
+}
+
+/// Apply a `UiAction` — today, theme switch. Owns the derivation:
+/// `theme_id` → `UiTheme` (UI cache) + `Styler` (map render). Both
+/// live at `App` level; this arm mutates them in place via the ctx.
+fn apply_ui_action(action: UiAction, ctx: &mut DispatchCtx<'_>) {
+    match action {
+        UiAction::SetTheme(new_id) => {
+            *ctx.theme_id = new_id;
+            let styler = Arc::new(Styler::new(new_id));
+            *ctx.ui_theme = UiTheme::from_palette(styler.palette());
+            ctx.render_handle.set_styler(styler);
         }
     }
 }
