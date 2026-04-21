@@ -71,8 +71,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
     let map_area = chunks[0];
     let footer_area = chunks[1];
 
-    let map_focused = !ui.focus.is_modal("search");
-    let border_color = if map_focused {
+    let border_color = if matches!(ui.focus.current(), Focus::Background) {
         theme.accent
     } else {
         theme.muted_color

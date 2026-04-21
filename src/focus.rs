@@ -35,13 +35,6 @@ pub enum Focus {
     Modal(SurfaceId),
 }
 
-impl Focus {
-    /// Whether the named surface is the current focus owner.
-    pub fn is_modal(&self, id: &str) -> bool {
-        matches!(self, Focus::Modal(t) if t == id)
-    }
-}
-
 /// Owns plugins + background + focus state. Single point of authority
 /// for "who has keyboard focus and what surfaces exist". `prev`
 /// restores the focus the previous claimer had instead of always
@@ -117,10 +110,6 @@ impl FocusManager {
 
     pub fn current(&self) -> &Focus {
         &self.current
-    }
-
-    pub fn is_modal(&self, id: &str) -> bool {
-        self.current.is_modal(id)
     }
 
     // ── Field accessors (for draw, async polling) ────────────────────

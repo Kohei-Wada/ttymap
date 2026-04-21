@@ -27,11 +27,6 @@ impl MouseHandler {
     /// locally (cursor move, click tracking, modal gate) — no state
     /// change for the dispatcher".
     pub fn handle(&mut self, event: MouseEvent, ui: &mut UiState) -> Option<AppCommand> {
-        // Search is modal — ignore mouse while its panel is open.
-        if ui.focus.is_modal("search") {
-            return None;
-        }
-
         ui.overlay.set_cursor((event.column, event.row));
         self.resolve(event)
     }
