@@ -1,9 +1,23 @@
+use std::time::Duration;
+
 use super::braille::BrailleBuffer;
+use super::earcut_worker::EarcutWorker;
 use super::frame::MapFrame;
 use super::geom::{BresenhamIter, clip_line, sutherland_hodgman_into};
 use super::label::LabelBuffer;
 
 use super::VIEWPORT_PADDING;
+
+/// Skip polygons whose vertex count exceeds this — earcut's cost grows
+/// fast on large degenerate input, and anything this big after clipping
+/// likely indicates pathological geometry.
+const POLYGON_VERTEX_CAP: usize = 8000;
+
+/// Per-polygon hard timeout for earcut. Above this we abandon the
+/// worker thread (zombie) and skip the polygon. Generous enough to
+/// admit legitimate complex coastlines, short enough that a single
+/// pathological feature doesn't ruin the frame.
+const POLYGON_TRIANGULATE_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub struct Canvas {
     width: usize,
@@ -15,8 +29,7 @@ pub struct Canvas {
     scratch_edge_pixels: Vec<(i32, i32)>,
     scratch_vertices: Vec<[f64; 2]>,
     scratch_hole_indices: Vec<usize>,
-    scratch_indices: Vec<usize>,
-    earcut: earcut::Earcut<f64>,
+    earcut_worker: EarcutWorker,
     // Ping-pong buffers used by sutherland_hodgman_into.
     sh_buf_a: Vec<(i32, i32)>,
     sh_buf_b: Vec<(i32, i32)>,
@@ -32,8 +45,7 @@ impl Canvas {
             scratch_edge_pixels: Vec::new(),
             scratch_vertices: Vec::new(),
             scratch_hole_indices: Vec::new(),
-            scratch_indices: Vec::new(),
-            earcut: earcut::Earcut::new(),
+            earcut_worker: EarcutWorker::new(),
             sh_buf_a: Vec::new(),
             sh_buf_b: Vec::new(),
         }
@@ -83,9 +95,22 @@ impl Canvas {
             return;
         }
 
+        // Vertex cap: cheap pre-filter for pathological input. Earcut's
+        // cost on degenerate geometry can explode well before reaching
+        // anything visually useful at this scale.
+        let total_vertices: usize = rings.iter().map(|r| r.len()).sum();
+        if total_vertices > POLYGON_VERTEX_CAP {
+            log::warn!(
+                "polygon skipped: {} vertices ({} rings) exceeds cap {}",
+                total_vertices,
+                rings.len(),
+                POLYGON_VERTEX_CAP
+            );
+            return;
+        }
+
         self.scratch_vertices.clear();
         self.scratch_hole_indices.clear();
-        self.scratch_indices.clear();
 
         for &(x, y) in &rings[0] {
             self.scratch_vertices.push([x as f64, y as f64]);
@@ -101,30 +126,26 @@ impl Canvas {
             }
         }
 
-        // Triangulate using earcut (ciscorn/earcut-rs, based on earcut 3.0.1).
-        // earcut can panic on degenerate geometry (e.g. unwrap on None), so
-        // contain it per-thread via silence_panics — this thread's panic hook
-        // output is suppressed without affecting other threads.
-        let result = super::panic_silence::silence_panics(|| {
-            self.earcut.earcut(
-                self.scratch_vertices.iter().copied(),
-                &self.scratch_hole_indices,
-                &mut self.scratch_indices,
-            );
-        });
-        if result.is_err() {
-            return;
-        }
-
-        if self.scratch_indices.is_empty() {
-            return;
-        }
+        // Triangulate on a dedicated worker thread with a hard timeout.
+        // earcut can not only panic on degenerate input (handled inside
+        // the worker via silence_panics) but also hang in an infinite
+        // loop on pathological self-intersections that survive our
+        // Sutherland–Hodgman clip — the timeout is the only protection
+        // against the latter.
+        let indices = match self.earcut_worker.triangulate(
+            self.scratch_vertices.clone(),
+            self.scratch_hole_indices.clone(),
+            POLYGON_TRIANGULATE_TIMEOUT,
+        ) {
+            Some(v) if !v.is_empty() => v,
+            _ => return,
+        };
 
         let mut i = 0;
-        while i + 2 < self.scratch_indices.len() {
-            let ia = self.scratch_indices[i];
-            let ib = self.scratch_indices[i + 1];
-            let ic = self.scratch_indices[i + 2];
+        while i + 2 < indices.len() {
+            let ia = indices[i];
+            let ib = indices[i + 1];
+            let ic = indices[i + 2];
             let a = [
                 self.scratch_vertices[ia][0] as i32,
                 self.scratch_vertices[ia][1] as i32,

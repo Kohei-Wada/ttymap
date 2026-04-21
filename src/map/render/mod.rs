@@ -2,6 +2,7 @@
 
 pub mod braille;
 pub mod canvas;
+pub mod earcut_worker;
 pub mod frame;
 mod geom;
 pub mod label;
