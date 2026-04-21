@@ -4,7 +4,7 @@
 //! entry (or, in the future, a `:theme` shortcut). Lists every
 //! registered [`ThemeId`] with the current one marked.
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 use crate::color_palette::ThemeId;
 use crate::ui::action::UiAction;
 
@@ -61,7 +61,7 @@ impl PaletteProvider for ThemeProvider {
 
     fn execute(&mut self, idx: usize) -> PaletteAction {
         match self.filtered_theme_ids.get(idx) {
-            Some(&t) => PaletteAction::Run(AppMsg::Ui(UiAction::SetTheme(t))),
+            Some(&t) => PaletteAction::Run(AppCommand::Ui(UiAction::SetTheme(t))),
             None => PaletteAction::Close,
         }
     }

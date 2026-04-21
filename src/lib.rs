@@ -18,7 +18,7 @@ pub mod commands;
 /// Central app-level message vocabulary — the single enum every
 /// emission site (palette, plugins, future RPC) speaks and the one
 /// dispatcher that interprets it.
-pub(crate) mod app_msg;
+pub(crate) mod app_command;
 
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;

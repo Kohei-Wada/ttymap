@@ -22,7 +22,7 @@
 //!
 //! The cost of keeping it a builtin (one special field on `UiState`,
 //! one `Focus::Palette` variant, two `FocusEvent::Palette*` events,
-//! one `AppMsg::OpenPalette` arm) is localised and tagged. The cost
+//! one `AppCommand::OpenPalette` arm) is localised and tagged. The cost
 //! of unification would be spread across the `Plugin` trait contract.
 //! The current asymmetry is chosen.
 //!
@@ -45,7 +45,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 use crate::color_palette::ThemeId;
 use crate::keymap::KeyMap;
 use crate::plugin::PluginRegistry;
@@ -62,9 +62,9 @@ pub enum PaletteOutcome {
     None,
     /// Key consumed, palette redraws.
     Consumed,
-    /// User picked an item — run the associated `AppMsg` through
-    /// `crate::app_msg::dispatch`.
-    Run(AppMsg),
+    /// User picked an item — run the associated `AppCommand` through
+    /// `crate::app_command::dispatch`.
+    Run(AppCommand),
 }
 
 pub struct CommandPalette {

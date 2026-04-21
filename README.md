@@ -117,7 +117,7 @@ src/
 ├── main.rs           CLI entry + interactive-mode composition
 ├── lib.rs            crate root
 ├── app.rs            App struct, event loop, composition root
-├── app_msg.rs        AppMsg enum + dispatch (the controller) + DispatchCtx
+├── app_command.rs        AppCommand enum + dispatch (the controller) + DispatchCtx
 ├── config.rs         TOML config + CLI overrides
 ├── logging.rs        XDG state log
 │
@@ -128,13 +128,13 @@ src/
 ├── focus.rs          FocusManager — event-driven focus transitions
 ├── painter.rs        MapPainter — plugins' world-space drawing API
 ├── theme.rs          UiTheme + runtime theme switch
-├── keymap.rs         KeyBinding → AppMsg table + user overrides
+├── keymap.rs         KeyBinding → AppCommand table + user overrides
 ├── geo.rs            Web Mercator, MapProjection, distance
 ├── color_palette.rs  xterm-256 color tables (ThemeId + DARK/BRIGHT)
 │
 ├── input/            pure device-event adapters
 │   ├── mod.rs
-│   └── mouse.rs      drag/scroll → AppMsg::Map(PanCells/ZoomAt)
+│   └── mouse.rs      drag/scroll → AppCommand::Map(PanCells/ZoomAt)
 │
 ├── map/              domain — viewport state + rendering pipeline
 │   ├── action.rs     Action enum (discrete + mouse-continuous variants)
@@ -195,43 +195,43 @@ src/
 ### Layering
 
 - **`map/`** — domain state. Knows nothing about UI or plugins. `Action` carries every map-level mutation, including mouse-emitted continuous variants (`PanCells`, `ZoomAt`); plugin activation and UI state are separate concerns.
-- **`app_msg.rs`** — the **controller**. One `AppMsg` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
-- **`input/`** — pure device-event adapters. `mouse.rs` turns raw events into `Option<AppMsg>` and returns it to `app.rs`. Focus-aware key routing is one layer up in `ui::router` (focus-first routing + gg sequence + keymap fallback). Neither calls `dispatch` themselves nor touches domain state directly. Symmetric with async plugin polling.
+- **`app_command.rs`** — the **controller**. One `AppCommand` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
+- **`input/`** — pure device-event adapters. `mouse.rs` turns raw events into `Option<AppCommand>` and returns it to `app.rs`. Focus-aware key routing is one layer up in `ui::router` (focus-first routing + gg sequence + keymap fallback). Neither calls `dispatch` themselves nor touches domain state directly. Symmetric with async plugin polling.
 - **`focus.rs`** — `FocusManager` driven by `FocusEvent`s (`PaletteOpened`, `PluginActivated(tag)`, …). Callers emit *what happened*; the manager decides the transition (wants_focus gating, auto-release, prev-slot restoration). All focus writes live here.
 - **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
 - **`ui/palette/`** — command palette. A **builtin coordinator**, not a `Plugin`. Plugins contribute functionality; palette aggregates over the plugin registry + keymap + theme to present a picker. Folding it into `Plugin` would widen `PluginCtx` to grant every plugin access to the registry and reduce the self-contained-widget contract to a naming convention. The asymmetry is deliberate — see `src/ui/palette/mod.rs` for the full rationale.
-- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The router (`ui::router`) dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppMsg`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
+- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The router (`ui::router`) dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppCommand`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
 
 ### Input flow
 
 ```
 raw event
   ↓ input layer (keyboard / mouse / async poll)
-  ↓ Option<AppMsg>          ← pure translation, no state mutation
+  ↓ Option<AppCommand>          ← pure translation, no state mutation
   ↓
 app.rs: self.dispatch(cmd)
   ↓
-app_msg::dispatch(cmd, &mut ctx)    ← single state mutator
+app_command::dispatch(cmd, &mut ctx)    ← single state mutator
   ↓
-    AppMsg::Map(a)            → ctx.map.process_action(&a)
-    AppMsg::Jump(loc)         → ctx.map.jump_to(loc)
-    AppMsg::Ui(a)             → ctx.ui.apply(a, render_handle)
-    AppMsg::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
-    AppMsg::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
-    AppMsg::OpenPalette       → ctx.ui.open_palette(keymap)
-    AppMsg::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
+    AppCommand::Map(a)            → ctx.map.process_action(&a)
+    AppCommand::Jump(loc)         → ctx.map.jump_to(loc)
+    AppCommand::Ui(a)             → ctx.ui.apply(a, render_handle)
+    AppCommand::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
+    AppCommand::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
+    AppCommand::OpenPalette       → ctx.ui.open_palette(keymap)
+    AppCommand::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
 ```
 
 The keyboard translator's decision tree:
 
 ```
 key event
-  ↓ keyboard.handle() → Option<AppMsg>:
+  ↓ keyboard.handle() → Option<AppCommand>:
     [1] focused surface delivery via ui.deliver_key() — consumes, runs, or passes through
-    [2] Tab / Shift-Tab        → AppMsg::CycleFocus(forward)
-    [3] `:`                    → AppMsg::OpenPalette
-    [4] plugin activation key  → AppMsg::ActivatePlugin(tag)
-    [5] keymap.resolve()       → whatever AppMsg the binding produces
+    [2] Tab / Shift-Tab        → AppCommand::CycleFocus(forward)
+    [3] `:`                    → AppCommand::OpenPalette
+    [4] plugin activation key  → AppCommand::ActivatePlugin(tag)
+    [5] keymap.resolve()       → whatever AppCommand the binding produces
        (with gg sequence state on the handler)
 ```
 
@@ -239,10 +239,10 @@ Mouse is similar:
 
 ```
 mouse event
-  ↓ mouse.handle(event, &mut ui) → Option<AppMsg>:
+  ↓ mouse.handle(event, &mut ui) → Option<AppCommand>:
     search focused?       → None (ignored)
-    drag (left)           → AppMsg::Map(Action::PanCells(dx, dy))
-    scroll up / down      → AppMsg::Map(Action::ZoomAt { anchor_*, zoom_in })
+    drag (left)           → AppCommand::Map(Action::PanCells(dx, dy))
+    scroll up / down      → AppCommand::Map(Action::ZoomAt { anchor_*, zoom_in })
     (cursor readout side effect on InfoOverlay always)
 ```
 
@@ -278,7 +278,7 @@ trait Plugin {
     fn visible(&self) -> bool;                     // is the panel on screen?
     fn handle_key(&mut self, code, mods, ctx) -> PluginAction;
     fn poll(&mut self) -> bool;                    // drain async work; redraw hint
-    fn pending_command(&mut self) -> Option<AppMsg>;  // async-emitted message (e.g. Jump)
+    fn pending_command(&mut self) -> Option<AppCommand>;  // async-emitted message (e.g. Jump)
     fn render(&self, f, area, theme);              // focused / visible panel
     fn footer_hints(&self) -> Vec<(&str, &str)>;
     fn paint_on_map(&self, p: &mut MapPainter);    // world-space primitives

@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
@@ -31,11 +31,11 @@ pub enum PluginAction {
     Pass,
     /// Key consumed by the widget. App should redraw.
     Consumed,
-    /// Plugin wants the host to run a `AppMsg` (jump, map action,
+    /// Plugin wants the host to run a `AppCommand` (jump, map action,
     /// theme switch, plugin hand-off). Routed through
-    /// [`crate::app_msg::dispatch`] so every emission site speaks the
+    /// [`crate::app_command::dispatch`] so every emission site speaks the
     /// same vocabulary.
-    Run(AppMsg),
+    Run(AppCommand),
 }
 
 /// Context passed to widget handler methods. Exposes read-only shared
@@ -130,11 +130,11 @@ pub trait Plugin {
     }
 
     /// Async command request produced by the plugin (e.g. `here`
-    /// resolves a geoip lookup and wants a `AppMsg::Jump`). Called
+    /// resolves a geoip lookup and wants a `AppCommand::Jump`). Called
     /// right after `poll`; returning `Some(cmd)` makes the app
-    /// dispatch it through [`crate::app_msg::dispatch`]. Plugins that
+    /// dispatch it through [`crate::app_command::dispatch`]. Plugins that
     /// emit commands only through `handle_key` keep the default.
-    fn pending_command(&mut self) -> Option<AppMsg> {
+    fn pending_command(&mut self) -> Option<AppCommand> {
         None
     }
 

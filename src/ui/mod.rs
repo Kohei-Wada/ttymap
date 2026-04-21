@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::app_msg::{AppMsg, KeyDelivery};
+use crate::app_command::{AppCommand, KeyDelivery};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
 use crate::plugin::{PluginAction, PluginCtx, PluginRegistry};
@@ -66,7 +66,7 @@ impl UiState {
     // Multi-step UI transitions live here (not on the controller) so
     // the invariants between `focus`, `palette`, `widgets` are owned
     // by the type that holds all three. The controller just picks
-    // which workflow a given `AppMsg` maps to.
+    // which workflow a given `AppCommand` maps to.
 
     /// Pull every frame the render thread has produced since the last
     /// tick, keeping the most recent. The receiver lives on
@@ -78,11 +78,11 @@ impl UiState {
     }
 
     /// Advance every plugin's async work by one tick. If multiple
-    /// plugins produced a `AppMsg` this tick, the latest wins — only
-    /// one AppMsg runs per tick to avoid cascading state changes
+    /// plugins produced a `AppCommand` this tick, the latest wins — only
+    /// one AppCommand runs per tick to avoid cascading state changes
     /// within a single frame.
-    pub fn poll_widgets(&mut self) -> Option<AppMsg> {
-        let mut async_cmd: Option<AppMsg> = None;
+    pub fn poll_widgets(&mut self) -> Option<AppCommand> {
+        let mut async_cmd: Option<AppCommand> = None;
         for w in self.widgets.iter_mut() {
             w.poll();
             if let Some(cmd) = w.pending_command() {

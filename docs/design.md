@@ -8,18 +8,18 @@ decisions again.
 
 ### The rule
 
-**User / system intent goes through `app_msg::dispatch`. Internal data
+**User / system intent goes through `app_command::dispatch`. Internal data
 flow does not.**
 
 Anything that's "we want to do X in response to an event" becomes a
-`AppMsg` variant and flows through `app_msg::dispatch(cmd, &mut ctx)`.
+`AppCommand` variant and flows through `app_command::dispatch(cmd, &mut ctx)`.
 Anything that's "a worker finished its job and handed us the result"
 stays as a direct method call.
 
 ### Why a pipeline at all
 
-`app_msg::dispatch` is the **single side-effect boundary** for
-app-level state changes. Every `AppMsg` arm reads/writes exactly the
+`app_command::dispatch` is the **single side-effect boundary** for
+app-level state changes. Every `AppCommand` arm reads/writes exactly the
 state it needs through the `DispatchCtx` bundle, and the post-dispatch
 rule (`InputEffect::Map → request redraw`) lives in one place. This
 gives us:
@@ -27,14 +27,14 @@ gives us:
 - One place to audit what can happen to app state
 - One place where the redraw-after-map-change invariant lives
 - A shared vocabulary for keymap, palette providers, plugin async
-  callbacks, mouse — they all emit the same `AppMsg` enum
+  callbacks, mouse — they all emit the same `AppCommand` enum
 
 Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
-### When to emit an `AppMsg`
+### When to emit an `AppCommand`
 
-Emit an `AppMsg` if **all** of the following are true:
+Emit an `AppCommand` if **all** of the following are true:
 
 1. It represents an **intent** (user action, OS event, plugin wanting
    something to happen). It's not a completion notification.
@@ -45,7 +45,7 @@ Emit an `AppMsg` if **all** of the following are true:
 
 Current examples:
 
-| AppMsg             | Source                          | Why it is an AppMsg                          |
+| AppCommand             | Source                          | Why it is an AppCommand                          |
 | ------------------- | ------------------------------- | -------------------------------------- |
 | `Map(Action::Pan…)` | keymap, mouse drag              | User intent → map state change         |
 | `Map(Action::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
@@ -80,15 +80,15 @@ Current examples:
 
 ### The infinite-loop trap
 
-Naively wrapping "frame arrived" as `AppMsg::FrameArrived(frame)` is
+Naively wrapping "frame arrived" as `AppCommand::FrameArrived(frame)` is
 tempting — everything goes through the same pipeline, right? It breaks:
 
 ```
-frame arrives → AppMsg::FrameArrived
+frame arrives → AppCommand::FrameArrived
              → dispatch → map_frame = Some(f)
              → InputEffect::Map → request_draw (post-dispatch rule)
              → render thread renders a frame
-             → frame arrives → AppMsg::FrameArrived
+             → frame arrives → AppCommand::FrameArrived
              → dispatch → map_frame = Some(f)
              → InputEffect::Map → request_draw
              → …
@@ -105,18 +105,18 @@ When unsure, ask:
 
 > "If this happens, should **other state also change** in response?"
 
-- **YES** → probably an `AppMsg`. The pipeline ensures the related
+- **YES** → probably an `AppCommand`. The pipeline ensures the related
   changes fire consistently.
-- **NO** → direct method. A `AppMsg` just adds ceremony without
+- **NO** → direct method. A `AppCommand` just adds ceremony without
   earning anything.
 
 ## Controller split: by feature, not by domain
 
-When `app_msg.rs` grows past ~200 lines, split `dispatch` into
+When `app_command.rs` grows past ~200 lines, split `dispatch` into
 per-feature modules (file names illustrative):
 
 ```
-app_msg/
+app_command/
   map_action.rs     # Map / Jump / Resize map-side
   resize.rs         # map + render_handle cross-cutting
   theme.rs          # ui + render_handle cross-cutting
@@ -130,7 +130,7 @@ and render styler; `Resize` touches map state and render canvas). A
 domain split forces these into arbitrary owners. A feature split lets
 each module freely touch whatever state its feature needs.
 
-Current threshold: not yet (app_msg.rs is ~140 lines). Revisit when
+Current threshold: not yet (app_command.rs is ~140 lines). Revisit when
 adding commands pushes us over.
 
 ## Cleanup via `Drop`, not manual

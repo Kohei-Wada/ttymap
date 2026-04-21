@@ -4,14 +4,14 @@
 //! palette can offer `Jump to current location`. Activation fires a
 //! background geoip lookup; when it returns the resolved coordinates
 //! are surfaced through [`Plugin::pending_command`] as a
-//! `AppMsg::Jump` and the main loop recenters the map. Shares
+//! `AppCommand::Jump` and the main loop recenters the map. Shares
 //! `config.geoip_endpoint` / `config.geoip_timeout_ms` with the
 //! `--here` startup path.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::{info, warn};
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
@@ -90,8 +90,8 @@ impl Plugin for HerePlugin {
         }
     }
 
-    fn pending_command(&mut self) -> Option<AppMsg> {
-        self.pending.take().map(AppMsg::Jump)
+    fn pending_command(&mut self) -> Option<AppCommand> {
+        self.pending.take().map(AppCommand::Jump)
     }
 }
 
@@ -105,7 +105,7 @@ mod tests {
         p.pending = Some(LonLat { lon: 1.0, lat: 2.0 });
         assert_eq!(
             p.pending_command(),
-            Some(AppMsg::Jump(LonLat { lon: 1.0, lat: 2.0 }))
+            Some(AppCommand::Jump(LonLat { lon: 1.0, lat: 2.0 }))
         );
         assert_eq!(p.pending_command(), None);
     }

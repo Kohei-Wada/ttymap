@@ -18,7 +18,7 @@ pub mod theme;
 pub use command::CommandProvider;
 pub use theme::ThemeProvider;
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 
 /// One row in the palette list.
 pub struct PaletteItem {
@@ -33,8 +33,8 @@ pub struct PaletteItem {
 pub enum PaletteAction {
     /// Dismiss the palette.
     Close,
-    /// Run the given `AppMsg` via `crate::app_msg::dispatch`.
-    Run(AppMsg),
+    /// Run the given `AppCommand` via `crate::app_command::dispatch`.
+    Run(AppCommand),
     /// Swap to a different provider without closing the palette — the
     /// "sub-mode" transition. Query resets; focus stays.
     SwitchProvider(Box<dyn PaletteProvider>),

@@ -1,16 +1,22 @@
-//! App-level message vocabulary + central dispatcher.
+//! App-level command vocabulary + central dispatcher.
 //!
-//! `AppMsg` is the **single enum** that anything inside the app can
+//! `AppCommand` is the **single enum** that anything inside the app can
 //! emit to request a state change — palette providers, plugins' key
 //! handlers, plugins' async `pending_command`, and (one day) external
 //! control surfaces like an HTTP/JSON-RPC front. Everyone speaks the
 //! same vocabulary.
 //!
-//! [`dispatch`] is a **thin router**: each arm maps an `AppMsg` to a
+//! This is the **Command pattern** (GoF): a closed enum of imperative
+//! intents (`Pan`, `OpenPalette`, `ActivatePlugin`), each with exactly
+//! one handler. *Not* an event/message bus — there is no broadcast and
+//! no subscriber registration. Emitter → router (`dispatch`) → one
+//! domain method per arm.
+//!
+//! [`dispatch`] is a **thin router**: each arm maps an `AppCommand` to a
 //! single method on the domain type that owns the relevant state
 //! (`UiState` / `MapState`). Those methods are where multi-step
 //! invariants live (focus ↔ palette ↔ widgets transitions, etc.).
-//! Adding a new message = one new `AppMsg` variant + one match arm +
+//! Adding a new command = one new `AppCommand` variant + one match arm +
 //! the domain method it calls.
 
 use std::sync::Arc;
@@ -29,7 +35,7 @@ use crate::ui::action::UiAction;
 /// providers, plugin handlers, and async plugin polling; dispatched by
 /// [`dispatch`] inside the input pipeline.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppMsg {
+pub enum AppCommand {
     /// Dispatch a map-state action (pan, zoom, reset, quit, ...).
     Map(Action),
     /// Jump the map to a specific location — produced by search /
@@ -58,7 +64,7 @@ pub enum AppMsg {
 /// loop will redraw when a fresh frame arrives, avoiding a
 /// stale-frame draw followed by a second fresh-frame draw.
 ///
-/// Lives on `app_msg` (not `app`) because it's the common return type
+/// Lives on `app_command` (not `app`) because it's the common return type
 /// of every dispatch path — keyboard handler, dispatcher, mouse
 /// handler all share it.
 #[derive(Clone, Copy, PartialEq)]
@@ -72,16 +78,16 @@ pub enum InputEffect {
 /// [`UiState::deliver_key`](crate::ui::UiState::deliver_key). The
 /// host routes on this: `Passthrough` falls through to the global
 /// fallback chain; `Consumed` is absorbed by the surface; `Run` is an
-/// `AppMsg` for the caller to dispatch next.
+/// `AppCommand` for the caller to dispatch next.
 pub enum KeyDelivery {
     /// Focus had no claim (`Focus::Map`) or the focused plugin
     /// returned `Pass`. Caller should try the global fallback chain.
     Passthrough,
-    /// Focused surface consumed the key; no `AppMsg` to run.
+    /// Focused surface consumed the key; no `AppCommand` to run.
     Consumed,
-    /// Focused surface emitted an `AppMsg` — caller should
+    /// Focused surface emitted an `AppCommand` — caller should
     /// `dispatch` it.
-    Run(AppMsg),
+    Run(AppCommand),
 }
 
 /// Bundle of borrows every dispatcher entry point needs. Bundling
@@ -111,41 +117,41 @@ pub struct DispatchCtx<'a> {
     pub ui_theme: &'a mut UiTheme,
 }
 
-/// Apply an `AppMsg` to the app. Thin router: each arm delegates to a
+/// Apply an `AppCommand` to the app. Thin router: each arm delegates to a
 /// single domain method that encapsulates the transition.
-pub fn dispatch(msg: AppMsg, ctx: &mut DispatchCtx<'_>) -> InputEffect {
-    match msg {
-        AppMsg::Map(action) => {
+pub fn dispatch(cmd: AppCommand, ctx: &mut DispatchCtx<'_>) -> InputEffect {
+    match cmd {
+        AppCommand::Map(action) => {
             if ctx.map.process_action(&action) {
                 InputEffect::Map
             } else {
                 InputEffect::None
             }
         }
-        AppMsg::Jump(loc) => {
+        AppCommand::Jump(loc) => {
             ctx.map.jump_to(loc);
             InputEffect::Map
         }
-        AppMsg::Ui(action) => {
+        AppCommand::Ui(action) => {
             apply_ui_action(action, ctx);
             InputEffect::Map
         }
-        AppMsg::ActivatePlugin(tag) => {
+        AppCommand::ActivatePlugin(tag) => {
             ctx.ui.activate_plugin(&tag, ctx.map.center());
             InputEffect::Plugin
         }
-        AppMsg::CycleFocus(forward) => {
+        AppCommand::CycleFocus(forward) => {
             if ctx.ui.cycle_focus(forward) {
                 InputEffect::Plugin
             } else {
                 InputEffect::None
             }
         }
-        AppMsg::OpenPalette => {
+        AppCommand::OpenPalette => {
             ctx.ui.open_palette(ctx.keymap, *ctx.theme_id);
             InputEffect::Plugin
         }
-        AppMsg::Resize(cols, rows) => {
+        AppCommand::Resize(cols, rows) => {
             ctx.map.resize(cols, rows);
             ctx.render_handle
                 .request_resize(ctx.map.width(), ctx.map.height());

@@ -23,8 +23,8 @@ The build step compiles `proto/vector_tile.proto` using protox (no system protoc
 ## Design philosophy
 
 See [docs/design.md](docs/design.md) for load-bearing design decisions:
-- **When to emit a `AppMsg` vs a direct method call** — user intent goes through `app_msg::dispatch`; internal data flow (frame arrival, widget polling) does not.
-- **Controller split: by feature, not by domain** — if `app_msg.rs` grows large.
+- **When to emit a `AppCommand` vs a direct method call** — user intent goes through `app_command::dispatch`; internal data flow (frame arrival, widget polling) does not.
+- **Controller split: by feature, not by domain** — if `app_command.rs` grows large.
 - **Cleanup via `Drop`, not manual** — `RenderHandle`'s thread shutdown is handled by its Drop impl.
 - **Frames are completed products** — main thread displays, does not compute.
 
@@ -32,7 +32,7 @@ See [docs/design.md](docs/design.md) for load-bearing design decisions:
 
 The app uses a **three-thread model**:
 
-1. **Main thread** (`src/app.rs`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `app_msg::dispatch` (`src/app_msg.rs`).
+1. **Main thread** (`src/app.rs`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `app_command::dispatch` (`src/app_command.rs`).
 
 2. **Render thread** (`src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw(Viewport)` / `Resize` / `SetStyler` / `Shutdown`) via `mpsc`, and sends completed `MapFrame`s back. Also polls the tile cache for completed fetches and re-renders when new tiles arrive.
 
@@ -50,7 +50,7 @@ Key modules:
 - **`src/map/styler/`**: Defines map styles as Rust data structures with style presets (Dark/Bright). Each preset provides layer rules (filter expressions, color by zoom level). Applied during tile decode to produce styled `Feature` objects.
 - **`src/color_palette.rs`**: Centralized xterm-256 color values per theme. `ColorPalette` is consumed by both the styler (map colors) and `src/theme.rs` (UI chrome colors).
 - **`src/map/tile/cache.rs` / `src/map/tile/fetch/`**: Two-tier cache (LRU memory cache + optional on-disk cache via `directories` crate) and pluggable HTTP clients, with in-flight dedup.
-- **`src/app_msg.rs`**: App-level command vocabulary and central `dispatch` router. Single side-effect boundary for user-intent state changes. See [docs/design.md](docs/design.md) for the Command-vs-direct-API judgment rules.
+- **`src/app_command.rs`**: App-level command vocabulary and central `dispatch` router. Single side-effect boundary for user-intent state changes. See [docs/design.md](docs/design.md) for the Command-vs-direct-API judgment rules.
 - **`src/ui/`**: UI state (`UiState`), plugin registry, command palette, overlays, and `draw()`. Workflow methods (palette open, focus cycle, plugin activate, frame drain) live on `UiState`.
 - **`src/geo.rs`**: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`src/input/`**: Keyboard / mouse handlers. Keyboard supports count prefixes for pan (e.g., `5j`); `:` opens the command palette, `/` opens the search plugin.

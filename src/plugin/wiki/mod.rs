@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::app_msg::AppMsg;
+use crate::app_command::AppCommand;
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;
@@ -94,7 +94,7 @@ impl Plugin for WikiPlugin {
         match outcome {
             KeyOutcome::None => PluginAction::Pass,
             KeyOutcome::Consumed => PluginAction::Consumed,
-            KeyOutcome::JumpTo(loc) => PluginAction::Run(AppMsg::Jump(loc)),
+            KeyOutcome::JumpTo(loc) => PluginAction::Run(AppCommand::Jump(loc)),
             KeyOutcome::Refresh => {
                 self.refresh(ctx.center);
                 PluginAction::Consumed
