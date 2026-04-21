@@ -1,19 +1,32 @@
-//! Mouse router — translates raw crossterm `MouseEvent`s into a
+//! Mouse adapter — translates raw crossterm `MouseEvent`s into a
 //! sequence of `AppCommand`s for the main loop to dispatch.
 //!
-//! Sibling of [`super::route_key`] under `ui::router`. Key and mouse
-//! paths stay intentionally separate — they have different semantics
-//! (keys are modal/captured, mouse is observer+target) and unifying
-//! them has been a documented regret in other Rust TUI apps (gitui).
-//! They share the `AppCommand` vocabulary on the output side: every
-//! event emits a leading `Ui(CursorMoved)`; drag additionally emits
-//! `Map(PanCells)`; scroll emits `Map(ZoomAt { ... })`.
+//! *Adapter* (not a router): wraps a device API
+//! (`crossterm::MouseEvent`) and produces a different shape
+//! (`AppCommand`), in the GoF sense. It does not decide where the
+//! output goes — every command flows straight to
+//! `app_command::dispatch`. Hit-testing against individual surfaces
+//! (click inside palette popup vs. click on the map) is future work;
+//! when added, a separate routing step would sit between this
+//! adapter and `dispatch`, matching the cached-`Rect` + `contains`
+//! pattern used by helix, zellij, bottom, and ratatui's own
+//! recommendation.
 //!
-//! Unlike [`super::route_key`], this is stateful (drag tracking) so
-//! it lives as a `MouseRouter` struct owned by `App`. The router
-//! never touches `UiState` directly — cursor-readout updates flow
-//! through `AppCommand::Ui(UiAction::CursorMoved)` like every other
-//! user-intent state change.
+//! Owns cross-event drag state (`drag_from`) because translating a
+//! `Drag` event into `PanCells(dx, dy)` requires knowing the
+//! previous position. That state is *this adapter's translation
+//! concern* (protocol-level event correlation, same role as
+//! zellij's `mouse_old_event`), not something the broader app cares
+//! about, so it stays encapsulated here. If drag state ever starts
+//! holding *semantic* information (world-space anchor, selected
+//! feature, …) it should move to the relevant domain type — helix
+//! puts its `mouse_down_range: Range` on `Editor` for that reason.
+//!
+//! Key and mouse paths are intentionally not symmetric (see
+//! [`super::router`] for the axes). Both emit the same `AppCommand`
+//! vocabulary on the output side: every event emits a leading
+//! `Ui(CursorMoved)`; drag additionally emits `Map(PanCells)`;
+//! scroll emits `Map(ZoomAt { ... })`.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
@@ -22,16 +35,16 @@ use crate::map::Action;
 use crate::ui::action::UiAction;
 
 #[derive(Default)]
-pub struct MouseRouter {
+pub struct MouseAdapter {
     drag_from: Option<(u16, u16)>,
 }
 
-impl MouseRouter {
+impl MouseAdapter {
     /// Translate a raw mouse event into zero or more `AppCommand`s.
     /// Every event emits a leading `Ui(CursorMoved)` for the overlay
     /// readout; the `resolve` stage appends any additional command
     /// (drag → pan, scroll → zoom).
-    pub fn route_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
+    pub fn translate(&mut self, event: MouseEvent) -> Vec<AppCommand> {
         let mut cmds = vec![AppCommand::Ui(UiAction::CursorMoved(
             event.column,
             event.row,

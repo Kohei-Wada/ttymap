@@ -24,15 +24,14 @@ use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
-use crate::ui::router::key::KeyRouter;
-use crate::ui::router::mouse::MouseRouter;
+use crate::ui::mouse::MouseAdapter;
+use crate::ui::router;
 
 pub struct App {
     map: MapState,
     render_handle: RenderHandle,
     ui: UiState,
-    key: KeyRouter,
-    mouse: MouseRouter,
+    mouse: MouseAdapter,
     /// Active theme — single source of truth for the running app.
     /// `ui_theme` is its derived UI-colour cache; the render thread
     /// receives a corresponding `Styler` via message on switch.
@@ -80,8 +79,7 @@ impl App {
             map,
             render_handle,
             ui,
-            key: KeyRouter,
-            mouse: MouseRouter::default(),
+            mouse: MouseAdapter::default(),
             theme_id,
             ui_theme,
         }
@@ -127,8 +125,7 @@ impl App {
                                 center: self.map.center(),
                                 theme_id: self.theme_id,
                             };
-                            if let Some(cmd) =
-                                self.key.route_key(&mut self.ui.focus, key_event, ctx)
+                            if let Some(cmd) = router::route_key(&mut self.ui.focus, key_event, ctx)
                             {
                                 self.dispatch(cmd);
                             }
@@ -139,7 +136,7 @@ impl App {
                         self.dispatch(AppCommand::Resize(cols, rows));
                     }
                     Event::Mouse(mouse) => {
-                        for cmd in self.mouse.route_mouse(mouse) {
+                        for cmd in self.mouse.translate(mouse) {
                             self.dispatch(cmd);
                         }
                     }

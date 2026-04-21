@@ -2,6 +2,7 @@
 
 pub mod action;
 pub mod map_view;
+pub mod mouse;
 pub mod overlay;
 pub mod router;
 
