@@ -92,14 +92,6 @@ impl Plugin for SearchPlugin {
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.has_candidates() {
-            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
-        } else {
-            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
-        }
-    }
 }
 
 /// Modal key dispatch. While candidates are showing the popup is in
@@ -183,5 +175,13 @@ impl FocusSurface for SearchPlugin {
 
     fn is_visible(&self) -> bool {
         self.active
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.has_candidates() {
+            vec![("↑↓", "select"), ("Enter", "jump"), ("Esc", "cancel")]
+        } else {
+            vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
+        }
     }
 }

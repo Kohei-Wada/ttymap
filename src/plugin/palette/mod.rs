@@ -157,10 +157,6 @@ impl Plugin for CommandPalette {
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
-    }
 }
 
 /// The palette is modal: every key while it is focused is `Consumed`
@@ -169,6 +165,10 @@ impl Plugin for CommandPalette {
 impl FocusSurface for CommandPalette {
     fn is_visible(&self) -> bool {
         self.active
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
     }
 
     fn handle_key(

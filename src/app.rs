@@ -5,7 +5,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::app_command::{self, AppCommand, DispatchCtx, InputEffect};
+use crate::app_command::{self, AppCommand, DispatchCtx, InputEffect, SurfaceCtx};
 use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::config::Config;
@@ -121,13 +121,13 @@ impl App {
                             self.dispatch(AppCommand::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
-                            if let Some(cmd) = router::route_key(
-                                &mut self.ui.focus,
-                                key_event.code,
-                                key_event.modifiers,
-                                self.map.center(),
-                                self.theme_id,
-                            ) {
+                            let ctx = SurfaceCtx {
+                                center: self.map.center(),
+                                theme_id: self.theme_id,
+                            };
+                            if let Some(cmd) =
+                                router::route_key(&mut self.ui.focus, key_event, ctx)
+                            {
                                 self.dispatch(cmd);
                             }
                         }

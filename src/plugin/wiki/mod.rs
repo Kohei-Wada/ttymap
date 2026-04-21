@@ -110,8 +110,10 @@ impl Plugin for WikiPlugin {
     fn activate(&mut self, ctx: SurfaceCtx) {
         // Non-modal: visible and focus are independent. Host drives
         // focus; here we only manage panel state. If the panel is
-        // already visible, leave state alone — host may be reclaiming
-        // focus (case 3) or closing via `close()` on toggle-off.
+        // already visible, leave state alone — the host may be
+        // reclaiming focus from another plugin's activation key.
+        // Toggle-off is handled by `handle_key`'s self-absorption of
+        // the `i` key, which calls `close_state` directly.
         if !self.active {
             self.open();
             self.refresh(ctx.center);
@@ -119,11 +121,7 @@ impl Plugin for WikiPlugin {
     }
 
     // Non-modal: keep the panel visible when focus leaves (default
-    // deactivate is no-op). `close()` fires on user-initiated
-    // toggle-off and tears down state.
-    fn close(&mut self) {
-        self.close_state();
-    }
+    // deactivate is no-op).
 
     fn poll(&mut self) -> bool {
         if let Some(articles) = self.service.poll() {
@@ -137,27 +135,6 @@ impl Plugin for WikiPlugin {
 
     fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
-    }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.is_detail_open() {
-            vec![
-                ("C-n/C-p", "prev/next"),
-                ("Enter/Esc", "back"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("?", "help"),
-            ]
-        } else {
-            vec![
-                ("C-n/C-p", "select"),
-                ("Enter", "open"),
-                ("r", "refresh"),
-                ("i", "close wiki"),
-                ("/", "search"),
-                ("?", "help"),
-            ]
-        }
     }
 
     fn paint_on_map(&self, p: &mut crate::painter::MapPainter<'_>) {
@@ -298,5 +275,26 @@ impl FocusSurface for WikiPlugin {
 
     fn is_visible(&self) -> bool {
         self.active
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if self.is_detail_open() {
+            vec![
+                ("C-n/C-p", "prev/next"),
+                ("Enter/Esc", "back"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("?", "help"),
+            ]
+        } else {
+            vec![
+                ("C-n/C-p", "select"),
+                ("Enter", "open"),
+                ("r", "refresh"),
+                ("i", "close wiki"),
+                ("/", "search"),
+                ("?", "help"),
+            ]
+        }
     }
 }

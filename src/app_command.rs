@@ -148,6 +148,16 @@ pub trait FocusSurface {
     fn is_visible(&self) -> bool {
         false
     }
+
+    /// Context-sensitive key hints for the footer, shown while this
+    /// surface is the focused one. Lives on `FocusSurface` (not
+    /// `Plugin`) so the [`BackgroundResponder`](crate::background::BackgroundResponder)
+    /// can supply its own hint list through the same channel — the
+    /// UI layer just calls `focused_surface().footer_hints()` and
+    /// doesn't special-case background.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
 }
 
 /// Bundle of borrows every dispatcher entry point needs. Bundling

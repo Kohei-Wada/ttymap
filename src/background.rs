@@ -122,6 +122,23 @@ impl FocusSurface for BackgroundResponder {
     fn is_visible(&self) -> bool {
         true
     }
+
+    /// Footer hints shown when the background owns focus (i.e. no
+    /// modal is up). The cycle hint (`Tab/S-Tab`) is *not* included
+    /// here — it depends on whether any plugin is currently visible,
+    /// which the background can't see. The UI layer adds it when
+    /// applicable.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("hjkl", "pan"),
+            ("a/z", "zoom"),
+            (":", "cmd"),
+            ("/", "search"),
+            ("i", "wiki"),
+            ("?", "help"),
+            ("q", "quit"),
+        ]
+    }
 }
 
 #[cfg(test)]

@@ -135,25 +135,21 @@ pub fn draw(f: &mut Frame, ui: &UiState, theme: &UiTheme) {
 }
 
 fn build_hints(ui: &UiState) -> Vec<(&'static str, &'static str)> {
-    // Focused surface provides its own context-sensitive hints.
-    if let Focus::Modal(id) = ui.focus.current()
-        && let Some(w) = ui.focus.widgets().get(id.as_ref())
+    let mut hints = ui.focus.focused_surface().footer_hints();
+
+    // Cycle hint is dynamic (requires "any plugin visible" check) +
+    // only meaningful while no modal owns focus, so the UI layer
+    // adds it on top of whatever the surface returned. Insert
+    // before the final `q` if present, append otherwise.
+    if matches!(ui.focus.current(), Focus::Background)
+        && ui.focus.widgets().iter().any(|w| w.is_visible())
     {
-        return w.footer_hints();
+        let cycle_hint = ("Tab/S-Tab", "focus");
+        match hints.iter().position(|(k, _)| *k == "q") {
+            Some(i) => hints.insert(i, cycle_hint),
+            None => hints.push(cycle_hint),
+        }
     }
-    let mut hints = vec![
-        ("hjkl", "pan"),
-        ("a/z", "zoom"),
-        (":", "cmd"),
-        ("/", "search"),
-        ("i", "wiki"),
-        ("?", "help"),
-    ];
-    // Tab only cycles when at least one plugin window is visible.
-    if ui.focus.widgets().iter().any(|w| w.is_visible()) {
-        hints.push(("Tab/S-Tab", "focus"));
-    }
-    hints.push(("q", "quit"));
     hints
 }
 

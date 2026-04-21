@@ -89,6 +89,21 @@ impl FocusManager {
         }
     }
 
+    /// Immutable counterpart of [`focused_surface_mut`] — used by the
+    /// UI layer to query non-mutating properties (today: footer
+    /// hints) of whichever surface holds focus, without special-
+    /// casing background.
+    pub fn focused_surface(&self) -> &dyn FocusSurface {
+        match &self.current {
+            Focus::Background => &self.background,
+            Focus::Modal(id) => self
+                .widgets
+                .get(id.as_ref())
+                .map(|p| p as &dyn FocusSurface)
+                .unwrap_or(&self.background),
+        }
+    }
+
     /// Release the currently-held modal focus (if any). Called by the
     /// router after `handle_key` when the surface reports
     /// `is_visible() == false`. No-op for `Focus::Background`.
@@ -130,11 +145,15 @@ impl FocusManager {
     /// Open / activate the named surface and transfer focus to it.
     /// Single entry point invoked by the router on `Effect::Open(id)`.
     ///
+    /// Toggle-off (re-pressing the activation key while the plugin
+    /// holds focus) is **the surface's own responsibility**: every
+    /// modal in the codebase consumes its activation key and
+    /// self-closes (palette / search → `Esc`; wiki → second `i`;
+    /// help → any key). That means `Effect::Open(id)` never reaches
+    /// `open()` while `id` is already the focused surface, so this
+    /// path only handles the "fresh activation" case.
+    ///
     /// Behaviour by id:
-    /// - **already-focused**: toggle-off — call the plugin's `close`
-    ///   hook and release focus. Defensive fallback for plugins that
-    ///   don't self-handle their activation key (palette uses Esc;
-    ///   wiki absorbs `i` directly).
     /// - **registered plugin**: bring to front, call its `activate`
     ///   hook with the supplied `ctx` snapshot (geo-aware plugins
     ///   read `ctx.center`, palette reads `ctx.theme_id`), take focus
@@ -143,14 +162,6 @@ impl FocusManager {
     /// - **unknown id**: no-op (defensive — registries shouldn't
     ///   shrink at runtime).
     pub fn open(&mut self, id: SurfaceId, ctx: SurfaceCtx) {
-        if self.is_modal(&id) {
-            if let Some(w) = self.widgets.get_mut(id.as_ref()) {
-                w.close();
-            }
-            self.release();
-            return;
-        }
-
         self.widgets.bring_to_front(id.as_ref());
         let wants_focus = if let Some(w) = self.widgets.get_mut(id.as_ref()) {
             w.activate(ctx);

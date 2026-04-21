@@ -20,26 +20,26 @@
 //! through `app_command::dispatch`, so they don't appear in the
 //! returned `Option<AppCommand>`.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::KeyEvent;
 
 use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
-use crate::color_palette::ThemeId;
 use crate::focus::{Focus, FocusManager};
-use crate::geo::LonLat;
 
+/// Route a key event to the focused surface. `ctx` is the read-only
+/// app-state snapshot the surface receives (built once per event by
+/// the caller from `App.theme_id` + `MapState.center` etc.). The
+/// `KeyEvent` carries both the code and the modifier set in one
+/// value, replacing the historical `(code, modifiers)` pair.
 pub fn route_key(
     focus: &mut FocusManager,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    center: LonLat,
-    theme_id: ThemeId,
+    key: KeyEvent,
+    ctx: SurfaceCtx,
 ) -> Option<AppCommand> {
-    let ctx = SurfaceCtx { center, theme_id };
     let was_modal = !matches!(focus.current(), Focus::Background);
 
     let (effect, still_visible) = {
         let surface = focus.focused_surface_mut();
-        let effect = surface.handle_key(code, modifiers, ctx);
+        let effect = surface.handle_key(key.code, key.modifiers, ctx);
         let still_visible = surface.is_visible();
         (effect, still_visible)
     };
@@ -51,7 +51,9 @@ pub fn route_key(
     // (Background-as-focused never reaches this branch; its own Pass
     // is the terminal "nothing happened" state.)
     let resolved = if matches!(effect, Effect::Pass) && was_modal {
-        focus.background_mut().handle_key(code, modifiers, ctx)
+        focus
+            .background_mut()
+            .handle_key(key.code, key.modifiers, ctx)
     } else {
         effect
     };

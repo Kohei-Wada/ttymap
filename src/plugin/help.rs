@@ -152,10 +152,6 @@ impl Plugin for HelpPlugin {
         let widget = Paragraph::new(rendered).style(theme.text()).block(block);
         f.render_widget(widget, area);
     }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("any key", "close")]
-    }
 }
 
 /// Help is fully modal: any key closes the panel. The host notices
@@ -173,6 +169,10 @@ impl FocusSurface for HelpPlugin {
 
     fn is_visible(&self) -> bool {
         self.active
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("any key", "close")]
     }
 }
 

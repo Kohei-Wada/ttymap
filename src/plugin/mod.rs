@@ -69,20 +69,17 @@ pub trait Plugin: FocusSurface {
     fn activate(&mut self, _ctx: SurfaceCtx) {}
 
     /// Called when focus moves to a different plugin via another
-    /// plugin's activation key. Modal plugins (search, help) close
-    /// themselves here; non-modal plugins leave their window visible
-    /// and only release focus. Default is a no-op (non-modal).
+    /// plugin's activation key. Modal plugins (search, help, palette)
+    /// close themselves here; non-modal plugins (wiki) leave their
+    /// window visible and only release focus. Default is a no-op.
+    ///
+    /// **Toggle-off (re-pressing the activation key while focused) is
+    /// not handled here** — the surface's own `handle_key` is
+    /// responsible for noticing the activation key and closing
+    /// itself (palette / search → `Esc`; help → any key; wiki →
+    /// second `i`). The router then auto-releases focus when
+    /// `is_visible()` flips to false.
     fn deactivate(&mut self) {}
-
-    /// Called when the user explicitly dismisses the plugin — e.g. by
-    /// pressing its activation key a second time while it already has
-    /// focus (toggle-off). Unlike `deactivate` (which fires on any
-    /// focus transfer), this is user-initiated close and should tear
-    /// down the panel state. Non-modal plugins (wiki) override this
-    /// to close their state while leaving `deactivate` a no-op.
-    fn close(&mut self) {
-        self.deactivate();
-    }
 
     /// Drain any async/background work. Returns `true` if state
     /// changed and the app should redraw.
@@ -104,11 +101,10 @@ pub trait Plugin: FocusSurface {
     /// no-op.
     fn render(&self, _f: &mut Frame, _area: Rect, _theme: &UiTheme) {}
 
-    /// Context-sensitive key hints for the footer, shown while the
-    /// widget holds focus.
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        Vec::new()
-    }
+    // `footer_hints()` is inherited from the [`FocusSurface`]
+    // supertrait. Plugins override it there (the impl block where
+    // `handle_key` / `is_visible` already live) — no separate
+    // `Plugin` declaration is needed.
 
     /// Paint primitives on the map via the supplied `MapPainter`.
     /// Always called during the draw phase, regardless of focus — a
