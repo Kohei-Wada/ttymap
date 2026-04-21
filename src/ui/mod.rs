@@ -20,7 +20,7 @@ use overlay::OverlayManager;
 use crate::app_command::{AppCommand, Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
-use crate::plugin::{PluginCtx, PluginRegistry};
+use crate::plugin::PluginRegistry;
 use crate::ui::palette::CommandPalette;
 
 use crate::color_palette::ThemeId;
@@ -135,9 +135,9 @@ impl UiState {
 
         // Normal activation.
         self.widgets.bring_to_front(tag);
-        let mut ctx = PluginCtx { center };
+        let ctx = SurfaceCtx { center };
         let wants_focus = if let Some(w) = self.widgets.get_mut(tag) {
-            w.activate(&mut ctx);
+            w.activate(ctx);
             w.wants_focus()
         } else {
             return;
@@ -173,7 +173,7 @@ impl UiState {
             (effect, self.palette.is_visible())
         } else {
             let effect = match self.widgets.get_mut(id.as_ref()) {
-                Some(p) => crate::plugin::deliver(p, code, modifiers, ctx),
+                Some(p) => p.handle_key(code, modifiers, ctx),
                 None => Effect::Pass,
             };
             let still_visible = self
@@ -318,7 +318,6 @@ mod tests {
 
     #[test]
     fn test_ui_state_search_lifecycle() {
-        use crate::plugin::PluginCtx;
         let ui = &mut make_ui();
         assert_eq!(ui.focus.current(), &Focus::Background);
 
@@ -327,14 +326,14 @@ mod tests {
         // dispatch loop) owns every focus transition. Here we just
         // verify the plugin's own state machine: open on activate,
         // close on Esc.
-        let mut ctx = PluginCtx { center: ZERO };
+        let ctx = SurfaceCtx { center: ZERO };
         let search = ui.widgets.get_mut("search").unwrap();
-        search.activate(&mut ctx);
+        search.activate(ctx);
         assert!(search.visible());
         assert!(search.wants_focus());
 
-        search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut ctx);
-        search.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut ctx);
+        search.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, ctx);
+        search.handle_key(KeyCode::Esc, KeyModifiers::NONE, ctx);
         assert!(!search.visible());
     }
 

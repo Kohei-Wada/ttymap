@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::app_command::AppCommand;
+use crate::app_command::{AppCommand, Effect, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;
@@ -23,7 +23,7 @@ use crate::theme::UiTheme;
 use service::WikiService;
 use state::{KeyOutcome, WikiState};
 
-use super::{Plugin, PluginAction, PluginCtx};
+use super::Plugin;
 
 pub struct WikiPlugin {
     pub(in crate::plugin::wiki) state: WikiState,
@@ -60,7 +60,7 @@ impl Plugin for WikiPlugin {
         vec!["i"]
     }
 
-    fn activate(&mut self, ctx: &mut PluginCtx) {
+    fn activate(&mut self, ctx: SurfaceCtx) {
         // Non-modal: visible and focus are independent. Host drives
         // focus; here we only manage panel state. If the panel is
         // already visible, leave state alone — host may be reclaiming
@@ -86,18 +86,18 @@ impl Plugin for WikiPlugin {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut PluginCtx,
-    ) -> PluginAction {
+        ctx: SurfaceCtx,
+    ) -> Effect {
         let outcome = self.state.handle_key(code, modifiers);
         // Focus release is host-driven: if `visible()` flips to false
         // (e.g. Esc closed the list), ui::router releases for us.
         match outcome {
-            KeyOutcome::None => PluginAction::Pass,
-            KeyOutcome::Consumed => PluginAction::Consumed,
-            KeyOutcome::JumpTo(loc) => PluginAction::Run(AppCommand::Jump(loc)),
+            KeyOutcome::None => Effect::Pass,
+            KeyOutcome::Consumed => Effect::Consumed,
+            KeyOutcome::JumpTo(loc) => Effect::Run(AppCommand::Jump(loc)),
             KeyOutcome::Refresh => {
                 self.refresh(ctx.center);
-                PluginAction::Consumed
+                Effect::Consumed
             }
         }
     }

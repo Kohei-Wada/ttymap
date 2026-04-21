@@ -12,7 +12,7 @@
 //!   Its whole job is to read other subsystems' state.
 //!
 //! Folding palette into the `Plugin` trait would work mechanically —
-//! with a wider `PluginCtx<'a>` carrying `&PluginRegistry`, `&KeyMap`,
+//! with a wider `SurfaceCtx<'a>` carrying `&PluginRegistry`, `&KeyMap`,
 //! `ThemeId` — but it would erase that semantic distinction: every
 //! plugin would gain permission to enumerate the registry (the "plugins
 //! don't see each other" invariant weakens from `pub(crate)` structure

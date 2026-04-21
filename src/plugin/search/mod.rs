@@ -20,7 +20,9 @@ use crate::theme::UiTheme;
 use service::SearchService;
 use state::{Outcome, SearchState};
 
-use super::{Plugin, PluginAction, PluginCtx};
+use crate::app_command::{Effect, SurfaceCtx};
+
+use super::Plugin;
 
 pub struct SearchPlugin {
     pub(in crate::plugin::search) state: SearchState,
@@ -53,7 +55,7 @@ impl Plugin for SearchPlugin {
         vec!["/"]
     }
 
-    fn activate(&mut self, _ctx: &mut PluginCtx) {
+    fn activate(&mut self, _ctx: SurfaceCtx) {
         self.state.open();
     }
 
@@ -69,17 +71,17 @@ impl Plugin for SearchPlugin {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        _ctx: &mut PluginCtx,
-    ) -> PluginAction {
+        _ctx: SurfaceCtx,
+    ) -> Effect {
         let outcome = self.state.handle_key(code, modifiers);
         // Focus release is host-driven: ui::router detects `visible()`
         // flipping to false and calls `ui.focus.release()`.
         match outcome {
-            Outcome::None | Outcome::Consumed => PluginAction::Consumed,
-            Outcome::Jump(loc) => PluginAction::Run(AppCommand::Jump(loc)),
+            Outcome::None | Outcome::Consumed => Effect::Consumed,
+            Outcome::Jump(loc) => Effect::Run(AppCommand::Jump(loc)),
             Outcome::Submit(query) => {
                 self.service.search(&query);
-                PluginAction::Consumed
+                Effect::Consumed
             }
         }
     }

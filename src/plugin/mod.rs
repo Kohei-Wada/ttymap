@@ -18,35 +18,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app_command::{AppCommand, Effect, SurfaceCtx};
-use crate::geo::LonLat;
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;
-
-/// Outcome of a widget seeing a raw key event.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PluginAction {
-    /// Key is not for this widget. Iteration should try the next widget
-    /// and, if none claim it, the global keymap.
-    Pass,
-    /// Key consumed by the widget. App should redraw.
-    Consumed,
-    /// Plugin wants the host to run a `AppCommand` (jump, map action,
-    /// theme switch, plugin hand-off). Routed through
-    /// [`crate::app_command::dispatch`] so every emission site speaks the
-    /// same vocabulary.
-    Run(AppCommand),
-}
-
-/// Context passed to widget handler methods. Exposes read-only shared
-/// state (current map center). Focus is **not** on here — plugins
-/// don't touch `FocusManager`; the host derives focus transitions from
-/// activation keys + `visible()` state. Kept as a struct so the surface
-/// can grow (e.g. a notification channel) without re-signalling every
-/// widget.
-pub struct PluginCtx {
-    pub center: LonLat,
-}
 
 /// Interactive widget dispatched from the keyboard handler.
 ///
@@ -85,7 +59,7 @@ pub trait Plugin {
     /// Called when one of this widget's `activation_keys` is pressed —
     /// or when the palette invokes the plugin. The host owns focus
     /// transitions; plugins only update their own state here.
-    fn activate(&mut self, _ctx: &mut PluginCtx) {}
+    fn activate(&mut self, _ctx: SurfaceCtx) {}
 
     /// Called when focus moves to a different plugin via another
     /// plugin's activation key. Modal plugins (search, help) close
@@ -113,15 +87,15 @@ pub trait Plugin {
 
     /// Raw key event while this widget holds focus. The handler is
     /// only called when the dispatcher routes to it — widgets do not
-    /// need to self-gate. Return `Pass` only when the key is
+    /// need to self-gate. Return `Effect::Pass` only when the key is
     /// deliberately delegated back to the global keymap (e.g. the
     /// wiki panel, which passes non-nav keys through).
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        ctx: &mut PluginCtx,
-    ) -> PluginAction;
+        ctx: SurfaceCtx,
+    ) -> Effect;
 
     /// Drain any async/background work. Returns `true` if state
     /// changed and the app should redraw.
@@ -154,27 +128,6 @@ pub trait Plugin {
     /// widget can leave its markers on the map even while another
     /// widget holds the keyboard.
     fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
-}
-
-/// Adapter onto the responder-chain `Effect` for any `Plugin` held in
-/// the registry. Reaching `dyn Plugin`'s blanket `FocusSurface` impl
-/// through trait-object dispatch needs trait upcasting (separate
-/// vtable), so the router calls this helper instead — semantically
-/// the same as `FocusSurface::handle_key`, mechanically a direct
-/// `Plugin::handle_key` call wrapped in the `PluginAction → Effect`
-/// mapping.
-pub fn deliver(
-    plugin: &mut dyn Plugin,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    ctx: SurfaceCtx,
-) -> Effect {
-    let mut plugin_ctx = PluginCtx { center: ctx.center };
-    match plugin.handle_key(code, modifiers, &mut plugin_ctx) {
-        PluginAction::Pass => Effect::Pass,
-        PluginAction::Consumed => Effect::Consumed,
-        PluginAction::Run(cmd) => Effect::Run(cmd),
-    }
 }
 
 /// Ordered registry of interactive widgets. Built-ins register at app

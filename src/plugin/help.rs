@@ -11,7 +11,9 @@ use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
 
-use super::{Plugin, PluginAction, PluginCtx};
+use crate::app_command::{Effect, SurfaceCtx};
+
+use super::Plugin;
 
 /// A colored span of help text. Theme is applied at render time so
 /// theme switches update the colors without rebuilding the help
@@ -152,7 +154,7 @@ impl Plugin for HelpPlugin {
         vec!["?"]
     }
 
-    fn activate(&mut self, _ctx: &mut PluginCtx) {
+    fn activate(&mut self, _ctx: SurfaceCtx) {
         self.active = true;
     }
 
@@ -169,12 +171,12 @@ impl Plugin for HelpPlugin {
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        _ctx: &mut PluginCtx,
-    ) -> PluginAction {
+        _ctx: SurfaceCtx,
+    ) -> Effect {
         // Modal: any key closes. Host detects `visible()=false` and
         // releases focus.
         self.active = false;
-        PluginAction::Consumed
+        Effect::Consumed
     }
 
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {

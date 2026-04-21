@@ -16,7 +16,9 @@ use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
 
-use super::{Plugin, PluginAction, PluginCtx};
+use crate::app_command::{Effect, SurfaceCtx};
+
+use super::Plugin;
 
 pub struct HerePlugin {
     job: AsyncJob<Option<(f64, f64)>>,
@@ -55,7 +57,7 @@ impl Plugin for HerePlugin {
         false
     }
 
-    fn activate(&mut self, _ctx: &mut PluginCtx) {
+    fn activate(&mut self, _ctx: SurfaceCtx) {
         let endpoint = self.endpoint.clone();
         let timeout = self.timeout_ms;
         info!("here: starting geoip lookup");
@@ -70,9 +72,9 @@ impl Plugin for HerePlugin {
         &mut self,
         _code: KeyCode,
         _modifiers: KeyModifiers,
-        _ctx: &mut PluginCtx,
-    ) -> PluginAction {
-        PluginAction::Pass
+        _ctx: SurfaceCtx,
+    ) -> Effect {
+        Effect::Pass
     }
 
     fn poll(&mut self) -> bool {
