@@ -100,12 +100,7 @@ impl Plugin for SearchPlugin {
 /// forward-geocode). Focus release is host-driven — `ui::router`
 /// notices `is_visible()=false` and releases for us.
 impl FocusSurface for SearchPlugin {
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
 
         if self.has_candidates() {

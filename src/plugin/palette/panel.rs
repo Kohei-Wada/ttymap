@@ -44,7 +44,8 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
         ])
         .split(inner);
 
-    let input = Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(theme.text());
+    let input =
+        Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(theme.text());
     f.render_widget(input, chunks[0]);
 
     let table_rows: Vec<Row> = items

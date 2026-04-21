@@ -157,12 +157,7 @@ impl Plugin for HelpPlugin {
 /// Help is fully modal: any key closes the panel. The host notices
 /// `is_visible()=false` and releases focus accordingly.
 impl FocusSurface for HelpPlugin {
-    fn handle_key(
-        &mut self,
-        _code: KeyCode,
-        _modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, _code: KeyCode, _modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
         self.active = false;
         Effect::Consumed
     }

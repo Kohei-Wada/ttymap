@@ -56,11 +56,7 @@ impl BackgroundResponder {
     /// Advance the `gg` state machine and resolve via the keymap.
     /// Used internally by `handle_key`; called unconditionally so any
     /// non-`g` keypress resets `pending_g`.
-    fn resolve_keymap(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-    ) -> Option<AppCommand> {
+    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppCommand> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
@@ -79,12 +75,7 @@ impl BackgroundResponder {
 /// same `&mut dyn FocusSurface` channel as palette / plugin. It needs
 /// `widgets` from `SurfaceCtx` to resolve plugin activation keys.
 impl FocusSurface for BackgroundResponder {
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
         // Always advance the gg state first — vim semantics: any
         // non-`g` key (including focus-transition triggers like Tab,
         // `:`, activation keys) resets `pending_g`.

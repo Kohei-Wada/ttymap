@@ -89,12 +89,7 @@ impl Plugin for HerePlugin {
 /// is never asked for here-specific hints). Spelt out explicitly
 /// even though both match the trait defaults.
 impl FocusSurface for HerePlugin {
-    fn handle_key(
-        &mut self,
-        _code: KeyCode,
-        _modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, _code: KeyCode, _modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
         Effect::Pass
     }
 

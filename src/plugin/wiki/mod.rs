@@ -167,12 +167,7 @@ impl Plugin for WikiPlugin {
 /// Focus release is host-driven: if `is_visible()` flips to false
 /// (e.g. Esc closed the list) `ui::router` releases for us.
 impl FocusSurface for WikiPlugin {
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, ctx: SurfaceCtx) -> Effect {
         if !self.active {
             return Effect::Pass;
         }

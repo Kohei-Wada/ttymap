@@ -171,12 +171,7 @@ impl FocusSurface for CommandPalette {
         vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
     }
 
-    fn handle_key(
-        &mut self,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        _ctx: SurfaceCtx,
-    ) -> Effect {
+    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         let up = matches!(code, KeyCode::Up) || (ctrl && code == KeyCode::Char('p'));
         let down = matches!(code, KeyCode::Down) || (ctrl && code == KeyCode::Char('n'));

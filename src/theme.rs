@@ -61,4 +61,3 @@ impl UiTheme {
             .add_modifier(Modifier::UNDERLINED)
     }
 }
-

@@ -30,11 +30,7 @@ use crate::focus::{Focus, FocusManager};
 /// the caller from `App.theme_id` + `MapState.center` etc.). The
 /// `KeyEvent` carries both the code and the modifier set in one
 /// value, replacing the historical `(code, modifiers)` pair.
-pub fn route_key(
-    focus: &mut FocusManager,
-    key: KeyEvent,
-    ctx: SurfaceCtx,
-) -> Option<AppCommand> {
+pub fn route_key(focus: &mut FocusManager, key: KeyEvent, ctx: SurfaceCtx) -> Option<AppCommand> {
     let was_modal = !matches!(focus.current(), Focus::Background);
 
     let (effect, still_visible) = {

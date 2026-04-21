@@ -19,12 +19,12 @@ use crate::map::{Action, MapState, MapStateOptions};
 use crate::plugin::PluginRegistry;
 use crate::plugin::help::HelpPlugin;
 use crate::plugin::here::HerePlugin;
+use crate::plugin::palette::CommandPalette;
 use crate::plugin::search::SearchPlugin;
 use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
-use crate::plugin::palette::CommandPalette;
 use crate::ui::router;
 
 pub struct App {
@@ -125,8 +125,7 @@ impl App {
                                 center: self.map.center(),
                                 theme_id: self.theme_id,
                             };
-                            if let Some(cmd) =
-                                router::route_key(&mut self.ui.focus, key_event, ctx)
+                            if let Some(cmd) = router::route_key(&mut self.ui.focus, key_event, ctx)
                             {
                                 self.dispatch(cmd);
                             }
