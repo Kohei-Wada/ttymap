@@ -11,11 +11,10 @@ use crate::theme::UiTheme;
 use super::CommandPalette;
 
 pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
-    let state = widget.state();
-    if !state.active || map_inner.width < 30 || map_inner.height < 6 {
+    if !widget.active || map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
-    let Some(provider) = state.provider.as_ref() else {
+    let Some(provider) = widget.provider.as_ref() else {
         return;
     };
     let items = provider.items();
@@ -45,7 +44,7 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
         ])
         .split(inner);
 
-    let input = Paragraph::new(format!("{}{}", provider.prompt(), state.query)).style(theme.text());
+    let input = Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(theme.text());
     f.render_widget(input, chunks[0]);
 
     let table_rows: Vec<Row> = items
@@ -65,7 +64,7 @@ pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, the
 
     let mut ts = TableState::default();
     if !items.is_empty() {
-        ts.select(Some(state.selected));
+        ts.select(Some(widget.selected));
     }
 
     let table = Table::new(table_rows, [Constraint::Min(10), Constraint::Length(16)])
