@@ -14,6 +14,11 @@ use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
+use crate::plugin::PluginRegistry;
+use crate::plugin::help::HelpPlugin;
+use crate::plugin::here::HerePlugin;
+use crate::plugin::search::SearchPlugin;
+use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::ui::UiState;
 
@@ -38,7 +43,8 @@ impl App {
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
-        let ui = UiState::new(&config, nominatim, attribution, &keymap);
+        let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
+        let ui = UiState::new(&config, nominatim, attribution, widgets);
         let styler = Arc::new(Styler::new(ui.theme_id));
         let pipeline =
             RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
@@ -180,4 +186,33 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
         crate::map::tile::TileCache::new(boxed, rx, config.cache_tiles),
         attribution,
     )
+}
+
+/// Composition root for plugins: instantiates the four built-in
+/// plugins, lets `HelpPlugin` introspect the others' activation keys,
+/// and returns a populated registry. Lives here (not in `UiState::new`)
+/// so adding a new plugin doesn't require touching the UI module.
+fn build_plugin_registry(
+    config: &Config,
+    nominatim: Arc<NominatimClient>,
+    keymap: &KeyMap,
+) -> PluginRegistry {
+    let search = SearchPlugin::new(nominatim);
+    let mut help = HelpPlugin::new();
+    let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
+    let here = HerePlugin::new(config.geoip_endpoint.clone(), config.geoip_timeout_ms);
+
+    // Help introspects the other plugins to list their activation
+    // keys, so it must build after they're constructed. Palette is a
+    // builtin (see `ui::palette`) so help references it directly via
+    // a hardcoded line rather than a `Plugin` trait object.
+    help.build(keymap, &[&search, &wiki]);
+
+    let mut widgets = PluginRegistry::new();
+    // Registration order = dispatch priority for action broadcasts.
+    widgets.register(Box::new(search));
+    widgets.register(Box::new(help));
+    widgets.register(Box::new(wiki));
+    widgets.register(Box::new(here));
+    widgets
 }

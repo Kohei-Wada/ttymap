@@ -19,10 +19,6 @@ use overlay::OverlayManager;
 use crate::app_msg::{AppMsg, KeyDelivery};
 use crate::geo::LonLat;
 use crate::map::render::thread::RenderHandle;
-use crate::plugin::help::HelpPlugin;
-use crate::plugin::here::HerePlugin;
-use crate::plugin::search::SearchPlugin;
-use crate::plugin::wiki::WikiPlugin;
 use crate::plugin::{PluginAction, PluginCtx, PluginRegistry};
 use crate::ui::action::UiAction;
 use crate::ui::palette::{CommandPalette, PaletteOutcome};
@@ -55,28 +51,10 @@ impl UiState {
         config: &Config,
         nominatim: Arc<NominatimClient>,
         attribution: Option<String>,
-        keymap: &KeyMap,
+        widgets: PluginRegistry,
     ) -> Self {
         let theme_id = crate::color_palette::ThemeId::from_name(&config.style);
         let palette = theme_id.palette();
-
-        let search = SearchPlugin::new(nominatim.clone());
-        let mut help = HelpPlugin::new();
-        let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
-        let here = HerePlugin::new(config.geoip_endpoint.clone(), config.geoip_timeout_ms);
-
-        // Help introspects the other plugins to list their activation
-        // keys, so it must build after they're constructed. Palette is
-        // a builtin (see `ui::palette`) so help references it directly
-        // via a hardcoded line rather than a `Plugin` trait object.
-        help.build(keymap, &[&search, &wiki]);
-
-        let mut widgets = PluginRegistry::new();
-        // Registration order = dispatch priority for action broadcasts.
-        widgets.register(Box::new(search));
-        widgets.register(Box::new(help));
-        widgets.register(Box::new(wiki));
-        widgets.register(Box::new(here));
 
         Self {
             focus: FocusManager::new(),
@@ -351,9 +329,12 @@ mod tests {
     const ZERO: LonLat = LonLat { lon: 0.0, lat: 0.0 };
 
     fn make_ui() -> UiState {
-        let keymap = KeyMap::default();
+        use crate::plugin::search::SearchPlugin;
         let config = Config::default();
-        UiState::new(&config, Arc::new(NominatimClient::new()), None, &keymap)
+        let nominatim = Arc::new(NominatimClient::new());
+        let mut widgets = PluginRegistry::new();
+        widgets.register(Box::new(SearchPlugin::new(nominatim.clone())));
+        UiState::new(&config, nominatim, None, widgets)
     }
 
     #[test]
