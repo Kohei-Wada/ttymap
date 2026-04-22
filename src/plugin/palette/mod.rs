@@ -21,14 +21,11 @@ pub mod provider;
 use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Frame;
-use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::compositor::window::Window;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
-use crate::theme::UiTheme;
 
 use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider};
 
@@ -133,8 +130,8 @@ impl Component for PaletteComponent {
         }
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
+    fn render(&self, win: &mut RenderWindow) {
+        panel::render_panel(self, win);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

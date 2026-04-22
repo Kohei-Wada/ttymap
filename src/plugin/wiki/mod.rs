@@ -31,12 +31,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
-use crate::compositor::window::Window;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::painter::MapPainter;
 use crate::shared::throttle::Throttle;
-use crate::theme::UiTheme;
 
 use service::WikiService;
 use wikipedia::WikiArticle;
@@ -226,8 +225,8 @@ impl Component for WikiComponent {
         win.ignore();
     }
 
-    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
-        panel::render_panel(&self.state.borrow(), f, area, theme);
+    fn render(&self, win: &mut RenderWindow) {
+        panel::render_panel(&self.state.borrow(), win);
     }
 
     fn paint_on_map(&self, p: &mut MapPainter<'_>) {

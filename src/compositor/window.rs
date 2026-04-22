@@ -32,8 +32,13 @@
 //! the compositor is the sole applier of the queue, so invariants
 //! (focus, dedup, clamp) remain framework-enforced.
 
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::widgets::Clear;
+
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
+use crate::theme::UiTheme;
 
 /// Queue of actions a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns.
@@ -120,5 +125,82 @@ impl<'a> Window<'a> {
     /// component clearly handled the event.
     pub fn ignore(&mut self) {
         self.ops.ignored = true;
+    }
+}
+
+// ── RenderWindow: draw-time handle ─────────────────────────────────
+
+/// Render-time companion to [`Window`]. Carries the ratatui
+/// [`Frame`], the layout area the component should draw into, the
+/// active [`UiTheme`], and a read-only snapshot of [`Context`] — so
+/// the component doesn't have to thread these through every helper
+/// as separate arguments.
+///
+/// Plugins receive this on [`Component::render`](super::Component)
+/// (and, when added, `paint_on_map`). It exposes ratatui's `Frame`
+/// when a primitive isn't yet provided, so existing panel code can
+/// keep calling `win.frame().render_widget(...)` during migration.
+pub struct RenderWindow<'a, 'b> {
+    frame: &'a mut Frame<'b>,
+    area: Rect,
+    theme: &'a UiTheme,
+    #[allow(dead_code)] // read via ctx(); kept even if unused
+    ctx: &'a Context,
+}
+
+impl<'a, 'b> RenderWindow<'a, 'b> {
+    pub(crate) fn new(
+        frame: &'a mut Frame<'b>,
+        area: Rect,
+        theme: &'a UiTheme,
+        ctx: &'a Context,
+    ) -> Self {
+        Self {
+            frame,
+            area,
+            theme,
+            ctx,
+        }
+    }
+
+    /// The theme currently in effect. Use for styling primitives
+    /// instead of threading `&UiTheme` through helper signatures.
+    pub fn theme(&self) -> &UiTheme {
+        self.theme
+    }
+
+    /// The area this component is allowed to draw into (usually
+    /// the map viewport minus the border).
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// App-level snapshot (center, theme id). Kept for parity with
+    /// [`Window::ctx`] so `paint_on_map` and future render-side
+    /// hooks can read it uniformly.
+    #[allow(dead_code)]
+    pub fn ctx(&self) -> &Context {
+        self.ctx
+    }
+
+    /// Escape hatch for direct ratatui access while primitives are
+    /// being built out. Components can call
+    /// `win.frame().render_widget(w, rect)` for anything not yet
+    /// covered by a `RenderWindow` primitive.
+    pub fn frame(&mut self) -> &mut Frame<'b> {
+        self.frame
+    }
+
+    /// Clear `rect` and draw a theme-styled bordered panel with
+    /// `title` inside it. Returns the inner rect (content region
+    /// inside the borders) for further widgets. Factors the
+    /// `Clear + theme.panel(title) + f.render_widget(block, rect)`
+    /// triplet duplicated across every plugin's panel module.
+    pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
+        self.frame.render_widget(Clear, rect);
+        let block = self.theme.panel(title);
+        let inner = block.inner(rect);
+        self.frame.render_widget(block, rect);
+        inner
     }
 }

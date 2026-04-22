@@ -1,15 +1,15 @@
 //! Wiki side panel — list view and detail view.
 //!
-//! Stateless renderer; reads `WikiState` and draws into the ratatui frame.
+//! Stateless renderer; reads `WikiState` and draws through the
+//! supplied [`RenderWindow`].
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::theme::UiTheme;
+use crate::compositor::window::RenderWindow;
 
 use super::WikiState;
 use super::wikipedia::WikiArticle;
@@ -17,7 +17,8 @@ use super::wikipedia::WikiArticle;
 /// Render the wiki side panel (list or detail view). Caller ensures
 /// the panel is supposed to be up (compositor only calls this while
 /// `WikiComponent` is on the stack).
-pub fn render_panel(widget: &WikiState, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+pub fn render_panel(widget: &WikiState, win: &mut RenderWindow) {
+    let map_inner = win.area();
     if map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
@@ -32,32 +33,32 @@ pub fn render_panel(widget: &WikiState, f: &mut Frame, map_inner: Rect, theme: &
 
     let x = map_inner.right().saturating_sub(panel_width + 1);
     let area = Rect::new(x, y, panel_width, panel_height);
-    f.render_widget(Clear, area);
+    win.frame().render_widget(Clear, area);
 
     let content_width = (panel_width as usize).saturating_sub(4).max(10);
 
     if let Some(ref article) = widget.detail {
-        render_detail(f, area, content_width, article, theme);
+        render_detail(win, area, content_width, article);
     } else {
-        render_list(widget, f, area, panel_height, content_width, theme);
+        render_list(widget, win, area, panel_height, content_width);
     }
 }
 
 fn render_list(
     widget: &WikiState,
-    f: &mut Frame,
+    win: &mut RenderWindow,
     area: Rect,
     panel_height: u16,
     content_width: usize,
-    theme: &UiTheme,
 ) {
+    let theme = win.theme();
     let block = theme.panel("wiki (Enter: open)");
 
     if widget.articles.is_empty() {
-        let widget = Paragraph::new("  Loading...")
+        let paragraph = Paragraph::new("  Loading...")
             .style(theme.muted())
             .block(block);
-        f.render_widget(widget, area);
+        win.frame().render_widget(paragraph, area);
         return;
     }
 
@@ -89,9 +90,6 @@ fn render_list(
         ]));
 
         if !article.extract.is_empty() {
-            // Cap the extract at roughly two lines of content, then wrap
-            // manually so scroll math below can treat each pushed Line as
-            // one output row (Paragraph::wrap is not used any more).
             let max_chars = content_width * 2;
             let raw: String = article.extract.chars().take(max_chars).collect();
             let truncated = if article.extract.chars().count() > max_chars {
@@ -110,22 +108,6 @@ fn render_list(
         }
     }
 
-    // Scroll to keep the selected article visible, with "top-anchored on
-    // overflow" behavior:
-    //
-    //   - If the selection fits into the viewport starting from the top
-    //     of the list (scroll=0), don't scroll. Pressing down through
-    //     the first few articles keeps the viewport stable.
-    //   - Once the selection would go off the bottom (or the selection
-    //     itself is taller than the viewport), put the selection's top
-    //     at the viewport top. Next press-down jumps to the next article
-    //     at the top.
-    //   - Clamp against the end of the content so the viewport never
-    //     shows empty space below the last article; consecutive
-    //     selections near the end share the same viewport.
-    //
-    // With Paragraph's wrap disabled, each pushed `Line` maps to exactly
-    // one output row, so the math is in output rows throughout.
     let visible_lines = panel_height.saturating_sub(2);
     let total_lines = lines.len() as u16;
     let max_scroll = total_lines.saturating_sub(visible_lines);
@@ -135,20 +117,16 @@ fn render_list(
         0
     };
 
-    let widget = Paragraph::new(lines)
-        .style(theme.text())
+    let text_style = theme.text();
+    let paragraph = Paragraph::new(lines)
+        .style(text_style)
         .block(block)
         .scroll((scroll, 0));
-    f.render_widget(widget, area);
+    win.frame().render_widget(paragraph, area);
 }
 
-fn render_detail(
-    f: &mut Frame,
-    area: Rect,
-    content_width: usize,
-    article: &WikiArticle,
-    theme: &UiTheme,
-) {
+fn render_detail(win: &mut RenderWindow, area: Rect, content_width: usize, article: &WikiArticle) {
+    let theme = win.theme();
     let block = theme.panel("wiki (Esc: back)");
     let dist = crate::geo::format_distance(article.dist_m);
     let coords = format!("{:.3}, {:.3}", article.lat, article.lon);
@@ -179,8 +157,9 @@ fn render_detail(
         }
     }
 
-    let widget = Paragraph::new(lines).style(theme.text()).block(block);
-    f.render_widget(widget, area);
+    let text_style = theme.text();
+    let paragraph = Paragraph::new(lines).style(text_style).block(block);
+    win.frame().render_widget(paragraph, area);
 }
 
 /// Word-wrap `text` to visual cell `width` using `unicode-width` so CJK

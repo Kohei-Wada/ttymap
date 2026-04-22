@@ -13,14 +13,11 @@ mod service;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Frame;
-use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
-use crate::compositor::window::Window;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
-use crate::theme::UiTheme;
 
 use service::SearchService;
 
@@ -95,8 +92,8 @@ impl Component for SearchComponent {
         }
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
+    fn render(&self, win: &mut RenderWindow) {
+        panel::render_panel(self, win);
     }
 
     fn poll(&mut self, _win: &mut Window) {

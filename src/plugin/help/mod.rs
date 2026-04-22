@@ -4,13 +4,12 @@
 //! on every push. Any key closes it.
 
 use crossterm::event::{KeyEvent, KeyModifiers};
-use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::AppMsg;
-use crate::compositor::window::Window;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::keymap::KeyMap;
 use crate::map::Action;
@@ -101,11 +100,13 @@ impl Component for HelpComponent {
         win.close();
     }
 
-    fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+    fn render(&self, win: &mut RenderWindow) {
+        let map_inner = win.area();
         if map_inner.width < 20 || map_inner.height < 10 {
             return;
         }
 
+        let theme = win.theme();
         let rendered = self.text.rendered_lines(theme);
 
         let content_width = rendered
@@ -125,11 +126,11 @@ impl Component for HelpComponent {
         let y = map_inner.y + (map_inner.height - popup_height) / 2;
 
         let area = Rect::new(x, y, popup_width, popup_height);
-        f.render_widget(Clear, area);
-
+        let text_style = theme.text();
         let block = theme.panel("help").title_alignment(Alignment::Center);
-        let widget = Paragraph::new(rendered).style(theme.text()).block(block);
-        f.render_widget(widget, area);
+        let widget = Paragraph::new(rendered).style(text_style).block(block);
+        win.frame().render_widget(Clear, area);
+        win.frame().render_widget(widget, area);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

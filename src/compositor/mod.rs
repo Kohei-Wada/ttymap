@@ -100,9 +100,12 @@ pub trait Component: Any {
     /// event is treated as handled but with no state change.
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window);
 
-    /// Paint this component into `area`. Called once per frame while
-    /// on the stack; compositor renders bottom-to-top.
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme);
+    /// Paint this component into `win.area()`. Called once per
+    /// frame while on the stack; compositor renders bottom-to-top.
+    /// `win` carries the ratatui frame, the component's allowed
+    /// area, and the current theme — plugins read all three through
+    /// `win` so theme does not thread through helper signatures.
+    fn render(&self, win: &mut window::RenderWindow);
 
     /// Paint world-space primitives on the map via [`MapPainter`].
     /// Called every frame while on the stack, before `render`. Default
@@ -265,9 +268,10 @@ impl Compositor {
     }
 
     /// Render bottom-up so later pushes draw on top.
-    pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
+    pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme, ctx: &Context) {
         for c in self.stack.iter() {
-            c.render(f, area, theme);
+            let mut win = window::RenderWindow::new(f, area, theme, ctx);
+            c.render(&mut win);
         }
     }
 
@@ -405,7 +409,7 @@ mod tests {
 
     impl Component for TagComponent {
         fn handle_event(&mut self, _: KeyEvent, _: &mut Window) {}
-        fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+        fn render(&self, _: &mut window::RenderWindow) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
             vec![(self.0, "")]
         }
@@ -495,7 +499,7 @@ mod tests {
                 win.open(Box::new(TagComponent(self.spawn_label)));
             }
         }
-        fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+        fn render(&self, _: &mut window::RenderWindow) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
             vec![(self.label, "")]
         }
@@ -552,7 +556,7 @@ mod tests {
             fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
                 win.emit(AppMsg::Map(crate::map::Action::None));
             }
-            fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+            fn render(&self, _: &mut window::RenderWindow) {}
         }
 
         let ctx = Context {

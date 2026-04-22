@@ -27,7 +27,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::window::Window;
+use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
 use crate::app::AppMsg;
 use crate::keymap::KeyMap;
@@ -109,12 +109,7 @@ impl Component for BaseLayer {
         // (no `win.ignore()`).
     }
 
-    fn render(
-        &self,
-        _f: &mut ratatui::Frame,
-        _area: ratatui::layout::Rect,
-        _theme: &crate::theme::UiTheme,
-    ) {
+    fn render(&self, _win: &mut RenderWindow) {
         // Bottom layer draws nothing — the map is painted by `App`
         // separately from the compositor (see `App::run`).
     }
