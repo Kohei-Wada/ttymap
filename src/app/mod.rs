@@ -2,16 +2,16 @@
 //!
 //! [`App`] is the sole **Receiver** in the GoF Command pattern: every
 //! invoker (keymap, palette, plugins, mouse adapter) returns
-//! `Vec<AppMsg>` and only `App::dispatch` executes them. The
-//! dispatcher is a thin router — each [`AppMsg`] arm either delegates
-//! to a method on the domain type that owns the relevant state
-//! ([`MapState`] / [`UiState`]) or, for cross-cutting transitions
-//! that don't fit a single domain ([`AppMsg::SetTheme`] and
-//! [`AppMsg::Resize`]), delegates to a method on `App` itself.
+//! `Vec<AppMsg>` and only `App::dispatch` executes them.
 //!
-//! This keeps the "what changed?" knowledge local: arms whose effect
-//! changed the map frame call [`App::request_map_redraw`] through
-//! their delegate, instead of the router having to guess from outside.
+//! Focus/modal state lives on [`Compositor`] — a stack of
+//! [`Component`]s that replaced the old `FocusManager` + `Plugin`
+//! trilogy. Components render map overlays through
+//! `Component::paint_on_map`. Headless async jobs (here plugin's
+//! geoip) live in a [`Task`] list. Neither channel carries a
+//! concrete plugin type — they contain only `Box<dyn Component>` /
+//! `Box<dyn Task>`, populated by each plugin's `register` function
+//! at composition time.
 
 pub mod msg;
 
@@ -19,40 +19,30 @@ pub use msg::AppMsg;
 
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
-use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
+use crate::compositor::{BaseLayer, Compositor, Context, Registrar, Task};
 use crate::config::Config;
-use crate::focus::{FocusManager, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
-use crate::plugin::PluginRegistry;
-use crate::plugin::help::HelpPlugin;
-use crate::plugin::here::HerePlugin;
-use crate::plugin::palette::CommandPalette;
-use crate::plugin::search::SearchPlugin;
-use crate::plugin::wiki::WikiPlugin;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::mouse::MouseAdapter;
-use crate::ui::router;
 
 pub struct App {
     map: MapState,
     render_handle: RenderHandle,
     ui: UiState,
     mouse: MouseAdapter,
-    /// Active theme — single source of truth for the running app.
-    /// `ui_theme` is its derived UI-colour cache; the render thread
-    /// receives a corresponding `Styler` via message on switch.
+    compositor: Compositor,
+    tasks: Vec<Box<dyn Task>>,
     theme_id: ThemeId,
     ui_theme: UiTheme,
 }
@@ -71,11 +61,8 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.style);
-        let widgets = build_plugin_registry(&config, nominatim.clone(), &keymap);
-        let activations = widgets.activations();
-        let background = BackgroundResponder::new(keymap, activations);
-        let focus = FocusManager::new(widgets, background);
-        let ui = UiState::new(nominatim, attribution, focus);
+        let registrar = build_registrar(&config, nominatim.clone(), &keymap);
+        let ui = UiState::new(nominatim, attribution);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline =
@@ -93,17 +80,27 @@ impl App {
         );
         let render_handle = RenderHandle::spawn(pipeline);
 
+        // Compositor bootstraps with the BaseLayer (keymap +
+        // activation dispatch) at index 0. Every subsequent modal is
+        // pushed on top.
+        let mut compositor = Compositor::new();
+        compositor.push(Box::new(BaseLayer::new(keymap, registrar.activations)));
+
         App {
             map,
             render_handle,
             ui,
             mouse: MouseAdapter::default(),
+            compositor,
+            tasks: registrar.tasks,
             theme_id,
             ui_theme,
         }
     }
 
     pub fn run(&mut self) -> io::Result<()> {
+        use std::time::Duration;
+
         let mut terminal = ratatui::init();
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
 
@@ -113,25 +110,27 @@ impl App {
         while self.map.is_running() {
             self.ui.drain_frames(&self.render_handle);
 
-            for msg in self.ui.focus.poll_widgets() {
-                info!("plugin async msg: {:?}", msg);
+            // Drain per-tick messages: compositor components first,
+            // then tasks. Both borrow &mut self transitively through
+            // dispatch, so collect into a Vec first.
+            let compositor_msgs = self.compositor.poll();
+            for msg in compositor_msgs {
+                self.dispatch(msg);
+            }
+            let task_msgs: Vec<AppMsg> = self.tasks.iter_mut().flat_map(|t| t.poll()).collect();
+            for msg in task_msgs {
                 self.dispatch(msg);
             }
 
             self.ui.overlay.poll();
 
-            terminal.draw(|f| crate::ui::draw(f, &self.ui, &self.ui_theme))?;
+            terminal.draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme))?;
 
-            // Drain the whole input queue in one pass. First poll blocks up to
-            // 4 ms so render-thread frame arrivals (which don't wake the event
-            // poll) show up within ~4 ms at worst; subsequent polls use zero
-            // timeout.
             let mut poll_timeout = Duration::from_millis(4);
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
                 match event::read()? {
                     Event::Key(key_event) => {
-                        // Ctrl-C is a host-level safety valve, bypassing the keymap.
                         if key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && key_event.code == KeyCode::Char('c')
                         {
@@ -139,13 +138,7 @@ impl App {
                             self.dispatch(AppMsg::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
-                            let ctx = SurfaceCtx {
-                                center: self.map.center(),
-                                theme_id: self.theme_id,
-                            };
-                            for msg in router::route_key(&mut self.ui.focus, key_event, ctx) {
-                                self.dispatch(msg);
-                            }
+                            self.handle_key(key_event);
                         }
                     }
                     Event::Resize(cols, rows) => {
@@ -170,12 +163,21 @@ impl App {
         Ok(())
     }
 
-    /// Apply an `AppMsg` to the app. Thin router: each arm either
-    /// delegates to a method on the domain type that owns the
-    /// relevant state, or — for cross-cutting transitions — to a
-    /// method on `self`. Those delegates request a map redraw via
-    /// [`request_map_redraw`](Self::request_map_redraw) when their
-    /// effect changed the map frame.
+    fn handle_key(&mut self, key: KeyEvent) {
+        let ctx = self.context();
+        let msgs = self.compositor.handle_event(key, &ctx);
+        for msg in msgs {
+            self.dispatch(msg);
+        }
+    }
+
+    fn context(&self) -> Context {
+        Context {
+            center: self.map.center(),
+            theme_id: self.theme_id,
+        }
+    }
+
     fn dispatch(&mut self, msg: AppMsg) {
         match msg {
             AppMsg::Map(action) => {
@@ -192,17 +194,12 @@ impl App {
                 self.ui.overlay.set_cursor((col, row));
             }
             AppMsg::CycleFocus(forward) => {
-                self.ui.focus.cycle(forward);
+                self.compositor.cycle(forward);
             }
             AppMsg::Resize(cols, rows) => self.handle_resize(cols, rows),
         }
     }
 
-    /// Cross-cutting: re-derive the UI colour cache and map styler
-    /// from the new theme id, notify the render thread, and force a
-    /// redraw so the change is visible without waiting for another
-    /// map event. The palette's theme-picker entry reads `theme_id`
-    /// via `SurfaceCtx` on activation, so no surface-level push.
     fn apply_theme(&mut self, new_id: ThemeId) {
         self.theme_id = new_id;
         let styler = Arc::new(Styler::new(new_id));
@@ -211,8 +208,6 @@ impl App {
         self.request_map_redraw();
     }
 
-    /// Cross-cutting: update map viewport + render thread canvas to
-    /// the new terminal size, then request a fresh frame.
     fn handle_resize(&mut self, cols: u16, rows: u16) {
         self.map.resize(cols, rows);
         self.render_handle
@@ -220,13 +215,6 @@ impl App {
         self.request_map_redraw();
     }
 
-    /// Request a fresh map frame from the render thread and notify
-    /// passive widgets that the map recentered. Called by the
-    /// dispatch delegates whose effect changed the map frame. No-op
-    /// after shutdown (`map.is_running() == false`).
-    ///
-    /// Wiki is intentionally not notified — Google-Maps-style, the
-    /// article list stays pinned to the query that produced it.
     fn request_map_redraw(&mut self) {
         if !self.map.is_running() {
             return;
@@ -237,12 +225,7 @@ impl App {
     }
 }
 
-/// Composition root for the tile subsystem: selects a `TileClient`
-/// from config and wires it to a fresh `TileCache`. Backend selection
-/// lives here (not in `tile/`) so swapping mapscii for mbtiles/pmtiles
-/// stays visible alongside the rest of app wiring. Also snapshots the
-/// client's attribution string before boxing, so the UI can display it
-/// without needing a live handle to the (moved) client.
+/// Composition root for the tile subsystem.
 pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
     use crate::map::tile::fetch::TileClient;
     let (tx, rx) = std::sync::mpsc::channel();
@@ -258,39 +241,40 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
     )
 }
 
-/// Composition root for plugins: instantiates the five built-in
-/// plugins (`search`, `help`, `wiki`, `here`, `palette`), lets the
-/// two introspection-driven ones (`help`, `palette`) walk the others
-/// for their entries, and returns a populated registry. Lives here
-/// (not in `UiState::new`) so adding a new plugin doesn't require
-/// touching the UI module.
-fn build_plugin_registry(
-    config: &Config,
-    nominatim: Arc<NominatimClient>,
-    keymap: &KeyMap,
-) -> PluginRegistry {
-    let search = SearchPlugin::new(nominatim);
-    let mut help = HelpPlugin::new();
-    let wiki = WikiPlugin::new(&config.language, config.wiki_limit);
-    let here = HerePlugin::new(config.geoip_endpoint.clone(), config.geoip_timeout_ms);
-    let mut palette = CommandPalette::new();
+/// Composition root for plugins. **This is the only function that
+/// names concrete plugin modules by type path**; `App` itself is
+/// plugin-agnostic. Order matters: the palette registers last so its
+/// default provider can harvest every other plugin's palette entries.
+fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &KeyMap) -> Registrar {
+    use std::rc::Rc;
 
-    // Help and palette both walk sibling plugins to capture their
-    // descriptions / activation keys. Both must be built before
-    // they're moved into the registry. Help still hardcodes its
-    // palette line because palette has no description (it opts out
-    // of being listed inside itself / inside help).
-    help.build(keymap, &[&search, &wiki]);
-    palette.build(keymap, &[&search, &help, &wiki, &here]);
+    let mut r = Registrar::default();
 
-    let mut widgets = PluginRegistry::new();
-    // Registration order = paint order in `ui::draw` (later entries
-    // draw on top). Palette goes last so its popup overlays any
-    // simultaneously visible plugin panel.
-    widgets.register(Box::new(search));
-    widgets.register(Box::new(help));
-    widgets.register(Box::new(wiki));
-    widgets.register(Box::new(here));
-    widgets.register(Box::new(palette));
-    widgets
+    crate::plugin::search::register(nominatim, &mut r);
+    crate::plugin::wiki::register(&config.language, config.wiki_limit, &mut r);
+    crate::plugin::here::register(
+        config.geoip_endpoint.clone(),
+        config.geoip_timeout_ms,
+        &mut r,
+    );
+
+    // Help needs to know the other plugins' activation hints, so build
+    // its text after them (but before the palette, since palette
+    // harvests help's palette entry too).
+    let plugin_help_entries: Vec<(String, String)> = r
+        .palette_entries
+        .iter()
+        .filter(|e| !e.hint.is_empty())
+        .map(|e| (e.hint.clone(), e.label.clone()))
+        .collect();
+    let help_text = Rc::new(crate::plugin::help::HelpText::build(
+        keymap,
+        &plugin_help_entries,
+    ));
+    crate::plugin::help::register(help_text, &mut r);
+
+    // Palette harvests all palette_entries contributed so far.
+    crate::plugin::palette::register(keymap, &mut r);
+
+    r
 }

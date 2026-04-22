@@ -1,11 +1,11 @@
 //! [`ThemeProvider`] — palette sub-mode for runtime theme switching.
 //!
-//! Reached from the default command provider by selecting the "Theme"
-//! entry (or, in the future, a `:theme` shortcut). Lists every
-//! registered [`ThemeId`] with the current one marked.
+//! Reached from [`CommandProvider`](super::CommandProvider) via the
+//! "Theme" entry.
 
 use crate::app::AppMsg;
 use crate::color_palette::ThemeId;
+use crate::compositor::Context;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
 
@@ -58,7 +58,7 @@ impl PaletteProvider for ThemeProvider {
         &self.items
     }
 
-    fn execute(&mut self, idx: usize) -> PaletteAction {
+    fn execute(&mut self, idx: usize, _ctx: &Context) -> PaletteAction {
         match self.filtered_theme_ids.get(idx) {
             Some(&t) => PaletteAction::Run(vec![AppMsg::SetTheme(t)]),
             None => PaletteAction::Close,

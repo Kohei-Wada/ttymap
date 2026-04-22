@@ -1,39 +1,41 @@
 //! Search widget — center popup for forward geocoding.
 //!
-//! Self-contained: owns its UI state, HTTP wrapper, and key dispatch.
-//! `app.rs` sees it only through the [`Plugin`](super::Plugin) trait.
+//! Under the compositor model, search is an **ephemeral** component:
+//! a fresh instance is pushed onto the stack when the user hits `/`
+//! (or selects it from the palette); it's popped when the user
+//! confirms a result, cancels, or submits an empty query. No
+//! per-open state to reset because the object itself is discarded
+//! and rebuilt.
 
 pub mod panel;
 mod service;
 
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
+use crate::compositor::{
+    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
+};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
 
 use service::SearchService;
 
-use super::Plugin;
-
-pub struct SearchPlugin {
+pub struct SearchComponent {
     pub(in crate::plugin::search) query: String,
-    pub(in crate::plugin::search) active: bool,
     pub(in crate::plugin::search) candidates: Vec<SearchResult>,
     pub(in crate::plugin::search) selected: usize,
     service: SearchService,
 }
 
-impl SearchPlugin {
+impl SearchComponent {
     pub fn new(nominatim: Arc<NominatimClient>) -> Self {
         Self {
             query: String::new(),
-            active: false,
             candidates: Vec::new(),
             selected: 0,
             service: SearchService::new(nominatim),
@@ -43,134 +45,82 @@ impl SearchPlugin {
     pub fn has_candidates(&self) -> bool {
         !self.candidates.is_empty()
     }
-
-    fn open(&mut self) {
-        self.query.clear();
-        self.candidates.clear();
-        self.selected = 0;
-        self.active = true;
-    }
-
-    fn close(&mut self) {
-        self.query.clear();
-        self.candidates.clear();
-        self.selected = 0;
-        self.active = false;
-    }
 }
 
-impl Plugin for SearchPlugin {
-    fn tag(&self) -> &str {
-        "search"
-    }
+impl Component for SearchComponent {
+    fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
 
-    fn description(&self) -> &str {
-        "Search location"
-    }
+        if self.has_candidates() {
+            let up = matches!(event.code, KeyCode::Up | KeyCode::Char('k'))
+                || (ctrl && event.code == KeyCode::Char('p'));
+            let down = matches!(event.code, KeyCode::Down | KeyCode::Char('j'))
+                || (ctrl && event.code == KeyCode::Char('n'));
 
-    fn activation_keys(&self) -> Vec<&'static str> {
-        vec!["/"]
-    }
+            return match event.code {
+                KeyCode::Esc => EventResult::Close(Vec::new()),
+                KeyCode::Enter => {
+                    let loc = self.candidates[self.selected].location;
+                    EventResult::Close(vec![AppMsg::Jump(loc)])
+                }
+                _ if up => {
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    }
+                    EventResult::Consumed(Vec::new())
+                }
+                _ if down => {
+                    if self.selected + 1 < self.candidates.len() {
+                        self.selected += 1;
+                    }
+                    EventResult::Consumed(Vec::new())
+                }
+                _ => EventResult::Consumed(Vec::new()),
+            };
+        }
 
-    fn activate(&mut self, _ctx: SurfaceCtx) {
-        self.open();
-    }
-
-    fn deactivate(&mut self) {
-        self.close();
-    }
-
-    fn poll(&mut self) -> bool {
-        if let Some(results) = self.service.poll() {
-            self.candidates = results;
-            self.selected = 0;
-            true
-        } else {
-            false
+        match event.code {
+            KeyCode::Esc => EventResult::Close(Vec::new()),
+            KeyCode::Enter => {
+                if self.query.is_empty() {
+                    EventResult::Close(Vec::new())
+                } else {
+                    self.service.search(&self.query);
+                    EventResult::Consumed(Vec::new())
+                }
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                EventResult::Consumed(Vec::new())
+            }
+            KeyCode::Char('h') if ctrl => {
+                self.query.pop();
+                EventResult::Consumed(Vec::new())
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.query.clear();
+                EventResult::Consumed(Vec::new())
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                EventResult::Consumed(Vec::new())
+            }
+            // Modal: any other key is still consumed (don't fall
+            // through to the keymap while the search popup is up).
+            _ => EventResult::Consumed(Vec::new()),
         }
     }
 
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
         panel::render_panel(self, f, area, theme);
     }
-}
 
-/// Modal key dispatch. While candidates are showing the popup is in
-/// "results mode" (Up/Down/Enter pick a hit, Esc cancels); otherwise
-/// it's in "input mode" (typing edits the query, Enter submits a
-/// forward-geocode). Focus release is host-driven — `ui::router`
-/// notices `is_visible()=false` and releases for us.
-impl FocusSurface for SearchPlugin {
-    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
-        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-
-        if self.has_candidates() {
-            let up = matches!(code, KeyCode::Up | KeyCode::Char('k'))
-                || (ctrl && code == KeyCode::Char('p'));
-            let down = matches!(code, KeyCode::Down | KeyCode::Char('j'))
-                || (ctrl && code == KeyCode::Char('n'));
-
-            return if code == KeyCode::Esc {
-                self.active = false;
-                self.candidates.clear();
-                Effect::Consumed
-            } else if code == KeyCode::Enter {
-                self.active = false;
-                let loc = self.candidates[self.selected].location;
-                self.candidates.clear();
-                Effect::Run(vec![AppMsg::Jump(loc)])
-            } else if up {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                Effect::Consumed
-            } else if down {
-                if self.selected + 1 < self.candidates.len() {
-                    self.selected += 1;
-                }
-                Effect::Consumed
-            } else {
-                Effect::Consumed
-            };
+    fn poll(&mut self) -> Vec<AppMsg> {
+        if let Some(results) = self.service.poll() {
+            self.candidates = results;
+            self.selected = 0;
         }
-
-        match code {
-            KeyCode::Esc => {
-                self.active = false;
-                Effect::Consumed
-            }
-            KeyCode::Enter => {
-                if self.query.is_empty() {
-                    self.active = false;
-                } else {
-                    self.service.search(&self.query);
-                }
-                Effect::Consumed
-            }
-            KeyCode::Backspace => {
-                self.query.pop();
-                Effect::Consumed
-            }
-            KeyCode::Char('h') if ctrl => {
-                self.query.pop();
-                Effect::Consumed
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.query.clear();
-                Effect::Consumed
-            }
-            KeyCode::Char(c) => {
-                self.query.push(c);
-                Effect::Consumed
-            }
-            // Modal: any other key is consumed (don't fall through to
-            // the background while the search popup is up).
-            _ => Effect::Consumed,
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        self.active
+        Vec::new()
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -180,4 +130,30 @@ impl FocusSurface for SearchPlugin {
             vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
         }
     }
+}
+
+/// Wire the search plugin into the registrar. Adds:
+/// - activation on `/` → push a fresh [`SearchComponent`]
+/// - palette entry so the picker can reach it
+pub fn register(nominatim: Arc<NominatimClient>, r: &mut Registrar) {
+    let spawn_for_activation = {
+        let nominatim = nominatim.clone();
+        move |_ctx: &Context| -> Box<dyn Component> {
+            Box::new(SearchComponent::new(nominatim.clone()))
+        }
+    };
+    r.add_activation(Activation {
+        code: KeyCode::Char('/'),
+        modifiers: KeyModifiers::NONE,
+        spawn: Box::new(spawn_for_activation),
+    });
+
+    let spawn_for_palette = move |_ctx: &Context| -> Box<dyn Component> {
+        Box::new(SearchComponent::new(nominatim.clone()))
+    };
+    r.add_palette_entry(PaletteEntry {
+        label: "Search location".to_string(),
+        hint: "/".to_string(),
+        kind: PaletteKind::Spawn(Box::new(spawn_for_palette)),
+    });
 }

@@ -17,10 +17,12 @@
 //! and the `:`-palette entries), while internal intent is `AppMsg`.
 //!
 //! Surface activation (palette open, plugin activate) intentionally
-//! does *not* live here — those are focus transitions, expressed as
-//! [`Effect::Open(SurfaceId)`](crate::focus::Effect::Open) returned by
-//! a [`FocusSurface`](crate::focus::FocusSurface) and handled by
-//! [`FocusManager::open`](crate::focus::FocusManager::open) directly.
+//! does *not* live here — those are focus transitions, handled
+//! internally by the
+//! [`Compositor`](crate::compositor::Compositor) via
+//! [`EventResult::Push`](crate::compositor::EventResult::Push) /
+//! [`CloseAndPush`](crate::compositor::EventResult::CloseAndPush)
+//! returned from a [`Component`](crate::compositor::Component).
 //! Keeping them off `AppMsg` means the focus state machine isn't
 //! coupled to the dispatch table.
 

@@ -11,12 +11,14 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::theme::UiTheme;
 
-use super::WikiPlugin;
+use super::WikiState;
 use super::wikipedia::WikiArticle;
 
-/// Render the wiki side panel (list or detail view) if active.
-pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
-    if !widget.active || map_inner.width < 30 || map_inner.height < 6 {
+/// Render the wiki side panel (list or detail view). Caller ensures
+/// the panel is supposed to be up (compositor only calls this while
+/// `WikiComponent` is on the stack).
+pub fn render_panel(widget: &WikiState, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+    if map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
 
@@ -42,7 +44,7 @@ pub fn render_panel(widget: &WikiPlugin, f: &mut Frame, map_inner: Rect, theme: 
 }
 
 fn render_list(
-    widget: &WikiPlugin,
+    widget: &WikiState,
     f: &mut Frame,
     area: Rect,
     panel_height: u16,

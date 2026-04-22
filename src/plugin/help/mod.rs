@@ -1,56 +1,42 @@
 //! Help widget — displays keybinding help as a center overlay.
+//!
+//! Under the compositor model: ephemeral component, fresh instance
+//! on every push. Any key closes it.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::AppMsg;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
+use crate::compositor::{
+    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
+};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
-
-use super::Plugin;
 
 /// A colored span of help text. Theme is applied at render time so
 /// theme switches update the colors without rebuilding the help
 /// structure.
 enum Seg {
-    /// Plain prose text.
     Text(String),
-    /// Key name / binding (e.g. "h", "Tab", "gg"). Rendered with the
-    /// accent color so bindings stand out from their descriptions.
     Key(String),
-    /// URL that modern terminals auto-detect for click-to-open.
-    /// Underlined to hint at clickability.
     Url(String),
 }
 
 type HelpLine = Vec<Seg>;
 
-#[derive(Default)]
-pub struct HelpPlugin {
-    active: bool,
+/// Pre-computed help text. Built once at startup from the keymap +
+/// plugin metadata, shared (via `Rc`) with every `HelpComponent`
+/// instance so pushes stay cheap.
+pub struct HelpText {
     lines: Vec<HelpLine>,
 }
 
-impl HelpPlugin {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Build the help text. `other_plugins` is inspected for each
-    /// plugin's activation keys + description, so the listing stays in
-    /// sync with the plugins actually loaded rather than a hardcoded
-    /// table in this file. Help includes its own entry automatically.
-    pub fn build(&mut self, keymap: &KeyMap, other_plugins: &[&dyn Plugin]) {
-        let entries: Vec<(String, String)> = plugin_entries(self)
-            .into_iter()
-            .chain(other_plugins.iter().flat_map(|p| plugin_entries(*p)))
-            .collect();
-
+impl HelpText {
+    pub fn build(keymap: &KeyMap, plugin_help_entries: &[(String, String)]) -> Self {
         let mut lines: Vec<HelpLine> = vec![
             text_line(" A terminal-based map viewer — Mapbox vector tiles"),
             text_line(" rendered as Unicode Braille."),
@@ -69,7 +55,7 @@ impl HelpPlugin {
         lines.push(key_line("gg", "Zoom to world"));
         lines.push(key_line("Tab/S-Tab", "Cycle focus"));
         lines.push(key_line(":", "Command palette"));
-        for (key, description) in &entries {
+        for (key, description) in plugin_help_entries {
             lines.push(key_line(key, description));
         }
         lines.push(Vec::new());
@@ -78,7 +64,7 @@ impl HelpPlugin {
         lines.push(text_line(" Bug reports and pull requests welcome:"));
         lines.push(url_line("https://github.com/Kohei-Wada/ttymap"));
 
-        self.lines = lines;
+        Self { lines }
     }
 
     fn rendered_lines<'a>(&'a self, theme: &UiTheme) -> Vec<Line<'a>> {
@@ -99,26 +85,21 @@ impl HelpPlugin {
     }
 }
 
-impl Plugin for HelpPlugin {
-    fn tag(&self) -> &str {
-        "help"
-    }
+pub struct HelpComponent {
+    text: std::rc::Rc<HelpText>,
+}
 
-    fn description(&self) -> &str {
-        "Toggle help"
+impl HelpComponent {
+    pub fn new(text: std::rc::Rc<HelpText>) -> Self {
+        Self { text }
     }
+}
 
-    fn activation_keys(&self) -> Vec<&'static str> {
-        vec!["?"]
-    }
-
-    fn activate(&mut self, _ctx: SurfaceCtx) {
-        self.active = true;
-    }
-
-    fn deactivate(&mut self) {
-        // Modal: losing focus means closing.
-        self.active = false;
+impl Component for HelpComponent {
+    fn handle_event(&mut self, _event: KeyEvent, _ctx: &Context) -> EventResult {
+        // Help is fully modal: any key closes the panel. (Tab is
+        // intercepted by the compositor before it reaches here.)
+        EventResult::Close(Vec::new())
     }
 
     fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
@@ -126,10 +107,8 @@ impl Plugin for HelpPlugin {
             return;
         }
 
-        let rendered = self.rendered_lines(theme);
+        let rendered = self.text.rendered_lines(theme);
 
-        // Fit content with breathing room, but cap at ~80% of the map
-        // area so the popup doesn't dominate the viewport.
         let content_width = rendered
             .iter()
             .map(|l| l.width() as u16)
@@ -153,36 +132,36 @@ impl Plugin for HelpPlugin {
         let widget = Paragraph::new(rendered).style(theme.text()).block(block);
         f.render_widget(widget, area);
     }
-}
-
-/// Help is fully modal: any key closes the panel. The host notices
-/// `is_visible()=false` and releases focus accordingly.
-impl FocusSurface for HelpPlugin {
-    fn handle_key(&mut self, _code: KeyCode, _modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
-        self.active = false;
-        Effect::Consumed
-    }
-
-    fn is_visible(&self) -> bool {
-        self.active
-    }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("any key", "close")]
     }
 }
 
-/// `(activation_key, description)` pairs from one plugin. Empty
-/// description means the plugin opted out of help listing.
-fn plugin_entries(p: &dyn Plugin) -> Vec<(String, String)> {
-    let desc = p.description();
-    if desc.is_empty() {
-        return Vec::new();
+/// Register the help plugin. Takes pre-computed help entries from
+/// sibling plugins (harvested by the composition root) so help
+/// remains in sync with what's actually loaded.
+pub fn register(help_text: std::rc::Rc<HelpText>, r: &mut Registrar) {
+    {
+        let text = help_text.clone();
+        r.add_activation(Activation {
+            code: crossterm::event::KeyCode::Char('?'),
+            modifiers: KeyModifiers::NONE,
+            spawn: Box::new(move |_ctx: &Context| -> Box<dyn Component> {
+                Box::new(HelpComponent::new(text.clone()))
+            }),
+        });
     }
-    p.activation_keys()
-        .into_iter()
-        .map(|k| (k.to_string(), desc.to_string()))
-        .collect()
+    {
+        let text = help_text;
+        r.add_palette_entry(PaletteEntry {
+            label: "Toggle help".to_string(),
+            hint: "?".to_string(),
+            kind: PaletteKind::Spawn(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
+                Box::new(HelpComponent::new(text.clone()))
+            })),
+        });
+    }
 }
 
 // ── Line builders ──────────────────────────────────────────────────────────────
@@ -195,8 +174,6 @@ fn url_line(url: &str) -> HelpLine {
     vec![Seg::Text(" ".to_string()), Seg::Url(url.to_string())]
 }
 
-/// `" <key padded to 20>  <label>"` — matches the original plain-text
-/// layout but splits the key into its own span so it can be colored.
 fn key_line(key: &str, label: &str) -> HelpLine {
     vec![
         Seg::Text(" ".to_string()),

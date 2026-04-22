@@ -1,19 +1,61 @@
 //! [`CommandProvider`] — the default palette provider.
 //!
-//! Lists every map-level `Action` and every visible-to-the-user plugin
-//! activation, filterable by substring. The palette shows this when
-//! opened via `:`. Other providers (theme, search, wiki, …) will be
-//! swapped in as the palette grows.
+//! Built once at startup from:
+//! - map actions (harvested from [`Action::all_listed`] with keymap
+//!   hints)
+//! - plugin palette entries harvested from the
+//!   [`Registrar`](crate::compositor::Registrar) by the palette
+//!   module's own `register` function
+//!
+//! A dynamic "Theme" entry is appended per-open with the current
+//! `ThemeId` so the "(current)" hint stays accurate after runtime
+//! theme changes.
+
+use std::rc::Rc;
 
 use crate::app::AppMsg;
 use crate::color_palette::ThemeId;
+use crate::compositor::{Context, PaletteEntry as RegistrarEntry, PaletteKind};
 use crate::keymap::KeyMap;
 use crate::map::Action;
-use crate::plugin::Plugin;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 
-/// Internal entry — a command label + what happens when it runs.
+/// Static snapshot of the default provider's entry list — built once
+/// at composition time, held as `Rc` so the palette activation
+/// closure can clone cheaply for each push.
+pub struct CommandSeed {
+    map_actions: Vec<(Action, String)>, // (action, key hint)
+    plugin_entries: Vec<RegistrarEntry>,
+}
+
+impl CommandSeed {
+    pub fn build(keymap: &KeyMap, plugin_entries: Vec<RegistrarEntry>) -> Self {
+        let map_actions = Action::all_listed()
+            .iter()
+            .map(|a| {
+                let hint = keymap.keys_for(&AppMsg::Map(a.clone())).join(", ");
+                (a.clone(), hint)
+            })
+            .collect();
+        Self {
+            map_actions,
+            plugin_entries,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Kind {
+    /// Plain map action — selecting runs `AppMsg::Map(action)`.
+    MapAction(Action),
+    /// Plugin-registered Spawn / Run entry — selecting invokes the
+    /// closure in `CommandSeed::plugin_entries[idx]`.
+    PluginEntry(usize),
+    /// "Theme" entry — swaps provider to [`ThemeProvider`].
+    OpenThemeProvider(ThemeId),
+}
+
 #[derive(Clone)]
 struct Entry {
     label: String,
@@ -21,88 +63,48 @@ struct Entry {
     kind: Kind,
 }
 
-#[derive(Clone)]
-enum Kind {
-    Action(Action),
-    Activate(String),
-    /// Opens the [`ThemeProvider`] sub-mode. Remembers the theme the
-    /// palette was opened with so it can show "(current)" marker.
-    OpenThemeProvider(ThemeId),
-}
-
-/// Snapshot of the static (theme-independent) portion of the command
-/// provider's entry list — captured once at startup by
-/// [`CommandProvider::snapshot`]. The dynamic "Theme" entry is
-/// appended per-open by [`CommandProvider::build`] using the current
-/// theme id.
-///
-/// Owned by `CommandPalette` so it can rebuild a fresh provider on
-/// each activation without re-walking the plugin registry / keymap
-/// (both of which are immutable post-startup).
-#[derive(Clone, Default)]
-pub struct CommandProviderSeed {
-    static_entries: Vec<Entry>,
-}
-
 pub struct CommandProvider {
+    seed: Rc<CommandSeed>,
     all: Vec<Entry>,
-    /// Indices into `all` matching the current query, in display order.
+    /// Indices into `all` matching the current query.
     filtered: Vec<usize>,
-    /// Cached [`PaletteItem`] view of `filtered` — rebuilt by `filter`.
     items: Vec<PaletteItem>,
 }
 
 impl CommandProvider {
-    /// Walk plugins + keymap once and capture the static portion of
-    /// the entry list (map actions + each plugin's activation entry).
-    /// The theme entry is *not* included — it depends on runtime
-    /// state, so it's appended in [`Self::build`].
-    pub fn snapshot(plugins: &[&dyn Plugin], keymap: &KeyMap) -> CommandProviderSeed {
-        let mut entries: Vec<Entry> = Vec::new();
+    pub fn build(seed: Rc<CommandSeed>, current_theme: ThemeId) -> Self {
+        let mut all: Vec<Entry> = Vec::new();
 
-        for action in Action::all_listed() {
-            entries.push(Entry {
+        for (action, hint) in &seed.map_actions {
+            all.push(Entry {
                 label: action.label().to_string(),
-                hint: keymap.keys_for(&AppMsg::Map(action.clone())).join(", "),
-                kind: Kind::Action(action.clone()),
+                hint: hint.clone(),
+                kind: Kind::MapAction(action.clone()),
             });
         }
 
-        for p in plugins {
-            let description = p.description();
-            if description.is_empty() {
-                continue;
-            }
-            entries.push(Entry {
-                label: description.to_string(),
-                hint: p.activation_keys().join(", "),
-                kind: Kind::Activate(p.tag().to_string()),
+        for (i, entry) in seed.plugin_entries.iter().enumerate() {
+            all.push(Entry {
+                label: entry.label.clone(),
+                hint: entry.hint.clone(),
+                kind: Kind::PluginEntry(i),
             });
         }
 
-        CommandProviderSeed {
-            static_entries: entries,
-        }
-    }
-
-    /// Build a fresh provider for one palette open. Combines the
-    /// startup snapshot with the current theme (which seeds the
-    /// "Theme" sub-mode entry's "(current)" hint).
-    pub fn build(seed: &CommandProviderSeed, current_theme: ThemeId) -> Self {
-        let mut all = seed.static_entries.clone();
         all.push(Entry {
             label: "Theme".to_string(),
             hint: current_theme.name().to_string(),
             kind: Kind::OpenThemeProvider(current_theme),
         });
 
-        let mut prov = Self {
+        let mut provider = Self {
+            seed,
             all,
             filtered: Vec::new(),
             items: Vec::new(),
         };
-        prov.filter("");
-        prov
+        provider.filter("");
+        provider
     }
 }
 
@@ -125,7 +127,6 @@ impl PaletteProvider for CommandProvider {
                     label.find(&q).map(|pos| (pos, i))
                 })
                 .collect();
-            // Earlier match position first; break ties by registration order.
             ranked.sort_by_key(|&(pos, i)| (pos, i));
             ranked.into_iter().map(|(_, i)| i).collect()
         };
@@ -143,13 +144,19 @@ impl PaletteProvider for CommandProvider {
         &self.items
     }
 
-    fn execute(&mut self, idx: usize) -> PaletteAction {
+    fn execute(&mut self, idx: usize, ctx: &Context) -> PaletteAction {
         let Some(&entry_idx) = self.filtered.get(idx) else {
             return PaletteAction::Close;
         };
         match &self.all[entry_idx].kind {
-            Kind::Action(a) => PaletteAction::Run(vec![AppMsg::Map(a.clone())]),
-            Kind::Activate(tag) => PaletteAction::Open(tag.clone().into()),
+            Kind::MapAction(a) => PaletteAction::Run(vec![AppMsg::Map(a.clone())]),
+            Kind::PluginEntry(i) => {
+                let entry = &self.seed.plugin_entries[*i];
+                match &entry.kind {
+                    PaletteKind::Spawn(spawn) => PaletteAction::Push(spawn(ctx)),
+                    PaletteKind::Run(run) => PaletteAction::Run(run(ctx)),
+                }
+            }
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))
             }
