@@ -27,6 +27,7 @@
 //! the one place that imports each plugin.
 
 pub mod base;
+pub mod window;
 
 pub use base::BaseLayer;
 
