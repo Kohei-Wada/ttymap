@@ -23,8 +23,6 @@
 //! composition root (today `main.rs` / a dedicated plugins module) is
 //! the one place that imports each plugin.
 
-#![allow(dead_code)] // wired in progressively over the refactor
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -47,11 +45,15 @@ use crate::theme::UiTheme;
 /// - `Push(component, msgs)`: absorbed + push a new component on top
 ///   of me. Used by the bottom-layer keymap component to open modals
 ///   on activation keys without knowing about the compositor.
+/// - `CloseAndPush(component, msgs)`: pop me and push `component`
+///   next. Used by the palette: selecting a Spawn-kind entry closes
+///   the palette and opens the target component.
 pub enum EventResult {
     Ignored,
     Consumed(Vec<AppMsg>),
     Close(Vec<AppMsg>),
     Push(Box<dyn Component>, Vec<AppMsg>),
+    CloseAndPush(Box<dyn Component>, Vec<AppMsg>),
 }
 
 /// Read-only snapshot of app-level context a component may need
@@ -105,14 +107,6 @@ impl Compositor {
         self.stack.push(c);
     }
 
-    pub fn pop(&mut self) -> Option<Box<dyn Component>> {
-        self.stack.pop()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.stack.is_empty()
-    }
-
     pub fn len(&self) -> usize {
         self.stack.len()
     }
@@ -131,6 +125,11 @@ impl Compositor {
                     return msgs;
                 }
                 EventResult::Push(new_component, msgs) => {
+                    self.stack.push(new_component);
+                    return msgs;
+                }
+                EventResult::CloseAndPush(new_component, msgs) => {
+                    self.stack.remove(i);
                     self.stack.push(new_component);
                     return msgs;
                 }
@@ -163,6 +162,37 @@ impl Compositor {
             .map(|c| c.footer_hints())
             .unwrap_or_default()
     }
+
+    /// Rotate the stack so Tab-style focus cycling works. Forward
+    /// moves the top to the bottom (bringing the next component up);
+    /// backward does the reverse. No-op with fewer than two
+    /// components. The bottom-layer keymap is index 0, so it stays
+    /// put unless there's only it (trivial case). This replaces
+    /// `FocusManager::cycle`.
+    ///
+    /// Note: the bottom layer sits at index 0 and participates in
+    /// rotation; reaching it via Tab equals the old "cycle to
+    /// Background" state. Callers that want to preserve a
+    /// never-rotate bottom can lift the first element out before
+    /// rotating.
+    pub fn cycle(&mut self, forward: bool) {
+        if self.stack.len() <= 1 {
+            return;
+        }
+        // Keep index 0 (the bottom layer) fixed; rotate only the
+        // modals above it.
+        if forward {
+            if let Some(top) = self.stack.pop() {
+                self.stack.insert(1, top);
+            }
+        } else {
+            // Swap the topmost two (simplest back-cycle for up to a
+            // handful of components; matches the old cycle semantics
+            // of "previous visible plugin").
+            let len = self.stack.len();
+            self.stack.swap(len - 1, len - 2);
+        }
+    }
 }
 
 impl Default for Compositor {
@@ -194,13 +224,17 @@ pub trait Task {
 // ── Plugin self-registration (App is plugin-agnostic) ──────────────
 
 /// Factory closure producing a fresh [`Component`] when the user
-/// activates the corresponding surface.
-pub type SpawnComponent = Box<dyn Fn() -> Box<dyn Component>>;
+/// activates the corresponding surface. Receives a [`Context`]
+/// snapshot so plugins that read app-level state at activation time
+/// (e.g. palette seeds its "(current)" theme hint from `theme_id`)
+/// can do so without a separate lifecycle hook.
+pub type SpawnComponent = Box<dyn Fn(&Context) -> Box<dyn Component>>;
 
 /// Closure that kicks off a headless action (typically: start an
 /// async `Task` or emit one-shot `AppMsg`s) when a palette entry is
-/// selected.
-pub type RunAction = Box<dyn Fn() -> Vec<AppMsg>>;
+/// selected. Receives `Context` for the same reason as
+/// [`SpawnComponent`].
+pub type RunAction = Box<dyn Fn(&Context) -> Vec<AppMsg>>;
 
 /// One activation entry — "when this key is pressed while nothing
 /// modal is above the bottom layer, invoke `spawn` and push the

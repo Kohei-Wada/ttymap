@@ -7,10 +7,10 @@ use ratatui::widgets::{Clear, List, ListItem, Paragraph};
 
 use crate::theme::UiTheme;
 
-use super::SearchPlugin;
+use super::SearchComponent;
 
-pub fn render_panel(widget: &SearchPlugin, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
-    if !widget.active || map_inner.width < 10 || map_inner.height < 3 {
+pub fn render_panel(widget: &SearchComponent, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+    if map_inner.width < 10 || map_inner.height < 3 {
         return;
     }
 
@@ -34,7 +34,7 @@ pub fn render_panel(widget: &SearchPlugin, f: &mut Frame, map_inner: Rect, theme
     }
 }
 
-fn render_input(widget: &SearchPlugin, f: &mut Frame, area: Rect, theme: &UiTheme) {
+fn render_input(widget: &SearchComponent, f: &mut Frame, area: Rect, theme: &UiTheme) {
     let block = theme.panel("search");
     let w = Paragraph::new(format!("/{}", widget.query))
         .style(theme.text())
@@ -42,7 +42,7 @@ fn render_input(widget: &SearchPlugin, f: &mut Frame, area: Rect, theme: &UiThem
     f.render_widget(w, area);
 }
 
-fn render_candidates(widget: &SearchPlugin, f: &mut Frame, area: Rect, theme: &UiTheme) {
+fn render_candidates(widget: &SearchComponent, f: &mut Frame, area: Rect, theme: &UiTheme) {
     let title = format!("search: {}", widget.query);
     let block = theme.panel(&title);
 

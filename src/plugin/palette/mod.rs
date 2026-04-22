@@ -1,119 +1,64 @@
 //! Command palette — `:`-triggered popup, a **universal picker**.
 //!
-//! # Builtin plugin
+//! Under the compositor model, palette is an ephemeral
+//! [`Component`]: pushed on `:`, popped on Esc/Enter/…. State
+//! (`query`, `selected`, `provider`) is per-open and discarded on
+//! pop — no `active` flag, no `seed` field on a long-lived struct.
 //!
-//! Palette is registered as a built-in [`Plugin`] alongside `search`,
-//! `wiki`, `help`, `here`. It uses the same activation pipeline
-//! (`activation_keys = [":"]` → `BackgroundResponder` →
-//! `Effect::Open("palette")` → `FocusManager::open`) and lives in the
-//! same registry. The asymmetry that previously justified treating it
-//! as a special field on `FocusManager` was largely cosmetic: the
-//! provider already walked `&PluginRegistry`, so the "plugins don't
-//! see each other" invariant was already broken at the provider
-//! layer. Folding palette in lets us delete a special branch in
-//! `FocusManager::open`, the `palette` / `palette_mut` accessors, and
-//! the `id == SURFACE_ID` check in `ui::draw`.
+//! The list of non-palette palette entries is harvested from the
+//! [`Registrar`](crate::compositor::Registrar) at composition time
+//! (see [`register`]) and baked into a [`CommandSeed`] that the
+//! activation closure clones (as an `Rc`) for each push.
 //!
-//! What palette **does** keep that no other plugin needs:
-//! - introspects sibling plugins at startup (via [`build`]) — same
-//!   pattern as `HelpPlugin::build`. The captured snapshot is then
-//!   combined per-open with the current theme id (read from
-//!   [`SurfaceCtx::theme_id`] in `activate`) to seed the
-//!   "Theme" sub-mode entry's "(current)" hint.
-//!
-//! # Mechanics
-//!
-//! Concrete behaviour (items, filter, activation) lives on a
-//! [`PaletteProvider`](provider::PaletteProvider). The palette swaps
-//! providers when the user picks a "sub-mode" command (e.g. "Theme"
-//! switches to [`ThemeProvider`](provider::ThemeProvider)). The
-//! palette never touches `FocusManager`; focus transitions are driven
-//! by `FocusManager::open` (which the router invokes when a surface
-//! returns `Effect::Open(SURFACE_ID)`) and the auto-release path
-//! (`is_visible()` flipping to false after `handle_key`).
+//! Provider sub-modes (Theme picker) are reached by the provider's
+//! `execute` returning [`PaletteAction::SwitchProvider`]; the palette
+//! swaps its internal `provider` field in place — no round-trip
+//! through the compositor.
 
 pub mod panel;
 pub mod provider;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use std::rc::Rc;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
+use crate::compositor::{
+    Activation, Component, Context, EventResult, Registrar,
+};
 use crate::keymap::KeyMap;
 use crate::theme::UiTheme;
 
-use super::Plugin;
+use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider};
 
-use provider::{CommandProvider, CommandProviderSeed, PaletteAction, PaletteProvider};
-
-/// `SurfaceId` for the palette in the focus system. Owned here so
-/// the palette is the source of truth for its own identifier; other
-/// modules import from this constant rather than hardcoding "palette".
-pub const SURFACE_ID: &str = "palette";
-
-pub struct CommandPalette {
+pub struct PaletteComponent {
     pub(super) query: String,
-    pub(super) active: bool,
     pub(super) selected: usize,
-    pub(super) provider: Option<Box<dyn PaletteProvider>>,
-    /// Static portion of the default provider's entry list — captured
-    /// at startup by [`build`]. Empty until `build` runs; activating
-    /// before `build` shows only the dynamic Theme entry.
-    seed: CommandProviderSeed,
+    pub(super) provider: Box<dyn PaletteProvider>,
 }
 
-impl Default for CommandPalette {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CommandPalette {
-    pub fn new() -> Self {
+impl PaletteComponent {
+    fn with_provider(mut provider: Box<dyn PaletteProvider>) -> Self {
+        provider.filter("");
         Self {
             query: String::new(),
-            active: false,
             selected: 0,
-            provider: None,
-            seed: CommandProviderSeed::default(),
+            provider,
         }
     }
 
-    /// Capture the static portion of the default provider's entry
-    /// list (map actions + every visible plugin's activation entry).
-    /// Called once at startup after sibling plugins are constructed
-    /// — same two-stage pattern as `HelpPlugin::build`. Re-running it
-    /// is safe (overwrites the snapshot) but unnecessary because
-    /// plugin metadata doesn't change at runtime.
-    pub fn build(&mut self, keymap: &KeyMap, plugins: &[&dyn Plugin]) {
-        self.seed = CommandProvider::snapshot(plugins, keymap);
-    }
-
-    fn open_default(&mut self, theme_id: ThemeId) {
-        let provider = Box::new(CommandProvider::build(&self.seed, theme_id));
-        self.open_with(provider);
-    }
-
-    fn open_with(&mut self, provider: Box<dyn PaletteProvider>) {
-        self.query.clear();
-        self.selected = 0;
-        self.provider = Some(provider);
-        self.active = true;
-        if let Some(p) = self.provider.as_mut() {
-            p.filter("");
-        }
+    pub fn new_default(seed: Rc<CommandSeed>, theme_id: ThemeId) -> Self {
+        Self::with_provider(Box::new(CommandProvider::build(seed, theme_id)))
     }
 
     fn items_len(&self) -> usize {
-        self.provider.as_ref().map(|p| p.items().len()).unwrap_or(0)
+        self.provider.items().len()
     }
 
     fn refilter(&mut self) {
-        if let Some(p) = self.provider.as_mut() {
-            p.filter(&self.query);
-        }
+        self.provider.filter(&self.query);
         let n = self.items_len();
         if self.selected >= n {
             self.selected = n.saturating_sub(1);
@@ -121,146 +66,119 @@ impl CommandPalette {
     }
 }
 
-impl Plugin for CommandPalette {
-    fn tag(&self) -> &str {
-        SURFACE_ID
-    }
+impl Component for PaletteComponent {
+    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+        let up = matches!(event.code, KeyCode::Up) || (ctrl && event.code == KeyCode::Char('p'));
+        let down = matches!(event.code, KeyCode::Down) || (ctrl && event.code == KeyCode::Char('n'));
 
-    /// Empty description — the palette opts out of being listed
-    /// inside itself / inside the help overlay (it would be
-    /// recursive / redundant).
-    fn description(&self) -> &str {
-        ""
-    }
-
-    fn activation_keys(&self) -> Vec<&'static str> {
-        vec![":"]
-    }
-
-    /// Open with the default [`CommandProvider`]. The palette is
-    /// location-agnostic so it ignores `ctx.center`; it reads
-    /// `ctx.theme_id` to seed the theme-picker entry's "(current)"
-    /// hint, which is the only place the active theme leaks into
-    /// the palette. The host (`FocusManager::open`) takes focus
-    /// after this returns.
-    fn activate(&mut self, ctx: SurfaceCtx) {
-        self.open_default(ctx.theme_id);
-    }
-
-    /// Modal: any focus transfer (Tab, another plugin's activation
-    /// key) closes the palette completely rather than leaving its
-    /// popup orphaned on screen.
-    fn deactivate(&mut self) {
-        self.active = false;
-    }
-
-    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
-    }
-}
-
-/// The palette is modal: every key while it is focused is `Consumed`
-/// (the responder chain stops here — never falls through to the
-/// background). Item selection produces `Effect::Run(Vec<AppMsg>)`.
-impl FocusSurface for CommandPalette {
-    fn is_visible(&self) -> bool {
-        self.active
-    }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
-    }
-
-    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
-        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-        let up = matches!(code, KeyCode::Up) || (ctrl && code == KeyCode::Char('p'));
-        let down = matches!(code, KeyCode::Down) || (ctrl && code == KeyCode::Char('n'));
-
-        match code {
-            KeyCode::Esc => {
-                self.active = false;
-                Effect::Consumed
-            }
+        match event.code {
+            KeyCode::Esc => EventResult::Close(Vec::new()),
             KeyCode::Enter => {
                 let has_item = self.selected < self.items_len();
-                self.active = false;
                 if !has_item {
-                    return Effect::Consumed;
+                    return EventResult::Close(Vec::new());
                 }
                 let idx = self.selected;
-                let action = self
-                    .provider
-                    .as_mut()
-                    .map(|p| p.execute(idx))
-                    .unwrap_or(PaletteAction::Close);
+                let action = self.provider.execute(idx, ctx);
                 match action {
-                    PaletteAction::Close => Effect::Consumed,
-                    PaletteAction::SwitchProvider(next) => {
-                        // Provider-to-provider transition: stay active,
-                        // reopen with the new provider. Host sees
-                        // `is_visible()` still true, keeps focus.
-                        self.open_with(next);
-                        Effect::Consumed
+                    PaletteAction::Close => EventResult::Close(Vec::new()),
+                    PaletteAction::Run(msgs) => EventResult::Close(msgs),
+                    PaletteAction::Push(component) => {
+                        EventResult::CloseAndPush(component, Vec::new())
                     }
-                    PaletteAction::Run(msgs) => Effect::Run(msgs),
-                    PaletteAction::Open(id) => Effect::Open(id),
+                    PaletteAction::SwitchProvider(next) => {
+                        self.query.clear();
+                        self.selected = 0;
+                        self.provider = next;
+                        self.provider.filter("");
+                        EventResult::Consumed(Vec::new())
+                    }
                 }
             }
             _ if up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
             _ if down => {
                 if self.selected + 1 < self.items_len() {
                     self.selected += 1;
                 }
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
             KeyCode::Backspace => {
                 self.query.pop();
                 self.refilter();
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('h') if ctrl => {
                 self.query.pop();
                 self.refilter();
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
                 self.refilter();
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char(c) => {
                 self.query.push(c);
                 self.refilter();
-                Effect::Consumed
+                EventResult::Consumed(Vec::new())
             }
-            // Modal: any other key is still consumed (don't fall
-            // through to the background while the palette is up).
-            _ => Effect::Consumed,
+            _ => EventResult::Consumed(Vec::new()),
         }
     }
+
+    fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme) {
+        panel::render_panel(self, f, area, theme);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
+    }
+}
+
+/// Register the palette. Harvests all palette entries contributed by
+/// other plugins (so call this **after** every other plugin's
+/// `register`), bakes them into a [`CommandSeed`], and adds a single
+/// `:` activation pointing at a fresh [`PaletteComponent`].
+pub fn register(keymap: &KeyMap, r: &mut Registrar) {
+    let plugin_entries = std::mem::take(&mut r.palette_entries);
+    let seed = Rc::new(CommandSeed::build(keymap, plugin_entries));
+
+    let seed_for_spawn = seed;
+    r.add_activation(Activation {
+        code: KeyCode::Char(':'),
+        modifiers: KeyModifiers::NONE,
+        spawn: Box::new(move |ctx: &Context| -> Box<dyn Component> {
+            Box::new(PaletteComponent::new_default(
+                seed_for_spawn.clone(),
+                ctx.theme_id,
+            ))
+        }),
+    });
 }
 
 #[cfg(test)]
 mod tests {
+    use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::app::AppMsg;
+    use crate::color_palette::ThemeId;
     use crate::geo::LonLat;
     use crate::map::Action;
-    use crate::plugin::palette::provider::PaletteItem;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
-    const CTX: SurfaceCtx = SurfaceCtx {
+    const CTX: Context = Context {
         center: LonLat { lon: 0.0, lat: 0.0 },
         theme_id: ThemeId::Dark,
     };
 
-    /// Minimal provider: lists the labels we give it, substring filter,
-    /// `execute(idx)` returns `Run(vec![AppMsg::Map(Action::None)])`.
+    /// Minimal provider for testing: lists labels, substring filter,
+    /// Enter returns `Run(Map(None))`.
     struct FakeProvider {
         all: Vec<String>,
         filtered: Vec<usize>,
@@ -309,29 +227,32 @@ mod tests {
         fn items(&self) -> &[PaletteItem] {
             &self.items
         }
-        fn execute(&mut self, _idx: usize) -> PaletteAction {
+        fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
             PaletteAction::Run(vec![AppMsg::Map(Action::None)])
         }
     }
 
-    fn palette_with(labels: &[&str]) -> CommandPalette {
-        let mut p = CommandPalette::new();
-        p.open_with(Box::new(FakeProvider::new(labels)));
-        p
+    fn palette_with(labels: &[&str]) -> PaletteComponent {
+        PaletteComponent::with_provider(Box::new(FakeProvider::new(labels)))
     }
 
-    fn filtered_labels(p: &CommandPalette) -> Vec<&str> {
+    fn filtered_labels(p: &PaletteComponent) -> Vec<&str> {
         p.provider
-            .as_ref()
-            .unwrap()
             .items()
             .iter()
             .map(|i| i.label.as_str())
             .collect()
     }
 
-    fn key(p: &mut CommandPalette, code: KeyCode, mods: KeyModifiers) -> Effect {
-        p.handle_key(code, mods, CTX)
+    fn key(p: &mut PaletteComponent, code: KeyCode, mods: KeyModifiers) -> EventResult {
+        p.handle_event(KeyEvent::new(code, mods), &CTX)
+    }
+
+    fn expect_consumed(r: EventResult) {
+        match r {
+            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
+            _ => panic!("expected Consumed"),
+        }
     }
 
     #[test]
@@ -350,7 +271,6 @@ mod tests {
     #[test]
     fn filter_earlier_match_ranks_first() {
         let mut p = palette_with(&["Zoom in", "Quit"]);
-        // 'i' at pos 2 of "Quit" vs pos 5 of "Zoom in" → Quit first.
         key(&mut p, KeyCode::Char('i'), NONE);
         assert_eq!(filtered_labels(&p), vec!["Quit", "Zoom in"]);
     }
@@ -367,23 +287,27 @@ mod tests {
     #[test]
     fn down_up_stays_in_bounds() {
         let mut p = palette_with(&["A", "B", "C"]);
-        key(&mut p, KeyCode::Down, NONE);
-        key(&mut p, KeyCode::Down, NONE);
-        key(&mut p, KeyCode::Down, NONE); // past end
+        expect_consumed(key(&mut p, KeyCode::Down, NONE));
+        expect_consumed(key(&mut p, KeyCode::Down, NONE));
+        expect_consumed(key(&mut p, KeyCode::Down, NONE)); // past end
         assert_eq!(p.selected, 2);
-        key(&mut p, KeyCode::Up, NONE);
-        key(&mut p, KeyCode::Up, NONE);
-        key(&mut p, KeyCode::Up, NONE); // past top
+        expect_consumed(key(&mut p, KeyCode::Up, NONE));
+        expect_consumed(key(&mut p, KeyCode::Up, NONE));
+        expect_consumed(key(&mut p, KeyCode::Up, NONE)); // past top
         assert_eq!(p.selected, 0);
     }
 
     #[test]
-    fn enter_returns_run_with_selected_msgs() {
+    fn enter_returns_close_with_selected_msgs() {
         let mut p = palette_with(&["A", "B", "C"]);
-        key(&mut p, KeyCode::Down, NONE);
-        let effect = key(&mut p, KeyCode::Enter, NONE);
-        assert_eq!(effect, Effect::Run(vec![AppMsg::Map(Action::None)]));
-        assert!(!p.is_visible());
+        expect_consumed(key(&mut p, KeyCode::Down, NONE));
+        let r = key(&mut p, KeyCode::Enter, NONE);
+        match r {
+            EventResult::Close(msgs) => {
+                assert_eq!(msgs, vec![AppMsg::Map(Action::None)]);
+            }
+            _ => panic!("expected Close"),
+        }
     }
 
     #[test]
@@ -391,16 +315,21 @@ mod tests {
         let mut p = palette_with(&["Zoom in"]);
         key(&mut p, KeyCode::Char('x'), NONE);
         assert!(filtered_labels(&p).is_empty());
-        let effect = key(&mut p, KeyCode::Enter, NONE);
-        assert_eq!(effect, Effect::Consumed);
-        assert!(!p.is_visible());
+        let r = key(&mut p, KeyCode::Enter, NONE);
+        match r {
+            EventResult::Close(msgs) => assert!(msgs.is_empty()),
+            _ => panic!("expected Close"),
+        }
     }
 
     #[test]
     fn esc_closes() {
         let mut p = palette_with(&["A"]);
-        key(&mut p, KeyCode::Esc, NONE);
-        assert!(!p.is_visible());
+        let r = key(&mut p, KeyCode::Esc, NONE);
+        match r {
+            EventResult::Close(msgs) => assert!(msgs.is_empty()),
+            _ => panic!("expected Close"),
+        }
     }
 
     #[test]

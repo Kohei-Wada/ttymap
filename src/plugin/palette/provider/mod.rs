@@ -1,71 +1,54 @@
 //! Palette provider abstraction.
 //!
 //! The palette popup is a **universal picker**: a generic UI that shows
-//! a prompt, a filtered list, lets the user navigate and select. What
-//! those items are, how they're filtered, and what happens on select
-//! varies per use-case (run a command, switch theme, jump to a searched
-//! location, pick a wiki article …).
-//!
-//! That variation lives behind [`PaletteProvider`]. The palette holds a
-//! `Box<dyn PaletteProvider>` and delegates list / filter / execute to
-//! it. Adding a new picker is implementing the trait in a sibling
-//! module + teaching the palette how to reach it (typically by
-//! returning [`PaletteAction::SwitchProvider`] from a parent provider).
+//! a prompt, a filtered list, and lets the user navigate/select.
+//! Providers plug in different item sources / filters / execution
+//! behaviour (default command menu, theme switcher, ...).
 
 pub mod command;
 pub mod theme;
 
-pub use command::{CommandProvider, CommandProviderSeed};
+pub use command::{CommandProvider, CommandSeed};
 pub use theme::ThemeProvider;
 
 use crate::app::AppMsg;
-use crate::focus::SurfaceId;
+use crate::compositor::{Component, Context};
 
 /// One row in the palette list.
 pub struct PaletteItem {
-    /// Main label — left-aligned, what the user reads.
     pub label: String,
-    /// Right-side hint (keybind, metadata). Empty means no hint.
     pub hint: String,
 }
 
-/// What a provider wants the host to do when the user activates (Enter)
-/// an item.
+/// What a provider wants the host to do when the user activates an
+/// item. Translated by the palette Component into the equivalent
+/// [`EventResult`](crate::compositor::EventResult).
 pub enum PaletteAction {
-    /// Dismiss the palette.
+    /// Close the palette with no side effect.
     Close,
-    /// Hand the given messages to [`App::dispatch`](crate::app::App)
-    /// in order. A single entry covers the common case (`vec![msg]`);
-    /// multiple entries let a provider chain effects in one step.
+    /// Close the palette and dispatch these messages.
     Run(Vec<AppMsg>),
-    /// Open / activate the named surface (typically a plugin tag).
-    /// The palette translates this to `Effect::Open(id)` so the focus
-    /// transition flows through the same path as a key-driven
-    /// activation from the background — no `AppMsg` round-trip.
-    Open(SurfaceId),
-    /// Swap to a different provider without closing the palette — the
-    /// "sub-mode" transition. Query resets; focus stays.
+    /// Close the palette and push `component` onto the compositor.
+    /// Used for Spawn-kind entries (Search, Wiki, Help).
+    Push(Box<dyn Component>),
+    /// Swap the palette's provider in place — sub-mode transition
+    /// (e.g. "Theme"). Palette stays open.
     SwitchProvider(Box<dyn PaletteProvider>),
 }
 
 /// Source of items + filter + activation logic for the palette popup.
-///
-/// Providers are owned by the palette while visible. Instantiated when
-/// the palette opens or switches mode; dropped when it closes.
 pub trait PaletteProvider {
     /// Prompt string shown in front of the query (e.g. `":"` for the
-    /// default command provider, `"theme> "` for the theme provider).
+    /// default provider, `"theme> "` for the theme provider).
     fn prompt(&self) -> &str;
 
-    /// Rebuild the visible item list for this query. Called on every
-    /// query edit. Synchronous today; async providers (search, wiki)
-    /// will need a polling extension when they arrive.
+    /// Rebuild the visible item list for this query.
     fn filter(&mut self, query: &str);
 
     /// Current visible items in display order.
     fn items(&self) -> &[PaletteItem];
 
-    /// User pressed Enter on `items()[idx]`. Returns what the host
-    /// should do next.
-    fn execute(&mut self, idx: usize) -> PaletteAction;
+    /// User pressed Enter on `items()[idx]`. `ctx` is forwarded so
+    /// Spawn-kind entries can seed their component from app state.
+    fn execute(&mut self, idx: usize, ctx: &Context) -> PaletteAction;
 }

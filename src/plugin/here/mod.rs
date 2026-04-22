@@ -1,114 +1,97 @@
-//! Here plugin — "jump to current location" as a runtime command.
+//! Here plugin — "jump to current location" as a palette action.
 //!
-//! Headless: no popup, no key focus. Exists purely so the command
-//! palette can offer `Jump to current location`. Activation fires a
-//! background geoip lookup; when it returns the resolved coordinates
-//! are surfaced through [`Plugin::pending_msgs`] as an
-//! `AppMsg::Jump` and the main loop recenters the map. Shares
-//! `config.geoip_endpoint` / `config.geoip_timeout_ms` with the
-//! `--here` startup path.
+//! Headless: no component, no focus. Exists purely so the command
+//! palette can offer `Jump to current location`. Selecting it kicks
+//! off a background geoip lookup; when the lookup completes the
+//! resolved coordinates surface as an `AppMsg::Jump` via the shared
+//! [`HereTask`] polled every tick by `App`.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use log::{info, warn};
 
 use crate::app::AppMsg;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
+use crate::compositor::{Context, PaletteEntry, PaletteKind, Registrar, Task};
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
 
-use super::Plugin;
-
-pub struct HerePlugin {
+/// Shared state for the here subsystem. A palette activation kicks
+/// off a geoip lookup; the task's `poll` drains the completed lookup
+/// and emits a `Jump`.
+pub struct HereState {
     job: AsyncJob<Option<(f64, f64)>>,
     endpoint: String,
     timeout_ms: u64,
-    pending: Option<LonLat>,
 }
 
-impl HerePlugin {
+impl HereState {
     pub fn new(endpoint: String, timeout_ms: u64) -> Self {
         Self {
             job: AsyncJob::new(),
             endpoint,
             timeout_ms,
-            pending: None,
         }
     }
-}
 
-impl Plugin for HerePlugin {
-    fn tag(&self) -> &str {
-        "here"
-    }
-
-    fn description(&self) -> &str {
-        "Jump to here (current location)"
-    }
-
-    fn activation_keys(&self) -> Vec<&'static str> {
-        // Palette-only — no dedicated keybind in v1.
-        Vec::new()
-    }
-
-    fn wants_focus(&self) -> bool {
-        // Headless: fires a background job, never owns the keyboard.
-        false
-    }
-
-    fn activate(&mut self, _ctx: SurfaceCtx) {
+    fn start_lookup(&mut self) {
         let endpoint = self.endpoint.clone();
         let timeout = self.timeout_ms;
         info!("here: starting geoip lookup");
         self.job.spawn(move || geoip::lookup(&endpoint, timeout));
     }
 
-    fn poll(&mut self) -> bool {
+    fn poll_result(&mut self) -> Option<LonLat> {
         match self.job.poll() {
             Some(Some((lat, lon))) => {
                 info!("here: resolved to {}, {}", lat, lon);
-                self.pending = Some(LonLat { lon, lat });
-                true
+                Some(LonLat { lon, lat })
             }
             Some(None) => {
                 warn!("here: geoip lookup failed");
-                false
+                None
             }
-            None => false,
+            None => None,
         }
     }
+}
 
-    fn pending_msgs(&mut self) -> Vec<AppMsg> {
-        self.pending.take().map(AppMsg::Jump).into_iter().collect()
+pub type HereHandle = Rc<RefCell<HereState>>;
+
+/// Periodic poller that surfaces the Jump when the background lookup
+/// completes. Registered in the app's task list.
+pub struct HereTask {
+    state: HereHandle,
+}
+
+impl HereTask {
+    pub fn new(state: HereHandle) -> Self {
+        Self { state }
     }
 }
 
-/// Headless: takes no keys (`wants_focus()=false` so it never gets
-/// any), and is never visible (so Tab cycle skips it and the footer
-/// is never asked for here-specific hints). Spelt out explicitly
-/// even though both match the trait defaults.
-impl FocusSurface for HerePlugin {
-    fn handle_key(&mut self, _code: KeyCode, _modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
-        Effect::Pass
-    }
-
-    fn is_visible(&self) -> bool {
-        false
+impl Task for HereTask {
+    fn poll(&mut self) -> Vec<AppMsg> {
+        match self.state.borrow_mut().poll_result() {
+            Some(loc) => vec![AppMsg::Jump(loc)],
+            None => Vec::new(),
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn register(endpoint: String, timeout_ms: u64, r: &mut Registrar) {
+    let state: HereHandle = Rc::new(RefCell::new(HereState::new(endpoint, timeout_ms)));
 
-    #[test]
-    fn pending_msgs_drained_once() {
-        let mut p = HerePlugin::new("about:blank".into(), 100);
-        p.pending = Some(LonLat { lon: 1.0, lat: 2.0 });
-        assert_eq!(
-            p.pending_msgs(),
-            vec![AppMsg::Jump(LonLat { lon: 1.0, lat: 2.0 })]
-        );
-        assert!(p.pending_msgs().is_empty());
-    }
+    r.add_task(Box::new(HereTask::new(state.clone())));
+
+    let state_for_palette = state;
+    r.add_palette_entry(PaletteEntry {
+        label: "Jump to here (current location)".to_string(),
+        hint: String::new(),
+        kind: PaletteKind::Run(Box::new(move |_ctx: &Context| -> Vec<AppMsg> {
+            state_for_palette.borrow_mut().start_lookup();
+            Vec::new() // Jump arrives later via HereTask::poll
+        })),
+    });
 }

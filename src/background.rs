@@ -1,36 +1,45 @@
-//! Background responder — the host's "default" key handler when no
-//! palette / plugin has focus.
+//! Bottom-layer compositor component — the host's default key handler
+//! when no modal is on top.
 //!
-//! Conceptually a peer of [`CommandPalette`](crate::plugin::palette::CommandPalette)
-//! and the plugin registry: each is a "thing that handles keys", just
-//! at a different focus state. Owned by [`FocusManager`](crate::focus::FocusManager),
-//! returned from `focused_surface_mut` whenever no modal surface holds
-//! focus — so the router never sees a `None` and never special-cases
-//! the background.
+//! Implemented as a [`Component`] that always sits at index 0 of the
+//! [`Compositor`](crate::compositor::Compositor) stack. Plays the role
+//! today's `BackgroundResponder` plays under `FocusManager`, collapsed
+//! into the same primitive every other focus surface uses.
 //!
-//! Owns the three global key behaviours:
-//! - Tab / Shift-Tab → cycle focus across visible plugins
-//! - plugin activation keys (`:`, `/`, `i`, `?`, …) → activate
-//!   (palette is a builtin plugin, so `:` flows through this path
-//!   like every other activation key)
-//! - keymap fallback (h/j/k/l/q/0/+/-/…) → map action
+//! Responsibilities:
+//! - **Keymap fallback**: resolves `h/j/k/l/q/0/+/-/…` via [`KeyMap`]
+//! - **Activation dispatch**: `:` / `/` / `i` / `?` (and any future
+//!   plugin activation key) looked up in an [`Activation`] table,
+//!   each entry a `KeyEvent → SpawnComponent`. When the bottom layer
+//!   sees an activation key it returns [`EventResult::Push`] with
+//!   the freshly-spawned component.
+//! - **Tab cycle**: emits `AppMsg::CycleFocus(forward)`; the
+//!   compositor rotates on dispatch.
+//! - **`gg` multi-key sequence**: tracks `pending_g` and emits
+//!   `ZoomToWorld` on the second `g`.
 //!
-//! Plus the `gg` multi-key sequence state machine.
+//! Because the bottom layer is always at the very bottom of the
+//! stack, its `handle_event` only runs when every modal above it has
+//! returned [`EventResult::Ignored`] — exactly the cases the old
+//! `Effect::Pass` → background-redelivery branch handled.
+//!
+//! The bottom layer renders nothing (the map comes from the render
+//! thread's `MapFrame`, drawn by `App` separately from the
+//! compositor).
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::AppMsg;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
-use crate::keymap::{KeyBinding, KeyMap};
+use crate::compositor::{Activation, Component, Context, EventResult};
+use crate::keymap::KeyMap;
 use crate::map::Action;
 
 pub struct BackgroundResponder {
     keymap: KeyMap,
-    /// `(KeyBinding, plugin_tag)` pairs harvested from every plugin's
-    /// `activation_keys()` at startup. Owned here so the responder
-    /// can look up activations without borrowing the plugin registry
-    /// at delivery time.
-    activations: Vec<(KeyBinding, String)>,
+    /// Activation table: key event → component factory. Populated at
+    /// startup from the [`Registrar`](crate::compositor::Registrar)
+    /// that each plugin's `register` function contributes to.
+    activations: Vec<Activation>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
     /// `KeyMap`) because multi-key sequencing is a responder concern;
     /// the keymap itself is a stateless lookup table.
@@ -38,7 +47,7 @@ pub struct BackgroundResponder {
 }
 
 impl BackgroundResponder {
-    pub fn new(keymap: KeyMap, activations: Vec<(KeyBinding, String)>) -> Self {
+    pub fn new(keymap: KeyMap, activations: Vec<Activation>) -> Self {
         Self {
             keymap,
             activations,
@@ -46,17 +55,18 @@ impl BackgroundResponder {
         }
     }
 
-    fn activation_tag(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&str> {
-        let clean_mods = modifiers & !KeyModifiers::SHIFT;
+    /// Find an activation matching this key (modulo Shift, which we
+    /// strip to match keymap lookup semantics).
+    fn activation_for(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&Activation> {
+        let clean = modifiers & !KeyModifiers::SHIFT;
         self.activations
             .iter()
-            .find(|(b, _)| b.code == code && b.modifiers == clean_mods)
-            .map(|(_, tag)| tag.as_str())
+            .find(|a| a.code == code && a.modifiers == clean)
     }
 
     /// Advance the `gg` state machine and resolve via the keymap.
-    /// Used internally by `handle_key`; called unconditionally so any
-    /// non-`g` keypress resets `pending_g`.
+    /// Called unconditionally so any non-`g` keypress resets
+    /// `pending_g`.
     fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppMsg> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
@@ -71,55 +81,45 @@ impl BackgroundResponder {
     }
 }
 
-/// `BackgroundResponder` is a `FocusSurface` (`is_visible` = true,
-/// always available) so the router can deliver keys to it through the
-/// same `&mut dyn FocusSurface` channel as palette / plugin. It needs
-/// `widgets` from `SurfaceCtx` to resolve plugin activation keys.
-impl FocusSurface for BackgroundResponder {
-    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, _ctx: SurfaceCtx) -> Effect {
+impl Component for BackgroundResponder {
+    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+        let KeyEvent { code, modifiers, .. } = event;
+
         // Always advance the gg state first — vim semantics: any
         // non-`g` key (including focus-transition triggers like Tab,
         // `:`, activation keys) resets `pending_g`.
         let keymap_msg = self.resolve_keymap(code, modifiers);
 
+        // Tab / Shift-Tab → cycle compositor stack.
         let forward = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
         let backward = code == KeyCode::BackTab
             || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
         if forward || backward {
-            return Effect::Run(vec![AppMsg::CycleFocus(forward)]);
+            return EventResult::Consumed(vec![AppMsg::CycleFocus(forward)]);
         }
 
-        // `:` is no longer a special-case here — palette is a builtin
-        // plugin with `activation_keys() = [":"]`, so the activation
-        // table below catches it through the same lookup as `/`, `i`,
-        // `?`. Keeps the surface count to one.
-        if let Some(tag) = self.activation_tag(code, modifiers) {
-            return Effect::Open(tag.to_string().into());
+        // Activation keys: spawn the plugin's fresh component and
+        // push it on top.
+        if let Some(activation) = self.activation_for(code, modifiers) {
+            let new_component = (activation.spawn)(ctx);
+            return EventResult::Push(new_component, Vec::new());
         }
 
         if let Some(msg) = keymap_msg {
-            return Effect::Run(vec![msg]);
+            return EventResult::Consumed(vec![msg]);
         }
 
-        // First `g` of `gg` and unrecognised keys both land here. The
-        // background is always "visible" so the router treats this as
-        // a no-op (no AppMsg, no auto-release).
-        Effect::Pass
+        // First `g` of `gg` and unrecognised keys land here. Bottom
+        // layer has nothing below it, so we consume rather than
+        // Ignore — there is no lower layer to fall through to.
+        EventResult::Consumed(Vec::new())
     }
 
-    /// The background is the one surface that is *always* available —
-    /// it is the resting state of the focus manager and is never
-    /// released. Overrides the trait default (`false`) which is the
-    /// safe assumption for everything else.
-    fn is_visible(&self) -> bool {
-        true
+    fn render(&self, _f: &mut ratatui::Frame, _area: ratatui::layout::Rect, _theme: &crate::theme::UiTheme) {
+        // Bottom layer draws nothing — the map is painted by `App`
+        // separately from the compositor (see `App::run`).
     }
 
-    /// Footer hints shown when the background owns focus (i.e. no
-    /// modal is up). The cycle hint (`Tab/S-Tab`) is *not* included
-    /// here — it depends on whether any plugin is currently visible,
-    /// which the background can't see. The UI layer adds it when
-    /// applicable.
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![
             ("hjkl", "pan"),
@@ -136,40 +136,54 @@ impl FocusSurface for BackgroundResponder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color_palette::ThemeId;
     use crate::geo::LonLat;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
-    const CTX: SurfaceCtx = SurfaceCtx {
+    const CTX: Context = Context {
         center: LonLat { lon: 0.0, lat: 0.0 },
-        theme_id: crate::color_palette::ThemeId::Dark,
+        theme_id: ThemeId::Dark,
     };
-
-    fn map(action: Action) -> AppMsg {
-        AppMsg::Map(action)
-    }
 
     fn bg() -> BackgroundResponder {
         BackgroundResponder::new(KeyMap::default(), Vec::new())
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, NONE)
+    }
+
+    fn assert_consumed_msg(effect: EventResult, expected: AppMsg) {
+        match effect {
+            EventResult::Consumed(msgs) => assert_eq!(msgs, vec![expected]),
+            _ => panic!("expected Consumed, got something else"),
+        }
     }
 
     #[test]
     fn gg_produces_zoom_to_world_on_second_g() {
         let mut bg = bg();
         // 1st g: nothing fires, pending_g latched.
-        assert_eq!(bg.handle_key(KeyCode::Char('g'), NONE, CTX), Effect::Pass);
+        match bg.handle_event(key(KeyCode::Char('g')), &CTX) {
+            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
+            _ => panic!("expected Consumed(empty)"),
+        }
         // 2nd g: ZoomToWorld.
-        assert_eq!(
-            bg.handle_key(KeyCode::Char('g'), NONE, CTX),
-            Effect::Run(vec![map(Action::ZoomToWorld)])
+        assert_consumed_msg(
+            bg.handle_event(key(KeyCode::Char('g')), &CTX),
+            AppMsg::Map(Action::ZoomToWorld),
         );
     }
 
     #[test]
     fn gg_sequence_broken_by_other_key() {
         let mut bg = bg();
-        bg.handle_key(KeyCode::Char('g'), NONE, CTX);
-        bg.handle_key(KeyCode::Char('h'), NONE, CTX); // breaks
+        bg.handle_event(key(KeyCode::Char('g')), &CTX);
+        bg.handle_event(key(KeyCode::Char('h')), &CTX); // breaks
         // Now pending_g was reset; this g latches afresh, doesn't fire.
-        assert_eq!(bg.handle_key(KeyCode::Char('g'), NONE, CTX), Effect::Pass);
+        match bg.handle_event(key(KeyCode::Char('g')), &CTX) {
+            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
+            _ => panic!("expected Consumed(empty)"),
+        }
     }
 }

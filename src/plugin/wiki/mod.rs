@@ -1,33 +1,47 @@
 //! Wiki widget — Wikipedia geosearch panel, map markers, and the
 //! background fetcher that populates them.
 //!
-//! Self-contained: `app.rs` sees it only through the
-//! [`Plugin`](super::Plugin) trait. The HTTP client and async wrapper
-//! are private to this module.
+//! Under the compositor model wiki is split into two surfaces sharing
+//! one state handle:
+//!
+//! - [`WikiComponent`] — the focus-side modal panel. Pushed onto the
+//!   compositor on activation, popped on close.
+//! - [`WikiPainter`] — the always-on map markers. Registered in the
+//!   app's painter list at startup; renders every frame regardless of
+//!   whether the component is on the stack.
+//!
+//! Both hold an `Rc<RefCell<WikiState>>` so the marker list, current
+//! selection, and the detail view survive panel open/close cycles and
+//! stay in sync between the two views.
 
 pub mod panel;
 mod service;
 mod wikipedia;
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
-use crate::focus::{Effect, FocusSurface, SurfaceCtx};
+use crate::compositor::{
+    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Painter, Registrar,
+};
 use crate::geo::LonLat;
+use crate::painter::MapPainter;
 use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;
 
 use service::WikiService;
 use wikipedia::WikiArticle;
 
-use super::Plugin;
-
-pub struct WikiPlugin {
-    pub(in crate::plugin::wiki) active: bool,
+/// Shared state for the wiki subsystem. Lives behind an
+/// `Rc<RefCell<_>>` so both the focus-side ([`WikiComponent`]) and
+/// the map-side ([`WikiPainter`]) views share one source of truth.
+pub struct WikiState {
     pub(in crate::plugin::wiki) articles: Vec<WikiArticle>,
     pub(in crate::plugin::wiki) selected: usize,
     /// Snapshot of the article being viewed in detail mode. A copy
@@ -39,10 +53,9 @@ pub struct WikiPlugin {
     throttle: Throttle,
 }
 
-impl WikiPlugin {
+impl WikiState {
     pub fn new(language: &str, limit: u32) -> Self {
         Self {
-            active: false,
             articles: Vec::new(),
             selected: 0,
             detail: None,
@@ -51,20 +64,8 @@ impl WikiPlugin {
         }
     }
 
-    pub(in crate::plugin::wiki) fn is_detail_open(&self) -> bool {
+    pub fn is_detail_open(&self) -> bool {
         self.detail.is_some()
-    }
-
-    fn open(&mut self) {
-        self.active = true;
-        self.selected = 0;
-        self.detail = None;
-    }
-
-    fn close_state(&mut self) {
-        self.active = false;
-        self.selected = 0;
-        self.detail = None;
     }
 
     fn refresh(&mut self, center: LonLat) {
@@ -73,10 +74,7 @@ impl WikiPlugin {
         }
     }
 
-    /// Merge fresh fetch results into the existing list — keeps any
-    /// article that is still in the new set (preserves selection
-    /// stability across pans), drops the rest, then appends new
-    /// arrivals.
+    /// Merge fresh fetch results into the existing list.
     fn set_articles(&mut self, new_articles: Vec<WikiArticle>) {
         let new_titles: HashSet<String> = new_articles.iter().map(|a| a.title.clone()).collect();
         self.articles.retain(|a| new_titles.contains(&a.title));
@@ -93,38 +91,9 @@ impl WikiPlugin {
             self.selected = self.articles.len().saturating_sub(1);
         }
     }
-}
 
-impl Plugin for WikiPlugin {
-    fn tag(&self) -> &str {
-        "wiki"
-    }
-
-    fn description(&self) -> &str {
-        "Toggle wiki"
-    }
-
-    fn activation_keys(&self) -> Vec<&'static str> {
-        vec!["i"]
-    }
-
-    fn activate(&mut self, ctx: SurfaceCtx) {
-        // Non-modal: visible and focus are independent. Host drives
-        // focus; here we only manage panel state. If the panel is
-        // already visible, leave state alone — the host may be
-        // reclaiming focus from another plugin's activation key.
-        // Toggle-off is handled by `handle_key`'s self-absorption of
-        // the `i` key, which calls `close_state` directly.
-        if !self.active {
-            self.open();
-            self.refresh(ctx.center);
-        }
-    }
-
-    // Non-modal: keep the panel visible when focus leaves (default
-    // deactivate is no-op).
-
-    fn poll(&mut self) -> bool {
+    /// Advance async fetch, merging new results when available.
+    pub fn poll(&mut self) -> bool {
         if let Some(articles) = self.service.poll() {
             debug!("wiki: received {} articles", articles.len());
             self.set_articles(articles);
@@ -133,148 +102,121 @@ impl Plugin for WikiPlugin {
             false
         }
     }
+}
 
-    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
-        panel::render_panel(self, f, area, theme);
-    }
+pub type WikiHandle = Rc<RefCell<WikiState>>;
 
-    fn paint_on_map(&self, p: &mut crate::painter::MapPainter<'_>) {
-        if !self.active {
-            return;
-        }
-        let (primary, accent) = {
-            let theme = p.theme();
-            (theme.accent, theme.accent_alt)
-        };
-        for (i, a) in self.articles.iter().enumerate() {
-            let fg = if i == self.selected { accent } else { primary };
-            p.point(
-                crate::geo::LonLat {
-                    lon: a.lon,
-                    lat: a.lat,
-                },
-                '●',
-                fg,
-            );
-        }
+/// Focus-side view of wiki. Holds no state of its own — state lives
+/// in `WikiHandle`, so push/pop is cheap and can't desync from the
+/// painter.
+pub struct WikiComponent {
+    state: WikiHandle,
+}
+
+impl WikiComponent {
+    pub fn new(state: WikiHandle, center: LonLat) -> Self {
+        // Trigger a refresh on (re)open so the list reflects the
+        // user's current position. Replaces the old `activate` hook.
+        state.borrow_mut().refresh(center);
+        Self { state }
     }
 }
 
-/// Non-modal key dispatch. Returns `Effect::Pass` for keys the wiki
-/// panel doesn't recognise so the background responder gets a chance
-/// — but only when the panel is open. Closed panel = `Pass` for
-/// everything.
-///
-/// Focus release is host-driven: if `is_visible()` flips to false
-/// (e.g. Esc closed the list) `ui::router` releases for us.
-impl FocusSurface for WikiPlugin {
-    fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers, ctx: SurfaceCtx) -> Effect {
-        if !self.active {
-            return Effect::Pass;
+impl Component for WikiComponent {
+    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+        let mut state = self.state.borrow_mut();
+        let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+
+        // Self-toggle on the activation key.
+        if event.code == KeyCode::Char('i') && event.modifiers == KeyModifiers::NONE {
+            return EventResult::Close(Vec::new());
         }
 
-        // Self-toggle on the activation key. Surfaces own their own
-        // lifecycle: pressing `i` again while the panel has focus
-        // closes it directly (no round-trip through the background
-        // responder + `FocusManager::open` toggle path). The router
-        // auto-releases focus when `is_visible()` flips to false.
-        if code == KeyCode::Char('i') && modifiers == KeyModifiers::NONE {
-            self.close_state();
-            return Effect::Consumed;
+        // Refresh is available even when the list is empty.
+        if event.code == KeyCode::Char('r') {
+            state.refresh(ctx.center);
+            return EventResult::Consumed(Vec::new());
         }
 
-        // Refresh is available even when the list is empty (e.g.
-        // initial load returned nothing and the user wants to retry).
-        if code == KeyCode::Char('r') {
-            self.refresh(ctx.center);
-            return Effect::Consumed;
-        }
+        let up = (ctrl && event.code == KeyCode::Char('p')) || event.code == KeyCode::Up;
+        let down = (ctrl && event.code == KeyCode::Char('n')) || event.code == KeyCode::Down;
+        let exit_detail = matches!(
+            event.code,
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter
+        );
 
-        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
-        let up = (ctrl && code == KeyCode::Char('p')) || code == KeyCode::Up;
-        let down = (ctrl && code == KeyCode::Char('n')) || code == KeyCode::Down;
-        let exit_detail = matches!(code, KeyCode::Esc | KeyCode::Backspace | KeyCode::Enter);
-
-        if self.articles.is_empty() {
+        if state.articles.is_empty() {
             // Panel is open but has nothing yet — still swallow
             // widget-control keys so they don't fall through to the
-            // global keymap.
+            // keymap.
             if up || down || exit_detail {
-                return Effect::Consumed;
+                return EventResult::Consumed(Vec::new());
             }
-            return Effect::Pass;
+            return EventResult::Ignored;
         }
 
         // ── Detail mode ─────────────────────────────────────────────
-        if self.detail.is_some() {
+        if state.is_detail_open() {
             if exit_detail {
-                self.detail = None;
-                return Effect::Consumed;
+                state.detail = None;
+                return EventResult::Consumed(Vec::new());
             }
             if up || down {
-                if up {
-                    self.selected = if self.selected == 0 {
-                        self.articles.len() - 1
-                    } else {
-                        self.selected - 1
-                    };
+                let n = state.articles.len();
+                state.selected = if up {
+                    if state.selected == 0 { n - 1 } else { state.selected - 1 }
                 } else {
-                    self.selected = (self.selected + 1) % self.articles.len();
-                }
-                let article = self.articles[self.selected].clone();
-                let loc = LonLat {
-                    lat: article.lat,
-                    lon: article.lon,
+                    (state.selected + 1) % n
                 };
-                self.detail = Some(article);
-                return Effect::Run(vec![AppMsg::Jump(loc)]);
+                let article = state.articles[state.selected].clone();
+                let loc = LonLat { lat: article.lat, lon: article.lon };
+                state.detail = Some(article);
+                return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
             }
-            return Effect::Consumed;
+            return EventResult::Consumed(Vec::new());
         }
 
         // ── List mode ───────────────────────────────────────────────
-        if code == KeyCode::Enter {
-            if let Some(article) = self.articles.get(self.selected) {
-                let loc = LonLat {
-                    lat: article.lat,
-                    lon: article.lon,
-                };
-                self.detail = Some(article.clone());
-                return Effect::Run(vec![AppMsg::Jump(loc)]);
+        if event.code == KeyCode::Enter {
+            if let Some(article) = state.articles.get(state.selected) {
+                let loc = LonLat { lat: article.lat, lon: article.lon };
+                state.detail = Some(article.clone());
+                return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
             }
-            return Effect::Consumed;
+            return EventResult::Consumed(Vec::new());
         }
         if up || down {
-            if up {
-                // Wrap around: top → bottom.
-                self.selected = if self.selected == 0 {
-                    self.articles.len() - 1
-                } else {
-                    self.selected - 1
-                };
+            let n = state.articles.len();
+            state.selected = if up {
+                if state.selected == 0 { n - 1 } else { state.selected - 1 }
             } else {
-                // Wrap around: bottom → top.
-                self.selected = (self.selected + 1) % self.articles.len();
-            }
-            let article = &self.articles[self.selected];
-            return Effect::Run(vec![AppMsg::Jump(LonLat {
+                (state.selected + 1) % n
+            };
+            let article = &state.articles[state.selected];
+            return EventResult::Consumed(vec![AppMsg::Jump(LonLat {
                 lat: article.lat,
                 lon: article.lon,
             })]);
         }
-        if matches!(code, KeyCode::Esc | KeyCode::Backspace) {
-            return Effect::Consumed;
+        if matches!(event.code, KeyCode::Esc | KeyCode::Backspace) {
+            return EventResult::Consumed(Vec::new());
         }
 
-        Effect::Pass
+        // Non-modal: let lower layers handle unknown keys.
+        EventResult::Ignored
     }
 
-    fn is_visible(&self) -> bool {
-        self.active
+    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
+        panel::render_panel(&self.state.borrow(), f, area, theme);
+    }
+
+    fn poll(&mut self) -> Vec<AppMsg> {
+        self.state.borrow_mut().poll();
+        Vec::new()
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        if self.is_detail_open() {
+        if self.state.borrow().is_detail_open() {
             vec![
                 ("C-n/C-p", "prev/next"),
                 ("Enter/Esc", "back"),
@@ -292,5 +234,67 @@ impl FocusSurface for WikiPlugin {
                 ("?", "help"),
             ]
         }
+    }
+}
+
+/// Map-side view of wiki. Paints markers for every article every
+/// frame, regardless of whether the panel is on the compositor stack.
+pub struct WikiPainter {
+    state: WikiHandle,
+}
+
+impl WikiPainter {
+    pub fn new(state: WikiHandle) -> Self {
+        Self { state }
+    }
+}
+
+impl Painter for WikiPainter {
+    fn paint(&self, p: &mut MapPainter<'_>) {
+        let state = self.state.borrow();
+        let (primary, accent) = {
+            let theme = p.theme();
+            (theme.accent, theme.accent_alt)
+        };
+        for (i, a) in state.articles.iter().enumerate() {
+            let fg = if i == state.selected { accent } else { primary };
+            p.point(
+                LonLat { lon: a.lon, lat: a.lat },
+                '●',
+                fg,
+            );
+        }
+    }
+}
+
+/// Wire wiki into the registrar. Creates the shared state once,
+/// hands clones of the handle to both the painter (always on) and
+/// the activation spawn closure (creates fresh `WikiComponent` on
+/// each activation).
+pub fn register(language: &str, limit: u32, r: &mut Registrar) {
+    let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(language, limit)));
+
+    r.add_painter(Box::new(WikiPainter::new(state.clone())));
+
+    {
+        let state = state.clone();
+        r.add_activation(Activation {
+            code: KeyCode::Char('i'),
+            modifiers: KeyModifiers::NONE,
+            spawn: Box::new(move |ctx: &Context| -> Box<dyn Component> {
+                Box::new(WikiComponent::new(state.clone(), ctx.center))
+            }),
+        });
+    }
+
+    {
+        let state = state;
+        r.add_palette_entry(PaletteEntry {
+            label: "Toggle wiki".to_string(),
+            hint: "i".to_string(),
+            kind: PaletteKind::Spawn(Box::new(move |ctx: &Context| -> Box<dyn Component> {
+                Box::new(WikiComponent::new(state.clone(), ctx.center))
+            })),
+        });
     }
 }

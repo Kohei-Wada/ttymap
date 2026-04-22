@@ -18,10 +18,10 @@ pub mod app;
 /// [`commands::Command::run`].
 pub mod commands;
 
-/// **Prototype.** Helix-style compositor stack, candidate replacement
-/// for `FocusManager` + `FocusSurface` + `Plugin`. Not wired in yet —
-/// the file is a design reference + shape comparison (one converted
-/// plugin `SearchComponent` lives at the bottom).
+/// Helix-style compositor stack — the focus/modal system that
+/// replaced the old FocusManager / FocusSurface / Plugin trio. Holds
+/// the `Component`, `Painter`, `Task`, `Registrar` abstractions that
+/// every plugin plugs into.
 pub(crate) mod compositor;
 
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
@@ -32,15 +32,9 @@ pub mod config;
 /// produced here is what the UI displays.
 pub mod map;
 
-/// Focus manager — single source of truth for "which surface owns the
-/// keyboard". Sits above `ui/` because keyboard dispatch routes input
-/// through it before falling back to global handlers.
-pub(crate) mod focus;
-
-/// Background responder — handles keys when no surface has focus
-/// (Tab cycle, `:` palette, plugin activation, keymap fallback, gg).
-/// Owned by `FocusManager`; peer of `CommandPalette` and
-/// `PluginRegistry` in the focus model.
+/// Background responder — the bottom-layer compositor component.
+/// Handles keymap fallback, activation dispatch, gg sequence, and
+/// Tab cycle.
 pub(crate) mod background;
 
 /// UI color set (Theme) + runtime theme-switch helper. Lives at the
@@ -57,9 +51,10 @@ pub(crate) mod painter;
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
 
-/// Plugin surface: the `Plugin` trait + `PluginRegistry` + built-in
-/// widget implementations (search, help, wiki) that dogfood the same
-/// trait external plugins will use.
+/// Plugin modules. Each plugin exposes a `pub fn register(...,
+/// &mut Registrar)` that plugs it into the compositor / painters /
+/// tasks / palette. `App` is plugin-agnostic — only
+/// `build_registrar` in `app/mod.rs` names plugins by module path.
 pub(crate) mod plugin;
 
 /// File-based logging to XDG state directory.

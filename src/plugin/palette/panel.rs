@@ -8,15 +8,13 @@ use ratatui::widgets::{Cell, Clear, Paragraph, Row, Table, TableState};
 
 use crate::theme::UiTheme;
 
-use super::CommandPalette;
+use super::PaletteComponent;
 
-pub fn render_panel(widget: &CommandPalette, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
-    if !widget.active || map_inner.width < 30 || map_inner.height < 6 {
+pub fn render_panel(widget: &PaletteComponent, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {
+    if map_inner.width < 30 || map_inner.height < 6 {
         return;
     }
-    let Some(provider) = widget.provider.as_ref() else {
-        return;
-    };
+    let provider = &widget.provider;
     let items = provider.items();
 
     let popup_width = (map_inner.width * 2 / 3).max(40).min(map_inner.width - 2);
