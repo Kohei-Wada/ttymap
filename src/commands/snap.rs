@@ -84,10 +84,10 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
 
     // Resolve center: --here wins, then --lat/--lon, then config default.
     if args.here {
-        match geoip::lookup(&config.geoip_endpoint, config.geoip_timeout_ms) {
+        match geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
             Some((lat, lon)) => {
-                config.initial_lat = lat;
-                config.initial_lon = lon;
+                config.map.lat = lat;
+                config.map.lon = lon;
             }
             None => {
                 return Err(io::Error::other(
@@ -97,20 +97,20 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
         }
     } else {
         if let Some(lat) = args.lat {
-            config.initial_lat = lat;
+            config.map.lat = lat;
         }
         if let Some(lon) = args.lon {
-            config.initial_lon = lon;
+            config.map.lon = lon;
         }
     }
     if let Some(z) = args.zoom {
-        config.initial_zoom = Some(z);
+        config.map.zoom = Some(z);
     }
     if let Some(s) = args.style {
-        config.style = s;
+        config.render.style = s;
     }
     if let Some(lang) = args.language {
-        config.language = lang;
+        config.render.language = lang;
     }
 
     // If --cols/--rows weren't given, default to the current
@@ -129,18 +129,23 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
     let (tile_cache, _attribution) = app::build_tile_cache(&config);
-    let theme_id = ThemeId::from_name(&config.style);
+    let theme_id = ThemeId::from_name(&config.render.style);
     let styler = Arc::new(Styler::new(theme_id));
-    let mut pipeline =
-        RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
+    let mut pipeline = RenderPipeline::new(
+        tile_cache,
+        styler,
+        config.render.language.clone(),
+        width,
+        height,
+    );
 
     let map = MapState::new(
         MapStateOptions {
-            initial_lon: config.initial_lon,
-            initial_lat: config.initial_lat,
-            initial_zoom: config.initial_zoom,
-            zoom_step: config.zoom_step,
-            max_zoom: config.max_zoom,
+            initial_lon: config.map.lon,
+            initial_lat: config.map.lat,
+            initial_zoom: config.map.zoom,
+            zoom_step: config.map.zoom_step,
+            max_zoom: config.map.max_zoom,
         },
         width,
         height,

@@ -1,43 +1,38 @@
 # ttymap configuration
 # Place this file at ~/.config/ttymap/config.toml
+#
+# Every field is optional. Omitted sections and omitted fields
+# fall back to the defaults shown below.
 
-# Tile source URL
-# source = "http://mapscii.me/"
-
-# Map label language (e.g. "en", "ja", "de")
-# language = "en"
-
-# Initial position (latitude, longitude)
+# --- Initial view ---------------------------------------------------
+# [map]
 # lat = 35.6828
 # lon = 139.7595
-
-# Initial zoom level
 # zoom = 10.0
-
-# Zoom step per keypress (default: 0.2)
-# zoom_step = 0.3
-
-# Maximum zoom level (default: 18.0)
 # max_zoom = 18.0
+# zoom_step = 0.2
 
-# Enable disk tile cache (default: true)
-# cache_tiles = true
+# --- Rendering ------------------------------------------------------
+# [render]
+# style = "dark"       # "dark" or "bright"
+# language = "en"      # map label language, e.g. "en", "ja", "de"
 
-# Style preset ("dark" or "bright")
-# style = "dark"
+# --- Tile cache -----------------------------------------------------
+# [cache]
+# tiles = true         # write decoded tiles to ~/.cache/ttymap/
+# memory_tiles = 192   # LRU capacity for decoded tiles in memory
 
-# Jump to IP-based current location on startup (default: false)
-# Can also be triggered per-run with the --here CLI flag.
-# here_on_startup = true
+# --- Wikipedia plugin -----------------------------------------------
+# [wiki]
+# limit = 50           # max nearby articles shown in the panel
 
-# IP geolocation endpoint (default: "https://ipapi.co/json/")
-# Must return JSON with numeric "latitude" / "longitude" fields.
-# geoip_endpoint = "https://ipapi.co/json/"
+# --- IP-based geolocation (shared by --here and the `here` plugin) --
+# [geoip]
+# on_startup = false
+# endpoint = "https://ipapi.co/json/"   # must return JSON with numeric "latitude" / "longitude"
+# timeout_ms = 2000
 
-# Timeout for the IP geolocation request in milliseconds (default: 2000)
-# geoip_timeout_ms = 2000
-
-# Key bindings
+# --- Key bindings ---------------------------------------------------
 # Notation: "h" (character), "Left" (special key), "C-d" (Ctrl+d)
 # Special keys: Left, Right, Up, Down, Enter, Esc, Tab
 #

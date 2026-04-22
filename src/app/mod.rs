@@ -60,20 +60,25 @@ impl App {
         let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
-        let theme_id = ThemeId::from_name(&config.style);
+        let theme_id = ThemeId::from_name(&config.render.style);
         let registrar = build_registrar(&config, nominatim.clone(), &keymap);
         let ui = UiState::new(nominatim, attribution);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
-        let pipeline =
-            RenderPipeline::new(tile_cache, styler, config.language.clone(), width, height);
+        let pipeline = RenderPipeline::new(
+            tile_cache,
+            styler,
+            config.render.language.clone(),
+            width,
+            height,
+        );
         let map = MapState::new(
             MapStateOptions {
-                initial_lon: config.initial_lon,
-                initial_lat: config.initial_lat,
-                initial_zoom: config.initial_zoom,
-                zoom_step: config.zoom_step,
-                max_zoom: config.max_zoom,
+                initial_lon: config.map.lon,
+                initial_lat: config.map.lat,
+                initial_zoom: config.map.zoom,
+                zoom_step: config.map.zoom_step,
+                max_zoom: config.map.max_zoom,
             },
             width,
             height,
@@ -239,7 +244,7 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
     };
     let boxed: Box<dyn TileClient> = Box::new(client);
     (
-        crate::map::tile::TileCache::new(boxed, rx, config.cache_tiles),
+        crate::map::tile::TileCache::new(boxed, rx, config.cache.tiles, config.cache.memory_tiles),
         attribution,
     )
 }
@@ -255,10 +260,10 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
     let mut r = Registrar::default();
 
     crate::plugin::search::register(nominatim, &mut r);
-    crate::plugin::wiki::register(&config.language, config.wiki_limit, &mut r);
+    crate::plugin::wiki::register(&config.render.language, config.wiki.limit, &mut r);
     crate::plugin::here::register(
-        config.geoip_endpoint.clone(),
-        config.geoip_timeout_ms,
+        config.geoip.endpoint.clone(),
+        config.geoip.timeout_ms,
         &mut r,
     );
 

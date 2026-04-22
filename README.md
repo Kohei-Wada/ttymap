@@ -315,7 +315,6 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Short-term
 
-- **Config sections** ([#47](https://github.com/Kohei-Wada/ttymap/issues/47)) — move flat TOML into `[map]` / `[render]` / `[geoip]` / … before more plugins accumulate config fields.
 - **Tile backends** ([#30](https://github.com/Kohei-Wada/ttymap/issues/30) MBTiles, [#31](https://github.com/Kohei-Wada/ttymap/issues/31) PMTiles) — offline and CDN-friendly serving. Today the only backend is `mapscii.me`.
 - **Error handling policy** ([#17](https://github.com/Kohei-Wada/ttymap/issues/17)) — normalize how soft errors (network, parse) surface.
 
@@ -363,23 +362,29 @@ Issues on GitHub carry the current opinion of what's easy, what's hard, and what
 Config file: `~/.config/ttymap/config.toml`
 
 ```toml
-language = "ja"
+[map]
 lat = 35.6828
 lon = 139.7595
 zoom = 10.0
-wiki_limit = 10
+
+[render]
+language = "ja"
+
+[wiki]
+limit = 10
 
 # IP-based geolocation (shared by --here flag and the `here` plugin)
-here_on_startup = false
-geoip_endpoint = "https://ipapi.co/json/"
-geoip_timeout_ms = 2000
+[geoip]
+on_startup = false
+endpoint = "https://ipapi.co/json/"
+timeout_ms = 2000
 
 [keymap]
 zoom_in = ["i", "+"]
 quit = ["q", "C-q"]
 ```
 
-See `config.example.toml` for all options. The flat layout is scheduled for refactor into `[section]` form ([#47](https://github.com/Kohei-Wada/ttymap/issues/47)) before it grows further.
+See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults.
 
 ## Build
 

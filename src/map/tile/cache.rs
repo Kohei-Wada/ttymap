@@ -56,6 +56,7 @@ impl TileCache {
         client: Box<dyn TileClient>,
         rx: mpsc::Receiver<(TileKey, Vec<u8>)>,
         enable_disk_cache: bool,
+        cache_size: usize,
     ) -> Self {
         let cache_dir = if enable_disk_cache {
             ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
@@ -72,7 +73,7 @@ impl TileCache {
             cache_dir,
             memory_cache: HashMap::new(),
             cache_order: VecDeque::new(),
-            cache_size: 64,
+            cache_size,
             current_z: 0,
             center_x: 0.0,
             center_y: 0.0,
@@ -292,7 +293,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::<TileKey>::new()));
         let client: Box<dyn TileClient> = Box::new(RecordingClient(log.clone()));
         let (_tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(client, rx, false);
+        let mut cache = TileCache::new(client, rx, false, 64);
 
         cache.get_tile(3, 1, 2);
         cache.get_tile(3, 5, 6);

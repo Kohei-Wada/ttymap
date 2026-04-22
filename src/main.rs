@@ -62,32 +62,32 @@ fn main() {
     let mut config = config::load_config();
 
     if let Some(v) = cli.lat {
-        config.initial_lat = v;
+        config.map.lat = v;
     }
     if let Some(v) = cli.lon {
-        config.initial_lon = v;
+        config.map.lon = v;
     }
     if let Some(v) = cli.zoom {
-        config.initial_zoom = Some(v);
+        config.map.zoom = Some(v);
     }
     if let Some(v) = cli.style {
         // Unknown values get normalised to "dark" by the styler's
         // fallback at construction time; just hand the raw string in.
-        config.style = v;
+        config.render.style = v;
     }
 
-    if cli.here || config.here_on_startup {
-        match ttymap::shared::geoip::lookup(&config.geoip_endpoint, config.geoip_timeout_ms) {
+    if cli.here || config.geoip.on_startup {
+        match ttymap::shared::geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
             Some((lat, lon)) => {
                 log::info!("geoip: resolved to {}, {}", lat, lon);
-                config.initial_lat = lat;
-                config.initial_lon = lon;
+                config.map.lat = lat;
+                config.map.lon = lon;
             }
             None => {
                 log::warn!(
                     "geoip lookup failed, using default {}, {}",
-                    config.initial_lat,
-                    config.initial_lon
+                    config.map.lat,
+                    config.map.lon
                 );
             }
         }
@@ -95,8 +95,8 @@ fn main() {
 
     log::info!(
         "starting ttymap: lat={}, lon={}",
-        config.initial_lat,
-        config.initial_lon
+        config.map.lat,
+        config.map.lon
     );
 
     let mut app = App::new(config);

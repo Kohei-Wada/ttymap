@@ -1,7 +1,8 @@
 //! Application configuration — `Config` is both the runtime
-//! representation and the TOML file schema. Missing fields fall back
-//! to `Config::default()` via `#[serde(default)]`, so a partially
-//! written `config.toml` picks up sane values for everything else.
+//! representation and the TOML file schema. Each sub-struct is a
+//! `[section]` in the TOML file; every field has a serde default so
+//! partial files stay valid. Section defaults apply even when the
+//! section header is omitted.
 //!
 //! The `[keymap]` section deserialises into `KeybindingOverrides`
 //! (defined in `keymap.rs` alongside the `KeyMap` it configures);
@@ -15,49 +16,107 @@ use serde::Deserialize;
 
 pub use crate::keymap::KeybindingOverrides;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
-    /// Visual theme name ("dark" / "bright"). Unknown values fall
-    /// back to a default at styler-initialisation time.
-    pub style: String,
-    #[serde(rename = "lat")]
-    pub initial_lat: f64,
-    #[serde(rename = "lon")]
-    pub initial_lon: f64,
-    #[serde(rename = "zoom")]
-    pub initial_zoom: Option<f64>,
-    pub max_zoom: f64,
-    pub zoom_step: f64,
-    pub cache_tiles: bool,
-    pub language: String,
-    pub wiki_limit: u32,
-    /// Jump to IP-based location on startup (can also be enabled by `--here`).
-    pub here_on_startup: bool,
-    /// IP geolocation endpoint. Must return JSON with `latitude`/`longitude`
-    /// numeric fields (ipapi.co shape).
-    pub geoip_endpoint: String,
-    /// Timeout for the IP geolocation request, in milliseconds.
-    pub geoip_timeout_ms: u64,
+    pub map: MapConfig,
+    pub render: RenderConfig,
+    pub cache: CacheConfig,
+    pub wiki: WikiConfig,
+    pub geoip: GeoipConfig,
     pub keymap: KeybindingOverrides,
 }
 
-impl Default for Config {
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct MapConfig {
+    pub lat: f64,
+    pub lon: f64,
+    pub zoom: Option<f64>,
+    pub max_zoom: f64,
+    pub zoom_step: f64,
+}
+
+impl Default for MapConfig {
+    fn default() -> Self {
+        Self {
+            lat: 52.51298, // Berlin
+            lon: 13.42012,
+            zoom: None,
+            max_zoom: 18.0,
+            zoom_step: 0.2,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct RenderConfig {
+    /// Visual theme name ("dark" / "bright"). Unknown values fall
+    /// back to a default at styler-initialisation time.
+    pub style: String,
+    pub language: String,
+}
+
+impl Default for RenderConfig {
     fn default() -> Self {
         Self {
             style: "dark".to_string(),
-            initial_lat: 52.51298, // Berlin
-            initial_lon: 13.42012,
-            initial_zoom: None,
-            max_zoom: 18.0,
-            zoom_step: 0.2,
-            cache_tiles: true,
             language: "en".to_string(),
-            wiki_limit: 50,
-            here_on_startup: false,
-            geoip_endpoint: "https://ipapi.co/json/".to_string(),
-            geoip_timeout_ms: 2000,
-            keymap: KeybindingOverrides::default(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct CacheConfig {
+    /// Write decoded tiles to `~/.cache/ttymap/` so they survive restarts.
+    pub tiles: bool,
+    /// Decoded-tile LRU capacity. Sized to cover the steady-state
+    /// footprint of the z±1 prefetch ring with headroom for panning;
+    /// raise further if working with very large viewports.
+    pub memory_tiles: usize,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            tiles: true,
+            memory_tiles: 192,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct WikiConfig {
+    pub limit: u32,
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        Self { limit: 50 }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct GeoipConfig {
+    /// Jump to IP-based location on startup (can also be enabled by `--here`).
+    pub on_startup: bool,
+    /// IP geolocation endpoint. Must return JSON with `latitude`/`longitude`
+    /// numeric fields (ipapi.co shape).
+    pub endpoint: String,
+    /// Timeout for the IP geolocation request, in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Default for GeoipConfig {
+    fn default() -> Self {
+        Self {
+            on_startup: false,
+            endpoint: "https://ipapi.co/json/".to_string(),
+            timeout_ms: 2000,
         }
     }
 }
@@ -95,18 +154,27 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = Config::default();
-        assert_eq!(cfg.max_zoom, 18.0);
-        assert_eq!(cfg.style, "dark");
+        assert_eq!(cfg.map.max_zoom, 18.0);
+        assert_eq!(cfg.render.style, "dark");
+        assert_eq!(cfg.cache.memory_tiles, 192);
     }
 
     #[test]
     fn test_partial_toml_fills_defaults_elsewhere() {
         let toml_str = r#"
-language = "ja"
+[map]
 zoom_step = 0.5
+
+[render]
+language = "ja"
 style = "bright"
-here_on_startup = true
-geoip_timeout_ms = 500
+
+[geoip]
+on_startup = true
+timeout_ms = 500
+
+[cache]
+memory_tiles = 256
 
 [keymap]
 zoom_in = ["i"]
@@ -115,16 +183,18 @@ quit = ["Q", "C-q"]
         let cfg: Config = toml::from_str(toml_str).unwrap();
 
         // Overridden.
-        assert_eq!(cfg.language, "ja");
-        assert_eq!(cfg.zoom_step, 0.5);
-        assert_eq!(cfg.style, "bright");
-        assert!(cfg.here_on_startup);
-        assert_eq!(cfg.geoip_timeout_ms, 500);
+        assert_eq!(cfg.render.language, "ja");
+        assert_eq!(cfg.map.zoom_step, 0.5);
+        assert_eq!(cfg.render.style, "bright");
+        assert!(cfg.geoip.on_startup);
+        assert_eq!(cfg.geoip.timeout_ms, 500);
+        assert_eq!(cfg.cache.memory_tiles, 256);
 
         // Unspecified fields kept their defaults.
-        assert_eq!(cfg.max_zoom, 18.0);
-        assert_eq!(cfg.initial_lat, 52.51298);
-        assert_eq!(cfg.geoip_endpoint, "https://ipapi.co/json/");
+        assert_eq!(cfg.map.max_zoom, 18.0);
+        assert_eq!(cfg.map.lat, 52.51298);
+        assert_eq!(cfg.geoip.endpoint, "https://ipapi.co/json/");
+        assert!(cfg.cache.tiles);
 
         // Keymap overrides are stored raw; resolution to KeyMap is in app.rs.
         assert_eq!(cfg.keymap.zoom_in.as_deref(), Some(&["i".to_string()][..]));
@@ -138,7 +208,19 @@ quit = ["Q", "C-q"]
     fn test_empty_toml_is_all_defaults() {
         let cfg: Config = toml::from_str("").unwrap();
         let def = Config::default();
-        assert_eq!(cfg.initial_lat, def.initial_lat);
-        assert_eq!(cfg.max_zoom, def.max_zoom);
+        assert_eq!(cfg.map.lat, def.map.lat);
+        assert_eq!(cfg.map.max_zoom, def.map.max_zoom);
+        assert_eq!(cfg.cache.memory_tiles, def.cache.memory_tiles);
+    }
+
+    #[test]
+    fn test_missing_section_headers_use_section_defaults() {
+        // Omitting a section header entirely should still give that
+        // section its default — serde(default) on each sub-struct field
+        // is what makes this work.
+        let cfg: Config = toml::from_str(r#"[keymap]"#).unwrap();
+        assert_eq!(cfg.render.style, "dark");
+        assert_eq!(cfg.cache.memory_tiles, 192);
+        assert!(!cfg.geoip.on_startup);
     }
 }
