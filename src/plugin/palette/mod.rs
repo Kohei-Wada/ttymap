@@ -161,7 +161,7 @@ impl Plugin for CommandPalette {
 
 /// The palette is modal: every key while it is focused is `Consumed`
 /// (the responder chain stops here — never falls through to the
-/// background). Item selection produces `Effect::Run(AppCommand)`.
+/// background). Item selection produces `Effect::Run(Vec<AppMsg>)`.
 impl FocusSurface for CommandPalette {
     fn is_visible(&self) -> bool {
         self.active
@@ -202,7 +202,7 @@ impl FocusSurface for CommandPalette {
                         self.open_with(next);
                         Effect::Consumed
                     }
-                    PaletteAction::Run(cmd) => Effect::Run(cmd),
+                    PaletteAction::Run(msgs) => Effect::Run(msgs),
                     PaletteAction::Open(id) => Effect::Open(id),
                 }
             }
@@ -248,7 +248,7 @@ impl FocusSurface for CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_command::AppCommand;
+    use crate::app::AppMsg;
     use crate::geo::LonLat;
     use crate::map::Action;
     use crate::plugin::palette::provider::PaletteItem;
@@ -260,7 +260,7 @@ mod tests {
     };
 
     /// Minimal provider: lists the labels we give it, substring filter,
-    /// `execute(idx)` returns `Run(AppCommand::Map(Action::None))`.
+    /// `execute(idx)` returns `Run(vec![AppMsg::Map(Action::None)])`.
     struct FakeProvider {
         all: Vec<String>,
         filtered: Vec<usize>,
@@ -310,7 +310,7 @@ mod tests {
             &self.items
         }
         fn execute(&mut self, _idx: usize) -> PaletteAction {
-            PaletteAction::Run(AppCommand::Map(Action::None))
+            PaletteAction::Run(vec![AppMsg::Map(Action::None)])
         }
     }
 
@@ -378,11 +378,11 @@ mod tests {
     }
 
     #[test]
-    fn enter_returns_run_with_selected_appcommand() {
+    fn enter_returns_run_with_selected_msgs() {
         let mut p = palette_with(&["A", "B", "C"]);
         key(&mut p, KeyCode::Down, NONE);
         let effect = key(&mut p, KeyCode::Enter, NONE);
-        assert_eq!(effect, Effect::Run(AppCommand::Map(Action::None)));
+        assert_eq!(effect, Effect::Run(vec![AppMsg::Map(Action::None)]));
         assert!(!p.is_visible());
     }
 

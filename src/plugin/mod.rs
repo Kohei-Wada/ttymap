@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, parse_key_binding};
 use crate::painter::MapPainter;
@@ -27,7 +27,7 @@ use crate::theme::UiTheme;
 ///
 /// Widgets decide which keys and actions they consume; the router
 /// hands events to the focused widget through the
-/// [`FocusSurface`](crate::app_command::FocusSurface) supertrait and
+/// [`FocusSurface`](crate::focus::FocusSurface) supertrait and
 /// never inspects per-widget types. Focus transitions are entirely
 /// host-owned — the host takes focus for an activating plugin whose
 /// `wants_focus` returns true, and releases it when `is_visible()`
@@ -88,13 +88,13 @@ pub trait Plugin: FocusSurface {
         false
     }
 
-    /// Async command request produced by the plugin (e.g. `here`
-    /// resolves a geoip lookup and wants a `AppCommand::Jump`). Called
-    /// right after `poll`; returning `Some(cmd)` makes the app
-    /// dispatch it through [`crate::app_command::dispatch`]. Plugins that
-    /// emit commands only through `handle_key` keep the default.
-    fn pending_command(&mut self) -> Option<AppCommand> {
-        None
+    /// Async messages produced by the plugin (e.g. `here` resolves a
+    /// geoip lookup and wants an `AppMsg::Jump`). Called right after
+    /// `poll`; each returned msg is handed to
+    /// [`App::dispatch`](crate::app::App). Plugins that emit only
+    /// through `handle_key` keep the default (empty vec).
+    fn pending_msgs(&mut self) -> Vec<AppMsg> {
+        Vec::new()
     }
 
     /// Render the widget's modal panel. Called only when the widget

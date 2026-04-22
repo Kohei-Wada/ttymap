@@ -7,18 +7,16 @@
 // tests can share a module tree; external consumers only need the handful
 // of items used by main.rs, so everything else is `pub(crate)`.
 
-/// Application event loop and terminal I/O orchestration.
+/// Application event loop and central message dispatcher. Also home
+/// of the [`AppMsg`](app::AppMsg) vocabulary — the single enum every
+/// emission site (palette, plugins, mouse, future RPC) speaks and that
+/// [`App::dispatch`](app::App) interprets.
 pub mod app;
 
 /// CLI subcommand implementations. Each subcommand lives in its own
 /// submodule; `main.rs` just parses the top-level enum and calls
 /// [`commands::Command::run`].
 pub mod commands;
-
-/// Central app-level message vocabulary — the single enum every
-/// emission site (palette, plugins, future RPC) speaks and the one
-/// dispatcher that interprets it.
-pub(crate) mod app_command;
 
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;

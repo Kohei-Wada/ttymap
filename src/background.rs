@@ -19,7 +19,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::{KeyBinding, KeyMap};
 use crate::map::Action;
@@ -57,11 +57,11 @@ impl BackgroundResponder {
     /// Advance the `gg` state machine and resolve via the keymap.
     /// Used internally by `handle_key`; called unconditionally so any
     /// non-`g` keypress resets `pending_g`.
-    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppCommand> {
+    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppMsg> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Some(AppCommand::Map(Action::ZoomToWorld));
+                return Some(AppMsg::Map(Action::ZoomToWorld));
             }
             self.pending_g = true;
             return None;
@@ -80,13 +80,13 @@ impl FocusSurface for BackgroundResponder {
         // Always advance the gg state first — vim semantics: any
         // non-`g` key (including focus-transition triggers like Tab,
         // `:`, activation keys) resets `pending_g`.
-        let keymap_cmd = self.resolve_keymap(code, modifiers);
+        let keymap_msg = self.resolve_keymap(code, modifiers);
 
         let forward = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
         let backward = code == KeyCode::BackTab
             || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
         if forward || backward {
-            return Effect::Run(AppCommand::CycleFocus(forward));
+            return Effect::Run(vec![AppMsg::CycleFocus(forward)]);
         }
 
         // `:` is no longer a special-case here — palette is a builtin
@@ -97,13 +97,13 @@ impl FocusSurface for BackgroundResponder {
             return Effect::Open(tag.to_string().into());
         }
 
-        if let Some(cmd) = keymap_cmd {
-            return Effect::Run(cmd);
+        if let Some(msg) = keymap_msg {
+            return Effect::Run(vec![msg]);
         }
 
         // First `g` of `gg` and unrecognised keys both land here. The
         // background is always "visible" so the router treats this as
-        // a no-op (no AppCommand, no auto-release).
+        // a no-op (no AppMsg, no auto-release).
         Effect::Pass
     }
 
@@ -144,8 +144,8 @@ mod tests {
         theme_id: crate::color_palette::ThemeId::Dark,
     };
 
-    fn map(action: Action) -> AppCommand {
-        AppCommand::Map(action)
+    fn map(action: Action) -> AppMsg {
+        AppMsg::Map(action)
     }
 
     fn bg() -> BackgroundResponder {
@@ -160,7 +160,7 @@ mod tests {
         // 2nd g: ZoomToWorld.
         assert_eq!(
             bg.handle_key(KeyCode::Char('g'), NONE, CTX),
-            Effect::Run(map(Action::ZoomToWorld))
+            Effect::Run(vec![map(Action::ZoomToWorld)])
         );
     }
 

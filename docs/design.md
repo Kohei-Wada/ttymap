@@ -8,33 +8,42 @@ decisions again.
 
 ### The rule
 
-**User / system intent goes through `app_command::dispatch`. Internal data
+**User / system intent goes through `App::dispatch`. Internal data
 flow does not.**
 
-Anything that's "we want to do X in response to an event" becomes a
-`AppCommand` variant and flows through `app_command::dispatch(cmd, &mut ctx)`.
-Anything that's "a worker finished its job and handed us the result"
-stays as a direct method call.
+Anything that's "we want to do X in response to an event" becomes an
+`AppMsg` variant and flows through `App::dispatch(msg)` on the single
+`App` receiver. Anything that's "a worker finished its job and handed
+us the result" stays as a direct method call.
 
 ### Why a pipeline at all
 
-`app_command::dispatch` is the **single side-effect boundary** for
-app-level state changes. Every `AppCommand` arm reads/writes exactly the
-state it needs through the `DispatchCtx` bundle, and arms whose effect
-changed the map frame call `request_map_redraw(ctx)` inline to
-request a fresh frame and notify passive widgets. This gives us:
+`App::dispatch` is the **single side-effect boundary** for app-level
+state changes. `App` is the Receiver (GoF): every invoker (keymap,
+palette, plugins, mouse) returns `Vec<AppMsg>` and never executes
+anything itself. Each match arm either delegates to a method on the
+domain type that owns the relevant state (`MapState` / `UiState`) or —
+for cross-cutting transitions — to a method on `App` itself
+(`apply_theme`, `handle_resize`). Arms whose effect changed the map
+frame call `self.request_map_redraw()` inline to request a fresh
+frame and notify passive widgets. This gives us:
 
 - One place to audit what can happen to app state
 - One place where the redraw-after-map-change invariant lives
 - A shared vocabulary for keymap, palette providers, plugin async
-  callbacks, mouse — they all emit the same `AppCommand` enum
+  callbacks, mouse — they all emit the same `AppMsg` enum
 
 Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
-### When to emit an `AppCommand`
+Note on naming: "command" is reserved for user-facing concepts — the
+CLI subcommand under `src/commands/` and the palette entries under
+`src/plugin/palette/`. The internal intent type is `AppMsg` so those
+three layers stay unambiguous.
 
-Emit an `AppCommand` if **all** of the following are true:
+### When to emit an `AppMsg`
+
+Emit an `AppMsg` if **all** of the following are true:
 
 1. It represents an **intent** (user action, OS event, plugin wanting
    something to happen). It's not a completion notification.
@@ -44,18 +53,22 @@ Emit an `AppCommand` if **all** of the following are true:
 
 Current examples:
 
-| AppCommand             | Source                          | Why it is an AppCommand                          |
+| AppMsg              | Source                          | Why it is an AppMsg                    |
 | ------------------- | ------------------------------- | -------------------------------------- |
 | `Map(Action::Pan…)` | keymap, mouse drag              | User intent → map state change         |
 | `Map(Action::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
 | `Map(Action::Redraw)` | initial draw                  | Forces an unconditional fresh frame    |
 | `Resize(w, h)`      | crossterm `Resize` event        | Cross-cutting: map state + render canvas |
-| `Ui(SetTheme)`      | palette entry                   | Cross-cutting: UI theme + render styler |
-| `Ui(CursorMoved)`   | mouse router (every event)      | Overlay readout through the same boundary |
+| `SetTheme`          | palette entry                   | Cross-cutting: UI theme + render styler |
+| `CursorMoved`       | mouse router (every event)      | Overlay readout through the same boundary |
 | `Jump(LonLat)`      | search result, geoip plugin     | Plugin async → map state change        |
-| `ActivatePlugin`    | keymap, palette                 | UI transition, same intent from 2 sources |
 | `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
-| `OpenPalette`       | `:` key                         | UI transition                          |
+
+Surface activations (palette open, plugin activate) deliberately do
+*not* go through `AppMsg` — they're expressed as
+`Effect::Open(SurfaceId)` returned by a `FocusSurface` and handled by
+`FocusManager::open` directly, so the focus state machine isn't
+coupled to the dispatch table.
 
 ### When to use a direct method / setter instead
 
@@ -80,14 +93,14 @@ Current examples:
 
 ### The infinite-loop trap
 
-Naively wrapping "frame arrived" as `AppCommand::FrameArrived(frame)` is
+Naively wrapping "frame arrived" as `AppMsg::FrameArrived(frame)` is
 tempting — everything goes through the same pipeline, right? It breaks:
 
 ```
-frame arrives → AppCommand::FrameArrived
+frame arrives → AppMsg::FrameArrived
              → dispatch → map_frame = Some(f)
              → request_map_redraw → render thread renders a frame
-             → frame arrives → AppCommand::FrameArrived
+             → frame arrives → AppMsg::FrameArrived
              → dispatch → map_frame = Some(f)
              → request_map_redraw → …
 ```
@@ -103,33 +116,36 @@ When unsure, ask:
 
 > "If this happens, should **other state also change** in response?"
 
-- **YES** → probably an `AppCommand`. The pipeline ensures the related
+- **YES** → probably an `AppMsg`. The pipeline ensures the related
   changes fire consistently.
-- **NO** → direct method. A `AppCommand` just adds ceremony without
+- **NO** → direct method. An `AppMsg` just adds ceremony without
   earning anything.
 
 ## Controller split: by feature, not by domain
 
-When `app_command.rs` grows past ~200 lines, split `dispatch` into
-per-feature modules (file names illustrative):
+When `App::dispatch` grows past ~200 lines (together with the
+cross-cutting helpers it delegates to), split the router + helpers
+into per-feature modules attached to `App` via `impl App { … }`
+blocks (file names illustrative):
 
 ```
-app_command/
-  map_action.rs     # Map / Jump / Resize map-side
-  resize.rs         # map + render_handle cross-cutting
-  theme.rs          # ui + render_handle cross-cutting
-  plugin.rs         # ActivatePlugin / CycleFocus
-  palette.rs        # OpenPalette
+app/
+  mod.rs          # App struct + top-level run/dispatch
+  msg.rs          # AppMsg enum definition
+  map_msg.rs      # impl App for Map / Jump
+  theme.rs        # impl App for apply_theme
+  resize.rs       # impl App for handle_resize
 ```
 
 Do **not** split by state domain (`map.rs` / `ui.rs` / `render.rs`).
-Many commands are cross-cutting (e.g. `SetTheme` touches both UI theme
+Many messages are cross-cutting (e.g. `SetTheme` touches both UI theme
 and render styler; `Resize` touches map state and render canvas). A
 domain split forces these into arbitrary owners. A feature split lets
-each module freely touch whatever state its feature needs.
+each module freely touch whatever state its feature needs, and `App`
+stays the single Receiver.
 
-Current threshold: not yet (app_command.rs is ~140 lines). Revisit when
-adding commands pushes us over.
+Current threshold: not yet. Revisit when dispatch plus cross-cutting
+methods push us over.
 
 ## Cleanup via `Drop`, not manual
 

@@ -1,3 +1,22 @@
+//! Application event loop and central message dispatcher.
+//!
+//! [`App`] is the sole **Receiver** in the GoF Command pattern: every
+//! invoker (keymap, palette, plugins, mouse adapter) returns
+//! `Vec<AppMsg>` and only `App::dispatch` executes them. The
+//! dispatcher is a thin router — each [`AppMsg`] arm either delegates
+//! to a method on the domain type that owns the relevant state
+//! ([`MapState`] / [`UiState`]) or, for cross-cutting transitions
+//! that don't fit a single domain ([`AppMsg::SetTheme`] and
+//! [`AppMsg::Resize`]), delegates to a method on `App` itself.
+//!
+//! This keeps the "what changed?" knowledge local: arms whose effect
+//! changed the map frame call [`App::request_map_redraw`] through
+//! their delegate, instead of the router having to guess from outside.
+
+pub mod msg;
+
+pub use msg::AppMsg;
+
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,7 +24,6 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::app_command::{self, AppCommand, DispatchCtx};
 use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
 use crate::config::Config;
@@ -90,14 +108,14 @@ impl App {
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
 
         info!("event loop started");
-        self.dispatch(AppCommand::Map(Action::Redraw));
+        self.dispatch(AppMsg::Map(Action::Redraw));
 
         while self.map.is_running() {
             self.ui.drain_frames(&self.render_handle);
 
-            if let Some(cmd) = self.ui.focus.poll_widgets() {
-                info!("plugin async command: {:?}", cmd);
-                self.dispatch(cmd);
+            for msg in self.ui.focus.poll_widgets() {
+                info!("plugin async msg: {:?}", msg);
+                self.dispatch(msg);
             }
 
             self.ui.overlay.poll();
@@ -118,26 +136,25 @@ impl App {
                             && key_event.code == KeyCode::Char('c')
                         {
                             info!("Ctrl-C received, quitting");
-                            self.dispatch(AppCommand::Map(Action::Quit));
+                            self.dispatch(AppMsg::Map(Action::Quit));
                         } else {
                             debug!("key event: {:?}", key_event.code);
                             let ctx = SurfaceCtx {
                                 center: self.map.center(),
                                 theme_id: self.theme_id,
                             };
-                            if let Some(cmd) = router::route_key(&mut self.ui.focus, key_event, ctx)
-                            {
-                                self.dispatch(cmd);
+                            for msg in router::route_key(&mut self.ui.focus, key_event, ctx) {
+                                self.dispatch(msg);
                             }
                         }
                     }
                     Event::Resize(cols, rows) => {
                         info!("resize: {}x{}", cols, rows);
-                        self.dispatch(AppCommand::Resize(cols, rows));
+                        self.dispatch(AppMsg::Resize(cols, rows));
                     }
                     Event::Mouse(mouse) => {
-                        for cmd in self.mouse.translate(mouse) {
-                            self.dispatch(cmd);
+                        for msg in self.mouse.translate(mouse) {
+                            self.dispatch(msg);
                         }
                     }
                     _ => {}
@@ -153,21 +170,70 @@ impl App {
         Ok(())
     }
 
-    /// Run a command through the controller. Thin wrapper that builds
-    /// the `DispatchCtx` bundle from the app's borrowed fields and
-    /// hands it to [`app_command::dispatch`]. The dispatch arms own
-    /// their own "did the map change? request a redraw" decision via
-    /// [`app_command::request_map_redraw`], so this wrapper has no
-    /// post-dispatch logic of its own.
-    fn dispatch(&mut self, cmd: AppCommand) {
-        let mut ctx = DispatchCtx {
-            map: &mut self.map,
-            ui: &mut self.ui,
-            render_handle: &self.render_handle,
-            theme_id: &mut self.theme_id,
-            ui_theme: &mut self.ui_theme,
-        };
-        app_command::dispatch(cmd, &mut ctx);
+    /// Apply an `AppMsg` to the app. Thin router: each arm either
+    /// delegates to a method on the domain type that owns the
+    /// relevant state, or — for cross-cutting transitions — to a
+    /// method on `self`. Those delegates request a map redraw via
+    /// [`request_map_redraw`](Self::request_map_redraw) when their
+    /// effect changed the map frame.
+    fn dispatch(&mut self, msg: AppMsg) {
+        match msg {
+            AppMsg::Map(action) => {
+                if self.map.process_action(&action) {
+                    self.request_map_redraw();
+                }
+            }
+            AppMsg::Jump(loc) => {
+                self.map.jump_to(loc);
+                self.request_map_redraw();
+            }
+            AppMsg::SetTheme(new_id) => self.apply_theme(new_id),
+            AppMsg::CursorMoved(col, row) => {
+                self.ui.overlay.set_cursor((col, row));
+            }
+            AppMsg::CycleFocus(forward) => {
+                self.ui.focus.cycle(forward);
+            }
+            AppMsg::Resize(cols, rows) => self.handle_resize(cols, rows),
+        }
+    }
+
+    /// Cross-cutting: re-derive the UI colour cache and map styler
+    /// from the new theme id, notify the render thread, and force a
+    /// redraw so the change is visible without waiting for another
+    /// map event. The palette's theme-picker entry reads `theme_id`
+    /// via `SurfaceCtx` on activation, so no surface-level push.
+    fn apply_theme(&mut self, new_id: ThemeId) {
+        self.theme_id = new_id;
+        let styler = Arc::new(Styler::new(new_id));
+        self.ui_theme = UiTheme::from_palette(styler.palette());
+        self.render_handle.set_styler(styler);
+        self.request_map_redraw();
+    }
+
+    /// Cross-cutting: update map viewport + render thread canvas to
+    /// the new terminal size, then request a fresh frame.
+    fn handle_resize(&mut self, cols: u16, rows: u16) {
+        self.map.resize(cols, rows);
+        self.render_handle
+            .request_resize(self.map.width(), self.map.height());
+        self.request_map_redraw();
+    }
+
+    /// Request a fresh map frame from the render thread and notify
+    /// passive widgets that the map recentered. Called by the
+    /// dispatch delegates whose effect changed the map frame. No-op
+    /// after shutdown (`map.is_running() == false`).
+    ///
+    /// Wiki is intentionally not notified — Google-Maps-style, the
+    /// article list stays pinned to the query that produced it.
+    fn request_map_redraw(&mut self) {
+        if !self.map.is_running() {
+            return;
+        }
+        let viewport = self.map.viewport();
+        self.render_handle.request_draw(viewport);
+        self.ui.overlay.on_map_moved(viewport.center);
     }
 }
 

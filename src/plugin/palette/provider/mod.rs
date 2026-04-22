@@ -18,7 +18,7 @@ pub mod theme;
 pub use command::{CommandProvider, CommandProviderSeed};
 pub use theme::ThemeProvider;
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::SurfaceId;
 
 /// One row in the palette list.
@@ -34,12 +34,14 @@ pub struct PaletteItem {
 pub enum PaletteAction {
     /// Dismiss the palette.
     Close,
-    /// Run the given `AppCommand` via `crate::app_command::dispatch`.
-    Run(AppCommand),
+    /// Hand the given messages to [`App::dispatch`](crate::app::App)
+    /// in order. A single entry covers the common case (`vec![msg]`);
+    /// multiple entries let a provider chain effects in one step.
+    Run(Vec<AppMsg>),
     /// Open / activate the named surface (typically a plugin tag).
     /// The palette translates this to `Effect::Open(id)` so the focus
     /// transition flows through the same path as a key-driven
-    /// activation from the background — no `AppCommand` round-trip.
+    /// activation from the background — no `AppMsg` round-trip.
     Open(SurfaceId),
     /// Swap to a different provider without closing the palette — the
     /// "sub-mode" transition. Query resets; focus stays.

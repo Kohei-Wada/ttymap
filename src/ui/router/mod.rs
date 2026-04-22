@@ -36,12 +36,12 @@
 //!
 //! `Effect::Open(id)` is handled in-line by calling
 //! [`FocusManager::open`] — focus transitions don't round-trip
-//! through `app_command::dispatch`, so they don't appear in the
-//! returned `Option<AppCommand>`.
+//! through `App::dispatch`, so they don't appear in the returned
+//! `Vec<AppMsg>`.
 
 use crossterm::event::KeyEvent;
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, Focus, FocusManager, FocusSurface, SurfaceCtx};
 
 /// Route a key event to the focused surface. `ctx` is the read-only
@@ -54,7 +54,7 @@ use crate::focus::{Effect, Focus, FocusManager, FocusSurface, SurfaceCtx};
 /// cross-event correlation to retain. Contrast with
 /// [`super::mouse::MouseAdapter`] which is a struct precisely
 /// because it holds the drag session between events.
-pub fn route_key(focus: &mut FocusManager, key: KeyEvent, ctx: SurfaceCtx) -> Option<AppCommand> {
+pub fn route_key(focus: &mut FocusManager, key: KeyEvent, ctx: SurfaceCtx) -> Vec<AppMsg> {
     let was_modal = !matches!(focus.current(), Focus::Background);
 
     let (effect, still_visible) = {
@@ -79,11 +79,11 @@ pub fn route_key(focus: &mut FocusManager, key: KeyEvent, ctx: SurfaceCtx) -> Op
     };
 
     match resolved {
-        Effect::Run(cmd) => Some(cmd),
+        Effect::Run(msgs) => msgs,
         Effect::Open(id) => {
             focus.open(id, ctx);
-            None
+            Vec::new()
         }
-        Effect::Consumed | Effect::Pass => None,
+        Effect::Consumed | Effect::Pass => Vec::new(),
     }
 }

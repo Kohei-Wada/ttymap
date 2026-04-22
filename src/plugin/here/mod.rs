@@ -3,15 +3,15 @@
 //! Headless: no popup, no key focus. Exists purely so the command
 //! palette can offer `Jump to current location`. Activation fires a
 //! background geoip lookup; when it returns the resolved coordinates
-//! are surfaced through [`Plugin::pending_command`] as a
-//! `AppCommand::Jump` and the main loop recenters the map. Shares
+//! are surfaced through [`Plugin::pending_msgs`] as an
+//! `AppMsg::Jump` and the main loop recenters the map. Shares
 //! `config.geoip_endpoint` / `config.geoip_timeout_ms` with the
 //! `--here` startup path.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::{info, warn};
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
@@ -78,8 +78,8 @@ impl Plugin for HerePlugin {
         }
     }
 
-    fn pending_command(&mut self) -> Option<AppCommand> {
-        self.pending.take().map(AppCommand::Jump)
+    fn pending_msgs(&mut self) -> Vec<AppMsg> {
+        self.pending.take().map(AppMsg::Jump).into_iter().collect()
     }
 }
 
@@ -102,13 +102,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pending_command_is_taken_once() {
+    fn pending_msgs_drained_once() {
         let mut p = HerePlugin::new("about:blank".into(), 100);
         p.pending = Some(LonLat { lon: 1.0, lat: 2.0 });
         assert_eq!(
-            p.pending_command(),
-            Some(AppCommand::Jump(LonLat { lon: 1.0, lat: 2.0 }))
+            p.pending_msgs(),
+            vec![AppMsg::Jump(LonLat { lon: 1.0, lat: 2.0 })]
         );
-        assert_eq!(p.pending_command(), None);
+        assert!(p.pending_msgs().is_empty());
     }
 }

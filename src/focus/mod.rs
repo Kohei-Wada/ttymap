@@ -31,7 +31,7 @@ pub mod surface;
 
 pub use surface::{Effect, FocusSurface, SurfaceCtx, SurfaceId};
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::background::BackgroundResponder;
 use crate::plugin::PluginRegistry;
 
@@ -236,17 +236,16 @@ impl FocusManager {
         true
     }
 
-    /// Advance every plugin's async work by one tick. If multiple
-    /// plugins produced a `AppCommand` this tick, the latest wins.
-    pub fn poll_widgets(&mut self) -> Option<AppCommand> {
-        let mut async_cmd: Option<AppCommand> = None;
+    /// Advance every plugin's async work by one tick and collect
+    /// every message they emit. Order follows registry iteration
+    /// order; multiple plugins can contribute to the same tick.
+    pub fn poll_widgets(&mut self) -> Vec<AppMsg> {
+        let mut out: Vec<AppMsg> = Vec::new();
         for w in self.widgets.iter_mut() {
             w.poll();
-            if let Some(cmd) = w.pending_command() {
-                async_cmd = Some(cmd);
-            }
+            out.extend(w.pending_msgs());
         }
-        async_cmd
+        out
     }
 
     // ── Internals ────────────────────────────────────────────────────

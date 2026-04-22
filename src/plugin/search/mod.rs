@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
@@ -118,7 +118,7 @@ impl FocusSurface for SearchPlugin {
                 self.active = false;
                 let loc = self.candidates[self.selected].location;
                 self.candidates.clear();
-                Effect::Run(AppCommand::Jump(loc))
+                Effect::Run(vec![AppMsg::Jump(loc)])
             } else if up {
                 if self.selected > 0 {
                     self.selected -= 1;

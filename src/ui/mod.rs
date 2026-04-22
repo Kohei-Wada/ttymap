@@ -1,6 +1,5 @@
 //! UI layer — widget state and screen rendering.
 
-pub mod action;
 pub mod map_view;
 pub mod mouse;
 pub mod overlay;

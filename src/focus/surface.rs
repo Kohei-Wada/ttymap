@@ -3,12 +3,12 @@
 //! concepts (the focus state machine): surfaces are *what* gets
 //! focus; the manager tracks *which one* currently has it.
 //!
-//! `Effect` wraps [`AppCommand`], so this module depends on
-//! `app_command` (for the command vocabulary) but `app_command`
+//! `Effect::Run` wraps [`Vec<AppMsg>`](AppMsg), so this module depends
+//! on `app::msg` (for the message vocabulary) but `App::dispatch`
 //! itself does not depend on focus — the dispatcher never handles
-//! `Effect`, only the `AppCommand` it may contain.
+//! `Effect`, only the `AppMsg`s it may carry.
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
 
@@ -27,11 +27,15 @@ pub enum Effect {
     /// (since `focused_surface_mut` always returns *some* surface,
     /// there is nowhere else to fall through to).
     Pass,
-    /// Surface absorbed the key. No `AppCommand` to run.
+    /// Surface absorbed the key. No `AppMsg` to run.
     Consumed,
-    /// Surface wants the host to run a command. The router returns it
-    /// to `App::dispatch` for execution.
-    Run(AppCommand),
+    /// Surface wants the host to run one or more messages. The
+    /// router returns the vec to the caller, which hands each to
+    /// `App::dispatch`. An empty vec is semantically equivalent to
+    /// `Consumed` but is kept separate so "absorbed the key" and
+    /// "absorbed the key and also emits N messages" stay
+    /// syntactically distinct.
+    Run(Vec<AppMsg>),
     /// Surface wants the focus manager to open / activate the named
     /// id and transfer focus to it. Router calls `focus.open(id, ctx)`
     /// which handles per-surface activation (palette setup, plugin

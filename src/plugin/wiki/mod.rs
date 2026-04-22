@@ -15,7 +15,7 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyModifiers};
 use log::debug;
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::geo::LonLat;
 use crate::shared::throttle::Throttle;
@@ -227,7 +227,7 @@ impl FocusSurface for WikiPlugin {
                     lon: article.lon,
                 };
                 self.detail = Some(article);
-                return Effect::Run(AppCommand::Jump(loc));
+                return Effect::Run(vec![AppMsg::Jump(loc)]);
             }
             return Effect::Consumed;
         }
@@ -240,7 +240,7 @@ impl FocusSurface for WikiPlugin {
                     lon: article.lon,
                 };
                 self.detail = Some(article.clone());
-                return Effect::Run(AppCommand::Jump(loc));
+                return Effect::Run(vec![AppMsg::Jump(loc)]);
             }
             return Effect::Consumed;
         }
@@ -257,10 +257,10 @@ impl FocusSurface for WikiPlugin {
                 self.selected = (self.selected + 1) % self.articles.len();
             }
             let article = &self.articles[self.selected];
-            return Effect::Run(AppCommand::Jump(LonLat {
+            return Effect::Run(vec![AppMsg::Jump(LonLat {
                 lat: article.lat,
                 lon: article.lon,
-            }));
+            })]);
         }
         if matches!(code, KeyCode::Esc | KeyCode::Backspace) {
             return Effect::Consumed;

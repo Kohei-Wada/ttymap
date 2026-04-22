@@ -6,7 +6,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::app_command::AppCommand;
+use crate::app::AppMsg;
 use crate::focus::{Effect, FocusSurface, SurfaceCtx};
 use crate::keymap::KeyMap;
 use crate::map::Action;
@@ -59,7 +59,7 @@ impl HelpPlugin {
             Vec::new(),
         ];
         for action in Action::all_listed() {
-            let keys = keymap.keys_for(&AppCommand::Map(action.clone()));
+            let keys = keymap.keys_for(&AppMsg::Map(action.clone()));
             if !keys.is_empty() {
                 lines.push(key_line(&keys.join(", "), action.label()));
             }
