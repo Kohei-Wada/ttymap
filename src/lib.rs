@@ -43,11 +43,6 @@ pub mod map;
 #[doc(hidden)]
 pub mod theme;
 
-/// `MapPainter` — world-space drawing primitives plugins use inside
-/// `paint_on_map`. Also plugin-facing, also lives at the crate root
-/// for the same cycle-avoidance reason as `theme`.
-pub(crate) mod painter;
-
 /// Widget vocabulary — neutral mirror/descriptor types that plugin
 /// code uses instead of importing `ratatui::*`. The host
 /// (`compositor::RenderWindow`) converts these to ratatui widgets

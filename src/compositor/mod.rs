@@ -28,9 +28,11 @@
 //! the one place that imports each plugin.
 
 pub mod base;
+pub mod painter;
 pub mod window;
 
 pub use base::BaseLayer;
+pub use painter::MapPainter;
 
 use std::any::Any;
 
@@ -40,7 +42,6 @@ use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
 use crate::geo::LonLat;
-use crate::painter::MapPainter;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 

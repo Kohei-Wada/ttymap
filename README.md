@@ -120,7 +120,6 @@ src/
 ├── config.rs            TOML config (sectioned) + CLI overrides
 ├── keymap.rs            KeyBinding → AppMsg table + user overrides
 ├── geo.rs               Web Mercator, projection, distance
-├── painter.rs           MapPainter — components' world-space drawing API
 │
 ├── theme/                colour palette + ratatui adapter
 │   ├── mod.rs            ThemeId + re-exports
@@ -138,7 +137,8 @@ src/
 ├── compositor/          helix-inspired focus / modal stack
 │   ├── mod.rs           Component trait, Compositor, Registrar, Task, Activation
 │   ├── base.rs          BaseLayer — keymap + activation dispatch + gg sequence
-│   └── window.rs        Window (event-side) + RenderWindow (render-side, owns UiTheme)
+│   ├── window.rs        Window (event-side) + RenderWindow (render-side, owns UiTheme)
+│   └── painter.rs       MapPainter — world-space drawing handle for paint_on_map
 │
 ├── widget/              ratatui-agnostic render vocabulary
 │   ├── geom.rs          Rect / Size

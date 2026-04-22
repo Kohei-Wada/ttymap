@@ -31,10 +31,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
+use crate::compositor::MapPainter;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
-use crate::painter::MapPainter;
 use crate::shared::throttle::Throttle;
 
 use service::WikiService;

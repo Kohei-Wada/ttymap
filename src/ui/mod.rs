@@ -14,10 +14,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
+use crate::compositor::MapPainter;
 use crate::compositor::{Compositor, Context};
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
-use crate::painter::MapPainter;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
