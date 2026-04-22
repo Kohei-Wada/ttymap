@@ -394,7 +394,7 @@ mod tests {
         // Empty tile data still produces a (background-only) frame so
         // overlays (coords / scale bar / place) keep refreshing while
         // tiles are in flight. Cf. `draw` doc comment.
-        let styler = Arc::new(Styler::new(crate::color_palette::ThemeId::Dark));
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
         assert!(renderer.draw(&[], 1.0).is_some());
     }

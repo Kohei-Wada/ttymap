@@ -26,9 +26,9 @@
 //! off `AppMsg` means the focus state machine isn't coupled to the
 //! dispatch table.
 
-use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
 use crate::map::Action;
+use crate::theme::ThemeId;
 
 /// What the app can do in response to an event. Emitted by palette
 /// providers, plugin handlers, and async plugin polling; interpreted

@@ -23,7 +23,6 @@ use std::sync::Arc;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
-use crate::color_palette::ThemeId;
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar, Task};
 use crate::config::Config;
 use crate::keymap::KeyMap;
@@ -32,6 +31,7 @@ use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
 use crate::shared::nominatim::NominatimClient;
+use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
 use crate::ui::mouse::MouseAdapter;

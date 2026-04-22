@@ -33,11 +33,15 @@ pub mod config;
 /// produced here is what the UI displays.
 pub mod map;
 
-/// UI color set (Theme) + runtime theme-switch helper. Lives at the
-/// crate root because it's a **plugin-facing service** — plugins read
-/// colors from it during `render()`, so putting it under `ui/` would
-/// recreate the ui↔plugin cycle we just broke.
-pub(crate) mod theme;
+/// Theme — colour palette data (`ColorPalette`, `DARK`, `BRIGHT`) plus
+/// the ratatui adapter (`UiTheme`). `ThemeId` drives everything. Lives
+/// at the crate root because it's a **plugin-facing service** —
+/// plugins read colours from it during `render()`, so putting it under
+/// `ui/` would recreate the ui↔plugin cycle we just broke. Marked
+/// `pub #[doc(hidden)]` so benches under `benches/` can reach
+/// `ThemeId` without treating it as stable API.
+#[doc(hidden)]
+pub mod theme;
 
 /// `MapPainter` — world-space drawing primitives plugins use inside
 /// `paint_on_map`. Also plugin-facing, also lives at the crate root
@@ -75,8 +79,6 @@ pub mod logging;
 // `tests/` / `benches/` — which are compiled as external crates — can
 // reach them. `#[doc(hidden)]` signals "not stable API" to consumers.
 
-#[doc(hidden)]
-pub mod color_palette;
 #[doc(hidden)]
 pub mod geo;
 #[doc(hidden)]

@@ -9,7 +9,7 @@ use filter::Filter;
 
 use crate::map::tile::PropertyValue;
 
-use crate::color_palette::{ColorPalette, ThemeId};
+use crate::theme::{ColorPalette, ThemeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleType {

@@ -14,10 +14,10 @@
 use std::rc::Rc;
 
 use crate::app::AppMsg;
-use crate::color_palette::ThemeId;
 use crate::compositor::{Context, PaletteEntry as RegistrarEntry, PaletteKind};
 use crate::keymap::KeyMap;
 use crate::map::Action;
+use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 

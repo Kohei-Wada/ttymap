@@ -132,8 +132,8 @@ mod tests {
     use super::super::Context;
     use super::super::window::WindowOps;
     use super::*;
-    use crate::color_palette::ThemeId;
     use crate::geo::LonLat;
+    use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {

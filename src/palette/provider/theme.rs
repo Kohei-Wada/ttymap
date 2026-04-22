@@ -4,8 +4,8 @@
 //! "Theme" entry.
 
 use crate::app::AppMsg;
-use crate::color_palette::ThemeId;
 use crate::compositor::Context;
+use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
 

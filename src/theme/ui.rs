@@ -1,17 +1,17 @@
-//! UI theme — converts palette u8 values to ratatui styles.
+//! Ratatui adapter — converts palette `u8` values to ratatui styles.
 //!
-//! Plugins never see this type. They get [`widget::StyleKind`] via
-//! `RenderWindow::style()`, which resolves here. Map of concrete
+//! Plugins never see this type. They get [`crate::widget::StyleKind`]
+//! via `RenderWindow::style()`, which resolves here. Map of concrete
 //! styles is private to the host; this file is the only place in
-//! plugin-facing territory where `ratatui::style::*` is touched
-//! (apart from the `widget::*` conversion floor).
+//! plugin-facing territory where `ratatui::style::*` is touched (apart
+//! from the `widget::*` conversion floor).
 
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
-use crate::color_palette::ColorPalette;
+use super::ColorPalette;
 
-/// Computed UI theme from a ColorPalette. The five `Color` fields
+/// Computed UI theme from a [`ColorPalette`]. The five `Color` fields
 /// are `Color::Indexed(u8)` — xterm-256 palette entries.
 pub struct UiTheme {
     pub accent: Color,

@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn paragraph_builds_without_title() {
-        let theme = UiTheme::from_palette(&crate::color_palette::DARK);
+        let theme = UiTheme::from_palette(&crate::theme::DARK);
         let p = Paragraph {
             lines: vec![Line::from_span(Span::raw("hello"))],
             style: TextStyle {
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn paragraph_builds_with_title() {
-        let theme = UiTheme::from_palette(&crate::color_palette::DARK);
+        let theme = UiTheme::from_palette(&crate::theme::DARK);
         let p = Paragraph {
             lines: vec![Line::from_span(Span::raw("x"))],
             style: TextStyle::default(),

@@ -120,9 +120,12 @@ src/
 ├── config.rs            TOML config (sectioned) + CLI overrides
 ├── keymap.rs            KeyBinding → AppMsg table + user overrides
 ├── geo.rs               Web Mercator, projection, distance
-├── theme.rs             UiTheme (UI colours)
-├── color_palette.rs     xterm-256 color tables per theme (DARK / BRIGHT)
 ├── painter.rs           MapPainter — components' world-space drawing API
+│
+├── theme/                colour palette + ratatui adapter
+│   ├── mod.rs            ThemeId + re-exports
+│   ├── palette.rs        ColorPalette struct + DARK / BRIGHT consts (xterm-256)
+│   └── ui.rs             UiTheme (ratatui style adapter)
 │
 ├── app/                 App struct + event loop + message dispatch
 │   ├── mod.rs           App::new / run / dispatch — single side-effect boundary

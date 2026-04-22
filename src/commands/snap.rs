@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::app;
-use crate::color_palette::ThemeId;
 use crate::config;
 use crate::map::Viewport;
 use crate::map::render::frame::MapFrame;
@@ -25,6 +24,7 @@ use crate::map::render::pipeline::RenderPipeline;
 use crate::map::styler::Styler;
 use crate::map::{MapState, MapStateOptions};
 use crate::shared::geoip;
+use crate::theme::ThemeId;
 
 /// Polling step between tile checks. Short enough to feel responsive,
 /// long enough to avoid busy-waiting the CPU while HTTP fetches run

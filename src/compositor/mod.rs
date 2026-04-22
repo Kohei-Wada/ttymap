@@ -39,9 +39,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
-use crate::color_palette::ThemeId;
 use crate::geo::LonLat;
 use crate::painter::MapPainter;
+use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
 // ── Framework-reserved keys ────────────────────────────────────────

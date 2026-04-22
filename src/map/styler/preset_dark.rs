@@ -1,4 +1,4 @@
-use crate::color_palette::ColorPalette;
+use crate::theme::ColorPalette;
 
 use super::filter::Filter;
 use super::{StyleRule, StyleType};

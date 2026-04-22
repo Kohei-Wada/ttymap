@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn style_kind_resolve_body_uses_theme_fg_bg() {
-        let p = &crate::color_palette::DARK;
+        let p = &crate::theme::DARK;
         let theme = UiTheme::from_palette(p);
         let ours = StyleKind::Body.resolve(&theme);
         assert_eq!(ours.fg, Some(p.fg));
@@ -216,17 +216,17 @@ mod tests {
 
     #[test]
     fn style_kind_resolve_selected_is_accent_bold() {
-        let theme = UiTheme::from_palette(&crate::color_palette::DARK);
+        let theme = UiTheme::from_palette(&crate::theme::DARK);
         let ours = StyleKind::Selected.resolve(&theme);
-        assert_eq!(ours.fg, Some(crate::color_palette::DARK.accent));
+        assert_eq!(ours.fg, Some(crate::theme::DARK.accent));
         assert!(ours.modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn style_kind_resolve_link_is_accent_alt_underlined() {
-        let theme = UiTheme::from_palette(&crate::color_palette::DARK);
+        let theme = UiTheme::from_palette(&crate::theme::DARK);
         let ours = StyleKind::Link.resolve(&theme);
-        assert_eq!(ours.fg, Some(crate::color_palette::DARK.accent_alt));
+        assert_eq!(ours.fg, Some(crate::theme::DARK.accent_alt));
         assert!(ours.modifier.contains(Modifier::UNDERLINED));
     }
 }

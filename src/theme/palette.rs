@@ -1,59 +1,10 @@
-//! Centralized color palette — every color in the app is defined here.
+//! Palette data — `ColorPalette` struct + `DARK` / `BRIGHT` consts.
 //!
-//! Values are xterm-256 color indices (`u8`). This module has no dependencies
-//! on ratatui or any UI crate, so it can be used by both the map renderer
-//! and the UI layer.
-//!
-//! [`ThemeId`] is the single source of truth for "which theme is active":
-//! pick one from the config, then derive everything else from it — the
-//! [`ColorPalette`] the UI reads, the `styler::Styler` the map renderer reads,
-//! and the display name shown to the user.
+//! Values are xterm-256 colour indices (`u8`). No ratatui dependency,
+//! so both the map renderer (via `styler::Styler`) and the UI layer
+//! (via [`crate::theme::UiTheme`]) read from here.
 
-/// Identifies which theme the app is running with. Derives the concrete
-/// [`ColorPalette`] and, separately, the set of styling rules consumed by
-/// `styler::Styler`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThemeId {
-    #[default]
-    Dark,
-    Bright,
-}
-
-impl ThemeId {
-    /// Parse a config string. Unknown names fall back to [`ThemeId::Dark`].
-    pub fn from_name(name: &str) -> Self {
-        match name {
-            "bright" => Self::Bright,
-            _ => Self::Dark,
-        }
-    }
-
-    /// The palette this theme ships with.
-    pub fn palette(self) -> &'static ColorPalette {
-        match self {
-            Self::Dark => &DARK,
-            Self::Bright => &BRIGHT,
-        }
-    }
-
-    /// Canonical lowercase name used for logging / `styler.name()`.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Dark => "dark",
-            Self::Bright => "bright",
-        }
-    }
-
-    /// Every known theme, in the order they should appear in UI
-    /// listings (command palette, help overlay). Extend here when
-    /// adding a new preset; the rest of the app discovers them through
-    /// this single table.
-    pub fn all() -> &'static [ThemeId] {
-        &[ThemeId::Dark, ThemeId::Bright]
-    }
-}
-
-/// All colors used by a single theme.
+/// All colours used by a single theme.
 pub struct ColorPalette {
     // background
     pub background: u8,

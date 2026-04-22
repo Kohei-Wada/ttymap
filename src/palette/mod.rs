@@ -22,10 +22,10 @@ use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::color_palette::ThemeId;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
+use crate::theme::ThemeId;
 
 use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider};
 
@@ -184,9 +184,9 @@ mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::app::AppMsg;
-    use crate::color_palette::ThemeId;
     use crate::geo::LonLat;
     use crate::map::Action;
+    use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {
