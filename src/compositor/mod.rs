@@ -96,6 +96,20 @@ pub struct Context {
 /// No `is_visible` / `activate` / `deactivate` contract — existence on
 /// the stack is the visibility lifecycle.
 pub trait Component {
+    /// Stable identifier for **deduplication**. When a new component
+    /// with a matching tag is about to be pushed (`EventResult::Push`
+    /// or `EventResult::CloseAndPush`), the compositor instead shifts
+    /// focus to the existing instance and discards the newcomer.
+    /// Prevents scenarios like "`i` pushes wiki1; Tab to base; `i`
+    /// again pushes wiki2" from creating duplicate panels.
+    ///
+    /// Returning `None` opts out of dedup (every push is a fresh
+    /// instance). The [`BaseLayer`] returns `None` because it's
+    /// never the target of a push.
+    fn tag(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Handle a single key event. Return `Ignored` to let lower
     /// layers see it, `Consumed(msgs)` to absorb, `Close(msgs)` to
     /// absorb and pop, or `Push(c, msgs)` to absorb and push `c` on
@@ -210,17 +224,33 @@ impl Compositor {
                 msgs
             }
             EventResult::Push(new_component, msgs) => {
-                self.stack.push(new_component);
-                self.focused_idx = self.stack.len() - 1;
+                self.push_or_focus(new_component);
                 msgs
             }
             EventResult::CloseAndPush(new_component, msgs) => {
                 self.stack.remove(idx);
-                self.stack.push(new_component);
-                self.focused_idx = self.stack.len() - 1;
+                self.clamp_focus_after_shrink();
+                self.push_or_focus(new_component);
                 msgs
             }
         }
+    }
+
+    /// Push `c` on top **unless** a component with the same
+    /// [`Component::tag`] is already on the stack — in that case
+    /// focus jumps to the existing instance and `c` is dropped. This
+    /// makes repeated activation keys (e.g. `i` pressed twice with
+    /// focus on the base between presses) idempotent instead of
+    /// stacking duplicate panels.
+    fn push_or_focus(&mut self, c: Box<dyn Component>) {
+        if let Some(tag) = c.tag()
+            && let Some(existing) = self.stack.iter().position(|s| s.tag() == Some(tag))
+        {
+            self.focused_idx = existing;
+            return;
+        }
+        self.stack.push(c);
+        self.focused_idx = self.stack.len() - 1;
     }
 
     /// Poll every component; messages appended in stack order.
@@ -364,11 +394,15 @@ impl Registrar {
 mod tests {
     use super::*;
 
-    /// Minimal test component that identifies itself via its
-    /// `footer_hints` entry. Used to verify cycle / push ordering.
+    /// Minimal test component that identifies itself via both
+    /// `tag` and `footer_hints`. Used to verify cycle / push /
+    /// dedup.
     struct TagComponent(&'static str);
 
     impl Component for TagComponent {
+        fn tag(&self) -> Option<&'static str> {
+            Some(self.0)
+        }
         fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
             EventResult::Consumed(Vec::new())
         }
@@ -444,6 +478,67 @@ mod tests {
         assert_eq!(focused_tag(&c), "base");
         c.cycle(false);
         assert_eq!(focused_tag(&c), "B");
+    }
+
+    /// Minimal component that identifies itself via its `tag` method
+    /// and produces a Push on a specific key — used to exercise the
+    /// tag-dedup path.
+    struct TaggedSpawner {
+        my_tag: &'static str,
+        spawn_tag: &'static str,
+        spawn_key: KeyCode,
+    }
+
+    impl Component for TaggedSpawner {
+        fn tag(&self) -> Option<&'static str> {
+            Some(self.my_tag)
+        }
+        fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
+            if event.code == self.spawn_key {
+                let tag = self.spawn_tag;
+                return EventResult::Push(Box::new(TagComponent(tag)), Vec::new());
+            }
+            EventResult::Consumed(Vec::new())
+        }
+        fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+            vec![(self.my_tag, "")]
+        }
+    }
+
+    /// Pushing a component whose tag matches something already on
+    /// the stack is idempotent: focus moves to the existing one,
+    /// no duplicate entry. Verifies the fix for "`i` with base
+    /// focused while wiki is already open spawns wiki2".
+    #[test]
+    fn push_with_existing_tag_focuses_existing() {
+        let ctx = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: ThemeId::Dark,
+        };
+
+        let mut c = Compositor::new();
+        // Base layer that spawns a "wiki" tagged component on 'i'.
+        c.push(Box::new(TaggedSpawner {
+            my_tag: "base",
+            spawn_tag: "wiki",
+            spawn_key: KeyCode::Char('i'),
+        }));
+        // Open wiki for the first time.
+        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        assert_eq!(c.len(), 2);
+        assert_eq!(focused_tag(&c), "wiki");
+
+        // Tab back to base.
+        c.cycle(true);
+        assert_eq!(focused_tag(&c), "base");
+
+        // Press `i` again — base would spawn a second wiki, but
+        // dedup catches it: focus moves to the existing one, stack
+        // stays length 2.
+        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        assert_eq!(c.len(), 2, "no duplicate wiki in stack");
+        assert_eq!(focused_tag(&c), "wiki", "focus moves to existing wiki");
     }
 
     /// Tab delivery is framework-level: even a component that

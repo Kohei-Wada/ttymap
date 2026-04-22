@@ -127,6 +127,10 @@ impl WikiComponent {
 }
 
 impl Component for WikiComponent {
+    fn tag(&self) -> Option<&'static str> {
+        Some("wiki")
+    }
+
     fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
         let mut state = self.state.borrow_mut();
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
