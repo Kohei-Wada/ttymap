@@ -10,9 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::AppMsg;
-use crate::compositor::{
-    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
-};
+use crate::compositor::window::Window;
+use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::UiTheme;
@@ -96,10 +95,10 @@ impl HelpComponent {
 }
 
 impl Component for HelpComponent {
-    fn handle_event(&mut self, _event: KeyEvent, _ctx: &Context) -> EventResult {
+    fn handle_event(&mut self, _event: KeyEvent, win: &mut Window) {
         // Help is fully modal: any key closes the panel. (Tab is
         // intercepted by the compositor before it reaches here.)
-        EventResult::Close(Vec::new())
+        win.close();
     }
 
     fn render(&self, f: &mut Frame, map_inner: Rect, theme: &UiTheme) {

@@ -17,9 +17,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
-use crate::compositor::{
-    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
-};
+use crate::compositor::window::Window;
+use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 use crate::theme::UiTheme;
 
@@ -48,7 +47,7 @@ impl SearchComponent {
 }
 
 impl Component for SearchComponent {
-    fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
 
         if self.has_candidates() {
@@ -57,57 +56,42 @@ impl Component for SearchComponent {
             let down = matches!(event.code, KeyCode::Down | KeyCode::Char('j'))
                 || (ctrl && event.code == KeyCode::Char('n'));
 
-            return match event.code {
-                KeyCode::Esc => EventResult::Close(Vec::new()),
-                KeyCode::Enter => {
-                    let loc = self.candidates[self.selected].location;
-                    EventResult::Close(vec![AppMsg::Jump(loc)])
-                }
-                _ if up => {
-                    if self.selected > 0 {
-                        self.selected -= 1;
-                    }
-                    EventResult::Consumed(Vec::new())
-                }
-                _ if down => {
-                    if self.selected + 1 < self.candidates.len() {
-                        self.selected += 1;
-                    }
-                    EventResult::Consumed(Vec::new())
-                }
-                _ => EventResult::Consumed(Vec::new()),
-            };
+            if event.code == KeyCode::Esc {
+                win.close();
+            } else if event.code == KeyCode::Enter {
+                let loc = self.candidates[self.selected].location;
+                win.emit(AppMsg::Jump(loc));
+                win.close();
+            } else if up && self.selected > 0 {
+                self.selected -= 1;
+            } else if down && self.selected + 1 < self.candidates.len() {
+                self.selected += 1;
+            }
+            return;
         }
 
         match event.code {
-            KeyCode::Esc => EventResult::Close(Vec::new()),
+            KeyCode::Esc => win.close(),
             KeyCode::Enter => {
                 if self.query.is_empty() {
-                    EventResult::Close(Vec::new())
+                    win.close();
                 } else {
                     self.service.search(&self.query);
-                    EventResult::Consumed(Vec::new())
                 }
             }
             KeyCode::Backspace => {
                 self.query.pop();
-                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('h') if ctrl => {
                 self.query.pop();
-                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
-                EventResult::Consumed(Vec::new())
             }
-            KeyCode::Char(c) => {
-                self.query.push(c);
-                EventResult::Consumed(Vec::new())
-            }
-            // Modal: any other key is still consumed (don't fall
-            // through to the keymap while the search popup is up).
-            _ => EventResult::Consumed(Vec::new()),
+            KeyCode::Char(c) => self.query.push(c),
+            // Modal: any other key is implicitly consumed (no
+            // `win.ignore()`), so it doesn't fall through to keymap.
+            _ => {}
         }
     }
 
@@ -115,12 +99,11 @@ impl Component for SearchComponent {
         panel::render_panel(self, f, area, theme);
     }
 
-    fn poll(&mut self) -> Vec<AppMsg> {
+    fn poll(&mut self, _win: &mut Window) {
         if let Some(results) = self.service.poll() {
             self.candidates = results;
             self.selected = 0;
         }
-        Vec::new()
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

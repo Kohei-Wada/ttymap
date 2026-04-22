@@ -25,7 +25,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::compositor::{Activation, Component, Context, EventResult, Registrar};
+use crate::compositor::window::Window;
+use crate::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
 use crate::theme::UiTheme;
 
@@ -65,69 +66,70 @@ impl PaletteComponent {
 }
 
 impl Component for PaletteComponent {
-    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let up = matches!(event.code, KeyCode::Up) || (ctrl && event.code == KeyCode::Char('p'));
         let down =
             matches!(event.code, KeyCode::Down) || (ctrl && event.code == KeyCode::Char('n'));
 
         match event.code {
-            KeyCode::Esc => EventResult::Close(Vec::new()),
+            KeyCode::Esc => win.close(),
             KeyCode::Enter => {
                 let has_item = self.selected < self.items_len();
                 if !has_item {
-                    return EventResult::Close(Vec::new());
+                    win.close();
+                    return;
                 }
                 let idx = self.selected;
-                let action = self.provider.execute(idx, ctx);
+                let action = self.provider.execute(idx, win.ctx());
                 match action {
-                    PaletteAction::Close => EventResult::Close(Vec::new()),
-                    PaletteAction::Run(msgs) => EventResult::Close(msgs),
+                    PaletteAction::Close => win.close(),
+                    PaletteAction::Run(msgs) => {
+                        for m in msgs {
+                            win.emit(m);
+                        }
+                        win.close();
+                    }
                     PaletteAction::Push(component) => {
-                        EventResult::CloseAndPush(component, Vec::new())
+                        // The compositor applies `close` before
+                        // `open` from the same WindowOps, so the
+                        // palette is out of the way before the new
+                        // component lands — identical to what the
+                        // old `EventResult::CloseAndPush` did.
+                        win.close();
+                        win.open(component);
                     }
                     PaletteAction::SwitchProvider(next) => {
                         self.query.clear();
                         self.selected = 0;
                         self.provider = next;
                         self.provider.filter("");
-                        EventResult::Consumed(Vec::new())
                     }
                 }
             }
-            _ if up => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                EventResult::Consumed(Vec::new())
+            _ if up && self.selected > 0 => {
+                self.selected -= 1;
             }
-            _ if down => {
-                if self.selected + 1 < self.items_len() {
-                    self.selected += 1;
-                }
-                EventResult::Consumed(Vec::new())
+            _ if down && self.selected + 1 < self.items_len() => {
+                self.selected += 1;
             }
             KeyCode::Backspace => {
                 self.query.pop();
                 self.refilter();
-                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('h') if ctrl => {
                 self.query.pop();
                 self.refilter();
-                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
                 self.refilter();
-                EventResult::Consumed(Vec::new())
             }
             KeyCode::Char(c) => {
                 self.query.push(c);
                 self.refilter();
-                EventResult::Consumed(Vec::new())
             }
-            _ => EventResult::Consumed(Vec::new()),
+            _ => {}
         }
     }
 
@@ -243,15 +245,21 @@ mod tests {
             .collect()
     }
 
-    fn key(p: &mut PaletteComponent, code: KeyCode, mods: KeyModifiers) -> EventResult {
-        p.handle_event(KeyEvent::new(code, mods), &CTX)
+    use crate::compositor::window::WindowOps;
+
+    fn dispatch(p: &mut PaletteComponent, code: KeyCode, mods: KeyModifiers) -> WindowOps {
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            p.handle_event(KeyEvent::new(code, mods), &mut win);
+        }
+        ops
     }
 
-    fn expect_consumed(r: EventResult) {
-        match r {
-            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
-            _ => panic!("expected Consumed"),
-        }
+    fn expect_consumed(ops: WindowOps) {
+        assert!(!ops.close);
+        assert!(ops.opens.is_empty());
+        assert!(ops.msgs.is_empty());
     }
 
     #[test]
@@ -263,80 +271,73 @@ mod tests {
     #[test]
     fn filter_substring_case_insensitive() {
         let mut p = palette_with(&["Zoom in", "Zoom out", "Quit"]);
-        key(&mut p, KeyCode::Char('Z'), NONE);
+        dispatch(&mut p, KeyCode::Char('Z'), NONE);
         assert_eq!(filtered_labels(&p), vec!["Zoom in", "Zoom out"]);
     }
 
     #[test]
     fn filter_earlier_match_ranks_first() {
         let mut p = palette_with(&["Zoom in", "Quit"]);
-        key(&mut p, KeyCode::Char('i'), NONE);
+        dispatch(&mut p, KeyCode::Char('i'), NONE);
         assert_eq!(filtered_labels(&p), vec!["Quit", "Zoom in"]);
     }
 
     #[test]
     fn backspace_widens_filter() {
         let mut p = palette_with(&["Zoom in", "Quit"]);
-        key(&mut p, KeyCode::Char('z'), NONE);
+        dispatch(&mut p, KeyCode::Char('z'), NONE);
         assert_eq!(filtered_labels(&p), vec!["Zoom in"]);
-        key(&mut p, KeyCode::Backspace, NONE);
+        dispatch(&mut p, KeyCode::Backspace, NONE);
         assert_eq!(filtered_labels(&p), vec!["Zoom in", "Quit"]);
     }
 
     #[test]
     fn down_up_stays_in_bounds() {
         let mut p = palette_with(&["A", "B", "C"]);
-        expect_consumed(key(&mut p, KeyCode::Down, NONE));
-        expect_consumed(key(&mut p, KeyCode::Down, NONE));
-        expect_consumed(key(&mut p, KeyCode::Down, NONE)); // past end
+        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
+        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
+        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE)); // past end
         assert_eq!(p.selected, 2);
-        expect_consumed(key(&mut p, KeyCode::Up, NONE));
-        expect_consumed(key(&mut p, KeyCode::Up, NONE));
-        expect_consumed(key(&mut p, KeyCode::Up, NONE)); // past top
+        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE));
+        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE));
+        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE)); // past top
         assert_eq!(p.selected, 0);
     }
 
     #[test]
-    fn enter_returns_close_with_selected_msgs() {
+    fn enter_closes_with_selected_msgs() {
         let mut p = palette_with(&["A", "B", "C"]);
-        expect_consumed(key(&mut p, KeyCode::Down, NONE));
-        let r = key(&mut p, KeyCode::Enter, NONE);
-        match r {
-            EventResult::Close(msgs) => {
-                assert_eq!(msgs, vec![AppMsg::Map(Action::None)]);
-            }
-            _ => panic!("expected Close"),
-        }
+        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.close);
+        assert_eq!(ops.msgs, vec![AppMsg::Map(Action::None)]);
+        assert!(ops.opens.is_empty());
     }
 
     #[test]
     fn enter_with_empty_filter_closes_without_run() {
         let mut p = palette_with(&["Zoom in"]);
-        key(&mut p, KeyCode::Char('x'), NONE);
+        dispatch(&mut p, KeyCode::Char('x'), NONE);
         assert!(filtered_labels(&p).is_empty());
-        let r = key(&mut p, KeyCode::Enter, NONE);
-        match r {
-            EventResult::Close(msgs) => assert!(msgs.is_empty()),
-            _ => panic!("expected Close"),
-        }
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.close);
+        assert!(ops.msgs.is_empty());
     }
 
     #[test]
     fn esc_closes() {
         let mut p = palette_with(&["A"]);
-        let r = key(&mut p, KeyCode::Esc, NONE);
-        match r {
-            EventResult::Close(msgs) => assert!(msgs.is_empty()),
-            _ => panic!("expected Close"),
-        }
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.close);
+        assert!(ops.msgs.is_empty());
     }
 
     #[test]
     fn ctrl_u_clears_query() {
         let mut p = palette_with(&["A"]);
-        key(&mut p, KeyCode::Char('a'), NONE);
-        key(&mut p, KeyCode::Char('b'), NONE);
-        key(&mut p, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        dispatch(&mut p, KeyCode::Char('a'), NONE);
+        dispatch(&mut p, KeyCode::Char('b'), NONE);
+        dispatch(&mut p, KeyCode::Char('u'), KeyModifiers::CONTROL);
         assert_eq!(p.query, "");
     }
 }

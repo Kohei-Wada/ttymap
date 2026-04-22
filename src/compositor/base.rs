@@ -7,8 +7,8 @@
 //! - **Keymap fallback**: resolves `h/j/k/l/q/0/+/-/…` via [`KeyMap`]
 //! - **Activation dispatch**: `:` / `/` / `i` / `?` (and any future
 //!   plugin activation key) looked up in an [`Activation`] table.
-//!   When the base layer sees an activation key it returns
-//!   [`EventResult::Push`] with the freshly-spawned component.
+//!   When the base layer sees an activation key it calls
+//!   `win.open(spawn(ctx))` with the freshly-spawned component.
 //! - **`gg` multi-key sequence**: tracks `pending_g` and emits
 //!   `ZoomToWorld` on the second `g`.
 //!
@@ -17,9 +17,9 @@
 //! BaseLayer doesn't need to know about it.
 //!
 //! Because it's always at the very bottom of the stack, its
-//! `handle_event` only runs when every modal above it has returned
-//! [`EventResult::Ignored`] — exactly the "pass through to
-//! background" cases the old `FocusManager` handled.
+//! `handle_event` only runs when the focused (possibly higher)
+//! component called `win.ignore()` — exactly the old
+//! "pass through to background" cases.
 //!
 //! The base layer renders nothing (the map comes from the render
 //! thread's `MapFrame`, drawn by `App` separately from the
@@ -27,7 +27,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{Activation, Component, Context, EventResult};
+use super::window::Window;
+use super::{Activation, Component};
 use crate::app::AppMsg;
 use crate::keymap::KeyMap;
 use crate::map::Action;
@@ -80,7 +81,7 @@ impl BaseLayer {
 }
 
 impl Component for BaseLayer {
-    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let KeyEvent {
             code, modifiers, ..
         } = event;
@@ -94,18 +95,18 @@ impl Component for BaseLayer {
         // Activation keys: spawn the plugin's fresh component and
         // push it on top.
         if let Some(activation) = self.activation_for(code, modifiers) {
-            let new_component = (activation.spawn)(ctx);
-            return EventResult::Push(new_component, Vec::new());
+            let new_component = (activation.spawn)(win.ctx());
+            win.open(new_component);
+            return;
         }
 
         if let Some(msg) = keymap_msg {
-            return EventResult::Consumed(vec![msg]);
+            win.emit(msg);
         }
 
-        // First `g` of `gg` and unrecognised keys land here. Bottom
-        // layer has nothing below it, so we consume rather than
-        // Ignore — there is no lower layer to fall through to.
-        EventResult::Consumed(Vec::new())
+        // First `g` of `gg` and unrecognised keys land here. Base
+        // layer has nothing below it, so we implicitly consume
+        // (no `win.ignore()`).
     }
 
     fn render(
@@ -133,6 +134,8 @@ impl Component for BaseLayer {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Context;
+    use super::super::window::WindowOps;
     use super::*;
     use crate::color_palette::ThemeId;
     use crate::geo::LonLat;
@@ -147,41 +150,35 @@ mod tests {
         BaseLayer::new(KeyMap::default(), Vec::new())
     }
 
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, NONE)
-    }
-
-    fn assert_consumed_msg(effect: EventResult, expected: AppMsg) {
-        match effect {
-            EventResult::Consumed(msgs) => assert_eq!(msgs, vec![expected]),
-            _ => panic!("expected Consumed, got something else"),
+    fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> WindowOps {
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            bg.handle_event(KeyEvent::new(code, NONE), &mut win);
         }
+        ops
     }
 
     #[test]
     fn gg_produces_zoom_to_world_on_second_g() {
         let mut bg = bg();
         // 1st g: nothing fires, pending_g latched.
-        match bg.handle_event(key(KeyCode::Char('g')), &CTX) {
-            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
-            _ => panic!("expected Consumed(empty)"),
-        }
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert!(ops.msgs.is_empty());
+        assert!(!ops.close);
+        assert!(ops.opens.is_empty());
         // 2nd g: ZoomToWorld.
-        assert_consumed_msg(
-            bg.handle_event(key(KeyCode::Char('g')), &CTX),
-            AppMsg::Map(Action::ZoomToWorld),
-        );
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert_eq!(ops.msgs, vec![AppMsg::Map(Action::ZoomToWorld)]);
     }
 
     #[test]
     fn gg_sequence_broken_by_other_key() {
         let mut bg = bg();
-        bg.handle_event(key(KeyCode::Char('g')), &CTX);
-        bg.handle_event(key(KeyCode::Char('h')), &CTX); // breaks
+        dispatch(&mut bg, KeyCode::Char('g'));
+        dispatch(&mut bg, KeyCode::Char('h')); // breaks
         // Now pending_g was reset; this g latches afresh, doesn't fire.
-        match bg.handle_event(key(KeyCode::Char('g')), &CTX) {
-            EventResult::Consumed(msgs) => assert!(msgs.is_empty()),
-            _ => panic!("expected Consumed(empty)"),
-        }
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert!(ops.msgs.is_empty());
     }
 }
