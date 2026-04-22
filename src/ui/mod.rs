@@ -108,10 +108,10 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
 
 fn build_hints(compositor: &Compositor) -> Vec<(&'static str, &'static str)> {
     let mut hints = compositor.footer_hints();
-    // Cycle hint: meaningful only when there's more than just the
-    // bottom layer on the stack (i.e. a modal is up) — otherwise
-    // there's nothing to cycle between.
-    if compositor.len() > 2 {
+    // Cycle hint: meaningful whenever there's more than just the
+    // base layer on the stack — Tab toggles focus between the base
+    // and any modal(s), including the single-modal case.
+    if compositor.len() > 1 {
         let cycle_hint = ("Tab/S-Tab", "focus");
         match hints.iter().position(|(k, _)| *k == "q") {
             Some(i) => hints.insert(i, cycle_hint),

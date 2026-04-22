@@ -129,61 +129,98 @@ pub trait Component {
 
 // ── Compositor stack ───────────────────────────────────────────────
 
-/// Stack of modal components. Replaces `FocusManager`.
+/// Stack of components + a separate **focused index** decoupled from
+/// stack position. Replaces `FocusManager` and its `Focus::{Background,
+/// Modal}` state machine.
+///
+/// The stack stores components in render order (bottom-up). The
+/// [`BaseLayer`] sits at index 0 and never moves. The focused index
+/// tracks which component key events target first — that can be the
+/// [`BaseLayer`] even while modals are rendered above it, which is
+/// how the old `Focus::Background` state maps into this design.
 pub struct Compositor {
     stack: Vec<Box<dyn Component>>,
+    /// Index of the component that receives key events first.
+    /// Invariant: `focused_idx < stack.len()` whenever the stack is
+    /// non-empty. After every push, this becomes the new top; after
+    /// a close/pop it is clamped down to the new last index.
+    focused_idx: usize,
 }
 
 impl Compositor {
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            focused_idx: 0,
+        }
     }
 
     pub fn push(&mut self, c: Box<dyn Component>) {
         self.stack.push(c);
+        self.focused_idx = self.stack.len() - 1;
     }
 
     pub fn len(&self) -> usize {
         self.stack.len()
     }
 
-    /// Deliver a key event top-to-bottom until something takes it.
-    /// Returns the messages the handling component(s) emitted.
-    /// Handles `Close` (pop) and `Push` (push new) by mutating the
-    /// stack before returning.
+    fn clamp_focus_after_shrink(&mut self) {
+        if !self.stack.is_empty() && self.focused_idx >= self.stack.len() {
+            self.focused_idx = self.stack.len() - 1;
+        }
+    }
+
+    /// Deliver a key event to the focused component first; if it
+    /// returns [`EventResult::Ignored`] and the focus isn't already
+    /// on the [`BaseLayer`], re-deliver to the base layer. This
+    /// two-step routing restores the old "non-modal plugin passes
+    /// unknown keys through to the keymap" semantic under the
+    /// compositor model.
     ///
-    /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**:
-    /// they are intercepted here and never delivered to components.
-    /// This makes focus cycling structurally independent of what any
-    /// individual component returns — a correctly-implemented
-    /// component can't accidentally swallow Tab, and an incorrect one
-    /// can't either. Components that want to react to Tab must do so
-    /// via explicit key bindings outside the compositor (not
-    /// currently supported).
+    /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**
+    /// and never reach any component — focus cycling is a property
+    /// of the framework, not of any individual plugin.
     pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<AppMsg> {
         if let Some(msg) = intercept_focus_key(event) {
             return vec![msg];
         }
-        for i in (0..self.stack.len()).rev() {
-            match self.stack[i].handle_event(event, ctx) {
-                EventResult::Ignored => continue,
-                EventResult::Consumed(msgs) => return msgs,
-                EventResult::Close(msgs) => {
-                    self.stack.remove(i);
-                    return msgs;
-                }
-                EventResult::Push(new_component, msgs) => {
-                    self.stack.push(new_component);
-                    return msgs;
-                }
-                EventResult::CloseAndPush(new_component, msgs) => {
-                    self.stack.remove(i);
-                    self.stack.push(new_component);
-                    return msgs;
-                }
+        if self.stack.is_empty() {
+            return Vec::new();
+        }
+        let focused = self.focused_idx;
+        let first = self.stack[focused].handle_event(event, ctx);
+        match first {
+            EventResult::Ignored if focused != 0 => {
+                // Non-modal fall-through: re-deliver to BaseLayer.
+                let second = self.stack[0].handle_event(event, ctx);
+                self.apply_event_result(0, second)
+            }
+            EventResult::Ignored => Vec::new(),
+            result => self.apply_event_result(focused, result),
+        }
+    }
+
+    fn apply_event_result(&mut self, idx: usize, result: EventResult) -> Vec<AppMsg> {
+        match result {
+            EventResult::Ignored => Vec::new(),
+            EventResult::Consumed(msgs) => msgs,
+            EventResult::Close(msgs) => {
+                self.stack.remove(idx);
+                self.clamp_focus_after_shrink();
+                msgs
+            }
+            EventResult::Push(new_component, msgs) => {
+                self.stack.push(new_component);
+                self.focused_idx = self.stack.len() - 1;
+                msgs
+            }
+            EventResult::CloseAndPush(new_component, msgs) => {
+                self.stack.remove(idx);
+                self.stack.push(new_component);
+                self.focused_idx = self.stack.len() - 1;
+                msgs
             }
         }
-        Vec::new()
     }
 
     /// Poll every component; messages appended in stack order.
@@ -211,34 +248,36 @@ impl Compositor {
         }
     }
 
-    /// Footer hints from the top of the stack, or empty when nothing
-    /// is above the bottom layer (caller falls back to its own hints).
+    /// Footer hints from the currently focused component.
     pub fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.stack
-            .last()
+            .get(self.focused_idx)
             .map(|c| c.footer_hints())
             .unwrap_or_default()
     }
 
-    /// Rotate the modals (indices `1..len`) so Tab-style focus
-    /// cycling works. Forward moves the top modal to just above the
-    /// base (bringing the next modal up); backward moves the bottom
-    /// modal to the top. The [`BaseLayer`] at index 0 never moves.
+    /// Rotate `focused_idx` through all components (including the
+    /// BaseLayer). Forward moves up the stack then wraps to 0;
+    /// backward moves down then wraps to top. The stack itself is
+    /// unchanged — only which component receives keys first.
     ///
-    /// No-op unless there are at least two modals (stack length 3
-    /// or more). With zero or one modal there is no one to cycle
-    /// to. Replaces the old `FocusManager::cycle`.
+    /// This restores the old `Focus::Background` behaviour: with a
+    /// single modal on top, Tab toggles focus between the modal and
+    /// the base layer. With multiple modals, Tab walks through all
+    /// of them and the base layer in turn.
+    ///
+    /// No-op when the stack has one element or fewer — nothing to
+    /// cycle to.
     pub fn cycle(&mut self, forward: bool) {
-        if self.stack.len() < 3 {
+        let len = self.stack.len();
+        if len <= 1 {
             return;
         }
-        if forward {
-            let top = self.stack.pop().expect("len >= 3");
-            self.stack.insert(1, top);
+        self.focused_idx = if forward {
+            (self.focused_idx + 1) % len
         } else {
-            let bottom_modal = self.stack.remove(1);
-            self.stack.push(bottom_modal);
-        }
+            (self.focused_idx + len - 1) % len
+        };
     }
 }
 
@@ -339,7 +378,7 @@ mod tests {
         }
     }
 
-    fn top_tag(c: &Compositor) -> &'static str {
+    fn focused_tag(c: &Compositor) -> &'static str {
         c.footer_hints()
             .first()
             .map(|(k, _)| *k)
@@ -359,40 +398,52 @@ mod tests {
         let mut c = make_with(&["base"]);
         c.cycle(true);
         c.cycle(false);
-        assert_eq!(top_tag(&c), "base");
+        assert_eq!(focused_tag(&c), "base");
         assert_eq!(c.len(), 1);
     }
 
     #[test]
-    fn cycle_no_op_with_single_modal() {
-        // Two elements: base + 1 modal. Nothing to cycle to; base
-        // must never move off index 0. This is the specific shape
-        // that previously swapped base↔modal under backward cycle.
+    fn cycle_toggles_focus_with_single_modal() {
+        // [base, m] — m on top and focused by default. Tab toggles
+        // focus to base (the old `Focus::Background` behaviour);
+        // stack order never changes, only `focused_idx` moves.
         let mut c = make_with(&["base", "m"]);
-        c.cycle(false);
-        assert_eq!(top_tag(&c), "m", "backward cycle must not move base to top");
+        assert_eq!(focused_tag(&c), "m");
         c.cycle(true);
-        assert_eq!(top_tag(&c), "m", "forward cycle with 1 modal is no-op");
+        assert_eq!(focused_tag(&c), "base");
+        c.cycle(true);
+        assert_eq!(focused_tag(&c), "m");
+        // Backward wraps the other way in the two-element case.
+        c.cycle(false);
+        assert_eq!(focused_tag(&c), "base");
     }
 
     #[test]
-    fn cycle_forward_rotates_modals_only() {
-        // [base, A, B] — B on top. Forward → A on top, B second.
+    fn cycle_forward_walks_all_components() {
+        // [base, A, B] — B focused initially (last pushed).
+        // Forward: B → base → A → B. Stack order never changes.
         let mut c = make_with(&["base", "A", "B"]);
+        assert_eq!(focused_tag(&c), "B");
         c.cycle(true);
-        assert_eq!(top_tag(&c), "A");
-        // Base must still be at the bottom.
-        assert_eq!(c.stack.len(), 3);
+        assert_eq!(focused_tag(&c), "base");
+        c.cycle(true);
+        assert_eq!(focused_tag(&c), "A");
+        c.cycle(true);
+        assert_eq!(focused_tag(&c), "B");
+        assert_eq!(c.len(), 3);
     }
 
     #[test]
-    fn cycle_backward_rotates_modals_only() {
-        // [base, A, B] — B on top. Backward → A on top (since B
-        // stays above the previously-bottom modal, which is itself
-        // now on top after rotation).
+    fn cycle_backward_walks_all_components_reverse() {
+        // [base, A, B] — B focused initially.
+        // Backward: B → A → base → B.
         let mut c = make_with(&["base", "A", "B"]);
         c.cycle(false);
-        assert_eq!(top_tag(&c), "A");
+        assert_eq!(focused_tag(&c), "A");
+        c.cycle(false);
+        assert_eq!(focused_tag(&c), "base");
+        c.cycle(false);
+        assert_eq!(focused_tag(&c), "B");
     }
 
     /// Tab delivery is framework-level: even a component that
