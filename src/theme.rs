@@ -1,11 +1,18 @@
 //! UI theme — converts palette u8 values to ratatui styles.
+//!
+//! Plugins never see this type. They get [`widget::StyleKind`] via
+//! `RenderWindow::style()`, which resolves here. Map of concrete
+//! styles is private to the host; this file is the only place in
+//! plugin-facing territory where `ratatui::style::*` is touched
+//! (apart from the `widget::*` conversion floor).
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
 use crate::color_palette::ColorPalette;
 
-/// Computed UI theme from a ColorPalette.
+/// Computed UI theme from a ColorPalette. The five `Color` fields
+/// are `Color::Indexed(u8)` — xterm-256 palette entries.
 pub struct UiTheme {
     pub accent: Color,
     pub accent_alt: Color,
@@ -25,39 +32,14 @@ impl UiTheme {
         }
     }
 
+    /// Build a theme-styled bordered block with `title`. Used by
+    /// `RenderWindow::panel` and `widget::Paragraph::into_ratatui`
+    /// (for framed_title).
     pub fn panel(&self, title: &str) -> Block<'static> {
         Block::new()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.accent).bg(self.bg))
             .title(format!(" {} ", title))
             .style(Style::default().bg(self.bg))
-    }
-
-    pub fn text(&self) -> Style {
-        Style::default().fg(self.fg).bg(self.bg)
-    }
-
-    pub fn muted(&self) -> Style {
-        Style::default().fg(self.muted_color).bg(self.bg)
-    }
-
-    pub fn accent_style(&self) -> Style {
-        Style::default().fg(self.accent)
-    }
-
-    pub fn selected(&self) -> Style {
-        Style::default()
-            .fg(self.accent)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    /// Used for clickable / copyable URLs (OSC 8 or terminal-autodetect
-    /// links). Underlined to suggest hyperlink, `accent_alt` for a hue
-    /// that pops against the background.
-    pub fn link(&self) -> Style {
-        Style::default()
-            .fg(self.accent_alt)
-            .bg(self.bg)
-            .add_modifier(Modifier::UNDERLINED)
     }
 }

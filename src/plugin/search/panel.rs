@@ -2,10 +2,8 @@
 //! candidate list. Stateless; reads the component's fields and the
 //! theme through the supplied [`RenderWindow`].
 
-use ratatui::layout::Rect;
-use ratatui::widgets::{List, ListItem, Paragraph};
-
 use crate::compositor::window::RenderWindow;
+use crate::widget::{self, Line, ListItem, Paragraph, Rect, Span, StyleKind};
 
 use super::SearchComponent;
 
@@ -34,20 +32,28 @@ pub fn render_panel(widget: &SearchComponent, win: &mut RenderWindow) {
     let inner = win.panel(popup_area, &title);
 
     if widget.has_candidates() {
-        render_candidates(widget, win, inner.into());
+        render_candidates(widget, win, inner);
     } else {
-        render_input(widget, win, inner.into());
+        render_input(widget, win, inner);
     }
 }
 
 fn render_input(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
-    let text = Paragraph::new(format!("/{}", widget.query)).style(win.body_style());
-    win.render_widget(text, area);
+    let body = win.style(StyleKind::Body);
+    let p = Paragraph {
+        lines: vec![Line::from_span(Span::styled(
+            format!("/{}", widget.query),
+            body,
+        ))],
+        style: body,
+        ..Default::default()
+    };
+    win.paragraph(p, area);
 }
 
 fn render_candidates(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
-    let body = win.body_style();
-    let selected = win.selected_style();
+    let body = win.style(StyleKind::Body);
+    let selected = win.style(StyleKind::Selected);
     let items: Vec<ListItem> = widget
         .candidates
         .iter()
@@ -55,10 +61,10 @@ fn render_candidates(widget: &SearchComponent, win: &mut RenderWindow, area: Rec
         .map(|(i, result)| {
             let style = if i == widget.selected { selected } else { body };
             let prefix = if i == widget.selected { "> " } else { "  " };
-            ListItem::new(format!("{}{}", prefix, result.name)).style(style)
+            ListItem::new(format!("{}{}", prefix, result.name), style)
         })
         .collect();
 
-    let list = List::new(items);
-    win.render_widget(list, area);
+    let list = widget::List { items, style: body };
+    win.list(list, area);
 }

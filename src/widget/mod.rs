@@ -14,10 +14,6 @@
 //! module (or on the plugin side of the codebase at all) where
 //! `ratatui::*` is imported.
 
-// Types land here ahead of the `RenderWindow` API swap (C2) and
-// plugin migration (C3). Removed once everything is consumed.
-#![allow(dead_code, unused_imports)]
-
 pub mod geom;
 pub mod list;
 pub mod paragraph;
@@ -28,6 +24,6 @@ pub mod text;
 pub use geom::{Rect, Size, split_rows};
 pub use list::{List, ListItem};
 pub use paragraph::Paragraph;
-pub use style::{Modifier, StyleKind, TextStyle};
+pub use style::{StyleKind, TextStyle};
 pub use table::{Cell, Row, Table, TableSel};
 pub use text::{Align, Line, Span};

@@ -34,9 +34,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect as RRect;
-use ratatui::style::Style;
-use ratatui::text::Span;
-use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
+use ratatui::widgets::Clear;
 
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
@@ -186,37 +184,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.ctx
     }
 
-    /// Render a ratatui widget into `rect`. `rect` is **clamped to
-    /// `self.area()`** before drawing, so a component cannot paint
-    /// outside the area the compositor allocated to it — the map
-    /// border, footer, and sibling components are all protected.
-    ///
-    /// This is the only way for a component to draw; direct access
-    /// to the underlying `Frame` is not exposed.
-    ///
-    /// Accepts anything convertible to [`widget::Rect`] (including
-    /// `ratatui::layout::Rect`) as a bridge during the plugin
-    /// migration — remove the `impl Into` once C3 lands.
-    pub fn render_widget<W: Widget>(&mut self, widget: W, rect: impl Into<widget::Rect>) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        self.frame.render_widget(widget, clamped);
-    }
-
-    /// Stateful counterpart to [`render_widget`] — for widgets like
-    /// `List` / `Table` that keep per-frame `*State`. Same rect
-    /// clamping.
-    pub fn render_stateful_widget<W: StatefulWidget>(
-        &mut self,
-        widget: W,
-        rect: impl Into<widget::Rect>,
-        state: &mut W::State,
-    ) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        self.frame.render_stateful_widget(widget, clamped, state);
-    }
-
     /// Clear the cells in `rect` (rect-clamped). Useful before
     /// drawing a popup so whatever was underneath doesn't bleed
     /// through.
@@ -239,107 +206,14 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         inner.into()
     }
 
-    /// Build a theme-styled [`Block`] without drawing anything. Use
-    /// when the content widget (Paragraph / List) needs to own the
-    /// Block via `.block(...)`, as in wiki's scrollable list or
-    /// help's centered text overlay.
-    pub fn panel_block<'t>(&self, title: &'t str) -> Block<'t> {
-        self.theme.panel(title)
-    }
-
-    // ── Semantic style accessors (UiTheme hidden) ─────────────────
-
-    /// Plain body text style. Maps to the theme's "fg on bg"
-    /// combination; plugin never sees which palette entry that is.
-    pub fn body_style(&self) -> Style {
-        self.theme.text()
-    }
-
-    /// Subdued text — hints, distances, coordinates, auxiliary
-    /// info. Lower contrast than body.
-    pub fn muted_style(&self) -> Style {
-        self.theme.muted()
-    }
-
-    /// Primary accent — section titles, key hints in help, plugin
-    /// panel headers.
-    pub fn accent_style(&self) -> Style {
-        self.theme.accent_style()
-    }
-
-    /// Secondary accent — the "look at this one" highlight used for
-    /// selected wiki titles. Distinct from [`selected_style`]
-    /// (which is the full selected-row chrome including bold);
-    /// this is just the alt accent colour on fg.
-    pub fn highlight_style(&self) -> Style {
-        Style::default().fg(self.theme.accent_alt)
-    }
-
-    /// Selected list / table row — accent colour + bold. Matches
-    /// the palette's row highlight and search candidate selection.
-    pub fn selected_style(&self) -> Style {
-        self.theme.selected()
-    }
-
-    /// URL / clickable text. Terminals that detect OSC 8 or auto-
-    /// link by regex will activate it. Distinct from plain accent
-    /// because it's underlined.
-    pub fn link_style(&self) -> Style {
-        self.theme.link()
-    }
-
-    /// Foreground-only style using the muted colour — suitable for
-    /// thin separator lines (`─`) where `muted_style()`'s
-    /// foreground-on-background combination would bleed the bg.
-    pub fn muted_fg_style(&self) -> Style {
-        Style::default().fg(self.theme.muted_color)
-    }
-
-    // ── Span constructors (compose `Line`s from styled text) ──────
-
-    /// Body-styled text span. Pair with [`Line::from`] /
-    /// [`Line::from(vec![..])`] to build multi-span lines without
-    /// importing `Style` / `Span::styled` from ratatui.
-    pub fn span_body<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.body_style())
-    }
-
-    /// Muted-styled text span.
-    pub fn span_muted<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.muted_style())
-    }
-
-    /// Accent-styled text span (primary accent).
-    pub fn span_accent<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.accent_style())
-    }
-
-    /// Highlight-styled text span (secondary accent, e.g. selected
-    /// wiki title).
-    pub fn span_highlight<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.highlight_style())
-    }
-
-    /// Link-styled text span (underlined, alt accent).
-    pub fn span_link<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.link_style())
-    }
-
-    /// Foreground-only muted span — separator glyphs etc.
-    pub fn span_separator<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
-        Span::styled(text, self.muted_fg_style())
-    }
-
-    // ── New widget-descriptor API ────────────────────────────────────
+    // ── Widget-descriptor API ────────────────────────────────────────
     //
-    // These accept `widget::*` descriptors and convert to ratatui
-    // internally. Plugins use these in place of `render_widget`
-    // after C3 migration. `allow(dead_code)` removed when C3 lands.
+    // Plugins construct `widget::*` descriptors (owned data) and
+    // pass them here; conversion to ratatui is host-side only.
 
     /// Draw a [`widget::Paragraph`] descriptor into `rect`. The
     /// paragraph's optional `framed_title` is expanded into a
     /// theme-styled bordered block at render time.
-    #[allow(dead_code)]
     pub fn paragraph(&mut self, p: widget::Paragraph, rect: impl Into<widget::Rect>) {
         let w_rect: widget::Rect = rect.into();
         let clamped = clamp(w_rect.into(), self.area);
@@ -348,7 +222,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     }
 
     /// Draw a [`widget::List`] descriptor into `rect`.
-    #[allow(dead_code)]
     pub fn list(&mut self, l: widget::List, rect: impl Into<widget::Rect>) {
         let w_rect: widget::Rect = rect.into();
         let clamped = clamp(w_rect.into(), self.area);
@@ -358,7 +231,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 
     /// Draw a [`widget::Table`] descriptor into `rect`, using `sel`
     /// as the selection state.
-    #[allow(dead_code)]
     pub fn table(
         &mut self,
         t: widget::Table,
@@ -374,7 +246,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 
     /// Resolve a semantic [`widget::StyleKind`] to a concrete
     /// [`widget::TextStyle`] under the active theme.
-    #[allow(dead_code)]
     pub fn style(&self, kind: widget::StyleKind) -> widget::TextStyle {
         kind.resolve(self.theme)
     }

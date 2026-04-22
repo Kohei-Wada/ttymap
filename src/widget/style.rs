@@ -205,13 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn style_kind_resolve_body_matches_theme_text() {
-        let theme = UiTheme::from_palette(&crate::color_palette::DARK);
+    fn style_kind_resolve_body_uses_theme_fg_bg() {
+        let p = &crate::color_palette::DARK;
+        let theme = UiTheme::from_palette(p);
         let ours = StyleKind::Body.resolve(&theme);
-        let ratatui_style: RStyle = ours.into();
-        let expected = theme.text();
-        assert_eq!(ratatui_style.fg, expected.fg);
-        assert_eq!(ratatui_style.bg, expected.bg);
+        assert_eq!(ours.fg, Some(p.fg));
+        assert_eq!(ours.bg, Some(p.background));
+        assert_eq!(ours.modifier, Modifier::NONE);
     }
 
     #[test]

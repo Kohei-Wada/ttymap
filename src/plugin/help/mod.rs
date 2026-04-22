@@ -4,15 +4,13 @@
 //! on every push. Any key closes it.
 
 use crossterm::event::{KeyEvent, KeyModifiers};
-use ratatui::layout::{Alignment, Rect};
-use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::keymap::KeyMap;
 use crate::map::Action;
+use crate::widget::{Align, Line, Paragraph, Rect, Span, StyleKind};
 
 /// A colored span of help text. Theme is applied at render time so
 /// theme switches update the colors without rebuilding the help
@@ -64,19 +62,22 @@ impl HelpText {
         Self { lines }
     }
 
-    fn rendered_lines<'a>(&'a self, win: &RenderWindow) -> Vec<Line<'a>> {
+    fn rendered_lines(&self, win: &RenderWindow) -> Vec<Line> {
+        let body = win.style(StyleKind::Body);
+        let accent = win.style(StyleKind::Accent);
+        let link = win.style(StyleKind::Link);
         self.lines
             .iter()
             .map(|segs| {
                 let spans = segs
                     .iter()
                     .map(|s| match s {
-                        Seg::Text(t) => win.span_body(t.as_str()),
-                        Seg::Key(k) => win.span_accent(k.as_str()),
-                        Seg::Url(u) => win.span_link(u.as_str()),
+                        Seg::Text(t) => Span::styled(t.clone(), body),
+                        Seg::Key(k) => Span::styled(k.clone(), accent),
+                        Seg::Url(u) => Span::styled(u.clone(), link),
                     })
                     .collect::<Vec<_>>();
-                Line::from(spans)
+                Line::from_spans(spans)
             })
             .collect()
     }
@@ -107,12 +108,7 @@ impl Component for HelpComponent {
 
         let rendered = self.text.rendered_lines(win);
 
-        let content_width = rendered
-            .iter()
-            .map(|l| l.width() as u16)
-            .max()
-            .unwrap_or(30)
-            + 6;
+        let content_width = rendered.iter().map(line_width).max().unwrap_or(30) + 6;
         let content_height = rendered.len() as u16 + 2;
 
         let max_width = map_inner.width.saturating_sub(4).max(20);
@@ -124,11 +120,16 @@ impl Component for HelpComponent {
         let y = map_inner.y + (map_inner.height - popup_height) / 2;
 
         let area = Rect::new(x, y, popup_width, popup_height);
-        let body = win.body_style();
-        let block = win.panel_block("help").title_alignment(Alignment::Center);
-        let widget = Paragraph::new(rendered).style(body).block(block);
+        let body = win.style(StyleKind::Body);
+        let paragraph = Paragraph {
+            lines: rendered,
+            style: body,
+            framed_title: Some("help".to_string()),
+            title_align: Align::Center,
+            ..Default::default()
+        };
         win.clear(area);
-        win.render_widget(widget, area);
+        win.paragraph(paragraph, area);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -163,6 +164,10 @@ pub fn register(help_text: std::rc::Rc<HelpText>, r: &mut Registrar) {
 }
 
 // ── Line builders ──────────────────────────────────────────────────────────────
+
+fn line_width(line: &Line) -> u16 {
+    line.spans.iter().map(|s| s.text.chars().count() as u16).sum()
+}
 
 fn text_line(s: &str) -> HelpLine {
     vec![Seg::Text(s.to_string())]

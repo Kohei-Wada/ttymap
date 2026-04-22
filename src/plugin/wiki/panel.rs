@@ -4,12 +4,10 @@
 //! supplied [`RenderWindow`] — every style comes from `win`'s
 //! semantic accessors, so the panel never touches `UiTheme`.
 
-use ratatui::layout::Rect;
-use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::compositor::window::RenderWindow;
+use crate::widget::{Line, Paragraph, Rect, Span, StyleKind};
 
 use super::WikiState;
 use super::wikipedia::WikiArticle;
@@ -51,19 +49,24 @@ fn render_list(
     panel_height: u16,
     content_width: usize,
 ) {
-    let block = win.panel_block("wiki (Enter: open)");
+    let body = win.style(StyleKind::Body);
+    let muted = win.style(StyleKind::Muted);
+    let accent = win.style(StyleKind::Accent);
+    let highlight = win.style(StyleKind::Highlight);
+    let muted_fg = win.style(StyleKind::MutedFg);
 
     if widget.articles.is_empty() {
-        let paragraph = Paragraph::new("  Loading...")
-            .style(win.muted_style())
-            .block(block);
-        win.render_widget(paragraph, area);
+        let paragraph = Paragraph {
+            lines: vec![Line::from_span(Span::styled("  Loading...", muted))],
+            style: muted,
+            framed_title: Some("wiki (Enter: open)".to_string()),
+            ..Default::default()
+        };
+        win.paragraph(paragraph, area);
         return;
     }
 
-    let body = win.body_style();
-
-    let sep_span = win.span_separator("─".repeat(content_width));
+    let sep_text = "─".repeat(content_width);
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_top: u16 = 0;
     let mut selected_height: u16 = 1;
@@ -72,19 +75,15 @@ fn render_list(
         let article_start = lines.len() as u16;
 
         if i > 0 {
-            lines.push(Line::from(sep_span.clone()));
+            lines.push(Line::from_span(Span::styled(sep_text.clone(), muted_fg)));
         }
 
         let is_selected = i == widget.selected;
         let dist = crate::geo::format_distance(article.dist_m);
-        let title_span = if is_selected {
-            win.span_highlight(article.title.clone())
-        } else {
-            win.span_accent(article.title.clone())
-        };
-        lines.push(Line::from(vec![
-            title_span,
-            win.span_muted(format!("  {}", dist)),
+        let title_style = if is_selected { highlight } else { accent };
+        lines.push(Line::from_spans(vec![
+            Span::styled(article.title.clone(), title_style),
+            Span::styled(format!("  {}", dist), muted),
         ]));
 
         if !article.extract.is_empty() {
@@ -96,7 +95,7 @@ fn render_list(
                 raw
             };
             for wrapped in wrap_to_width(&truncated, content_width) {
-                lines.push(Line::from(win.span_body(wrapped)));
+                lines.push(Line::from_span(Span::styled(wrapped, body)));
             }
         }
 
@@ -115,41 +114,55 @@ fn render_list(
         0
     };
 
-    let paragraph = Paragraph::new(lines)
-        .style(body)
-        .block(block)
-        .scroll((scroll, 0));
-    win.render_widget(paragraph, area);
+    let paragraph = Paragraph {
+        lines,
+        style: body,
+        scroll_y: scroll,
+        framed_title: Some("wiki (Enter: open)".to_string()),
+        ..Default::default()
+    };
+    win.paragraph(paragraph, area);
 }
 
 fn render_detail(win: &mut RenderWindow, area: Rect, content_width: usize, article: &WikiArticle) {
-    let block = win.panel_block("wiki (Esc: back)");
-    let body = win.body_style();
+    let body = win.style(StyleKind::Body);
+    let muted = win.style(StyleKind::Muted);
+    let highlight = win.style(StyleKind::Highlight);
+    let muted_fg = win.style(StyleKind::MutedFg);
 
     let dist = crate::geo::format_distance(article.dist_m);
     let coords = format!("{:.3}, {:.3}", article.lat, article.lon);
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(win.span_highlight(article.title.clone())));
-    lines.push(Line::from(vec![
-        win.span_muted(dist),
-        win.span_muted("  ".to_string()),
-        win.span_muted(coords),
+    lines.push(Line::from_span(Span::styled(article.title.clone(), highlight)));
+    lines.push(Line::from_spans(vec![
+        Span::styled(dist, muted),
+        Span::styled("  ", muted),
+        Span::styled(coords, muted),
     ]));
-    lines.push(Line::from(win.span_separator("─".repeat(content_width))));
+    lines.push(Line::from_span(Span::styled(
+        "─".repeat(content_width),
+        muted_fg,
+    )));
 
     if article.extract.is_empty() {
-        lines.push(Line::from(
-            win.span_muted("(no summary available)".to_string()),
-        ));
+        lines.push(Line::from_span(Span::styled(
+            "(no summary available)",
+            muted,
+        )));
     } else {
         for wrapped in wrap_to_width(&article.extract, content_width) {
-            lines.push(Line::from(win.span_body(wrapped)));
+            lines.push(Line::from_span(Span::styled(wrapped, body)));
         }
     }
 
-    let paragraph = Paragraph::new(lines).style(body).block(block);
-    win.render_widget(paragraph, area);
+    let paragraph = Paragraph {
+        lines,
+        style: body,
+        framed_title: Some("wiki (Esc: back)".to_string()),
+        ..Default::default()
+    };
+    win.paragraph(paragraph, area);
 }
 
 /// Word-wrap `text` to visual cell `width` using `unicode-width` so CJK
