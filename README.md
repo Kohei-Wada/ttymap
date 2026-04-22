@@ -18,7 +18,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Scale bar + attribution** — always on screen
 - **Help popup** — `?` shows all keybindings
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Plugin API** — built-in features (search, wiki, here) use the same `Plugin` trait external plugins will
+- **Component API** — built-in plugins (search, wiki, here, palette, help) are `Component`s on a focus stack; external plugins will use the same trait
 
 ## Usage
 
@@ -114,192 +114,184 @@ Keybindings are customizable via `~/.config/ttymap/config.toml`.
 
 ```
 src/
-├── main.rs           CLI entry + interactive-mode composition
-├── lib.rs            crate root
-├── app.rs            App struct, event loop, composition root
-├── app_command.rs        AppCommand enum + dispatch (the controller) + DispatchCtx
-├── config.rs         TOML config + CLI overrides
-├── logging.rs        XDG state log
+├── main.rs              CLI entry + interactive-mode composition
+├── lib.rs               crate root
+├── logging.rs           XDG state log
+├── config.rs            TOML config (sectioned) + CLI overrides
+├── keymap.rs            KeyBinding → AppMsg table + user overrides
+├── geo.rs               Web Mercator, projection, distance
+├── theme.rs             UiTheme (UI colours)
+├── color_palette.rs     xterm-256 color tables per theme (DARK / BRIGHT)
+├── painter.rs           MapPainter — components' world-space drawing API
 │
-├── commands/         one file per CLI subcommand (main.rs stays thin)
-│   ├── mod.rs        Command enum (#[derive(Subcommand)]) + run() dispatch
-│   └── snap.rs       `ttymap snap` / `snapshot` — headless single-frame renderer
+├── app/                 App struct + event loop + message dispatch
+│   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
+│   └── msg.rs           AppMsg enum (Map / Jump / SetTheme / CycleFocus / …)
 │
-├── focus.rs          FocusManager — event-driven focus transitions
-├── painter.rs        MapPainter — plugins' world-space drawing API
-├── theme.rs          UiTheme + runtime theme switch
-├── keymap.rs         KeyBinding → AppCommand table + user overrides
-├── geo.rs            Web Mercator, MapProjection, distance
-├── color_palette.rs  xterm-256 color tables (ThemeId + DARK/BRIGHT)
+├── commands/            one file per CLI subcommand (main.rs stays thin)
+│   ├── mod.rs           Command enum + run() dispatch
+│   └── snap.rs          `ttymap snap` / `snapshot` — headless single-frame renderer
 │
-├── input/            pure device-event adapters
-│   ├── mod.rs
-│   └── mouse.rs      drag/scroll → AppCommand::Map(PanCells/ZoomAt)
+├── compositor/          helix-inspired focus / modal stack
+│   ├── mod.rs           Component trait, Compositor, Registrar, Task, Activation
+│   ├── base.rs          BaseLayer — keymap + activation dispatch + gg sequence
+│   └── window.rs        Window (event-side) + RenderWindow (render-side, owns UiTheme)
 │
-├── map/              domain — viewport state + rendering pipeline
-│   ├── action.rs     Action enum (discrete + mouse-continuous variants)
-│   ├── state.rs      MapState, MapStateOptions, Viewport
-│   ├── render/       tiles → MapFrame on a dedicated thread
-│   │   ├── pipeline.rs   RenderPipeline
-│   │   ├── thread.rs     RenderHandle
-│   │   ├── renderer.rs   Feature[] → Canvas
-│   │   ├── canvas.rs     Braille drawing primitives
-│   │   ├── braille.rs    2×4 pixel buffer
-│   │   ├── frame.rs      MapFrame DTO
-│   │   ├── view.rs       Visible-tile math
-│   │   ├── label.rs      R-tree label collision buffer
-│   │   └── geom/         Bresenham, clipping
-│   ├── styler/       Mapbox GL-style rules (dark / bright presets)
-│   └── tile/         MVT fetch + cache + decode
-│       ├── cache.rs      Memory + disk LRU
-│       ├── decode.rs     Protobuf → DecodedTile
-│       └── fetch/        TileClient trait + mapscii HTTP backend
+├── widget/              ratatui-agnostic render vocabulary
+│   ├── geom.rs          Rect / Size
+│   ├── style.rs         StyleKind (Body / Accent / Muted / Selected / Link / …)
+│   ├── text.rs          Line / Span
+│   └── paragraph.rs, list.rs, table.rs
 │
-├── plugin/           plugin API + built-in plugins
-│   ├── mod.rs        Plugin trait, PluginCtx, PluginAction, PluginRegistry
-│   ├── help.rs       help popup
-│   ├── here/         IP-geolocation "jump to here" (headless, palette-only)
-│   ├── search/       forward-geocode popup
-│   └── wiki/         nearby-Wikipedia panel
+├── palette/             `:`-triggered universal picker (itself a Component)
+│   ├── mod.rs           CommandPalette + install(&mut Registrar)
+│   ├── panel.rs         popup layout
+│   └── provider/        default provider + theme sub-mode
 │
-├── shared/           cross-cutting utilities
-│   ├── async_job.rs  fire-and-poll background job (reused by geocode/wiki/here)
-│   ├── geoip.rs      IP-based lat/lon lookup (shared by --here and the here plugin)
-│   ├── http/         user-agent-tagged reqwest wrapper
-│   ├── nominatim.rs  forward + reverse geocoding
+├── plugin/              built-in plugins — each exposes `pub fn register(…, &mut Registrar)`
+│   ├── help/            help popup
+│   ├── here/            IP-geolocation "jump to here" (headless Task)
+│   ├── search/          forward-geocode popup (Nominatim)
+│   └── wiki/            nearby Wikipedia panel
+│
+├── map/                 domain — viewport state + rendering pipeline
+│   ├── state.rs, action.rs, mod.rs
+│   ├── render/          tiles → MapFrame on a dedicated thread
+│   │   ├── pipeline.rs, thread.rs, renderer.rs
+│   │   ├── canvas.rs, braille.rs, frame.rs
+│   │   └── view.rs, label.rs, geom/, earcut_worker.rs
+│   ├── styler/          Mapbox GL-style rules (dark / bright presets)
+│   └── tile/            MVT fetch + cache + decode
+│       ├── cache.rs         Memory (configurable LRU) + optional disk
+│       ├── decode.rs        Protobuf → DecodedTile
+│       └── fetch/           TileClient trait + mapscii backend + priority queue
+│
+├── shared/              cross-cutting utilities
+│   ├── async_job.rs     fire-and-poll background job
+│   ├── geoip.rs         IP-based lat/lon lookup
+│   ├── http/            user-agent-tagged reqwest wrapper
+│   ├── nominatim.rs     forward + reverse geocoding
 │   └── throttle.rs
 │
-└── ui/               terminal UI framework
-    ├── mod.rs        UiState + draw() + workflow methods (open_palette, …)
-    ├── action.rs     UiAction enum (UI-level commands, e.g. SetTheme)
-    ├── map_view.rs   MapFrame ratatui adapter
-    ├── router.rs     KeyRouter — focus-first routing + gg sequence + keymap fallback
-    │
-    ├── palette/      command palette (builtin coordinator — see mod.rs)
-    │   ├── mod.rs    CommandPalette + PaletteOutcome
-    │   ├── panel.rs  ratatui Table popup
-    │   ├── state.rs  query buffer + substring filter
-    │   └── provider/ universal picker backends
-    │       ├── mod.rs     PaletteProvider trait + PaletteAction
-    │       ├── command.rs default provider (actions + plugins + sub-modes)
-    │       └── theme.rs   theme-picker sub-mode
-    │
-    └── overlay/      built-in, always-on map decorations
+└── ui/                  non-modal UI framework
+    ├── mod.rs           UiState + draw() — owns overlay + last MapFrame
+    ├── map_view.rs      MapFrame → ratatui widget
+    ├── mouse.rs         MouseAdapter: MouseEvent → Vec<AppMsg>
+    └── overlay/         always-on map decorations
         ├── attribution.rs   © OpenStreetMap
         ├── scale_bar.rs     distance ruler
-        └── info/            center/cursor/zoom/place readout
-            ├── mod.rs
-            └── service.rs   async reverse-geocoder
+        ├── info/            center / cursor / zoom / place readout
+        └── manager.rs       OverlayManager
 ```
 
 ### Layering
 
-- **`map/`** — domain state. Knows nothing about UI or plugins. `Action` carries every map-level mutation, including mouse-emitted continuous variants (`PanCells`, `ZoomAt`); plugin activation and UI state are separate concerns.
-- **`app_command.rs`** — the **controller**. One `AppCommand` enum that every input source (keyboard, mouse, plugins, async polling, future API / MCP / Lua) emits; one `dispatch(cmd, &mut DispatchCtx)` that routes it to the right domain method. The single state mutator in the app.
-- **`input/`** — pure device-event adapters. `mouse.rs` turns raw events into `Option<AppCommand>` and returns it to `app.rs`. Focus-aware key routing is one layer up in `ui::router` (focus-first routing + gg sequence + keymap fallback). Neither calls `dispatch` themselves nor touches domain state directly. Symmetric with async plugin polling.
-- **`focus.rs`** — `FocusManager` driven by `FocusEvent`s (`PaletteOpened`, `PluginActivated(tag)`, …). Callers emit *what happened*; the manager decides the transition (wants_focus gating, auto-release, prev-slot restoration). All focus writes live here.
-- **`ui/overlay/`** — identity decorations (info, attribution, scale bar). Always rendered; not plugin territory.
-- **`ui/palette/`** — command palette. A **builtin coordinator**, not a `Plugin`. Plugins contribute functionality; palette aggregates over the plugin registry + keymap + theme to present a picker. Folding it into `Plugin` would widen `PluginCtx` to grant every plugin access to the registry and reduce the self-contained-widget contract to a naming convention. The asymmetry is deliberate — see `src/ui/palette/mod.rs` for the full rationale.
-- **`plugin/`** — the plugin surface. Built-in plugins (search, help, wiki, here) implement the `Plugin` trait and register into the `PluginRegistry`. The router (`ui::router`) dispatches by focus + activation-key lookup, never by plugin name. Plugins emit `AppCommand`s via `PluginAction::Run(msg)` and `pending_command()`; they never touch `FocusManager` or `MapState` directly.
+- **`map/`** — domain. Knows nothing about UI, plugins, or focus. `Action` carries every map-level mutation, including mouse-continuous variants (`PanCells`, `ZoomAt`).
+- **`app/`** — the **controller**. `AppMsg` (in `app/msg.rs`) is the closed enum every input source (keymap, palette, compositor components, mouse adapter, async tasks) emits; `App::dispatch` in `app/mod.rs` is the sole place that executes them. Command pattern with `App` as the Receiver — see [`docs/design.md`](docs/design.md) for the AppMsg-vs-direct-call judgment rules.
+- **`compositor/`** — focus and modal state. A stack of `Component`s; the top is focused. No `is_visible` / `activate` / `deactivate` contract — presence on the stack *is* the lifecycle. `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted before any component sees them).
+- **`ui/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
+- **`ui/`** (non-mouse) — non-modal chrome: map view, always-on overlays (info, attribution, scale bar), and `draw()` which forwards focused-surface rendering to the Compositor.
+- **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
+- **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
+- **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
 
-### Input flow
+### Message flow
 
 ```
 raw event
-  ↓ input layer (keyboard / mouse / async poll)
-  ↓ Option<AppCommand>          ← pure translation, no state mutation
+  ↓ keyboard / mouse / async poll / tile arrival
+  ↓ produces 0..N AppMsg (pure translation)
   ↓
-app.rs: self.dispatch(cmd)
+App::dispatch(msg)
   ↓
-app_command::dispatch(cmd, &mut ctx)    ← single state mutator
-  ↓
-    AppCommand::Map(a)            → ctx.map.process_action(&a)
-    AppCommand::Jump(loc)         → ctx.map.jump_to(loc)
-    AppCommand::Ui(a)             → ctx.ui.apply(a, render_handle)
-    AppCommand::ActivatePlugin    → ctx.ui.activate_plugin(tag, center)
-    AppCommand::CycleFocus(fwd)   → ctx.ui.cycle_focus(fwd)
-    AppCommand::OpenPalette       → ctx.ui.open_palette(keymap)
-    AppCommand::Resize(cols,rows) → ctx.map.resize + render_handle.request_resize
+    AppMsg::Map(action)      → MapState::process_action(&action)
+    AppMsg::Jump(loc)        → MapState::jump_to(loc)
+    AppMsg::SetTheme(id)     → App::apply_theme (rebuilds styler + UI theme)
+    AppMsg::CursorMoved(c,r) → overlay.set_cursor
+    AppMsg::CycleFocus(fwd)  → Compositor::cycle
+    AppMsg::Resize(cols,rows)→ App::handle_resize
 ```
 
-The keyboard translator's decision tree:
+Keyboard and mouse take different paths to `AppMsg` — keys go through the Compositor; mouse events go through a pure adapter:
 
 ```
 key event
-  ↓ keyboard.handle() → Option<AppCommand>:
-    [1] focused surface delivery via ui.deliver_key() — consumes, runs, or passes through
-    [2] Tab / Shift-Tab        → AppCommand::CycleFocus(forward)
-    [3] `:`                    → AppCommand::OpenPalette
-    [4] plugin activation key  → AppCommand::ActivatePlugin(tag)
-    [5] keymap.resolve()       → whatever AppCommand the binding produces
-       (with gg sequence state on the handler)
-```
+  ↓ Compositor::handle_event(event, ctx):
+    [reserved]  Tab / Shift-Tab   → AppMsg::CycleFocus(…)
+    [focused]   focused component's handle_event(event, &mut win)
+                  ↓ win.emit / win.open / win.close / win.ignore
+    [fallback]  only if the focused component called win.ignore()
+                and focus isn't already on BaseLayer
+                → re-deliver to BaseLayer (keymap + activation table)
+  ↓ Vec<AppMsg>
 
-Mouse is similar:
-
-```
 mouse event
-  ↓ mouse.handle(event, &mut ui) → Option<AppCommand>:
-    search focused?       → None (ignored)
-    drag (left)           → AppCommand::Map(Action::PanCells(dx, dy))
-    scroll up / down      → AppCommand::Map(Action::ZoomAt { anchor_*, zoom_in })
-    (cursor readout side effect on InfoOverlay always)
+  ↓ MouseAdapter::translate(event) → Vec<AppMsg>:
+    every event   → AppMsg::CursorMoved(col, row)
+    drag (left)   → AppMsg::Map(Action::PanCells(dx, dy))
+    scroll        → AppMsg::Map(Action::ZoomAt { anchor_*, zoom_in })
 ```
 
 ### Render flow
 
+Rendering is decoupled from fetching. The render thread builds a `MapFrame` from the current `Viewport`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
+
 ```
 main thread (ratatui draw):
-  ui::draw(f, &ui):
+  ui::draw(f, &ui, &compositor, &theme, &ctx):
     1. map_view renders the latest MapFrame
-    2. MapPainter set up; plugins.paint_on_map(painter)
-       — wiki plots article markers via painter.point(...)
-    3. built-in overlays (info, attribution, scale_bar) stamp their
-       rectangles onto the buffer
-    4. focused plugin's panel (search popup / help / wiki)
-    5. footer hints from the focused plugin (or default)
+    2. MapPainter set up; compositor.paint_on_map(painter)
+       — components paint world-space primitives (wiki markers, …)
+    3. always-on overlays (info, attribution, scale_bar) stamp their rects
+    4. compositor.render(f, area, theme, ctx)
+       — every Component on the stack drawn bottom-up
+    5. footer hints from the focused component
 ```
-
-Rendering is decoupled from fetching. The render thread produces a `MapFrame` from the current `Viewport`; the main thread consumes it. Stale frames are fine — overlays reproject against the frame's own center/zoom.
 
 ### Focus model
 
-`UiState.focus: Focus` is the single source of truth for which plugin (if any) owns the keyboard. Plugins never carry their own `active` flag — rendering, hint selection, and modality all consult `focus`. Activating one plugin implicitly `deactivate`s the previously-focused plugin, so lingering state (wiki markers, etc.) is cleared.
+Focus is a `focused_idx` into the Compositor stack, **decoupled from stack position**. Pushing a modal puts focus on it; `Tab` moves focus back to the base layer without popping the modal (the old `Focus::Background` behaviour). Stack order never changes through cycling — only which component receives keys first.
 
-### Plugin API (built-ins + external plugins)
+Dedup is by `Any::type_id`: pressing an activation key while the plugin is already on the stack focuses the existing instance instead of stacking a duplicate. A plugin author cannot forget to opt in — the concrete type *is* the identity.
+
+### Plugin API (built-ins + future external plugins)
 
 ```rust
-trait Plugin {
-    fn tag(&self) -> &str;
-    fn description(&self) -> &str;                 // label shown in palette + help
-    fn activation_keys(&self) -> Vec<&'static str>;
-    fn activate(&mut self, ctx: &mut PluginCtx);
-    fn deactivate(&mut self);
-    fn visible(&self) -> bool;                     // is the panel on screen?
-    fn handle_key(&mut self, code, mods, ctx) -> PluginAction;
-    fn poll(&mut self) -> bool;                    // drain async work; redraw hint
-    fn pending_command(&mut self) -> Option<AppCommand>;  // async-emitted message (e.g. Jump)
-    fn render(&self, f, area, theme);              // focused / visible panel
-    fn footer_hints(&self) -> Vec<(&str, &str)>;
-    fn paint_on_map(&self, p: &mut MapPainter);    // world-space primitives
+trait Component: Any {
+    /// Handle one key event. Communicate intent via win.*.
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window);
+
+    /// Paint into win.area(). Theme + ratatui Frame reached through win.
+    fn render(&self, win: &mut RenderWindow);
+
+    /// World-space primitives on the map (e.g. wiki markers). Default no-op.
+    fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
+
+    /// Tick-driven async polling. Default no-op.
+    fn poll(&mut self, _win: &mut Window) {}
+
+    /// Footer hints shown while this component is on top.
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> { vec![] }
+}
+
+// Headless plugin — no UI, no focus. The `here` geoip lookup uses this.
+trait Task {
+    fn poll(&mut self) -> Vec<AppMsg>;
 }
 ```
 
-All methods except `tag` and `handle_key` have defaults, so a passive
-data-only plugin (e.g. a map-marker feed) can implement just `tag` +
-`paint_on_map` and skip the UI-heavy parts. A plugin with a non-empty
-`description()` is automatically listed in the command palette.
+Each plugin module exposes `pub fn register(…, &mut Registrar)` which contributes some mix of: an `Activation` (key → component factory), a `PaletteEntry` (label for `:`), and/or a `Task`.
 
-`MapPainter` hides projection, buffer, and theme behind primitives like `point(ll, glyph, fg)` — plugins never compute screen coordinates themselves.
+Components never import ratatui or `UiTheme` directly — everything flows through `Window` (event side) and `RenderWindow` (render side). That containment lets the host own visual invariants (focused border colour, panel layout) and prevents a misbehaving plugin from painting outside its rect. `MapPainter` similarly hides projection and buffer behind primitives like `point(ll, glyph, fg)`.
 
 ### Concurrency
 
 | Thread | Responsibility |
 |--------|----------------|
-| main | event loop, UI state, terminal draw |
+| main | event loop, compositor, UI state, terminal draw |
 | render | MapFrame generation (tile fetch + draw) |
 | tile fetch | HTTP workers with priority queue |
-| geocode | Nominatim / Wikipedia calls |
+| async jobs | Nominatim / Wikipedia / geoip (fire-and-poll via `shared::async_job`) |
 
 mpsc channels connect the threads; the main thread never blocks on I/O.
 
@@ -320,7 +312,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Mid-term — external plugin architecture
 
-The current `Plugin` trait is in-process Rust. To let contributors ship plugins without touching this repo or matching an unstable ABI, the plan is:
+The current `Component` trait is in-process Rust. To let contributors ship plugins without touching this repo or matching an unstable ABI, the plan is:
 
 1. **Ingest markers from stdin / file** ([#39](https://github.com/Kohei-Wada/ttymap/issues/39)) — the minimum-viable external plugin entry point:
    ```bash
@@ -352,7 +344,7 @@ The following are fun ideas, but belong **outside this repo** as separate plugin
 ttymap is small, the code is documented, and the roadmap is deliberately open. If you want to:
 
 - **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job). A plugin with a non-empty `description()` lands in the command palette automatically. Once the subprocess architecture lands, plugins can live in their own repos.
+- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job via `Task`). `src/plugin/search/mod.rs` is a good starting point for a modal `Component` with its own keymap. Once the subprocess architecture lands, plugins can live in their own repos.
 - **Fix a bug or clean something up** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt; follow its lead.
 
 Issues on GitHub carry the current opinion of what's easy, what's hard, and what's deferred. Skim them before designing.
@@ -390,8 +382,8 @@ See `config.example.toml` for all options. Every section and field is optional; 
 
 ```bash
 cargo build       # build.rs compiles proto/vector_tile.proto via protox
-cargo test        # 154 tests
-cargo clippy      # lint
+cargo test
+cargo clippy
 ```
 
 ## File locations
