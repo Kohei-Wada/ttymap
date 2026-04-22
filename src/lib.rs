@@ -53,6 +53,13 @@ pub(crate) mod keymap;
 /// `build_registrar` in `app/mod.rs` names plugins by module path.
 pub(crate) mod plugin;
 
+/// Command palette — `:`-triggered universal picker. Lives as a peer
+/// of `plugin/` (not inside it) because palette has privileged
+/// integration with the compositor's `Registrar`: it *drains*
+/// `palette_entries` at install time rather than contributing one.
+/// Plugins still plug into it via `Registrar::add_palette_entry`.
+pub(crate) mod palette;
+
 /// File-based logging to XDG state directory.
 pub mod logging;
 

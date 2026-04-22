@@ -7,7 +7,7 @@
 //!
 //! The list of non-palette palette entries is harvested from the
 //! [`Registrar`](crate::compositor::Registrar) at composition time
-//! (see [`register`]) and baked into a [`CommandSeed`] that the
+//! (see [`install`]) and baked into a [`CommandSeed`] that the
 //! activation closure clones (as an `Rc`) for each push.
 //!
 //! Provider sub-modes (Theme picker) are reached by the provider's
@@ -149,11 +149,13 @@ impl Component for PaletteComponent {
     }
 }
 
-/// Register the palette. Harvests all palette entries contributed by
-/// other plugins (so call this **after** every other plugin's
-/// `register`), bakes them into a [`CommandSeed`], and adds a single
-/// `:` activation pointing at a fresh [`PaletteComponent`].
-pub fn register(keymap: &KeyMap, r: &mut Registrar) {
+/// Install the palette as a built-in. Unlike a plugin's `register`,
+/// this is a **sink**: it drains every palette entry contributed by
+/// earlier `plugin::*::register` calls via `std::mem::take`, bakes
+/// them into a [`CommandSeed`], and adds a single `:` activation
+/// pointing at a fresh [`PaletteComponent`]. Must be called **after**
+/// every other plugin's `register`.
+pub fn install(keymap: &KeyMap, r: &mut Registrar) {
     let plugin_entries = std::mem::take(&mut r.palette_entries);
     let seed = Rc::new(CommandSeed::build(keymap, plugin_entries));
 

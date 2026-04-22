@@ -246,8 +246,9 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
 
 /// Composition root for plugins. **This is the only function that
 /// names concrete plugin modules by type path**; `App` itself is
-/// plugin-agnostic. Order matters: the palette registers last so its
-/// default provider can harvest every other plugin's palette entries.
+/// plugin-agnostic. Order matters: the palette is installed last so
+/// its default provider can harvest every other plugin's palette
+/// entries.
 fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &KeyMap) -> Registrar {
     use std::rc::Rc;
 
@@ -262,7 +263,7 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
     );
 
     // Help needs to know the other plugins' activation hints, so build
-    // its text after them (but before the palette, since palette
+    // its text after them (but before palette install, since palette
     // harvests help's palette entry too).
     let plugin_help_entries: Vec<(String, String)> = r
         .palette_entries
@@ -276,8 +277,10 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
     ));
     crate::plugin::help::register(help_text, &mut r);
 
-    // Palette harvests all palette_entries contributed so far.
-    crate::plugin::palette::register(keymap, &mut r);
+    // Palette is a built-in, not a plugin. `install` drains every
+    // palette_entry contributed above and bakes them into the default
+    // provider — so it must run after every plugin::*::register call.
+    crate::palette::install(keymap, &mut r);
 
     r
 }

@@ -8,6 +8,5 @@
 
 pub mod help;
 pub mod here;
-pub mod palette;
 pub mod search;
 pub mod wiki;
