@@ -32,8 +32,17 @@ impl<'a> MapPainter<'a> {
         }
     }
 
-    pub fn theme(&self) -> &UiTheme {
-        self.theme
+    /// Primary accent colour — used by plugins to highlight features
+    /// (wiki markers, search pins, ...). Semantic accessor; the
+    /// underlying theme is hidden from plugins.
+    pub fn accent_color(&self) -> Color {
+        self.theme.accent
+    }
+
+    /// Secondary accent colour — typically used to distinguish the
+    /// selected / focused feature from the rest.
+    pub fn accent_alt_color(&self) -> Color {
+        self.theme.accent_alt
     }
 
     /// Plot a single-cell glyph at the given world coordinate. No-op

@@ -41,25 +41,19 @@ pub fn render_panel(widget: &SearchComponent, win: &mut RenderWindow) {
 }
 
 fn render_input(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
-    let style = win.theme().text();
-    let text = Paragraph::new(format!("/{}", widget.query)).style(style);
+    let text = Paragraph::new(format!("/{}", widget.query)).style(win.body_style());
     win.frame().render_widget(text, area);
 }
 
 fn render_candidates(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
-    let theme = win.theme();
-    let text_style = theme.text();
-    let selected_style = theme.selected();
+    let body = win.body_style();
+    let selected = win.selected_style();
     let items: Vec<ListItem> = widget
         .candidates
         .iter()
         .enumerate()
         .map(|(i, result)| {
-            let style = if i == widget.selected {
-                selected_style
-            } else {
-                text_style
-            };
+            let style = if i == widget.selected { selected } else { body };
             let prefix = if i == widget.selected { "> " } else { "  " };
             ListItem::new(format!("{}{}", prefix, result.name)).style(style)
         })

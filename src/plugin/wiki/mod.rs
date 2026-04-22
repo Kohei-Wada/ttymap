@@ -231,12 +231,10 @@ impl Component for WikiComponent {
 
     fn paint_on_map(&self, p: &mut MapPainter<'_>) {
         let state = self.state.borrow();
-        let (primary, accent) = {
-            let theme = p.theme();
-            (theme.accent, theme.accent_alt)
-        };
+        let primary = p.accent_color();
+        let highlight = p.accent_alt_color();
         for (i, a) in state.articles.iter().enumerate() {
-            let fg = if i == state.selected { accent } else { primary };
+            let fg = if i == state.selected { highlight } else { primary };
             p.point(
                 LonLat {
                     lon: a.lon,

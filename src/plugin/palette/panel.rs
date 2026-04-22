@@ -37,13 +37,12 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
         ])
         .split(inner);
 
-    let theme = win.theme();
-    let text_style = theme.text();
-    let muted_style = theme.muted();
-    let selected_style = theme.selected();
+    let body = win.body_style();
+    let muted = win.muted_style();
+    let selected = win.selected_style();
 
     let input_text =
-        Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(text_style);
+        Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(body);
     win.frame().render_widget(input_text, chunks[0]);
 
     let table_rows: Vec<Row> = items
@@ -56,7 +55,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
             };
             Row::new(vec![
                 Cell::from(item.label.clone()),
-                Cell::from(hint_cell).style(muted_style),
+                Cell::from(hint_cell).style(muted),
             ])
         })
         .collect();
@@ -67,9 +66,9 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     }
 
     let table = Table::new(table_rows, [Constraint::Min(10), Constraint::Length(16)])
-        .style(text_style)
+        .style(body)
         .highlight_symbol("> ")
-        .row_highlight_style(selected_style)
+        .row_highlight_style(selected)
         .column_spacing(1);
 
     win.frame()

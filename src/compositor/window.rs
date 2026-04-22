@@ -34,7 +34,8 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::widgets::Clear;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Clear};
 
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
@@ -131,15 +132,21 @@ impl<'a> Window<'a> {
 // ── RenderWindow: draw-time handle ─────────────────────────────────
 
 /// Render-time companion to [`Window`]. Carries the ratatui
-/// [`Frame`], the layout area the component should draw into, the
-/// active [`UiTheme`], and a read-only snapshot of [`Context`] — so
-/// the component doesn't have to thread these through every helper
-/// as separate arguments.
+/// [`Frame`], the layout area the component may draw into, a
+/// read-only snapshot of [`Context`], and — internally, never
+/// exposed — the active [`UiTheme`].
 ///
-/// Plugins receive this on [`Component::render`](super::Component)
-/// (and, when added, `paint_on_map`). It exposes ratatui's `Frame`
-/// when a primitive isn't yet provided, so existing panel code can
-/// keep calling `win.frame().render_widget(...)` during migration.
+/// **Components never see `UiTheme`.** They ask for semantic styles
+/// (body / muted / accent / highlight / selected / link), and
+/// [`RenderWindow`] maps them to the current theme's concrete
+/// `Style`. Adding a new theme-driven field requires one accessor
+/// here, not a signature change in every plugin.
+///
+/// `frame()` remains as an escape hatch for widgets not yet wrapped
+/// by this module (lists, tables, scrollable paragraphs). A
+/// follow-up refactor will fold those into Window primitives and
+/// retire the escape hatch — at which point plugins won't need
+/// `use ratatui::*` at all.
 pub struct RenderWindow<'a, 'b> {
     frame: &'a mut Frame<'b>,
     area: Rect,
@@ -161,12 +168,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
             theme,
             ctx,
         }
-    }
-
-    /// The theme currently in effect. Use for styling primitives
-    /// instead of threading `&UiTheme` through helper signatures.
-    pub fn theme(&self) -> &UiTheme {
-        self.theme
     }
 
     /// The area this component is allowed to draw into (usually
@@ -202,5 +203,61 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         let inner = block.inner(rect);
         self.frame.render_widget(block, rect);
         inner
+    }
+
+    /// Build a theme-styled [`Block`] without drawing anything. Use
+    /// when the content widget (Paragraph / List) needs to own the
+    /// Block via `.block(...)`, as in wiki's scrollable list or
+    /// help's centered text overlay.
+    pub fn panel_block<'t>(&self, title: &'t str) -> Block<'t> {
+        self.theme.panel(title)
+    }
+
+    // ── Semantic style accessors (UiTheme hidden) ─────────────────
+
+    /// Plain body text style. Maps to the theme's "fg on bg"
+    /// combination; plugin never sees which palette entry that is.
+    pub fn body_style(&self) -> Style {
+        self.theme.text()
+    }
+
+    /// Subdued text — hints, distances, coordinates, auxiliary
+    /// info. Lower contrast than body.
+    pub fn muted_style(&self) -> Style {
+        self.theme.muted()
+    }
+
+    /// Primary accent — section titles, key hints in help, plugin
+    /// panel headers.
+    pub fn accent_style(&self) -> Style {
+        self.theme.accent_style()
+    }
+
+    /// Secondary accent — the "look at this one" highlight used for
+    /// selected wiki titles. Distinct from [`selected_style`]
+    /// (which is the full selected-row chrome including bold);
+    /// this is just the alt accent colour on fg.
+    pub fn highlight_style(&self) -> Style {
+        Style::default().fg(self.theme.accent_alt)
+    }
+
+    /// Selected list / table row — accent colour + bold. Matches
+    /// the palette's row highlight and search candidate selection.
+    pub fn selected_style(&self) -> Style {
+        self.theme.selected()
+    }
+
+    /// URL / clickable text. Terminals that detect OSC 8 or auto-
+    /// link by regex will activate it. Distinct from plain accent
+    /// because it's underlined.
+    pub fn link_style(&self) -> Style {
+        self.theme.link()
+    }
+
+    /// Foreground-only style using the muted colour — suitable for
+    /// thin separator lines (`─`) where `muted_style()`'s
+    /// foreground-on-background combination would bleed the bg.
+    pub fn muted_fg_style(&self) -> Style {
+        Style::default().fg(self.theme.muted_color)
     }
 }

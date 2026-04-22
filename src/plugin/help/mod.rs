@@ -13,7 +13,6 @@ use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::keymap::KeyMap;
 use crate::map::Action;
-use crate::theme::UiTheme;
 
 /// A colored span of help text. Theme is applied at render time so
 /// theme switches update the colors without rebuilding the help
@@ -65,16 +64,19 @@ impl HelpText {
         Self { lines }
     }
 
-    fn rendered_lines<'a>(&'a self, theme: &UiTheme) -> Vec<Line<'a>> {
+    fn rendered_lines<'a>(&'a self, win: &RenderWindow) -> Vec<Line<'a>> {
+        let body = win.body_style();
+        let accent = win.accent_style();
+        let link = win.link_style();
         self.lines
             .iter()
             .map(|segs| {
                 let spans: Vec<Span<'a>> = segs
                     .iter()
                     .map(|s| match s {
-                        Seg::Text(t) => Span::styled(t.as_str(), theme.text()),
-                        Seg::Key(k) => Span::styled(k.as_str(), theme.accent_style()),
-                        Seg::Url(u) => Span::styled(u.as_str(), theme.link()),
+                        Seg::Text(t) => Span::styled(t.as_str(), body),
+                        Seg::Key(k) => Span::styled(k.as_str(), accent),
+                        Seg::Url(u) => Span::styled(u.as_str(), link),
                     })
                     .collect();
                 Line::from(spans)
@@ -106,8 +108,7 @@ impl Component for HelpComponent {
             return;
         }
 
-        let theme = win.theme();
-        let rendered = self.text.rendered_lines(theme);
+        let rendered = self.text.rendered_lines(win);
 
         let content_width = rendered
             .iter()
@@ -126,9 +127,9 @@ impl Component for HelpComponent {
         let y = map_inner.y + (map_inner.height - popup_height) / 2;
 
         let area = Rect::new(x, y, popup_width, popup_height);
-        let text_style = theme.text();
-        let block = theme.panel("help").title_alignment(Alignment::Center);
-        let widget = Paragraph::new(rendered).style(text_style).block(block);
+        let body = win.body_style();
+        let block = win.panel_block("help").title_alignment(Alignment::Center);
+        let widget = Paragraph::new(rendered).style(body).block(block);
         win.frame().render_widget(Clear, area);
         win.frame().render_widget(widget, area);
     }
