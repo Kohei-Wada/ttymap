@@ -43,8 +43,8 @@ use service::WikiService;
 use wikipedia::WikiArticle;
 
 /// Shared state for the wiki subsystem. Lives behind an
-/// `Rc<RefCell<_>>` so both the focus-side ([`WikiComponent`]) and
-/// the map-side ([`WikiPainter`]) views share one source of truth.
+/// `Rc<RefCell<_>>` so every [`WikiComponent`] push (and any future
+/// second view) shares one source of truth.
 pub struct WikiState {
     pub(in crate::plugin::wiki) articles: Vec<WikiArticle>,
     pub(in crate::plugin::wiki) selected: usize,
@@ -110,9 +110,9 @@ impl WikiState {
 
 pub type WikiHandle = Rc<RefCell<WikiState>>;
 
-/// Focus-side view of wiki. Holds no state of its own — state lives
-/// in `WikiHandle`, so push/pop is cheap and can't desync from the
-/// painter.
+/// Wiki component — owns no state of its own. All state (articles,
+/// selection, detail view) lives in the shared [`WikiHandle`], so
+/// push/pop is cheap and the next open inherits the prior list.
 pub struct WikiComponent {
     state: WikiHandle,
 }
@@ -168,12 +168,19 @@ impl Component for WikiComponent {
             if up || down {
                 let n = state.articles.len();
                 state.selected = if up {
-                    if state.selected == 0 { n - 1 } else { state.selected - 1 }
+                    if state.selected == 0 {
+                        n - 1
+                    } else {
+                        state.selected - 1
+                    }
                 } else {
                     (state.selected + 1) % n
                 };
                 let article = state.articles[state.selected].clone();
-                let loc = LonLat { lat: article.lat, lon: article.lon };
+                let loc = LonLat {
+                    lat: article.lat,
+                    lon: article.lon,
+                };
                 state.detail = Some(article);
                 return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
             }
@@ -183,7 +190,10 @@ impl Component for WikiComponent {
         // ── List mode ───────────────────────────────────────────────
         if event.code == KeyCode::Enter {
             if let Some(article) = state.articles.get(state.selected) {
-                let loc = LonLat { lat: article.lat, lon: article.lon };
+                let loc = LonLat {
+                    lat: article.lat,
+                    lon: article.lon,
+                };
                 state.detail = Some(article.clone());
                 return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
             }
@@ -192,7 +202,11 @@ impl Component for WikiComponent {
         if up || down {
             let n = state.articles.len();
             state.selected = if up {
-                if state.selected == 0 { n - 1 } else { state.selected - 1 }
+                if state.selected == 0 {
+                    n - 1
+                } else {
+                    state.selected - 1
+                }
             } else {
                 (state.selected + 1) % n
             };
@@ -222,7 +236,14 @@ impl Component for WikiComponent {
         };
         for (i, a) in state.articles.iter().enumerate() {
             let fg = if i == state.selected { accent } else { primary };
-            p.point(LonLat { lon: a.lon, lat: a.lat }, '●', fg);
+            p.point(
+                LonLat {
+                    lon: a.lon,
+                    lat: a.lat,
+                },
+                '●',
+                fg,
+            );
         }
     }
 

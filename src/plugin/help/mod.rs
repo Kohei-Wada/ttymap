@@ -36,10 +36,7 @@ pub struct HelpText {
 }
 
 impl HelpText {
-    pub fn build(
-        keymap: &KeyMap,
-        plugin_help_entries: &[(String, String)],
-    ) -> Self {
+    pub fn build(keymap: &KeyMap, plugin_help_entries: &[(String, String)]) -> Self {
         let mut lines: Vec<HelpLine> = vec![
             text_line(" A terminal-based map viewer — Mapbox vector tiles"),
             text_line(" rendered as Unicode Braille."),
@@ -99,8 +96,16 @@ impl HelpComponent {
 }
 
 impl Component for HelpComponent {
-    fn handle_event(&mut self, _event: KeyEvent, _ctx: &Context) -> EventResult {
-        // Help is fully modal: any key closes the panel.
+    fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
+        // Let Tab/Shift-Tab bubble to the base layer so focus cycle
+        // works rather than being eaten by the "any key closes" rule.
+        if matches!(
+            event.code,
+            crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab
+        ) {
+            return EventResult::Ignored;
+        }
+        // Any other key closes the panel.
         EventResult::Close(Vec::new())
     }
 

@@ -187,34 +187,24 @@ impl Compositor {
             .unwrap_or_default()
     }
 
-    /// Rotate the stack so Tab-style focus cycling works. Forward
-    /// moves the top to the bottom (bringing the next component up);
-    /// backward does the reverse. No-op with fewer than two
-    /// components. The bottom-layer keymap is index 0, so it stays
-    /// put unless there's only it (trivial case). This replaces
-    /// `FocusManager::cycle`.
+    /// Rotate the modals (indices `1..len`) so Tab-style focus
+    /// cycling works. Forward moves the top modal to just above the
+    /// base (bringing the next modal up); backward moves the bottom
+    /// modal to the top. The [`BaseLayer`] at index 0 never moves.
     ///
-    /// Note: the bottom layer sits at index 0 and participates in
-    /// rotation; reaching it via Tab equals the old "cycle to
-    /// Background" state. Callers that want to preserve a
-    /// never-rotate bottom can lift the first element out before
-    /// rotating.
+    /// No-op unless there are at least two modals (stack length 3
+    /// or more). With zero or one modal there is no one to cycle
+    /// to. Replaces the old `FocusManager::cycle`.
     pub fn cycle(&mut self, forward: bool) {
-        if self.stack.len() <= 1 {
+        if self.stack.len() < 3 {
             return;
         }
-        // Keep index 0 (the bottom layer) fixed; rotate only the
-        // modals above it.
         if forward {
-            if let Some(top) = self.stack.pop() {
-                self.stack.insert(1, top);
-            }
+            let top = self.stack.pop().expect("len >= 3");
+            self.stack.insert(1, top);
         } else {
-            // Swap the topmost two (simplest back-cycle for up to a
-            // handful of components; matches the old cycle semantics
-            // of "previous visible plugin").
-            let len = self.stack.len();
-            self.stack.swap(len - 1, len - 2);
+            let bottom_modal = self.stack.remove(1);
+            self.stack.push(bottom_modal);
         }
     }
 }
@@ -295,5 +285,80 @@ impl Registrar {
     }
     pub fn add_task(&mut self, t: Box<dyn Task>) {
         self.tasks.push(t);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal test component that identifies itself via its
+    /// `footer_hints` entry. Used to verify cycle / push ordering.
+    struct TagComponent(&'static str);
+
+    impl Component for TagComponent {
+        fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
+            EventResult::Consumed(Vec::new())
+        }
+        fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+            vec![(self.0, "")]
+        }
+    }
+
+    fn top_tag(c: &Compositor) -> &'static str {
+        c.footer_hints()
+            .first()
+            .map(|(k, _)| *k)
+            .unwrap_or("<empty>")
+    }
+
+    fn make_with(tags: &[&'static str]) -> Compositor {
+        let mut c = Compositor::new();
+        for t in tags {
+            c.push(Box::new(TagComponent(t)));
+        }
+        c
+    }
+
+    #[test]
+    fn cycle_no_op_with_base_only() {
+        let mut c = make_with(&["base"]);
+        c.cycle(true);
+        c.cycle(false);
+        assert_eq!(top_tag(&c), "base");
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn cycle_no_op_with_single_modal() {
+        // Two elements: base + 1 modal. Nothing to cycle to; base
+        // must never move off index 0. This is the specific shape
+        // that previously swapped base↔modal under backward cycle.
+        let mut c = make_with(&["base", "m"]);
+        c.cycle(false);
+        assert_eq!(top_tag(&c), "m", "backward cycle must not move base to top");
+        c.cycle(true);
+        assert_eq!(top_tag(&c), "m", "forward cycle with 1 modal is no-op");
+    }
+
+    #[test]
+    fn cycle_forward_rotates_modals_only() {
+        // [base, A, B] — B on top. Forward → A on top, B second.
+        let mut c = make_with(&["base", "A", "B"]);
+        c.cycle(true);
+        assert_eq!(top_tag(&c), "A");
+        // Base must still be at the bottom.
+        assert_eq!(c.stack.len(), 3);
+    }
+
+    #[test]
+    fn cycle_backward_rotates_modals_only() {
+        // [base, A, B] — B on top. Backward → A on top (since B
+        // stays above the previously-bottom modal, which is itself
+        // now on top after rotation).
+        let mut c = make_with(&["base", "A", "B"]);
+        c.cycle(false);
+        assert_eq!(top_tag(&c), "A");
     }
 }

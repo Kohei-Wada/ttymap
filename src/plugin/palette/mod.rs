@@ -25,9 +25,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::color_palette::ThemeId;
-use crate::compositor::{
-    Activation, Component, Context, EventResult, Registrar,
-};
+use crate::compositor::{Activation, Component, Context, EventResult, Registrar};
 use crate::keymap::KeyMap;
 use crate::theme::UiTheme;
 
@@ -68,9 +66,15 @@ impl PaletteComponent {
 
 impl Component for PaletteComponent {
     fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+        // Let Tab/Shift-Tab bubble to the base layer for focus cycle.
+        if matches!(event.code, KeyCode::Tab | KeyCode::BackTab) {
+            return EventResult::Ignored;
+        }
+
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let up = matches!(event.code, KeyCode::Up) || (ctrl && event.code == KeyCode::Char('p'));
-        let down = matches!(event.code, KeyCode::Down) || (ctrl && event.code == KeyCode::Char('n'));
+        let down =
+            matches!(event.code, KeyCode::Down) || (ctrl && event.code == KeyCode::Char('n'));
 
         match event.code {
             KeyCode::Esc => EventResult::Close(Vec::new()),

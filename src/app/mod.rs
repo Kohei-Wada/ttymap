@@ -6,12 +6,12 @@
 //!
 //! Focus/modal state lives on [`Compositor`] — a stack of
 //! [`Component`]s that replaced the old `FocusManager` + `Plugin`
-//! trilogy. Map overlays (wiki markers) live in a separate
-//! [`Painter`] list. Headless async jobs (here plugin's geoip) live
-//! in a [`Task`] list. None of these three channels carries a concrete
-//! plugin type — they contain only `Box<dyn Component / Painter /
-//! Task>`, populated by each plugin's `register` function at
-//! composition time.
+//! trilogy. Components render map overlays through
+//! `Component::paint_on_map`. Headless async jobs (here plugin's
+//! geoip) live in a [`Task`] list. Neither channel carries a
+//! concrete plugin type — they contain only `Box<dyn Component>` /
+//! `Box<dyn Task>`, populated by each plugin's `register` function
+//! at composition time.
 
 pub mod msg;
 
@@ -117,20 +117,14 @@ impl App {
             for msg in compositor_msgs {
                 self.dispatch(msg);
             }
-            let task_msgs: Vec<AppMsg> = self
-                .tasks
-                .iter_mut()
-                .flat_map(|t| t.poll())
-                .collect();
+            let task_msgs: Vec<AppMsg> = self.tasks.iter_mut().flat_map(|t| t.poll()).collect();
             for msg in task_msgs {
                 self.dispatch(msg);
             }
 
             self.ui.overlay.poll();
 
-            terminal.draw(|f| {
-                crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme)
-            })?;
+            terminal.draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme))?;
 
             let mut poll_timeout = Duration::from_millis(4);
             while event::poll(poll_timeout)? {
@@ -251,11 +245,7 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
 /// names concrete plugin modules by type path**; `App` itself is
 /// plugin-agnostic. Order matters: the palette registers last so its
 /// default provider can harvest every other plugin's palette entries.
-fn build_registrar(
-    config: &Config,
-    nominatim: Arc<NominatimClient>,
-    keymap: &KeyMap,
-) -> Registrar {
+fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &KeyMap) -> Registrar {
     use std::rc::Rc;
 
     let mut r = Registrar::default();

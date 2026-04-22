@@ -79,7 +79,9 @@ impl BaseLayer {
 
 impl Component for BaseLayer {
     fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
-        let KeyEvent { code, modifiers, .. } = event;
+        let KeyEvent {
+            code, modifiers, ..
+        } = event;
 
         // Always advance the gg state first — vim semantics: any
         // non-`g` key (including focus-transition triggers like Tab,
@@ -111,7 +113,12 @@ impl Component for BaseLayer {
         EventResult::Consumed(Vec::new())
     }
 
-    fn render(&self, _f: &mut ratatui::Frame, _area: ratatui::layout::Rect, _theme: &crate::theme::UiTheme) {
+    fn render(
+        &self,
+        _f: &mut ratatui::Frame,
+        _area: ratatui::layout::Rect,
+        _theme: &crate::theme::UiTheme,
+    ) {
         // Bottom layer draws nothing — the map is painted by `App`
         // separately from the compositor (see `App::run`).
     }

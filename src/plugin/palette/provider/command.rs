@@ -25,7 +25,7 @@ use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 /// at composition time, held as `Rc` so the palette activation
 /// closure can clone cheaply for each push.
 pub struct CommandSeed {
-    map_actions: Vec<(Action, String)>,  // (action, key hint)
+    map_actions: Vec<(Action, String)>, // (action, key hint)
     plugin_entries: Vec<RegistrarEntry>,
 }
 
