@@ -35,7 +35,8 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Clear};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
@@ -184,24 +185,48 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.ctx
     }
 
-    /// Escape hatch for direct ratatui access while primitives are
-    /// being built out. Components can call
-    /// `win.frame().render_widget(w, rect)` for anything not yet
-    /// covered by a `RenderWindow` primitive.
-    pub fn frame(&mut self) -> &mut Frame<'b> {
-        self.frame
+    /// Render a ratatui widget into `rect`. `rect` is **clamped to
+    /// `self.area()`** before drawing, so a component cannot paint
+    /// outside the area the compositor allocated to it — the map
+    /// border, footer, and sibling components are all protected.
+    ///
+    /// This is the only way for a component to draw; direct access
+    /// to the underlying `Frame` is not exposed.
+    pub fn render_widget<W: Widget>(&mut self, widget: W, rect: Rect) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(widget, clamped);
+    }
+
+    /// Stateful counterpart to [`render_widget`] — for widgets like
+    /// `List` / `Table` that keep per-frame `*State`. Same rect
+    /// clamping.
+    pub fn render_stateful_widget<W: StatefulWidget>(
+        &mut self,
+        widget: W,
+        rect: Rect,
+        state: &mut W::State,
+    ) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_stateful_widget(widget, clamped, state);
+    }
+
+    /// Clear the cells in `rect` (rect-clamped). Useful before
+    /// drawing a popup so whatever was underneath doesn't bleed
+    /// through.
+    pub fn clear(&mut self, rect: Rect) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(Clear, clamped);
     }
 
     /// Clear `rect` and draw a theme-styled bordered panel with
     /// `title` inside it. Returns the inner rect (content region
-    /// inside the borders) for further widgets. Factors the
-    /// `Clear + theme.panel(title) + f.render_widget(block, rect)`
-    /// triplet duplicated across every plugin's panel module.
+    /// inside the borders) for further widgets.
     pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
-        self.frame.render_widget(Clear, rect);
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(Clear, clamped);
         let block = self.theme.panel(title);
-        let inner = block.inner(rect);
-        self.frame.render_widget(block, rect);
+        let inner = block.inner(clamped);
+        self.frame.render_widget(block, clamped);
         inner
     }
 
@@ -259,5 +284,124 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     /// foreground-on-background combination would bleed the bg.
     pub fn muted_fg_style(&self) -> Style {
         Style::default().fg(self.theme.muted_color)
+    }
+
+    // ── Span constructors (compose `Line`s from styled text) ──────
+
+    /// Body-styled text span. Pair with [`Line::from`] /
+    /// [`Line::from(vec![..])`] to build multi-span lines without
+    /// importing `Style` / `Span::styled` from ratatui.
+    pub fn span_body<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.body_style())
+    }
+
+    /// Muted-styled text span.
+    pub fn span_muted<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.muted_style())
+    }
+
+    /// Accent-styled text span (primary accent).
+    pub fn span_accent<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.accent_style())
+    }
+
+    /// Highlight-styled text span (secondary accent, e.g. selected
+    /// wiki title).
+    pub fn span_highlight<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.highlight_style())
+    }
+
+    /// Link-styled text span (underlined, alt accent).
+    pub fn span_link<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.link_style())
+    }
+
+    /// Foreground-only muted span — separator glyphs etc.
+    pub fn span_separator<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.muted_fg_style())
+    }
+}
+
+/// Intersect `rect` with `bounds`, returning the portion inside
+/// bounds. If they don't overlap, returns a zero-sized rect
+/// (ratatui draws nothing for width or height == 0).
+///
+/// Uses saturating arithmetic throughout so a malicious or buggy
+/// caller passing a `Rect` with huge coordinates (e.g. `Rect::new(
+/// u16::MAX, u16::MAX, u16::MAX, u16::MAX)`) cannot overflow u16
+/// in the right/bottom computation and wrap into a tiny valid
+/// rect that would escape the bounds.
+fn clamp(rect: Rect, bounds: Rect) -> Rect {
+    let x = rect.x.max(bounds.x);
+    let y = rect.y.max(bounds.y);
+    let right = rect
+        .x
+        .saturating_add(rect.width)
+        .min(bounds.x.saturating_add(bounds.width));
+    let bottom = rect
+        .y
+        .saturating_add(rect.height)
+        .min(bounds.y.saturating_add(bounds.height));
+    Rect {
+        x,
+        y,
+        width: right.saturating_sub(x),
+        height: bottom.saturating_sub(y),
+    }
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+
+    fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
+        Rect::new(x, y, w, h)
+    }
+
+    #[test]
+    fn inside_bounds_returns_same() {
+        let bounds = r(0, 0, 100, 100);
+        assert_eq!(clamp(r(10, 10, 50, 50), bounds), r(10, 10, 50, 50));
+    }
+
+    #[test]
+    fn partial_overlap_clipped() {
+        let bounds = r(10, 10, 50, 50);
+        // rect extends past bounds on the right/bottom
+        assert_eq!(clamp(r(30, 30, 100, 100), bounds), r(30, 30, 30, 30));
+    }
+
+    #[test]
+    fn fully_outside_returns_zero_size() {
+        let bounds = r(0, 0, 10, 10);
+        let clamped = clamp(r(100, 100, 5, 5), bounds);
+        assert_eq!(clamped.width, 0);
+        assert_eq!(clamped.height, 0);
+    }
+
+    #[test]
+    fn huge_coords_dont_overflow_u16() {
+        // The overflow-guard case: without saturating_add, this
+        // would wrap `rect.x + rect.width` in u16 and produce a
+        // small valid right edge, letting the rect escape bounds.
+        let bounds = r(0, 0, 100, 100);
+        let clamped = clamp(r(u16::MAX - 1, u16::MAX - 1, u16::MAX, u16::MAX), bounds);
+        // Fully outside → zero-sized.
+        assert_eq!(clamped.width, 0);
+        assert_eq!(clamped.height, 0);
+    }
+
+    #[test]
+    fn zero_sized_input_stays_zero() {
+        let bounds = r(0, 0, 100, 100);
+        assert_eq!(clamp(r(50, 50, 0, 0), bounds), r(50, 50, 0, 0));
+    }
+
+    #[test]
+    fn offset_bounds_respected() {
+        // bounds not at origin — negative-ish deltas must clip
+        // without underflow.
+        let bounds = r(20, 20, 50, 50);
+        assert_eq!(clamp(r(0, 0, 200, 200), bounds), r(20, 20, 50, 50));
     }
 }

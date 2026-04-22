@@ -42,7 +42,7 @@ pub fn render_panel(widget: &SearchComponent, win: &mut RenderWindow) {
 
 fn render_input(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
     let text = Paragraph::new(format!("/{}", widget.query)).style(win.body_style());
-    win.frame().render_widget(text, area);
+    win.render_widget(text, area);
 }
 
 fn render_candidates(widget: &SearchComponent, win: &mut RenderWindow, area: Rect) {
@@ -60,5 +60,5 @@ fn render_candidates(widget: &SearchComponent, win: &mut RenderWindow, area: Rec
         .collect();
 
     let list = List::new(items);
-    win.frame().render_widget(list, area);
+    win.render_widget(list, area);
 }
