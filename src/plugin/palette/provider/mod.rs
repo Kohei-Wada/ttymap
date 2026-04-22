@@ -22,7 +22,7 @@ pub struct PaletteItem {
 
 /// What a provider wants the host to do when the user activates an
 /// item. Translated by the palette Component into the equivalent
-/// [`EventResult`](crate::compositor::EventResult).
+/// `win.*` calls.
 pub enum PaletteAction {
     /// Close the palette with no side effect.
     Close,

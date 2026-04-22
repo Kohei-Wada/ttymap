@@ -20,11 +20,11 @@
 //! does *not* live here — those are focus transitions, handled
 //! internally by the
 //! [`Compositor`](crate::compositor::Compositor) via
-//! [`EventResult::Push`](crate::compositor::EventResult::Push) /
-//! [`CloseAndPush`](crate::compositor::EventResult::CloseAndPush)
-//! returned from a [`Component`](crate::compositor::Component).
-//! Keeping them off `AppMsg` means the focus state machine isn't
-//! coupled to the dispatch table.
+//! [`Window::open`](crate::compositor::window::Window::open) /
+//! [`Window::close`](crate::compositor::window::Window::close) calls
+//! from a [`Component`](crate::compositor::Component). Keeping them
+//! off `AppMsg` means the focus state machine isn't coupled to the
+//! dispatch table.
 
 use crate::color_palette::ThemeId;
 use crate::geo::LonLat;

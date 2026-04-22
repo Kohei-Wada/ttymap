@@ -2,7 +2,8 @@
 //!
 //! Replaces the `FocusManager` + `FocusSurface` + `Plugin` trio with a
 //! single primitive: a stack of [`Component`]s. The top of the stack
-//! holds focus; push on activation, pop on [`EventResult::Close`].
+//! holds focus; push on activation, pop when a component calls
+//! `win.close()`.
 //! Object lifetime *is* the visibility lifecycle, so plugins never
 //! have to maintain a separate `is_visible` / `activate` / `deactivate`
 //! contract — fresh instances on every push, dropped on every pop.
@@ -66,29 +67,9 @@ fn intercept_focus_key(event: KeyEvent) -> Option<AppMsg> {
 
 // ── Component + event routing ──────────────────────────────────────
 
-/// Outcome of delivering an event to a [`Component`].
-///
-/// - `Ignored`: the component is not interested; compositor tries the
-///   next layer down. If nothing claims it, the event is discarded.
-/// - `Consumed(msgs)`: absorbed, may emit messages, stack unchanged.
-/// - `Close(msgs)`: absorbed + pop me. Messages dispatch before the
-///   pop (so e.g. a `Jump` fires before the modal disappears).
-/// - `Push(component, msgs)`: absorbed + push a new component on top
-///   of me. Used by the bottom-layer keymap component to open modals
-///   on activation keys without knowing about the compositor.
-/// - `CloseAndPush(component, msgs)`: pop me and push `component`
-///   next. Used by the palette: selecting a Spawn-kind entry closes
-///   the palette and opens the target component.
-pub enum EventResult {
-    Ignored,
-    Consumed(Vec<AppMsg>),
-    Close(Vec<AppMsg>),
-    Push(Box<dyn Component>, Vec<AppMsg>),
-    CloseAndPush(Box<dyn Component>, Vec<AppMsg>),
-}
-
 /// Read-only snapshot of app-level context a component may need
-/// during key handling. Equivalent to today's `SurfaceCtx`.
+/// during a hook. Reached by the component through
+/// [`Window::ctx`](window::Window::ctx).
 #[derive(Debug, Clone, Copy)]
 pub struct Context {
     pub center: LonLat,
@@ -104,12 +85,20 @@ pub struct Context {
 /// tag. Pressing an activation key twice with the base focused in
 /// between still produces one instance of the plugin on the stack,
 /// because the framework notices the type already present.
+///
+/// The event-producing hooks ([`handle_event`](Self::handle_event)
+/// and [`poll`](Self::poll)) receive a
+/// [`&mut Window`](window::Window) and express intent through it
+/// (`win.close()`, `win.open(c)`, `win.emit(msg)`, `win.ignore()`).
+/// The framework applies those ops atomically after the hook
+/// returns, so components cannot break stack / focus invariants
+/// regardless of what order they call the methods.
 pub trait Component: Any {
-    /// Handle a single key event. Return `Ignored` to let lower
-    /// layers see it, `Consumed(msgs)` to absorb, `Close(msgs)` to
-    /// absorb and pop, or `Push(c, msgs)` to absorb and push `c` on
-    /// top.
-    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult;
+    /// Handle a single key event. Call `win.close()` / `open(c)` /
+    /// `emit(msg)` / `ignore()` to express what should happen next.
+    /// Silence (no `win.*` call) is implicit consumption — the
+    /// event is treated as handled but with no state change.
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window);
 
     /// Paint this component into `area`. Called once per frame while
     /// on the stack; compositor renders bottom-to-top.
@@ -124,17 +113,18 @@ pub trait Component: Any {
     fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
 
     /// Advance async work and surface new messages. Called every tick
-    /// on every component on the stack. Replaces `Plugin::poll()` +
-    /// `Plugin::pending_msgs()` — one hook instead of two.
-    fn poll(&mut self) -> Vec<AppMsg> {
-        Vec::new()
-    }
+    /// on every component on the stack. Use `win.emit(msg)` to
+    /// dispatch app-level state changes when a future completes,
+    /// and `win.close()` if the component should self-remove.
+    fn poll(&mut self, _win: &mut Window) {}
 
     /// Footer hints shown while this component is on top.
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
 }
+
+use window::{Window, WindowOps};
 
 // ── Compositor stack ───────────────────────────────────────────────
 
@@ -179,12 +169,11 @@ impl Compositor {
         }
     }
 
-    /// Deliver a key event to the focused component first; if it
-    /// returns [`EventResult::Ignored`] and the focus isn't already
+    /// Deliver a key event to the focused component first; if the
+    /// component called only `win.ignore()` and focus isn't already
     /// on the [`BaseLayer`], re-deliver to the base layer. This
     /// two-step routing restores the old "non-modal plugin passes
-    /// unknown keys through to the keymap" semantic under the
-    /// compositor model.
+    /// unknown keys through to the keymap" semantic.
     ///
     /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**
     /// and never reach any component — focus cycling is a property
@@ -197,38 +186,37 @@ impl Compositor {
             return Vec::new();
         }
         let focused = self.focused_idx;
-        let first = self.stack[focused].handle_event(event, ctx);
-        match first {
-            EventResult::Ignored if focused != 0 => {
-                // Non-modal fall-through: re-deliver to BaseLayer.
-                let second = self.stack[0].handle_event(event, ctx);
-                self.apply_event_result(0, second)
-            }
-            EventResult::Ignored => Vec::new(),
-            result => self.apply_event_result(focused, result),
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, ctx);
+            self.stack[focused].handle_event(event, &mut win);
         }
+        // Fall-through: only when the hook queued nothing *and*
+        // explicitly called `ignore()`, and the focus isn't already
+        // on the base layer.
+        if ops.is_ignorable_noop() && ops.ignored && focused != 0 {
+            let mut ops = WindowOps::default();
+            {
+                let mut win = Window::new(&mut ops, ctx);
+                self.stack[0].handle_event(event, &mut win);
+            }
+            return self.apply_ops(0, ops);
+        }
+        self.apply_ops(focused, ops)
     }
 
-    fn apply_event_result(&mut self, idx: usize, result: EventResult) -> Vec<AppMsg> {
-        match result {
-            EventResult::Ignored => Vec::new(),
-            EventResult::Consumed(msgs) => msgs,
-            EventResult::Close(msgs) => {
-                self.stack.remove(idx);
-                self.clamp_focus_after_shrink();
-                msgs
-            }
-            EventResult::Push(new_component, msgs) => {
-                self.push_or_focus(new_component);
-                msgs
-            }
-            EventResult::CloseAndPush(new_component, msgs) => {
-                self.stack.remove(idx);
-                self.clamp_focus_after_shrink();
-                self.push_or_focus(new_component);
-                msgs
-            }
+    /// Drain a [`WindowOps`] queue in the documented order:
+    /// `close` → `opens` (with TypeId dedup) → return `msgs` for
+    /// the caller to dispatch. See [`window`] module docs.
+    fn apply_ops(&mut self, idx: usize, ops: WindowOps) -> Vec<AppMsg> {
+        if ops.close {
+            self.stack.remove(idx);
+            self.clamp_focus_after_shrink();
         }
+        for c in ops.opens {
+            self.push_or_focus(c);
+        }
+        ops.msgs
     }
 
     /// Push `c` on top **unless** a component of the same concrete
@@ -255,13 +243,25 @@ impl Compositor {
         self.focused_idx = self.stack.len() - 1;
     }
 
-    /// Poll every component; messages appended in stack order.
-    pub fn poll(&mut self) -> Vec<AppMsg> {
-        let mut out = Vec::new();
-        for c in self.stack.iter_mut() {
-            out.extend(c.poll());
+    /// Poll every component; drain all queued `win.emit(...)` /
+    /// `win.close()` / `win.open(...)` ops and apply them in the
+    /// same way [`handle_event`](Self::handle_event) does.
+    pub fn poll(&mut self, ctx: &Context) -> Vec<AppMsg> {
+        // Walk in reverse so closing a component doesn't disturb
+        // indices of later ones. Collect ops per index first; apply
+        // after the borrow of `stack` is released.
+        let mut all_msgs: Vec<AppMsg> = Vec::new();
+        let len = self.stack.len();
+        for i in (0..len).rev() {
+            let mut ops = WindowOps::default();
+            {
+                let mut win = Window::new(&mut ops, ctx);
+                self.stack[i].poll(&mut win);
+            }
+            let msgs = self.apply_ops(i, ops);
+            all_msgs.extend(msgs);
         }
-        out
+        all_msgs
     }
 
     /// Render bottom-up so later pushes draw on top.
@@ -404,9 +404,7 @@ mod tests {
     struct TagComponent(&'static str);
 
     impl Component for TagComponent {
-        fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
-            EventResult::Consumed(Vec::new())
-        }
+        fn handle_event(&mut self, _: KeyEvent, _: &mut Window) {}
         fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
             vec![(self.0, "")]
@@ -492,11 +490,10 @@ mod tests {
     }
 
     impl Component for Spawner {
-        fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
+        fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
             if event.code == self.spawn_key {
-                return EventResult::Push(Box::new(TagComponent(self.spawn_label)), Vec::new());
+                win.open(Box::new(TagComponent(self.spawn_label)));
             }
-            EventResult::Consumed(Vec::new())
         }
         fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -548,11 +545,12 @@ mod tests {
     fn tab_is_intercepted_before_components() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-        /// Consumes literally every event, including Tab.
+        /// Absorbs every event and emits a no-op msg — the "bad
+        /// plugin" that would swallow Tab if Tab reached it.
         struct SwallowsAll;
         impl Component for SwallowsAll {
-            fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
-                EventResult::Consumed(vec![AppMsg::Map(crate::map::Action::None)])
+            fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
+                win.emit(AppMsg::Map(crate::map::Action::None));
             }
             fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
         }

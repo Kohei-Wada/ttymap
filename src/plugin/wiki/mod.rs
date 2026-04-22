@@ -31,9 +31,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
-use crate::compositor::{
-    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
-};
+use crate::compositor::window::Window;
+use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::painter::MapPainter;
 use crate::shared::throttle::Throttle;
@@ -127,19 +126,20 @@ impl WikiComponent {
 }
 
 impl Component for WikiComponent {
-    fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let mut state = self.state.borrow_mut();
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
 
         // Self-toggle on the activation key.
         if event.code == KeyCode::Char('i') && event.modifiers == KeyModifiers::NONE {
-            return EventResult::Close(Vec::new());
+            win.close();
+            return;
         }
 
         // Refresh is available even when the list is empty.
         if event.code == KeyCode::Char('r') {
-            state.refresh(ctx.center);
-            return EventResult::Consumed(Vec::new());
+            state.refresh(win.ctx().center);
+            return;
         }
 
         let up = (ctrl && event.code == KeyCode::Char('p')) || event.code == KeyCode::Up;
@@ -152,18 +152,19 @@ impl Component for WikiComponent {
         if state.articles.is_empty() {
             // Panel is open but has nothing yet — still swallow
             // widget-control keys so they don't fall through to the
-            // keymap.
-            if up || down || exit_detail {
-                return EventResult::Consumed(Vec::new());
+            // keymap, but let everything else pass through (non-
+            // modal behaviour).
+            if !(up || down || exit_detail) {
+                win.ignore();
             }
-            return EventResult::Ignored;
+            return;
         }
 
         // ── Detail mode ─────────────────────────────────────────────
         if state.is_detail_open() {
             if exit_detail {
                 state.detail = None;
-                return EventResult::Consumed(Vec::new());
+                return;
             }
             if up || down {
                 let n = state.articles.len();
@@ -182,9 +183,9 @@ impl Component for WikiComponent {
                     lon: article.lon,
                 };
                 state.detail = Some(article);
-                return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
+                win.emit(AppMsg::Jump(loc));
             }
-            return EventResult::Consumed(Vec::new());
+            return;
         }
 
         // ── List mode ───────────────────────────────────────────────
@@ -195,9 +196,9 @@ impl Component for WikiComponent {
                     lon: article.lon,
                 };
                 state.detail = Some(article.clone());
-                return EventResult::Consumed(vec![AppMsg::Jump(loc)]);
+                win.emit(AppMsg::Jump(loc));
             }
-            return EventResult::Consumed(Vec::new());
+            return;
         }
         if up || down {
             let n = state.articles.len();
@@ -211,17 +212,18 @@ impl Component for WikiComponent {
                 (state.selected + 1) % n
             };
             let article = &state.articles[state.selected];
-            return EventResult::Consumed(vec![AppMsg::Jump(LonLat {
+            win.emit(AppMsg::Jump(LonLat {
                 lat: article.lat,
                 lon: article.lon,
-            })]);
+            }));
+            return;
         }
         if matches!(event.code, KeyCode::Esc | KeyCode::Backspace) {
-            return EventResult::Consumed(Vec::new());
+            return;
         }
 
         // Non-modal: let lower layers handle unknown keys.
-        EventResult::Ignored
+        win.ignore();
     }
 
     fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
@@ -247,9 +249,8 @@ impl Component for WikiComponent {
         }
     }
 
-    fn poll(&mut self) -> Vec<AppMsg> {
+    fn poll(&mut self, _win: &mut Window) {
         self.state.borrow_mut().poll();
-        Vec::new()
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

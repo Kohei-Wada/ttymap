@@ -113,7 +113,8 @@ impl App {
             // Drain per-tick messages: compositor components first,
             // then tasks. Both borrow &mut self transitively through
             // dispatch, so collect into a Vec first.
-            let compositor_msgs = self.compositor.poll();
+            let ctx = self.context();
+            let compositor_msgs = self.compositor.poll(&ctx);
             for msg in compositor_msgs {
                 self.dispatch(msg);
             }
