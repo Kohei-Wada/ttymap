@@ -115,7 +115,10 @@ fn render_list(
         0
     };
 
-    let paragraph = Paragraph::new(lines).style(body).block(block).scroll((scroll, 0));
+    let paragraph = Paragraph::new(lines)
+        .style(body)
+        .block(block)
+        .scroll((scroll, 0));
     win.frame().render_widget(paragraph, area);
 }
 
@@ -136,7 +139,10 @@ fn render_detail(win: &mut RenderWindow, area: Rect, content_width: usize, artic
         Span::styled("  ", muted),
         Span::styled(coords, muted),
     ]));
-    lines.push(Line::from(Span::styled("─".repeat(content_width), separator)));
+    lines.push(Line::from(Span::styled(
+        "─".repeat(content_width),
+        separator,
+    )));
 
     if article.extract.is_empty() {
         lines.push(Line::from(Span::styled("(no summary available)", muted)));

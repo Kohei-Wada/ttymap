@@ -41,8 +41,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     let muted = win.muted_style();
     let selected = win.selected_style();
 
-    let input_text =
-        Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(body);
+    let input_text = Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(body);
     win.frame().render_widget(input_text, chunks[0]);
 
     let table_rows: Vec<Row> = items

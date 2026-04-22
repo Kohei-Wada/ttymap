@@ -234,7 +234,11 @@ impl Component for WikiComponent {
         let primary = p.accent_color();
         let highlight = p.accent_alt_color();
         for (i, a) in state.articles.iter().enumerate() {
-            let fg = if i == state.selected { highlight } else { primary };
+            let fg = if i == state.selected {
+                highlight
+            } else {
+                primary
+            };
             p.point(
                 LonLat {
                     lon: a.lon,
