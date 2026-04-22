@@ -128,7 +128,8 @@ src/
 │
 ├── app/                 App struct + event loop + message dispatch
 │   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
-│   └── msg.rs           AppMsg enum (Map / Jump / SetTheme / CycleFocus / …)
+│   ├── msg.rs           AppMsg enum (Map / Jump / SetTheme / CycleFocus / …)
+│   └── mouse.rs         MouseAdapter: MouseEvent → Vec<AppMsg>
 │
 ├── commands/            one file per CLI subcommand (main.rs stays thin)
 │   ├── mod.rs           Command enum + run() dispatch
@@ -179,7 +180,6 @@ src/
 └── ui/                  non-modal UI framework
     ├── mod.rs           UiState + draw() — owns overlay + last MapFrame
     ├── map_view.rs      MapFrame → ratatui widget
-    ├── mouse.rs         MouseAdapter: MouseEvent → Vec<AppMsg>
     └── overlay/         always-on map decorations
         ├── attribution.rs   © OpenStreetMap
         ├── scale_bar.rs     distance ruler
@@ -192,8 +192,8 @@ src/
 - **`map/`** — domain. Knows nothing about UI, plugins, or focus. `Action` carries every map-level mutation, including mouse-continuous variants (`PanCells`, `ZoomAt`).
 - **`app/`** — the **controller**. `AppMsg` (in `app/msg.rs`) is the closed enum every input source (keymap, palette, compositor components, mouse adapter, async tasks) emits; `App::dispatch` in `app/mod.rs` is the sole place that executes them. Command pattern with `App` as the Receiver — see [`docs/design.md`](docs/design.md) for the AppMsg-vs-direct-call judgment rules.
 - **`compositor/`** — focus and modal state. A stack of `Component`s; the top is focused. No `is_visible` / `activate` / `deactivate` contract — presence on the stack *is* the lifecycle. `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted before any component sees them).
-- **`ui/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
-- **`ui/`** (non-mouse) — non-modal chrome: map view, always-on overlays (info, attribution, scale bar), and `draw()` which forwards focused-surface rendering to the Compositor.
+- **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
+- **`ui/`** — non-modal chrome: map view, always-on overlays (info, attribution, scale bar), and `draw()` which forwards focused-surface rendering to the Compositor.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
 - **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.

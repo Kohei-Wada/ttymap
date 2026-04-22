@@ -13,6 +13,7 @@
 //! `Box<dyn Task>`, populated by each plugin's `register` function
 //! at composition time.
 
+mod mouse;
 pub mod msg;
 
 pub use msg::AppMsg;
@@ -34,7 +35,7 @@ use crate::shared::nominatim::NominatimClient;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 use crate::ui::UiState;
-use crate::ui::mouse::MouseAdapter;
+use mouse::MouseAdapter;
 
 pub struct App {
     map: MapState,

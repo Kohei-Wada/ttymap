@@ -21,15 +21,17 @@
 //! feature, …) it should move to the relevant domain type — helix
 //! puts its `mouse_down_range: Range` on `Editor` for that reason.
 //!
-//! Key and mouse paths are intentionally not symmetric (see
-//! [`super::router`] for the axes). Both emit the same `AppMsg`
+//! Key and mouse paths are intentionally not symmetric: keyboard
+//! routes through the [`compositor`](crate::compositor) for focus
+//! delivery before producing an `AppMsg`, while mouse is a pure
+//! translator with no focus involvement. Both emit the same `AppMsg`
 //! vocabulary on the output side: every event emits a leading
-//! `Ui(CursorMoved)`; drag additionally emits `Map(PanCells)`;
-//! scroll emits `Map(ZoomAt { ... })`.
+//! `CursorMoved`; drag additionally emits `Map(PanCells)`; scroll
+//! emits `Map(ZoomAt { ... })`.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::app::AppMsg;
+use super::AppMsg;
 use crate::map::Action;
 
 #[derive(Default)]

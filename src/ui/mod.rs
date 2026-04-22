@@ -1,7 +1,6 @@
 //! UI layer — widget state and screen rendering.
 
 pub mod map_view;
-pub mod mouse;
 pub mod overlay;
 
 use std::sync::Arc;
