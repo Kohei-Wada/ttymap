@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::compositor::{Compositor, Painter};
+use crate::compositor::Compositor;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
 use crate::painter::MapPainter;
@@ -52,16 +52,11 @@ impl UiState {
     }
 }
 
-/// Draw the full screen. App passes the compositor + painters so
-/// world-space overlays (wiki markers) and on-top components (search,
-/// palette, ...) render through the same draw pass as the map.
-pub fn draw(
-    f: &mut Frame,
-    ui: &UiState,
-    compositor: &Compositor,
-    painters: &[Box<dyn Painter>],
-    theme: &UiTheme,
-) {
+/// Draw the full screen. App passes the compositor so world-space
+/// overlays (wiki markers via `Component::paint_on_map`) and on-top
+/// panels (via `Component::render`) go through the same draw pass
+/// as the map.
+pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiTheme) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
     let map_area = chunks[0];
@@ -76,22 +71,19 @@ pub fn draw(
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
 
-        // World-space overlays. Painters draw through the
-        // `MapPainter` abstraction; each one is focus-independent
-        // (e.g. wiki markers stay on the map regardless of whether
-        // the wiki panel is on the compositor stack).
+        // World-space overlays from components on the compositor
+        // stack (wiki markers etc.). Focus-gated: closing the panel
+        // drops the component, which drops the paint hook.
         {
             let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, theme);
-            for p in painters {
-                p.paint(&mut painter);
-            }
+            compositor.paint_on_map(&mut painter);
         }
 
         ui.overlay
             .render(f.buffer_mut(), map_inner, map_frame, theme);
     }
 
-    // Modal components on top of the map, bottom-up.
+    // Modal panels on top of the map, bottom-up.
     compositor.render(f, map_inner, theme);
 
     let hints = build_hints(compositor);

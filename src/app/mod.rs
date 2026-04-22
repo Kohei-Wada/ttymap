@@ -24,7 +24,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
 use crate::color_palette::ThemeId;
-use crate::compositor::{BaseLayer, Compositor, Context, Painter, Registrar, Task};
+use crate::compositor::{BaseLayer, Compositor, Context, Registrar, Task};
 use crate::config::Config;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
@@ -42,7 +42,6 @@ pub struct App {
     ui: UiState,
     mouse: MouseAdapter,
     compositor: Compositor,
-    painters: Vec<Box<dyn Painter>>,
     tasks: Vec<Box<dyn Task>>,
     theme_id: ThemeId,
     ui_theme: UiTheme,
@@ -93,7 +92,6 @@ impl App {
             ui,
             mouse: MouseAdapter::default(),
             compositor,
-            painters: registrar.painters,
             tasks: registrar.tasks,
             theme_id,
             ui_theme,
@@ -131,7 +129,7 @@ impl App {
             self.ui.overlay.poll();
 
             terminal.draw(|f| {
-                crate::ui::draw(f, &self.ui, &self.compositor, &self.painters, &self.ui_theme)
+                crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme)
             })?;
 
             let mut poll_timeout = Duration::from_millis(4);

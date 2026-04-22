@@ -7,9 +7,12 @@
 //! have to maintain a separate `is_visible` / `activate` / `deactivate`
 //! contract — fresh instances on every push, dropped on every pop.
 //!
-//! The map's always-on overlays (wiki markers, etc.) live through
-//! [`Painter`], a sibling trait with no focus semantics: painters are
-//! drawn every frame regardless of what's on the compositor stack.
+//! World-space map overlays (wiki markers etc.) live on
+//! [`Component::paint_on_map`] — called for every component on the
+//! stack. Tying map-side rendering to stack presence means markers
+//! appear when the panel opens and disappear when it closes, in
+//! step, without a second "is this paint active?" flag to keep in
+//! sync.
 //!
 //! Plugin self-registration goes through [`Registrar`]: each plugin
 //! module exposes
@@ -81,6 +84,14 @@ pub trait Component {
     /// Paint this component into `area`. Called once per frame while
     /// on the stack; compositor renders bottom-to-top.
     fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme);
+
+    /// Paint world-space primitives on the map via [`MapPainter`].
+    /// Called every frame while on the stack, before `render`. Default
+    /// no-op for components with no map presence (search, palette,
+    /// help). Wiki uses this for article markers — because it's gated
+    /// on stack presence, the markers naturally disappear when the
+    /// panel is popped.
+    fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
 
     /// Advance async work and surface new messages. Called every tick
     /// on every component on the stack. Replaces `Plugin::poll()` +
@@ -158,6 +169,15 @@ impl Compositor {
         }
     }
 
+    /// Walk every component on the stack and let it paint world-space
+    /// primitives through the supplied [`MapPainter`]. Drawn before
+    /// `render` so modal popups sit on top of any map markers.
+    pub fn paint_on_map(&self, p: &mut MapPainter<'_>) {
+        for c in self.stack.iter() {
+            c.paint_on_map(p);
+        }
+    }
+
     /// Footer hints from the top of the stack, or empty when nothing
     /// is above the bottom layer (caller falls back to its own hints).
     pub fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -203,17 +223,6 @@ impl Default for Compositor {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ── Map painters (always-on, focus-independent) ────────────────────
-
-/// World-space overlay drawn every frame regardless of focus. Kept
-/// separate from [`Component`] so a plugin's markers (e.g. wiki)
-/// persist on the map while its panel is closed. Plugins that need
-/// both implement both traits and share state through
-/// `Rc<RefCell<_>>`.
-pub trait Painter {
-    fn paint(&self, p: &mut MapPainter<'_>);
 }
 
 // ── Async tasks (headless plugins) ─────────────────────────────────
@@ -265,21 +274,19 @@ pub struct PaletteEntry {
 }
 
 /// Collector passed to each plugin's `register` function. Every
-/// channel is optional — headless plugins add a task + palette
-/// entry; visual plugins add an activation + palette entry; wiki
-/// adds all four.
+/// channel is optional — headless plugins add only a task + palette
+/// entry; visual plugins add an activation + palette entry; wiki's
+/// map markers live on the component itself (via
+/// [`Component::paint_on_map`]) so they flow through activations,
+/// not a separate registrar field.
 #[derive(Default)]
 pub struct Registrar {
-    pub painters: Vec<Box<dyn Painter>>,
     pub activations: Vec<Activation>,
     pub palette_entries: Vec<PaletteEntry>,
     pub tasks: Vec<Box<dyn Task>>,
 }
 
 impl Registrar {
-    pub fn add_painter(&mut self, p: Box<dyn Painter>) {
-        self.painters.push(p);
-    }
     pub fn add_activation(&mut self, a: Activation) {
         self.activations.push(a);
     }

@@ -1,18 +1,22 @@
 //! Wiki widget — Wikipedia geosearch panel, map markers, and the
 //! background fetcher that populates them.
 //!
-//! Under the compositor model wiki is split into two surfaces sharing
-//! one state handle:
+//! Under the compositor model wiki is a single [`WikiComponent`]
+//! with two rendering hooks:
 //!
-//! - [`WikiComponent`] — the focus-side modal panel. Pushed onto the
-//!   compositor on activation, popped on close.
-//! - [`WikiPainter`] — the always-on map markers. Registered in the
-//!   app's painter list at startup; renders every frame regardless of
-//!   whether the component is on the stack.
+//! - `render` — the side panel (list / detail view), modal popup
+//! - `paint_on_map` — article markers drawn on the map
 //!
-//! Both hold an `Rc<RefCell<WikiState>>` so the marker list, current
-//! selection, and the detail view survive panel open/close cycles and
-//! stay in sync between the two views.
+//! Both hooks fire only while the component is on the compositor
+//! stack, so opening the panel shows the markers *and* the list, and
+//! closing the panel removes both in step — no separate "paint
+//! active?" flag to keep in sync.
+//!
+//! The persistent article list, selection, and detail state live in
+//! [`WikiState`] behind an `Rc<RefCell<_>>` so a future second push
+//! of the wiki panel (from the palette, say) sees the same cached
+//! list without a re-fetch. The handle is owned by the spawn
+//! closures in `register` and lives for the app's lifetime.
 
 pub mod panel;
 mod service;
@@ -28,7 +32,7 @@ use log::debug;
 
 use crate::app::AppMsg;
 use crate::compositor::{
-    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Painter, Registrar,
+    Activation, Component, Context, EventResult, PaletteEntry, PaletteKind, Registrar,
 };
 use crate::geo::LonLat;
 use crate::painter::MapPainter;
@@ -210,6 +214,18 @@ impl Component for WikiComponent {
         panel::render_panel(&self.state.borrow(), f, area, theme);
     }
 
+    fn paint_on_map(&self, p: &mut MapPainter<'_>) {
+        let state = self.state.borrow();
+        let (primary, accent) = {
+            let theme = p.theme();
+            (theme.accent, theme.accent_alt)
+        };
+        for (i, a) in state.articles.iter().enumerate() {
+            let fg = if i == state.selected { accent } else { primary };
+            p.point(LonLat { lon: a.lon, lat: a.lat }, '●', fg);
+        }
+    }
+
     fn poll(&mut self) -> Vec<AppMsg> {
         self.state.borrow_mut().poll();
         Vec::new()
@@ -237,44 +253,11 @@ impl Component for WikiComponent {
     }
 }
 
-/// Map-side view of wiki. Paints markers for every article every
-/// frame, regardless of whether the panel is on the compositor stack.
-pub struct WikiPainter {
-    state: WikiHandle,
-}
-
-impl WikiPainter {
-    pub fn new(state: WikiHandle) -> Self {
-        Self { state }
-    }
-}
-
-impl Painter for WikiPainter {
-    fn paint(&self, p: &mut MapPainter<'_>) {
-        let state = self.state.borrow();
-        let (primary, accent) = {
-            let theme = p.theme();
-            (theme.accent, theme.accent_alt)
-        };
-        for (i, a) in state.articles.iter().enumerate() {
-            let fg = if i == state.selected { accent } else { primary };
-            p.point(
-                LonLat { lon: a.lon, lat: a.lat },
-                '●',
-                fg,
-            );
-        }
-    }
-}
-
-/// Wire wiki into the registrar. Creates the shared state once,
-/// hands clones of the handle to both the painter (always on) and
-/// the activation spawn closure (creates fresh `WikiComponent` on
-/// each activation).
+/// Wire wiki into the registrar. Creates the shared state once; the
+/// spawn closures for activation (`i`) and the palette entry both
+/// clone the handle so every push shares the same persistent list.
 pub fn register(language: &str, limit: u32, r: &mut Registrar) {
     let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(language, limit)));
-
-    r.add_painter(Box::new(WikiPainter::new(state.clone())));
 
     {
         let state = state.clone();
