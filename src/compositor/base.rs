@@ -1,52 +1,48 @@
-//! Bottom-layer compositor component — the host's default key handler
-//! when no modal is on top.
+//! [`BaseLayer`] — the bottom-layer compositor component.
 //!
 //! Implemented as a [`Component`] that always sits at index 0 of the
-//! [`Compositor`](crate::compositor::Compositor) stack. Plays the role
-//! today's `BackgroundResponder` plays under `FocusManager`, collapsed
-//! into the same primitive every other focus surface uses.
+//! [`Compositor`](super::Compositor) stack. Handles everything that
+//! applies when no modal above it has claimed the key:
 //!
-//! Responsibilities:
 //! - **Keymap fallback**: resolves `h/j/k/l/q/0/+/-/…` via [`KeyMap`]
 //! - **Activation dispatch**: `:` / `/` / `i` / `?` (and any future
-//!   plugin activation key) looked up in an [`Activation`] table,
-//!   each entry a `KeyEvent → SpawnComponent`. When the bottom layer
-//!   sees an activation key it returns [`EventResult::Push`] with
-//!   the freshly-spawned component.
+//!   plugin activation key) looked up in an [`Activation`] table.
+//!   When the base layer sees an activation key it returns
+//!   [`EventResult::Push`] with the freshly-spawned component.
 //! - **Tab cycle**: emits `AppMsg::CycleFocus(forward)`; the
 //!   compositor rotates on dispatch.
 //! - **`gg` multi-key sequence**: tracks `pending_g` and emits
 //!   `ZoomToWorld` on the second `g`.
 //!
-//! Because the bottom layer is always at the very bottom of the
-//! stack, its `handle_event` only runs when every modal above it has
-//! returned [`EventResult::Ignored`] — exactly the cases the old
-//! `Effect::Pass` → background-redelivery branch handled.
+//! Because it's always at the very bottom of the stack, its
+//! `handle_event` only runs when every modal above it has returned
+//! [`EventResult::Ignored`] — exactly the "pass through to
+//! background" cases the old `FocusManager` handled.
 //!
-//! The bottom layer renders nothing (the map comes from the render
+//! The base layer renders nothing (the map comes from the render
 //! thread's `MapFrame`, drawn by `App` separately from the
 //! compositor).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::{Activation, Component, Context, EventResult};
 use crate::app::AppMsg;
-use crate::compositor::{Activation, Component, Context, EventResult};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 
-pub struct BackgroundResponder {
+pub struct BaseLayer {
     keymap: KeyMap,
     /// Activation table: key event → component factory. Populated at
-    /// startup from the [`Registrar`](crate::compositor::Registrar)
-    /// that each plugin's `register` function contributes to.
+    /// startup from the [`Registrar`](super::Registrar) that each
+    /// plugin's `register` function contributes to.
     activations: Vec<Activation>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
-    /// `KeyMap`) because multi-key sequencing is a responder concern;
-    /// the keymap itself is a stateless lookup table.
+    /// `KeyMap`) because multi-key sequencing is a base-layer
+    /// concern; the keymap itself is a stateless lookup table.
     pending_g: bool,
 }
 
-impl BackgroundResponder {
+impl BaseLayer {
     pub fn new(keymap: KeyMap, activations: Vec<Activation>) -> Self {
         Self {
             keymap,
@@ -81,7 +77,7 @@ impl BackgroundResponder {
     }
 }
 
-impl Component for BackgroundResponder {
+impl Component for BaseLayer {
     fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
         let KeyEvent { code, modifiers, .. } = event;
 
@@ -145,8 +141,8 @@ mod tests {
         theme_id: ThemeId::Dark,
     };
 
-    fn bg() -> BackgroundResponder {
-        BackgroundResponder::new(KeyMap::default(), Vec::new())
+    fn bg() -> BaseLayer {
+        BaseLayer::new(KeyMap::default(), Vec::new())
     }
 
     fn key(code: KeyCode) -> KeyEvent {

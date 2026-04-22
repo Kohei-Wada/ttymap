@@ -21,7 +21,8 @@ pub mod commands;
 /// Helix-style compositor stack — the focus/modal system that
 /// replaced the old FocusManager / FocusSurface / Plugin trio. Holds
 /// the `Component`, `Painter`, `Task`, `Registrar` abstractions that
-/// every plugin plugs into.
+/// every plugin plugs into, plus the always-on `BaseLayer`
+/// (keymap fallback + activation dispatch).
 pub(crate) mod compositor;
 
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
@@ -31,11 +32,6 @@ pub mod config;
 /// rendering pipeline (tile fetch, styler, render thread). `MapFrame`
 /// produced here is what the UI displays.
 pub mod map;
-
-/// Background responder — the bottom-layer compositor component.
-/// Handles keymap fallback, activation dispatch, gg sequence, and
-/// Tab cycle.
-pub(crate) mod background;
 
 /// UI color set (Theme) + runtime theme-switch helper. Lives at the
 /// crate root because it's a **plugin-facing service** — plugins read

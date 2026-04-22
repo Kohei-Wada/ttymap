@@ -23,6 +23,10 @@
 //! composition root (today `main.rs` / a dedicated plugins module) is
 //! the one place that imports each plugin.
 
+pub mod base;
+
+pub use base::BaseLayer;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;

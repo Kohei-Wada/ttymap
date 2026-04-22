@@ -23,9 +23,8 @@ use std::sync::Arc;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
-use crate::background::BackgroundResponder;
 use crate::color_palette::ThemeId;
-use crate::compositor::{Compositor, Context, Painter, Registrar, Task};
+use crate::compositor::{BaseLayer, Compositor, Context, Painter, Registrar, Task};
 use crate::config::Config;
 use crate::keymap::KeyMap;
 use crate::map::render::pipeline::RenderPipeline;
@@ -82,12 +81,11 @@ impl App {
         );
         let render_handle = RenderHandle::spawn(pipeline);
 
-        // Compositor bootstraps with the bottom-layer BackgroundResponder
-        // (keymap + activation dispatch) at index 0. Every subsequent
-        // modal is pushed on top.
+        // Compositor bootstraps with the BaseLayer (keymap +
+        // activation dispatch) at index 0. Every subsequent modal is
+        // pushed on top.
         let mut compositor = Compositor::new();
-        let background = BackgroundResponder::new(keymap, registrar.activations);
-        compositor.push(Box::new(background));
+        compositor.push(Box::new(BaseLayer::new(keymap, registrar.activations)));
 
         App {
             map,
