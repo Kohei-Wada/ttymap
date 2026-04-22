@@ -25,7 +25,7 @@ impl UiTheme {
         }
     }
 
-    pub fn panel<'a>(&self, title: &'a str) -> Block<'a> {
+    pub fn panel(&self, title: &str) -> Block<'static> {
         Block::new()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(self.accent).bg(self.bg))
