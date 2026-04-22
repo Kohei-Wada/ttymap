@@ -17,8 +17,9 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Place name display** — reverse geocoding shows current location
 - **Scale bar + attribution** — always on screen
 - **Help popup** — `?` shows all keybindings
+- **Frame export** — palette entry writes the current view as an ANSI-coloured text file under `~/.local/share/ttymap/exports/`
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Component API** — built-in plugins (search, wiki, here, palette, help) are `Component`s on a focus stack; external plugins will use the same trait
+- **Component API** — built-in plugins (search, wiki, here, export, palette, help) are `Component`s on a focus stack; external plugins will use the same trait
 
 ## Usage
 
@@ -153,6 +154,7 @@ src/
 │   └── provider/        default provider + theme sub-mode
 │
 ├── plugin/              built-in plugins — each exposes `pub fn register(…, &mut Registrar)`
+│   ├── export/          headless — dump current frame to ~/.local/share/ttymap/exports/*.ans
 │   ├── help/            help popup
 │   ├── here/            IP-geolocation "jump to here" (headless Task)
 │   ├── search/          forward-geocode popup (Nominatim)

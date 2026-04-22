@@ -206,6 +206,36 @@ impl App {
                 self.compositor.cycle(forward);
             }
             AppMsg::Resize(cols, rows) => self.handle_resize(cols, rows),
+            AppMsg::ExportFrame => self.export_current_frame(),
+        }
+    }
+
+    fn export_current_frame(&self) {
+        let Some(frame) = self.ui.map_frame.as_ref() else {
+            log::warn!("export: no frame to write yet");
+            return;
+        };
+        let Some(dirs) = directories::ProjectDirs::from("", "", "ttymap") else {
+            log::warn!("export: no ProjectDirs available");
+            return;
+        };
+        let dir = dirs.data_dir().join("exports");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("export: mkdir {} failed: {e}", dir.display());
+            return;
+        }
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let name = format!(
+            "ttymap-z{}-{:.4}-{:.4}-{}.ans",
+            frame.zoom.floor() as i32,
+            frame.center.lat,
+            frame.center.lon,
+            stamp
+        );
+        let path = dir.join(&name);
+        match std::fs::write(&path, frame.to_ansi()) {
+            Ok(()) => log::info!("export: wrote {}", path.display()),
+            Err(e) => log::warn!("export: write {} failed: {e}", path.display()),
         }
     }
 
@@ -267,6 +297,7 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
         config.geoip.timeout_ms,
         &mut r,
     );
+    crate::plugin::export::register(&mut r);
 
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette

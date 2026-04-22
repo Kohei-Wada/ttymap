@@ -6,6 +6,7 @@
 //! calls each `register` in turn. See [`crate::compositor`] for the
 //! Component / Painter / Task traits plugins implement.
 
+pub mod export;
 pub mod help;
 pub mod here;
 pub mod search;

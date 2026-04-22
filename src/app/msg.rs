@@ -63,4 +63,9 @@ pub enum AppMsg {
     /// thread's canvas dimensions. Arguments are the new terminal
     /// size in cells.
     Resize(u16, u16),
+    /// Write the currently displayed [`MapFrame`](crate::map::render::frame::MapFrame)
+    /// to an auto-named file under `$XDG_DATA_HOME/ttymap/exports/`.
+    /// Emitted by the export plugin's palette entry. Filename encodes
+    /// zoom + centre + timestamp so repeated exports don't collide.
+    ExportFrame,
 }
