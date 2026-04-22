@@ -1,8 +1,6 @@
 //! Table descriptor + helpers.
 
-use ratatui::widgets::{
-    Cell as RCell, Row as RRow, Table as RTable, TableState as RTableState,
-};
+use ratatui::widgets::{Cell as RCell, Row as RRow, Table as RTable, TableState as RTableState};
 
 use super::geom::Size;
 use super::style::TextStyle;

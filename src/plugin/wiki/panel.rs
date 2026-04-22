@@ -134,7 +134,10 @@ fn render_detail(win: &mut RenderWindow, area: Rect, content_width: usize, artic
     let coords = format!("{:.3}, {:.3}", article.lat, article.lon);
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from_span(Span::styled(article.title.clone(), highlight)));
+    lines.push(Line::from_span(Span::styled(
+        article.title.clone(),
+        highlight,
+    )));
     lines.push(Line::from_spans(vec![
         Span::styled(dist, muted),
         Span::styled("  ", muted),

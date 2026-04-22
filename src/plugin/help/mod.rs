@@ -166,7 +166,10 @@ pub fn register(help_text: std::rc::Rc<HelpText>, r: &mut Registrar) {
 // ── Line builders ──────────────────────────────────────────────────────────────
 
 fn line_width(line: &Line) -> u16 {
-    line.spans.iter().map(|s| s.text.chars().count() as u16).sum()
+    line.spans
+        .iter()
+        .map(|s| s.text.chars().count() as u16)
+        .sum()
 }
 
 fn text_line(s: &str) -> HelpLine {

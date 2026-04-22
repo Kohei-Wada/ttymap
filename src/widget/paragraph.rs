@@ -44,9 +44,7 @@ impl Paragraph {
             .scroll((self.scroll_y, 0));
 
         if let Some(title) = self.framed_title {
-            let block = theme
-                .panel(&title)
-                .title_alignment(self.title_align.into());
+            let block = theme.panel(&title).title_alignment(self.title_align.into());
             p = p.block(block);
         }
 

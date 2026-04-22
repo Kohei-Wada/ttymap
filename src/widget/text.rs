@@ -126,7 +126,11 @@ mod tests {
         let r: RSpan = s.into();
         assert_eq!(r.content, "x");
         assert_eq!(r.style.fg, Some(ratatui::style::Color::Indexed(9)));
-        assert!(r.style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        assert!(
+            r.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
     }
 
     #[test]
