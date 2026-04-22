@@ -18,6 +18,12 @@ pub mod app;
 /// [`commands::Command::run`].
 pub mod commands;
 
+/// **Prototype.** Helix-style compositor stack, candidate replacement
+/// for `FocusManager` + `FocusSurface` + `Plugin`. Not wired in yet —
+/// the file is a design reference + shape comparison (one converted
+/// plugin `SearchComponent` lives at the bottom).
+pub(crate) mod compositor;
+
 /// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
 pub mod config;
 
