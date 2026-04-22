@@ -48,10 +48,6 @@ impl SearchComponent {
 }
 
 impl Component for SearchComponent {
-    fn tag(&self) -> Option<&'static str> {
-        Some("search")
-    }
-
     fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
 

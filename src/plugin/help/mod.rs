@@ -96,10 +96,6 @@ impl HelpComponent {
 }
 
 impl Component for HelpComponent {
-    fn tag(&self) -> Option<&'static str> {
-        Some("help")
-    }
-
     fn handle_event(&mut self, _event: KeyEvent, _ctx: &Context) -> EventResult {
         // Help is fully modal: any key closes the panel. (Tab is
         // intercepted by the compositor before it reaches here.)

@@ -65,10 +65,6 @@ impl PaletteComponent {
 }
 
 impl Component for PaletteComponent {
-    fn tag(&self) -> Option<&'static str> {
-        Some("palette")
-    }
-
     fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> EventResult {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let up = matches!(event.code, KeyCode::Up) || (ctrl && event.code == KeyCode::Char('p'));

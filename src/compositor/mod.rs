@@ -30,6 +30,8 @@ pub mod base;
 
 pub use base::BaseLayer;
 
+use std::any::Any;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -95,21 +97,13 @@ pub struct Context {
 /// A focus-capable UI entity. Pushed on activation, popped on close.
 /// No `is_visible` / `activate` / `deactivate` contract — existence on
 /// the stack is the visibility lifecycle.
-pub trait Component {
-    /// Stable identifier for **deduplication**. When a new component
-    /// with a matching tag is about to be pushed (`EventResult::Push`
-    /// or `EventResult::CloseAndPush`), the compositor instead shifts
-    /// focus to the existing instance and discards the newcomer.
-    /// Prevents scenarios like "`i` pushes wiki1; Tab to base; `i`
-    /// again pushes wiki2" from creating duplicate panels.
-    ///
-    /// Returning `None` opts out of dedup (every push is a fresh
-    /// instance). The [`BaseLayer`] returns `None` because it's
-    /// never the target of a push.
-    fn tag(&self) -> Option<&'static str> {
-        None
-    }
-
+///
+/// Component extends [`Any`] so the compositor can deduplicate pushes
+/// by concrete type without each plugin having to declare a stable
+/// tag. Pressing an activation key twice with the base focused in
+/// between still produces one instance of the plugin on the stack,
+/// because the framework notices the type already present.
+pub trait Component: Any {
     /// Handle a single key event. Return `Ignored` to let lower
     /// layers see it, `Consumed(msgs)` to absorb, `Close(msgs)` to
     /// absorb and pop, or `Push(c, msgs)` to absorb and push `c` on
@@ -236,15 +230,22 @@ impl Compositor {
         }
     }
 
-    /// Push `c` on top **unless** a component with the same
-    /// [`Component::tag`] is already on the stack — in that case
-    /// focus jumps to the existing instance and `c` is dropped. This
-    /// makes repeated activation keys (e.g. `i` pressed twice with
-    /// focus on the base between presses) idempotent instead of
-    /// stacking duplicate panels.
+    /// Push `c` on top **unless** a component of the same concrete
+    /// type is already on the stack — in that case focus jumps to the
+    /// existing instance and `c` is dropped. This makes repeated
+    /// activation keys (e.g. `i` pressed twice with focus on the
+    /// base between presses) idempotent instead of stacking duplicate
+    /// panels.
+    ///
+    /// Uses [`Any::type_id`] from the supertrait so no per-plugin
+    /// declaration is needed — the concrete component type *is* its
+    /// dedup identity. A plugin author cannot forget to opt in.
     fn push_or_focus(&mut self, c: Box<dyn Component>) {
-        if let Some(tag) = c.tag()
-            && let Some(existing) = self.stack.iter().position(|s| s.tag() == Some(tag))
+        let new_type = Any::type_id(&*c);
+        if let Some(existing) = self
+            .stack
+            .iter()
+            .position(|s| Any::type_id(&**s) == new_type)
         {
             self.focused_idx = existing;
             return;
@@ -394,15 +395,14 @@ impl Registrar {
 mod tests {
     use super::*;
 
-    /// Minimal test component that identifies itself via both
-    /// `tag` and `footer_hints`. Used to verify cycle / push /
-    /// dedup.
+    /// Minimal test component that identifies itself via
+    /// `footer_hints`. Distinct string parameters are just labels;
+    /// dedup in the compositor is by concrete type (`Any::type_id`),
+    /// so two `TagComponent` instances are always considered the
+    /// same kind regardless of the inner string.
     struct TagComponent(&'static str);
 
     impl Component for TagComponent {
-        fn tag(&self) -> Option<&'static str> {
-            Some(self.0)
-        }
         fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
             EventResult::Consumed(Vec::new())
         }
@@ -480,51 +480,49 @@ mod tests {
         assert_eq!(focused_tag(&c), "B");
     }
 
-    /// Minimal component that identifies itself via its `tag` method
-    /// and produces a Push on a specific key — used to exercise the
-    /// tag-dedup path.
-    struct TaggedSpawner {
-        my_tag: &'static str,
-        spawn_tag: &'static str,
+    /// Component that Pushes a `TagComponent` when the given key is
+    /// hit — used to exercise dedup. Distinct concrete type from
+    /// `TagComponent` so the compositor's TypeId-based dedup does
+    /// not conflate them.
+    struct Spawner {
+        label: &'static str,
         spawn_key: KeyCode,
+        spawn_label: &'static str,
     }
 
-    impl Component for TaggedSpawner {
-        fn tag(&self) -> Option<&'static str> {
-            Some(self.my_tag)
-        }
+    impl Component for Spawner {
         fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
             if event.code == self.spawn_key {
-                let tag = self.spawn_tag;
-                return EventResult::Push(Box::new(TagComponent(tag)), Vec::new());
+                return EventResult::Push(Box::new(TagComponent(self.spawn_label)), Vec::new());
             }
             EventResult::Consumed(Vec::new())
         }
         fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-            vec![(self.my_tag, "")]
+            vec![(self.label, "")]
         }
     }
 
-    /// Pushing a component whose tag matches something already on
-    /// the stack is idempotent: focus moves to the existing one,
-    /// no duplicate entry. Verifies the fix for "`i` with base
-    /// focused while wiki is already open spawns wiki2".
+    /// Pushing a component whose concrete type matches something
+    /// already on the stack is idempotent: focus moves to the
+    /// existing one, no duplicate entry. Verifies the fix for
+    /// "`i` with base focused while wiki is already open spawns
+    /// wiki2". Dedup is by `Any::type_id`, so plugin authors don't
+    /// have to declare identity — the type *is* the identity.
     #[test]
-    fn push_with_existing_tag_focuses_existing() {
+    fn push_with_existing_type_focuses_existing() {
         let ctx = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
             theme_id: ThemeId::Dark,
         };
 
         let mut c = Compositor::new();
-        // Base layer that spawns a "wiki" tagged component on 'i'.
-        c.push(Box::new(TaggedSpawner {
-            my_tag: "base",
-            spawn_tag: "wiki",
+        c.push(Box::new(Spawner {
+            label: "base",
             spawn_key: KeyCode::Char('i'),
+            spawn_label: "wiki",
         }));
-        // Open wiki for the first time.
+        // Open the spawned component for the first time.
         c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
         assert_eq!(c.len(), 2);
         assert_eq!(focused_tag(&c), "wiki");
@@ -533,12 +531,12 @@ mod tests {
         c.cycle(true);
         assert_eq!(focused_tag(&c), "base");
 
-        // Press `i` again — base would spawn a second wiki, but
-        // dedup catches it: focus moves to the existing one, stack
-        // stays length 2.
+        // Press `i` again — would spawn a second TagComponent, but
+        // the compositor sees TypeId collision and focuses the
+        // existing instance. Stack length stays 2.
         c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 2, "no duplicate wiki in stack");
-        assert_eq!(focused_tag(&c), "wiki", "focus moves to existing wiki");
+        assert_eq!(c.len(), 2, "no duplicate of same type in stack");
+        assert_eq!(focused_tag(&c), "wiki", "focus moves to existing instance");
     }
 
     /// Tab delivery is framework-level: even a component that
