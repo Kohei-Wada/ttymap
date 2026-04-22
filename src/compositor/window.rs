@@ -32,8 +32,14 @@
 //! the compositor is the sole applier of the queue, so invariants
 //! (focus, dedup, clamp) remain framework-enforced.
 
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Clear};
+
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
+use crate::theme::UiTheme;
 
 /// Queue of actions a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns.
@@ -120,5 +126,138 @@ impl<'a> Window<'a> {
     /// component clearly handled the event.
     pub fn ignore(&mut self) {
         self.ops.ignored = true;
+    }
+}
+
+// ── RenderWindow: draw-time handle ─────────────────────────────────
+
+/// Render-time companion to [`Window`]. Carries the ratatui
+/// [`Frame`], the layout area the component may draw into, a
+/// read-only snapshot of [`Context`], and — internally, never
+/// exposed — the active [`UiTheme`].
+///
+/// **Components never see `UiTheme`.** They ask for semantic styles
+/// (body / muted / accent / highlight / selected / link), and
+/// [`RenderWindow`] maps them to the current theme's concrete
+/// `Style`. Adding a new theme-driven field requires one accessor
+/// here, not a signature change in every plugin.
+///
+/// `frame()` remains as an escape hatch for widgets not yet wrapped
+/// by this module (lists, tables, scrollable paragraphs). A
+/// follow-up refactor will fold those into Window primitives and
+/// retire the escape hatch — at which point plugins won't need
+/// `use ratatui::*` at all.
+pub struct RenderWindow<'a, 'b> {
+    frame: &'a mut Frame<'b>,
+    area: Rect,
+    theme: &'a UiTheme,
+    #[allow(dead_code)] // read via ctx(); kept even if unused
+    ctx: &'a Context,
+}
+
+impl<'a, 'b> RenderWindow<'a, 'b> {
+    pub(crate) fn new(
+        frame: &'a mut Frame<'b>,
+        area: Rect,
+        theme: &'a UiTheme,
+        ctx: &'a Context,
+    ) -> Self {
+        Self {
+            frame,
+            area,
+            theme,
+            ctx,
+        }
+    }
+
+    /// The area this component is allowed to draw into (usually
+    /// the map viewport minus the border).
+    pub fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// App-level snapshot (center, theme id). Kept for parity with
+    /// [`Window::ctx`] so `paint_on_map` and future render-side
+    /// hooks can read it uniformly.
+    #[allow(dead_code)]
+    pub fn ctx(&self) -> &Context {
+        self.ctx
+    }
+
+    /// Escape hatch for direct ratatui access while primitives are
+    /// being built out. Components can call
+    /// `win.frame().render_widget(w, rect)` for anything not yet
+    /// covered by a `RenderWindow` primitive.
+    pub fn frame(&mut self) -> &mut Frame<'b> {
+        self.frame
+    }
+
+    /// Clear `rect` and draw a theme-styled bordered panel with
+    /// `title` inside it. Returns the inner rect (content region
+    /// inside the borders) for further widgets. Factors the
+    /// `Clear + theme.panel(title) + f.render_widget(block, rect)`
+    /// triplet duplicated across every plugin's panel module.
+    pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
+        self.frame.render_widget(Clear, rect);
+        let block = self.theme.panel(title);
+        let inner = block.inner(rect);
+        self.frame.render_widget(block, rect);
+        inner
+    }
+
+    /// Build a theme-styled [`Block`] without drawing anything. Use
+    /// when the content widget (Paragraph / List) needs to own the
+    /// Block via `.block(...)`, as in wiki's scrollable list or
+    /// help's centered text overlay.
+    pub fn panel_block<'t>(&self, title: &'t str) -> Block<'t> {
+        self.theme.panel(title)
+    }
+
+    // ── Semantic style accessors (UiTheme hidden) ─────────────────
+
+    /// Plain body text style. Maps to the theme's "fg on bg"
+    /// combination; plugin never sees which palette entry that is.
+    pub fn body_style(&self) -> Style {
+        self.theme.text()
+    }
+
+    /// Subdued text — hints, distances, coordinates, auxiliary
+    /// info. Lower contrast than body.
+    pub fn muted_style(&self) -> Style {
+        self.theme.muted()
+    }
+
+    /// Primary accent — section titles, key hints in help, plugin
+    /// panel headers.
+    pub fn accent_style(&self) -> Style {
+        self.theme.accent_style()
+    }
+
+    /// Secondary accent — the "look at this one" highlight used for
+    /// selected wiki titles. Distinct from [`selected_style`]
+    /// (which is the full selected-row chrome including bold);
+    /// this is just the alt accent colour on fg.
+    pub fn highlight_style(&self) -> Style {
+        Style::default().fg(self.theme.accent_alt)
+    }
+
+    /// Selected list / table row — accent colour + bold. Matches
+    /// the palette's row highlight and search candidate selection.
+    pub fn selected_style(&self) -> Style {
+        self.theme.selected()
+    }
+
+    /// URL / clickable text. Terminals that detect OSC 8 or auto-
+    /// link by regex will activate it. Distinct from plain accent
+    /// because it's underlined.
+    pub fn link_style(&self) -> Style {
+        self.theme.link()
+    }
+
+    /// Foreground-only style using the muted colour — suitable for
+    /// thin separator lines (`─`) where `muted_style()`'s
+    /// foreground-on-background combination would bleed the bg.
+    pub fn muted_fg_style(&self) -> Style {
+        Style::default().fg(self.theme.muted_color)
     }
 }

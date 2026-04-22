@@ -31,12 +31,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
-use crate::compositor::window::Window;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::painter::MapPainter;
 use crate::shared::throttle::Throttle;
-use crate::theme::UiTheme;
 
 use service::WikiService;
 use wikipedia::WikiArticle;
@@ -226,18 +225,20 @@ impl Component for WikiComponent {
         win.ignore();
     }
 
-    fn render(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect, theme: &UiTheme) {
-        panel::render_panel(&self.state.borrow(), f, area, theme);
+    fn render(&self, win: &mut RenderWindow) {
+        panel::render_panel(&self.state.borrow(), win);
     }
 
     fn paint_on_map(&self, p: &mut MapPainter<'_>) {
         let state = self.state.borrow();
-        let (primary, accent) = {
-            let theme = p.theme();
-            (theme.accent, theme.accent_alt)
-        };
+        let primary = p.accent_color();
+        let highlight = p.accent_alt_color();
         for (i, a) in state.articles.iter().enumerate() {
-            let fg = if i == state.selected { accent } else { primary };
+            let fg = if i == state.selected {
+                highlight
+            } else {
+                primary
+            };
             p.point(
                 LonLat {
                     lon: a.lon,

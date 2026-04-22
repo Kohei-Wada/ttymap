@@ -125,7 +125,9 @@ impl App {
 
             self.ui.overlay.poll();
 
-            terminal.draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme))?;
+            let ctx = self.context();
+            terminal
+                .draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme, &ctx))?;
 
             let mut poll_timeout = Duration::from_millis(4);
             while event::poll(poll_timeout)? {
