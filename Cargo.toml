@@ -40,3 +40,6 @@ harness = false
 [[bench]]
 name = "render_frame"
 harness = false
+
+[profile.release]
+strip = "symbols"
