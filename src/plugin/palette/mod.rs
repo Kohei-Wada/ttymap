@@ -104,11 +104,21 @@ impl Component for PaletteComponent {
                     }
                 }
             }
-            _ if up && self.selected > 0 => {
-                self.selected -= 1;
+            _ if up => {
+                let n = self.items_len();
+                if n > 0 {
+                    self.selected = if self.selected == 0 {
+                        n - 1
+                    } else {
+                        self.selected - 1
+                    };
+                }
             }
-            _ if down && self.selected + 1 < self.items_len() => {
-                self.selected += 1;
+            _ if down => {
+                let n = self.items_len();
+                if n > 0 {
+                    self.selected = (self.selected + 1) % n;
+                }
             }
             KeyCode::Backspace => {
                 self.query.pop();
@@ -289,16 +299,44 @@ mod tests {
     }
 
     #[test]
-    fn down_up_stays_in_bounds() {
+    fn down_wraps_at_bottom_up_wraps_at_top() {
         let mut p = palette_with(&["A", "B", "C"]);
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
-        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE)); // past end
         assert_eq!(p.selected, 2);
-        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE));
-        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE));
-        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE)); // past top
+        expect_consumed(dispatch(&mut p, KeyCode::Down, NONE)); // bottom -> top
         assert_eq!(p.selected, 0);
+        expect_consumed(dispatch(&mut p, KeyCode::Up, NONE)); // top -> bottom
+        assert_eq!(p.selected, 2);
+    }
+
+    #[test]
+    fn ctrl_p_at_top_wraps_without_typing() {
+        let mut p = palette_with(&["A", "B", "C"]);
+        expect_consumed(dispatch(&mut p, KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(p.selected, 2);
+        assert_eq!(p.query, "");
+    }
+
+    #[test]
+    fn ctrl_n_at_bottom_wraps_without_typing() {
+        let mut p = palette_with(&["A", "B", "C"]);
+        dispatch(&mut p, KeyCode::Down, NONE);
+        dispatch(&mut p, KeyCode::Down, NONE);
+        assert_eq!(p.selected, 2);
+        expect_consumed(dispatch(&mut p, KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(p.selected, 0);
+        assert_eq!(p.query, "");
+    }
+
+    #[test]
+    fn up_down_on_empty_list_is_noop() {
+        let mut p = palette_with(&["Zoom"]);
+        dispatch(&mut p, KeyCode::Char('x'), NONE); // filter to empty
+        assert!(filtered_labels(&p).is_empty());
+        expect_consumed(dispatch(&mut p, KeyCode::Char('p'), KeyModifiers::CONTROL));
+        expect_consumed(dispatch(&mut p, KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(p.query, "x");
     }
 
     #[test]
