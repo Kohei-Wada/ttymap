@@ -40,6 +40,27 @@ use crate::geo::LonLat;
 use crate::painter::MapPainter;
 use crate::theme::UiTheme;
 
+// ── Framework-reserved keys ────────────────────────────────────────
+
+/// Keys the compositor handles globally, without consulting any
+/// component. Currently: `Tab` → forward cycle, `Shift-Tab` /
+/// `BackTab` → backward cycle.
+///
+/// Intercepting here — rather than at `BaseLayer` — means no
+/// component on the stack can accidentally absorb Tab. Focus cycling
+/// is a property of the framework, not of any plugin's correctness.
+fn intercept_focus_key(event: KeyEvent) -> Option<AppMsg> {
+    if event.code == KeyCode::Tab && event.modifiers == KeyModifiers::NONE {
+        return Some(AppMsg::CycleFocus(true));
+    }
+    if event.code == KeyCode::BackTab
+        || (event.code == KeyCode::Tab && event.modifiers.contains(KeyModifiers::SHIFT))
+    {
+        return Some(AppMsg::CycleFocus(false));
+    }
+    None
+}
+
 // ── Component + event routing ──────────────────────────────────────
 
 /// Outcome of delivering an event to a [`Component`].
@@ -130,7 +151,19 @@ impl Compositor {
     /// Returns the messages the handling component(s) emitted.
     /// Handles `Close` (pop) and `Push` (push new) by mutating the
     /// stack before returning.
+    ///
+    /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**:
+    /// they are intercepted here and never delivered to components.
+    /// This makes focus cycling structurally independent of what any
+    /// individual component returns — a correctly-implemented
+    /// component can't accidentally swallow Tab, and an incorrect one
+    /// can't either. Components that want to react to Tab must do so
+    /// via explicit key bindings outside the compositor (not
+    /// currently supported).
     pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<AppMsg> {
+        if let Some(msg) = intercept_focus_key(event) {
+            return vec![msg];
+        }
         for i in (0..self.stack.len()).rev() {
             match self.stack[i].handle_event(event, ctx) {
                 EventResult::Ignored => continue,
@@ -360,5 +393,37 @@ mod tests {
         let mut c = make_with(&["base", "A", "B"]);
         c.cycle(false);
         assert_eq!(top_tag(&c), "A");
+    }
+
+    /// Tab delivery is framework-level: even a component that
+    /// consumes every key (the "bad plugin" case) can't block it.
+    /// This is the structural guarantee that replaced the per-plugin
+    /// "remember to Ignore Tab" contract.
+    #[test]
+    fn tab_is_intercepted_before_components() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        /// Consumes literally every event, including Tab.
+        struct SwallowsAll;
+        impl Component for SwallowsAll {
+            fn handle_event(&mut self, _: KeyEvent, _: &Context) -> EventResult {
+                EventResult::Consumed(vec![AppMsg::Map(crate::map::Action::None)])
+            }
+            fn render(&self, _: &mut Frame, _: Rect, _: &UiTheme) {}
+        }
+
+        let ctx = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: ThemeId::Dark,
+        };
+
+        let mut c = Compositor::new();
+        c.push(Box::new(SwallowsAll));
+
+        let msgs = c.handle_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &ctx);
+        assert_eq!(msgs, vec![AppMsg::CycleFocus(true)]);
+
+        let msgs = c.handle_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE), &ctx);
+        assert_eq!(msgs, vec![AppMsg::CycleFocus(false)]);
     }
 }

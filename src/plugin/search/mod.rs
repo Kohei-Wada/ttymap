@@ -51,12 +51,6 @@ impl Component for SearchComponent {
     fn handle_event(&mut self, event: KeyEvent, _ctx: &Context) -> EventResult {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Let Tab/Shift-Tab bubble to the base layer so focus cycle
-        // works even when the search popup is the top modal.
-        if matches!(event.code, KeyCode::Tab | KeyCode::BackTab) {
-            return EventResult::Ignored;
-        }
-
         if self.has_candidates() {
             let up = matches!(event.code, KeyCode::Up | KeyCode::Char('k'))
                 || (ctrl && event.code == KeyCode::Char('p'));

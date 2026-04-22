@@ -9,10 +9,12 @@
 //!   plugin activation key) looked up in an [`Activation`] table.
 //!   When the base layer sees an activation key it returns
 //!   [`EventResult::Push`] with the freshly-spawned component.
-//! - **Tab cycle**: emits `AppMsg::CycleFocus(forward)`; the
-//!   compositor rotates on dispatch.
 //! - **`gg` multi-key sequence**: tracks `pending_g` and emits
 //!   `ZoomToWorld` on the second `g`.
+//!
+//! Tab / Shift-Tab focus cycling is **not** handled here — it's
+//! intercepted by the compositor before any component sees it, so
+//! BaseLayer doesn't need to know about it.
 //!
 //! Because it's always at the very bottom of the stack, its
 //! `handle_event` only runs when every modal above it has returned
@@ -84,17 +86,10 @@ impl Component for BaseLayer {
         } = event;
 
         // Always advance the gg state first — vim semantics: any
-        // non-`g` key (including focus-transition triggers like Tab,
-        // `:`, activation keys) resets `pending_g`.
+        // non-`g` key (including `:`, activation keys) resets
+        // `pending_g`. Tab is already filtered out by the compositor
+        // above, so it never reaches here.
         let keymap_msg = self.resolve_keymap(code, modifiers);
-
-        // Tab / Shift-Tab → cycle compositor stack.
-        let forward = code == KeyCode::Tab && modifiers == KeyModifiers::NONE;
-        let backward = code == KeyCode::BackTab
-            || (code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT));
-        if forward || backward {
-            return EventResult::Consumed(vec![AppMsg::CycleFocus(forward)]);
-        }
 
         // Activation keys: spawn the plugin's fresh component and
         // push it on top.
