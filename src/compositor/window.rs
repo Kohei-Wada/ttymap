@@ -33,7 +33,7 @@
 //! (focus, dedup, clamp) remain framework-enforced.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::Rect as RRect;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
@@ -41,6 +41,7 @@ use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
 use crate::theme::UiTheme;
+use crate::widget;
 
 /// Queue of actions a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns.
@@ -150,7 +151,7 @@ impl<'a> Window<'a> {
 /// `use ratatui::*` at all.
 pub struct RenderWindow<'a, 'b> {
     frame: &'a mut Frame<'b>,
-    area: Rect,
+    area: RRect,
     theme: &'a UiTheme,
     #[allow(dead_code)] // read via ctx(); kept even if unused
     ctx: &'a Context,
@@ -159,7 +160,7 @@ pub struct RenderWindow<'a, 'b> {
 impl<'a, 'b> RenderWindow<'a, 'b> {
     pub(crate) fn new(
         frame: &'a mut Frame<'b>,
-        area: Rect,
+        area: RRect,
         theme: &'a UiTheme,
         ctx: &'a Context,
     ) -> Self {
@@ -173,8 +174,8 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 
     /// The area this component is allowed to draw into (usually
     /// the map viewport minus the border).
-    pub fn area(&self) -> Rect {
-        self.area
+    pub fn area(&self) -> widget::Rect {
+        self.area.into()
     }
 
     /// App-level snapshot (center, theme id). Kept for parity with
@@ -192,8 +193,13 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     ///
     /// This is the only way for a component to draw; direct access
     /// to the underlying `Frame` is not exposed.
-    pub fn render_widget<W: Widget>(&mut self, widget: W, rect: Rect) {
-        let clamped = clamp(rect, self.area);
+    ///
+    /// Accepts anything convertible to [`widget::Rect`] (including
+    /// `ratatui::layout::Rect`) as a bridge during the plugin
+    /// migration — remove the `impl Into` once C3 lands.
+    pub fn render_widget<W: Widget>(&mut self, widget: W, rect: impl Into<widget::Rect>) {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
         self.frame.render_widget(widget, clamped);
     }
 
@@ -203,31 +209,34 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     pub fn render_stateful_widget<W: StatefulWidget>(
         &mut self,
         widget: W,
-        rect: Rect,
+        rect: impl Into<widget::Rect>,
         state: &mut W::State,
     ) {
-        let clamped = clamp(rect, self.area);
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
         self.frame.render_stateful_widget(widget, clamped, state);
     }
 
     /// Clear the cells in `rect` (rect-clamped). Useful before
     /// drawing a popup so whatever was underneath doesn't bleed
     /// through.
-    pub fn clear(&mut self, rect: Rect) {
-        let clamped = clamp(rect, self.area);
+    pub fn clear(&mut self, rect: impl Into<widget::Rect>) {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
         self.frame.render_widget(Clear, clamped);
     }
 
     /// Clear `rect` and draw a theme-styled bordered panel with
     /// `title` inside it. Returns the inner rect (content region
     /// inside the borders) for further widgets.
-    pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
-        let clamped = clamp(rect, self.area);
+    pub fn panel(&mut self, rect: impl Into<widget::Rect>, title: &str) -> widget::Rect {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
         self.frame.render_widget(Clear, clamped);
         let block = self.theme.panel(title);
         let inner = block.inner(clamped);
         self.frame.render_widget(block, clamped);
-        inner
+        inner.into()
     }
 
     /// Build a theme-styled [`Block`] without drawing anything. Use
@@ -320,6 +329,55 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     pub fn span_separator<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
         Span::styled(text, self.muted_fg_style())
     }
+
+    // ── New widget-descriptor API ────────────────────────────────────
+    //
+    // These accept `widget::*` descriptors and convert to ratatui
+    // internally. Plugins use these in place of `render_widget`
+    // after C3 migration. `allow(dead_code)` removed when C3 lands.
+
+    /// Draw a [`widget::Paragraph`] descriptor into `rect`. The
+    /// paragraph's optional `framed_title` is expanded into a
+    /// theme-styled bordered block at render time.
+    #[allow(dead_code)]
+    pub fn paragraph(&mut self, p: widget::Paragraph, rect: impl Into<widget::Rect>) {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
+        let r = p.into_ratatui(self.theme);
+        self.frame.render_widget(r, clamped);
+    }
+
+    /// Draw a [`widget::List`] descriptor into `rect`.
+    #[allow(dead_code)]
+    pub fn list(&mut self, l: widget::List, rect: impl Into<widget::Rect>) {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
+        let r: ratatui::widgets::List = l.into();
+        self.frame.render_widget(r, clamped);
+    }
+
+    /// Draw a [`widget::Table`] descriptor into `rect`, using `sel`
+    /// as the selection state.
+    #[allow(dead_code)]
+    pub fn table(
+        &mut self,
+        t: widget::Table,
+        rect: impl Into<widget::Rect>,
+        sel: &widget::TableSel,
+    ) {
+        let w_rect: widget::Rect = rect.into();
+        let clamped = clamp(w_rect.into(), self.area);
+        let r: ratatui::widgets::Table = t.into();
+        let mut state: ratatui::widgets::TableState = (*sel).into();
+        self.frame.render_stateful_widget(r, clamped, &mut state);
+    }
+
+    /// Resolve a semantic [`widget::StyleKind`] to a concrete
+    /// [`widget::TextStyle`] under the active theme.
+    #[allow(dead_code)]
+    pub fn style(&self, kind: widget::StyleKind) -> widget::TextStyle {
+        kind.resolve(self.theme)
+    }
 }
 
 /// Intersect `rect` with `bounds`, returning the portion inside
@@ -331,7 +389,7 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 /// u16::MAX, u16::MAX, u16::MAX, u16::MAX)`) cannot overflow u16
 /// in the right/bottom computation and wrap into a tiny valid
 /// rect that would escape the bounds.
-fn clamp(rect: Rect, bounds: Rect) -> Rect {
+fn clamp(rect: RRect, bounds: RRect) -> RRect {
     let x = rect.x.max(bounds.x);
     let y = rect.y.max(bounds.y);
     let right = rect
@@ -342,7 +400,7 @@ fn clamp(rect: Rect, bounds: Rect) -> Rect {
         .y
         .saturating_add(rect.height)
         .min(bounds.y.saturating_add(bounds.height));
-    Rect {
+    RRect {
         x,
         y,
         width: right.saturating_sub(x),
@@ -354,8 +412,8 @@ fn clamp(rect: Rect, bounds: Rect) -> Rect {
 mod clamp_tests {
     use super::*;
 
-    fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
-        Rect::new(x, y, w, h)
+    fn r(x: u16, y: u16, w: u16, h: u16) -> RRect {
+        RRect::new(x, y, w, h)
     }
 
     #[test]

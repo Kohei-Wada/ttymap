@@ -34,9 +34,9 @@ pub fn render_panel(widget: &SearchComponent, win: &mut RenderWindow) {
     let inner = win.panel(popup_area, &title);
 
     if widget.has_candidates() {
-        render_candidates(widget, win, inner);
+        render_candidates(widget, win, inner.into());
     } else {
-        render_input(widget, win, inner);
+        render_input(widget, win, inner.into());
     }
 }
 

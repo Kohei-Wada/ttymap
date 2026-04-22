@@ -35,7 +35,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
             Constraint::Length(1), // blank
             Constraint::Min(1),    // table
         ])
-        .split(inner);
+        .split(inner.into());
 
     let body = win.body_style();
     let muted = win.muted_style();
