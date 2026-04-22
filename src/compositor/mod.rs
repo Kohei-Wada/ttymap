@@ -209,8 +209,9 @@ impl Compositor {
     }
 
     /// Drain a [`WindowOps`] queue in the documented order:
-    /// `close` → `opens` (with TypeId dedup) → return `msgs` for
-    /// the caller to dispatch. See [`window`] module docs.
+    /// `close` → `opens` (TypeId dedup → refocus) → `toggles`
+    /// (TypeId dedup → close) → return `msgs` for the caller to
+    /// dispatch. See [`window`] module docs.
     fn apply_ops(&mut self, idx: usize, ops: WindowOps) -> Vec<AppMsg> {
         if ops.close {
             self.stack.remove(idx);
@@ -218,6 +219,9 @@ impl Compositor {
         }
         for c in ops.opens {
             self.push_or_focus(c);
+        }
+        for c in ops.toggles {
+            self.push_or_toggle(c);
         }
         ops.msgs
     }
@@ -227,7 +231,8 @@ impl Compositor {
     /// existing instance and `c` is dropped. This makes repeated
     /// activation keys (e.g. `i` pressed twice with focus on the
     /// base between presses) idempotent instead of stacking duplicate
-    /// panels.
+    /// panels. For toggle semantics (close-if-open) see
+    /// [`push_or_toggle`](Self::push_or_toggle).
     ///
     /// Uses [`Any::type_id`] from the supertrait so no per-plugin
     /// declaration is needed — the concrete component type *is* its
@@ -240,6 +245,29 @@ impl Compositor {
             .position(|s| Any::type_id(&**s) == new_type)
         {
             self.focused_idx = existing;
+            return;
+        }
+        self.stack.push(c);
+        self.focused_idx = self.stack.len() - 1;
+    }
+
+    /// Toggle counterpart to [`push_or_focus`]: if a component of the
+    /// same concrete type is already on the stack, that existing
+    /// instance closes and `c` is dropped. Otherwise `c` is pushed.
+    ///
+    /// Used by palette entries labelled "Toggle X" — pressing a
+    /// second time should close the surface, not refocus it.
+    /// Activation keys (`i`, `?`, …) still use `push_or_focus` so
+    /// their refocus semantic is preserved.
+    fn push_or_toggle(&mut self, c: Box<dyn Component>) {
+        let new_type = Any::type_id(&*c);
+        if let Some(existing) = self
+            .stack
+            .iter()
+            .position(|s| Any::type_id(&**s) == new_type)
+        {
+            self.stack.remove(existing);
+            self.clamp_focus_after_shrink();
             return;
         }
         self.stack.push(c);
@@ -358,8 +386,13 @@ pub struct Activation {
 
 /// What a palette entry does when selected.
 pub enum PaletteKind {
-    /// Push a new component (search, wiki, palette sub-mode ...).
+    /// Push a new component. TypeId dedup refocuses an existing
+    /// instance of the same concrete type (search, palette sub-mode, …).
     Spawn(SpawnComponent),
+    /// Toggle semantics: same as [`Spawn`](Self::Spawn) on first
+    /// selection, but closes the existing instance on re-selection.
+    /// Used by palette labels of the form "Toggle X".
+    Toggle(SpawnComponent),
     /// Fire-and-forget action (here's "jump to current location").
     Run(RunAction),
 }
@@ -539,6 +572,55 @@ mod tests {
         c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
         assert_eq!(c.len(), 2, "no duplicate of same type in stack");
         assert_eq!(focused_tag(&c), "wiki", "focus moves to existing instance");
+    }
+
+    /// Component that calls `win.toggle(c)` (instead of `win.open(c)`)
+    /// for a given key. Used to exercise the toggle-API close path.
+    struct Toggler {
+        label: &'static str,
+        spawn_key: KeyCode,
+        spawn_label: &'static str,
+    }
+
+    impl Component for Toggler {
+        fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+            if event.code == self.spawn_key {
+                win.toggle(Box::new(TagComponent(self.spawn_label)));
+            }
+        }
+        fn render(&self, _: &mut window::RenderWindow) {}
+        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+            vec![(self.label, "")]
+        }
+    }
+
+    /// `win.toggle(c)` closes an existing instance of the same
+    /// concrete type instead of refocusing it — the semantic palette
+    /// entries labelled "Toggle X" need. Mirror of the refocus test
+    /// above, same setup / different op.
+    #[test]
+    fn toggle_with_existing_type_closes_existing() {
+        let ctx = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: ThemeId::Dark,
+        };
+
+        let mut c = Compositor::new();
+        c.push(Box::new(Toggler {
+            label: "base",
+            spawn_key: KeyCode::Char('i'),
+            spawn_label: "wiki",
+        }));
+        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        assert_eq!(c.len(), 2);
+        assert_eq!(focused_tag(&c), "wiki");
+
+        c.cycle(true);
+        assert_eq!(focused_tag(&c), "base");
+
+        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        assert_eq!(c.len(), 1, "toggle op closes existing of same type");
+        assert_eq!(focused_tag(&c), "base", "focus returns to base layer");
     }
 
     /// Tab delivery is framework-level: even a component that

@@ -96,6 +96,13 @@ impl Component for PaletteComponent {
                         win.close();
                         win.open(component);
                     }
+                    PaletteAction::Toggle(component) => {
+                        // Same flow as `Push`, but the compositor
+                        // closes any existing same-type instance
+                        // instead of refocusing it.
+                        win.close();
+                        win.toggle(component);
+                    }
                     PaletteAction::SwitchProvider(next) => {
                         self.query.clear();
                         self.selected = 0;

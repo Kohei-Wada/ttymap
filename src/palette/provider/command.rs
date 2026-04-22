@@ -154,6 +154,7 @@ impl PaletteProvider for CommandProvider {
                 let entry = &self.seed.plugin_entries[*i];
                 match &entry.kind {
                     PaletteKind::Spawn(spawn) => PaletteAction::Push(spawn(ctx)),
+                    PaletteKind::Toggle(spawn) => PaletteAction::Toggle(spawn(ctx)),
                     PaletteKind::Run(run) => PaletteAction::Run(run(ctx)),
                 }
             }

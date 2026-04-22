@@ -156,7 +156,7 @@ pub fn register(help_text: std::rc::Rc<HelpText>, r: &mut Registrar) {
         r.add_palette_entry(PaletteEntry {
             label: "Toggle help".to_string(),
             hint: "?".to_string(),
-            kind: PaletteKind::Spawn(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
+            kind: PaletteKind::Toggle(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
                 Box::new(HelpComponent::new(text.clone()))
             })),
         });

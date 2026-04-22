@@ -298,7 +298,7 @@ pub fn register(language: &str, limit: u32, r: &mut Registrar) {
         r.add_palette_entry(PaletteEntry {
             label: "Toggle wiki".to_string(),
             hint: "i".to_string(),
-            kind: PaletteKind::Spawn(Box::new(move |ctx: &Context| -> Box<dyn Component> {
+            kind: PaletteKind::Toggle(Box::new(move |ctx: &Context| -> Box<dyn Component> {
                 Box::new(WikiComponent::new(state.clone(), ctx.center))
             })),
         });
