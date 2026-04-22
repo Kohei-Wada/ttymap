@@ -35,7 +35,8 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Clear};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
@@ -184,24 +185,48 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.ctx
     }
 
-    /// Escape hatch for direct ratatui access while primitives are
-    /// being built out. Components can call
-    /// `win.frame().render_widget(w, rect)` for anything not yet
-    /// covered by a `RenderWindow` primitive.
-    pub fn frame(&mut self) -> &mut Frame<'b> {
-        self.frame
+    /// Render a ratatui widget into `rect`. `rect` is **clamped to
+    /// `self.area()`** before drawing, so a component cannot paint
+    /// outside the area the compositor allocated to it — the map
+    /// border, footer, and sibling components are all protected.
+    ///
+    /// This is the only way for a component to draw; direct access
+    /// to the underlying `Frame` is not exposed.
+    pub fn render_widget<W: Widget>(&mut self, widget: W, rect: Rect) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(widget, clamped);
+    }
+
+    /// Stateful counterpart to [`render_widget`] — for widgets like
+    /// `List` / `Table` that keep per-frame `*State`. Same rect
+    /// clamping.
+    pub fn render_stateful_widget<W: StatefulWidget>(
+        &mut self,
+        widget: W,
+        rect: Rect,
+        state: &mut W::State,
+    ) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_stateful_widget(widget, clamped, state);
+    }
+
+    /// Clear the cells in `rect` (rect-clamped). Useful before
+    /// drawing a popup so whatever was underneath doesn't bleed
+    /// through.
+    pub fn clear(&mut self, rect: Rect) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(Clear, clamped);
     }
 
     /// Clear `rect` and draw a theme-styled bordered panel with
     /// `title` inside it. Returns the inner rect (content region
-    /// inside the borders) for further widgets. Factors the
-    /// `Clear + theme.panel(title) + f.render_widget(block, rect)`
-    /// triplet duplicated across every plugin's panel module.
+    /// inside the borders) for further widgets.
     pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
-        self.frame.render_widget(Clear, rect);
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(Clear, clamped);
         let block = self.theme.panel(title);
-        let inner = block.inner(rect);
-        self.frame.render_widget(block, rect);
+        let inner = block.inner(clamped);
+        self.frame.render_widget(block, clamped);
         inner
     }
 
@@ -259,5 +284,56 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     /// foreground-on-background combination would bleed the bg.
     pub fn muted_fg_style(&self) -> Style {
         Style::default().fg(self.theme.muted_color)
+    }
+
+    // ── Span constructors (compose `Line`s from styled text) ──────
+
+    /// Body-styled text span. Pair with [`Line::from`] /
+    /// [`Line::from(vec![..])`] to build multi-span lines without
+    /// importing `Style` / `Span::styled` from ratatui.
+    pub fn span_body<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.body_style())
+    }
+
+    /// Muted-styled text span.
+    pub fn span_muted<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.muted_style())
+    }
+
+    /// Accent-styled text span (primary accent).
+    pub fn span_accent<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.accent_style())
+    }
+
+    /// Highlight-styled text span (secondary accent, e.g. selected
+    /// wiki title).
+    pub fn span_highlight<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.highlight_style())
+    }
+
+    /// Link-styled text span (underlined, alt accent).
+    pub fn span_link<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.link_style())
+    }
+
+    /// Foreground-only muted span — separator glyphs etc.
+    pub fn span_separator<'t, T: Into<std::borrow::Cow<'t, str>>>(&self, text: T) -> Span<'t> {
+        Span::styled(text, self.muted_fg_style())
+    }
+}
+
+/// Intersect `rect` with `bounds`, returning the portion inside
+/// bounds. If they don't overlap, returns a zero-sized rect at the
+/// bounds origin (ratatui draws nothing for width or height == 0).
+fn clamp(rect: Rect, bounds: Rect) -> Rect {
+    let x = rect.x.max(bounds.x);
+    let y = rect.y.max(bounds.y);
+    let right = (rect.x + rect.width).min(bounds.x + bounds.width);
+    let bottom = (rect.y + rect.height).min(bounds.y + bounds.height);
+    Rect {
+        x,
+        y,
+        width: right.saturating_sub(x),
+        height: bottom.saturating_sub(y),
     }
 }

@@ -42,7 +42,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     let selected = win.selected_style();
 
     let input_text = Paragraph::new(format!("{}{}", provider.prompt(), widget.query)).style(body);
-    win.frame().render_widget(input_text, chunks[0]);
+    win.render_widget(input_text, chunks[0]);
 
     let table_rows: Vec<Row> = items
         .iter()
@@ -70,6 +70,5 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
         .row_highlight_style(selected)
         .column_spacing(1);
 
-    win.frame()
-        .render_stateful_widget(table, chunks[2], &mut ts);
+    win.render_stateful_widget(table, chunks[2], &mut ts);
 }

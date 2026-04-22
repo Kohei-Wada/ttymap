@@ -5,8 +5,8 @@
 
 use crossterm::event::{KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
@@ -65,20 +65,17 @@ impl HelpText {
     }
 
     fn rendered_lines<'a>(&'a self, win: &RenderWindow) -> Vec<Line<'a>> {
-        let body = win.body_style();
-        let accent = win.accent_style();
-        let link = win.link_style();
         self.lines
             .iter()
             .map(|segs| {
-                let spans: Vec<Span<'a>> = segs
+                let spans = segs
                     .iter()
                     .map(|s| match s {
-                        Seg::Text(t) => Span::styled(t.as_str(), body),
-                        Seg::Key(k) => Span::styled(k.as_str(), accent),
-                        Seg::Url(u) => Span::styled(u.as_str(), link),
+                        Seg::Text(t) => win.span_body(t.as_str()),
+                        Seg::Key(k) => win.span_accent(k.as_str()),
+                        Seg::Url(u) => win.span_link(u.as_str()),
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
                 Line::from(spans)
             })
             .collect()
@@ -130,8 +127,8 @@ impl Component for HelpComponent {
         let body = win.body_style();
         let block = win.panel_block("help").title_alignment(Alignment::Center);
         let widget = Paragraph::new(rendered).style(body).block(block);
-        win.frame().render_widget(Clear, area);
-        win.frame().render_widget(widget, area);
+        win.clear(area);
+        win.render_widget(widget, area);
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
