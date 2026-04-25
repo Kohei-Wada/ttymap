@@ -1,4 +1,5 @@
 use rstar::{AABB, RTree, RTreeObject};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone)]
 struct LabelEntry {
@@ -56,7 +57,7 @@ impl LabelBuffer {
         LabelEntry {
             min_x: x - margin,
             min_y: y - margin / 2.0,
-            max_x: x + margin + text.len() as f64,
+            max_x: x + margin + text.width() as f64,
             max_y: y + margin / 2.0,
         }
     }
@@ -110,5 +111,37 @@ mod tests {
         buf.clear();
         let result = buf.write_if_possible("Hello", 10.0, 10.0, None);
         assert!(result);
+    }
+
+    // Regression tests for issue #104: label width must use terminal
+    // cell width, not UTF-8 byte length. Bytes-as-width over-reserves
+    // for non-ASCII (Cyrillic 2 bytes / 1 cell, CJK 3 bytes / 2 cells)
+    // and silently drops legitimate neighbouring labels.
+
+    #[test]
+    fn cyrillic_label_uses_display_width_not_bytes() {
+        // "Москва" → 6 cells (display) vs 12 bytes. Margin = 5.
+        // Bytes path reserves x ∈ [-5, 17]. Display path: [-5, 11].
+        // A 1-cell "X" at x = 18 → [13, 24]: collides under bytes (13 < 17),
+        // fits under display width (13 > 11).
+        let mut buf = LabelBuffer::new();
+        assert!(buf.write_if_possible("Москва", 0.0, 0.0, None));
+        assert!(
+            buf.write_if_possible("X", 18.0, 0.0, None),
+            "non-ASCII labels must reserve display width, not UTF-8 byte length"
+        );
+    }
+
+    #[test]
+    fn cjk_label_uses_terminal_cell_width() {
+        // "東京都" → 6 cells (3 chars × 2) vs 9 bytes. Margin = 5.
+        // Bytes: [-5, 14]. Display: [-5, 11]. "X" at x = 17 → [12, 23]:
+        // collides under bytes (12 < 14), fits under display (12 > 11).
+        let mut buf = LabelBuffer::new();
+        assert!(buf.write_if_possible("東京都", 0.0, 0.0, None));
+        assert!(
+            buf.write_if_possible("X", 17.0, 0.0, None),
+            "CJK labels must reserve double-width per char, not UTF-8 bytes"
+        );
     }
 }
