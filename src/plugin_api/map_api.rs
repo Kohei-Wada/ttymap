@@ -19,6 +19,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::geo::{LonLat, MapProjection};
 use crate::map::render::frame::MapFrame;
@@ -154,21 +155,37 @@ impl<'a> MapApi<'a> {
     /// Convention: leave a space between marker and label by placing
     /// the marker via `point` first; this method already skips the
     /// marker's own cell.
+    ///
+    /// CJK wide chars are placed correctly (each occupies two cells)
+    /// because the underlying `set_stringn` consults
+    /// `UnicodeWidthStr` rather than counting code points.
     pub fn label(&mut self, ll: LonLat, text: &str, fg: Color) {
-        let Some((mut x, y)) = self.cell_for(ll) else {
+        let Some((x, y)) = self.cell_for(ll) else {
             return;
         };
         let style = Style::default().fg(fg).bg(self.theme.bg);
         let right_edge = self.map_area.x + self.map_area.width;
         // Skip the marker cell itself.
-        x = x.saturating_add(1);
-        for ch in text.chars() {
-            if x >= right_edge {
+        let label_start = x.saturating_add(1);
+        if label_start >= right_edge {
+            return;
+        }
+        let max_cells = (right_edge - label_start) as usize;
+        // Truncate text to what fits in the remaining cells; the
+        // truncation respects character boundaries (no partial CJK
+        // half-cells written).
+        let mut budget = max_cells;
+        let mut end = 0;
+        for (i, ch) in text.char_indices() {
+            let w = ch.width().unwrap_or(0);
+            if w > budget {
                 break;
             }
-            self.buf[(x, y)].set_char(ch).set_style(style);
-            x = x.saturating_add(1);
+            budget -= w;
+            end = i + ch.len_utf8();
         }
+        self.buf
+            .set_stringn(label_start, y, &text[..end], max_cells, style);
     }
 
     /// Draw a single-glyph line between two world coordinates at
@@ -243,27 +260,27 @@ impl<'a> MapApi<'a> {
             }
         };
 
-        let chars: Vec<char> = text.chars().collect();
-        let text_width = chars.len() as u16;
         let area_width = self.map_area.width;
+        // `UnicodeWidthStr::width` reports display columns (CJK wide
+        // chars count as 2), unlike `chars().count()` which counts
+        // code points. Right-aligned anchors need the visual width so
+        // a Japanese place name doesn't slide off the right edge.
+        let text_width = (text.width() as u16).min(area_width);
 
         let start_x = match anchor {
             Anchor::TopLeft | Anchor::BottomLeft => self.map_area.x,
             Anchor::TopRight | Anchor::BottomRight => {
                 let right = self.map_area.x + area_width;
-                right.saturating_sub(text_width.min(area_width))
+                right.saturating_sub(text_width)
             }
         };
 
         let style = Style::default().fg(fg).bg(self.theme.bg);
-        let right_edge = self.map_area.x + area_width;
-        for (i, &ch) in chars.iter().enumerate() {
-            let x = start_x.saturating_add(i as u16);
-            if x >= right_edge {
-                break;
-            }
-            self.buf[(x, row)].set_char(ch).set_style(style);
-        }
+        // Buffer::set_stringn handles wide-char placement correctly:
+        // a CJK char occupies cell N and marks N+1 as continuation;
+        // an English char occupies one cell.
+        self.buf
+            .set_stringn(start_x, row, text, text_width as usize, style);
     }
 
     /// Project an absolute terminal cursor position (as surfaced via
@@ -460,6 +477,20 @@ mod tests {
         // Row 2 from the top-left corner should be the third row.
         api.text_anchored(Anchor::TopLeft, 2, "Q", Color::Reset);
         assert_eq!(buf[(area.x, area.y + 2)].symbol(), "Q");
+    }
+
+    #[test]
+    fn text_anchored_cjk_right_aligns_by_display_width() {
+        // Each CJK char is 2 cells wide, so "千代田" occupies 6 cells.
+        // Right-aligned in a 20-column area, the first char should
+        // start at column 14, not column 17 (which is what naive
+        // chars().count() arithmetic would produce).
+        let (mut buf, area, frame, theme) = fixture(20, 1);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        api.text_anchored(Anchor::TopRight, 0, "千代田", Color::Reset);
+        assert_eq!(buf[(14, 0)].symbol(), "千");
+        assert_eq!(buf[(16, 0)].symbol(), "代");
+        assert_eq!(buf[(18, 0)].symbol(), "田");
     }
 
     #[test]
