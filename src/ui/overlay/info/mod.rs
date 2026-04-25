@@ -19,8 +19,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::geo::{LonLat, MapProjection};
 use crate::map::render::frame::MapFrame;
+use crate::plugin_api::Throttle;
 use crate::shared::nominatim::NominatimClient;
-use crate::shared::throttle::Throttle;
 use crate::theme::UiTheme;
 
 mod service;

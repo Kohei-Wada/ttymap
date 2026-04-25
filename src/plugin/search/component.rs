@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::plugin_api::AsyncJob;
 use crate::plugin_api::prelude::*;
-use crate::shared::async_job::AsyncJob;
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 
 use super::panel;

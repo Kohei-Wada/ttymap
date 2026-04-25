@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::geo::LonLat;
-use crate::shared::async_job::AsyncJob;
+use crate::plugin_api::AsyncJob;
 use crate::shared::nominatim::{NominatimClient, PlaceInfo};
 
 pub struct PlaceService {

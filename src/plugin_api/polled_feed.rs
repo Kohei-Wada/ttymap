@@ -40,8 +40,8 @@
 
 use std::time::Duration;
 
-use crate::shared::async_job::AsyncJob;
-use crate::shared::throttle::Throttle;
+use crate::plugin_api::async_job::AsyncJob;
+use crate::plugin_api::throttle::Throttle;
 
 pub struct PolledFeed<T: Send + 'static> {
     job: AsyncJob<T>,

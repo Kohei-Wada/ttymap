@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use log::{info, warn};
 
+use crate::plugin_api::AsyncJob;
 use crate::plugin_api::prelude::*;
-use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
 
 pub struct HereState {

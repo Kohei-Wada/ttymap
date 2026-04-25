@@ -28,11 +28,15 @@
 //! use crate::plugin_api::prelude::*;
 //! ```
 
+pub mod async_job;
 pub mod map_api;
 pub mod polled_feed;
+pub mod throttle;
 
+pub use async_job::AsyncJob;
 pub use map_api::MapApi;
 pub use polled_feed::PolledFeed;
+pub use throttle::Throttle;
 
 /// Plugin author prelude — re-exports the items every plugin reaches
 /// for. Glob-imported at the top of plugin modules so the file's
