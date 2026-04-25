@@ -4,7 +4,7 @@
 # Every field is optional. Omitted sections and omitted fields
 # fall back to the defaults shown below.
 
-# --- Initial view ---------------------------------------------------
+# ── Initial view ────────────────────────────────────────────────────
 # [map]
 # lat = 35.6828
 # lon = 139.7595
@@ -12,27 +12,23 @@
 # max_zoom = 18.0
 # zoom_step = 0.2
 
-# --- Rendering ------------------------------------------------------
+# ── Rendering ───────────────────────────────────────────────────────
 # [render]
 # style = "dark"       # "dark" or "bright"
 # language = "en"      # map label language, e.g. "en", "ja", "de"
 
-# --- Tile cache -----------------------------------------------------
+# ── Tile cache ──────────────────────────────────────────────────────
 # [cache]
 # tiles = true         # write decoded tiles to ~/.cache/ttymap/
 # memory_tiles = 192   # LRU capacity for decoded tiles in memory
 
-# --- Wikipedia plugin -----------------------------------------------
-# [wiki]
-# limit = 50           # max nearby articles shown in the panel
-
-# --- IP-based geolocation (shared by --here and the `here` plugin) --
+# ── IP-based geolocation (shared by --here and the `here` plugin) ──
 # [geoip]
 # on_startup = false
 # endpoint = "https://ipapi.co/json/"   # must return JSON with numeric "latitude" / "longitude"
 # timeout_ms = 2000
 
-# --- Key bindings ---------------------------------------------------
+# ── Key bindings ────────────────────────────────────────────────────
 # Notation: "h" (character), "Left" (special key), "C-d" (Ctrl+d)
 # Special keys: Left, Right, Up, Down, Enter, Esc, Tab
 #
@@ -50,3 +46,55 @@
 # zoom_to_world = ["gg"]
 # reset_position = ["0"]
 # quit = ["q"]
+
+# ════════════════════════════════════════════════════════════════════
+# Plugins
+# ════════════════════════════════════════════════════════════════════
+#
+# Each plugin gets its own [section]. Two kinds of fields:
+#
+# 1. Plugin-specific behaviour  (e.g. fetch interval, fetch radius)
+# 2. Generic overrides shared by every plugin:
+#
+#    enabled  = false                                    # disable the plugin entirely
+#    anchor   = "left" / "right" / "top-left" / "top-right"
+#               / "bottom-left" / "bottom-right" / "center"
+#    width    = 30                                       # cells, panel width
+#    height   = 20                                       # cells, panel height
+#
+# Anchor / width / height only matter for plugins that draw a panel
+# (wiki / aircraft / iss / search / help). Marker-only plugins
+# (scalebar / attribution / etc.) ignore them.
+
+# ── Wikipedia plugin ────────────────────────────────────────────────
+# [wiki]
+# language = "en"      # Wikipedia language (independent of [render].language)
+# limit    = 50        # max nearby articles loaded
+# anchor   = "right"   # default — moves the panel anywhere
+# width    = 30
+# height   = 25
+
+# ── Aircraft plugin (live ADS-B from OpenSky) ───────────────────────
+# [aircraft]
+# interval_secs  = 12  # min seconds between OpenSky fetches
+# fetch_half_deg = 5.0 # half-side of the bbox (degrees) sent per fetch
+# anchor         = "left"
+# width          = 40
+
+# ── ISS plugin (live position from open-notify) ─────────────────────
+# [iss]
+# interval_secs = 5
+# anchor        = "top-left"
+# width         = 30
+# height        = 4
+
+# ── Earthquake plugin (USGS M2.5+ feed) ─────────────────────────────
+# [quake]
+# interval_secs = 300
+
+# ── Disable plugins you don't use ───────────────────────────────────
+# [aircraft]
+# enabled = false
+
+# [info]
+# enabled = false      # turns off the top-right cursor / centre / zoom readout
