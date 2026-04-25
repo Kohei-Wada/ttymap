@@ -14,7 +14,7 @@ pub mod queue;
 pub use http::HttpTileClient;
 pub use priority::TilePriority;
 
-use crate::map::tile::cache::TileKey;
+use crate::map::tile::key::TileKey;
 use queue::PriorityFn;
 
 /// Abstract tile-fetch backend. Cache owns a `Box<dyn TileClient>` and
