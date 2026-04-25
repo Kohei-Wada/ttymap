@@ -1,60 +1,44 @@
-//! Tile cache — memory + disk storage with background tile fetching.
-//! Owns the full tile lifecycle and all domain logic.
-//! Interacts with the fetch backend only through the `TileFetchLane` trait.
+//! Tile cache (orchestrator) — memory LRU + view state + prefetch.
+//!
+//! After the three-layer-pipe refactor, this module no longer touches
+//! disk or runs `decode()`: bytes-from-network and disk-cache live in
+//! the `TileFetcher` (currently `HttpFetcher`), and decoding runs on
+//! its own thread (`super::decoder`). Arrivals here are already
+//! `DecodedTile`s; `poll_completed` is a thin "drain channel into LRU".
 
-use std::collections::HashMap;
-use std::fs;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::sync::mpsc;
 
-use directories::ProjectDirs;
 use log::debug;
 use lru::LruCache;
 
-use super::decode::{self, DecodedTile};
+use super::decode::DecodedTile;
 use super::fetch::{TileFetchLane, TilePriority};
 use super::key::TileKey;
 
 pub struct TileCache {
     client: Box<dyn TileFetchLane>,
-    cache_dir: Option<PathBuf>,
     memory_cache: LruCache<TileKey, DecodedTile>,
     current_z: u32,
     center_x: f64,
     center_y: f64,
-    rx: mpsc::Receiver<(TileKey, Vec<u8>)>,
+    rx: mpsc::Receiver<(TileKey, DecodedTile)>,
 }
 
 impl TileCache {
-    /// Build a cache around an injected `TileFetchLane`. The `rx`
-    /// channel is the receiving end of the pair whose `tx` was handed
-    /// to the lane — completed fetches arrive on it.
-    ///
-    /// Wiring (channel + lane construction) lives at the composition
-    /// root in `app::build_tile_cache`, where backend selection is made.
+    /// Build a cache around an injected `TileFetchLane` and the
+    /// receiving end of the **decoder** channel. Bytes-and-disk and
+    /// `decode()` are no longer this module's concern.
     pub fn new(
         client: Box<dyn TileFetchLane>,
-        rx: mpsc::Receiver<(TileKey, Vec<u8>)>,
-        enable_disk_cache: bool,
+        rx: mpsc::Receiver<(TileKey, DecodedTile)>,
         cache_size: usize,
     ) -> Self {
-        let cache_dir = if enable_disk_cache {
-            ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
-                let dir = proj_dirs.cache_dir().to_path_buf();
-                let _ = fs::create_dir_all(&dir);
-                dir
-            })
-        } else {
-            None
-        };
-
         // `cache_size` may legitimately be configured to 0 by paranoid
         // users; clamp to 1 since `NonZeroUsize::new` rejects zero.
         let capacity = NonZeroUsize::new(cache_size.max(1)).unwrap();
         TileCache {
             client,
-            cache_dir,
             memory_cache: LruCache::new(capacity),
             current_z: 0,
             center_x: 0.0,
@@ -63,7 +47,7 @@ impl TileCache {
         }
     }
 
-    /// Update view state. Purges stale queue entries and re-sorts by distance.
+    /// Update view state. Reprioritizes any queued fetch entries.
     pub fn set_view(&mut self, center_lon: f64, center_lat: f64, z: u32) {
         self.current_z = z;
         let center = crate::geo::ll2tile(center_lon, center_lat, z);
@@ -92,53 +76,33 @@ impl TileCache {
         self.client.is_idle()
     }
 
-    /// Drain completed HTTP fetches: decode, save to disk, insert to memory.
+    /// Drain decoded-tile arrivals into the memory LRU. Returns true
+    /// if any current-zoom tile arrived (i.e. the render thread
+    /// should redraw).
     pub fn poll_completed(&mut self) -> bool {
         let mut any_new = false;
-        while let Ok((key, bytes)) = self.rx.try_recv() {
+        while let Ok((key, decoded)) = self.rx.try_recv() {
             let is_current = key.z.abs_diff(self.current_z) <= 1;
-
-            if bytes.is_empty() {
-                debug!("poll_completed: negative cache for {}", key);
-                let empty = DecodedTile {
-                    layers: HashMap::new(),
-                };
-                self.insert_memory(key, empty);
-                continue;
-            }
-
-            self.write_disk_cache(&key, &bytes);
-            let decoded = decode::decode(&bytes);
-
             if is_current {
-                debug!(
-                    "poll_completed: decoded tile {} ({} layers)",
-                    key,
-                    decoded.layers.len()
-                );
+                debug!("poll_completed: {} ({} layers)", key, decoded.layers.len());
                 any_new = true;
             }
-            self.insert_memory(key, decoded);
+            // `LruCache::put` evicts the least-recently-used entry
+            // when at capacity and treats the inserted key as MRU.
+            self.memory_cache.put(key, decoded);
         }
         any_new
     }
 
-    /// Get a tile. Checks: memory → disk → enqueue HTTP fetch.
-    ///
-    /// On a memory hit, `LruCache::get` promotes the key to MRU so a
-    /// hot tile can survive a long pan across many cold tiles (issue
-    /// #105).
+    /// Get a tile. Memory LRU hit returns immediately (and bumps to
+    /// MRU); a miss enqueues the key for the fetch lane and returns
+    /// `None`. Disk-cache lookups now live inside the fetcher itself,
+    /// so a disk hit there will arrive through `poll_completed` like
+    /// any other fetch.
     pub fn get_tile(&mut self, z: u32, x: i32, y: i32) -> Option<&DecodedTile> {
         let key = TileKey::new(z, x, y);
 
         if self.memory_cache.contains(&key) {
-            return self.memory_cache.get(&key);
-        }
-
-        if let Some(bytes) = self.read_disk_cache(&key) {
-            debug!("disk cache hit: {} ({} bytes)", key, bytes.len());
-            let decoded = decode::decode(&bytes);
-            self.insert_memory(key.clone(), decoded);
             return self.memory_cache.get(&key);
         }
 
@@ -206,31 +170,6 @@ impl TileCache {
                 self.get_tile(z - 1, tx, ty);
             }
         }
-    }
-
-    // ── Private ───────────────────────────────────────────────────────────
-
-    fn read_disk_cache(&self, key: &TileKey) -> Option<Vec<u8>> {
-        let dir = self.cache_dir.as_ref()?;
-        fs::read(
-            dir.join(key.z.to_string())
-                .join(format!("{}-{}.pbf", key.x, key.y)),
-        )
-        .ok()
-    }
-
-    fn write_disk_cache(&self, key: &TileKey, bytes: &[u8]) {
-        if let Some(dir) = &self.cache_dir {
-            let tile_dir = dir.join(key.z.to_string());
-            let _ = fs::create_dir_all(&tile_dir);
-            let _ = fs::write(tile_dir.join(format!("{}-{}.pbf", key.x, key.y)), bytes);
-        }
-    }
-
-    fn insert_memory(&mut self, key: TileKey, decoded: DecodedTile) {
-        // `LruCache::put` evicts the least-recently-used entry when at
-        // capacity and treats the inserted key as MRU.
-        self.memory_cache.put(key, decoded);
     }
 }
 
@@ -330,26 +269,25 @@ mod tests {
     /// recent access promotes the tile to MRU and protects it.
     #[test]
     fn lru_eviction_keeps_recently_accessed_tile() {
-        // cache_size = 2. Inject A, B via empty-bytes negative-cache
-        // path (poll_completed inserts an empty DecodedTile). Hit A
-        // (which under LRU bumps it to MRU). Insert C. With LRU, B
-        // (LRU) is evicted; A survives. With FIFO, A (oldest insert)
-        // is evicted regardless of the hit.
+        // cache_size = 2. Inject A, B as empty `DecodedTile`s through
+        // the decoder channel. Hit A (LRU bumps it to MRU). Insert C.
+        // With LRU, B is evicted; A survives. With FIFO, A (oldest
+        // insert) is evicted regardless of the hit.
         let (tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(Box::new(NoopLane), rx, false, 2);
+        let mut cache = TileCache::new(Box::new(NoopLane), rx, 2);
 
         let a = TileKey::new(0, 0, 0);
         let b = TileKey::new(0, 1, 0);
         let c = TileKey::new(0, 2, 0);
 
-        tx.send((a.clone(), Vec::new())).unwrap();
-        tx.send((b.clone(), Vec::new())).unwrap();
+        tx.send((a.clone(), DecodedTile::empty())).unwrap();
+        tx.send((b.clone(), DecodedTile::empty())).unwrap();
         cache.poll_completed();
 
         // Access A: bumps to MRU under LRU.
         assert!(cache.get_tile(a.z, a.x, a.y).is_some());
 
-        tx.send((c.clone(), Vec::new())).unwrap();
+        tx.send((c.clone(), DecodedTile::empty())).unwrap();
         cache.poll_completed();
 
         assert!(
@@ -381,7 +319,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::<TileKey>::new()));
         let client: Box<dyn TileFetchLane> = Box::new(RecordingLane(log.clone()));
         let (_tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(client, rx, false, 64);
+        let mut cache = TileCache::new(client, rx, 64);
 
         cache.get_tile(3, 1, 2);
         cache.get_tile(3, 5, 6);
@@ -389,6 +327,43 @@ mod tests {
         assert_eq!(
             *log.lock().unwrap(),
             vec![TileKey::new(3, 1, 2), TileKey::new(3, 5, 6)],
+        );
+    }
+
+    /// Memory hit short-circuits the lane: a tile already inserted
+    /// via the decoder channel must not result in another `enqueue`.
+    #[test]
+    fn memory_hit_does_not_dispatch_to_lane() {
+        struct CountingLane(Arc<Mutex<usize>>);
+        impl TileFetchLane for CountingLane {
+            fn enqueue(&self, _: &TileKey, _: TilePriority) {
+                *self.0.lock().unwrap() += 1;
+            }
+            fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
+            fn attribution(&self) -> &str {
+                ""
+            }
+            fn is_idle(&self) -> bool {
+                true
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(0usize));
+        let client: Box<dyn TileFetchLane> = Box::new(CountingLane(calls.clone()));
+        let (tx, rx) = mpsc::channel();
+        let mut cache = TileCache::new(client, rx, 4);
+
+        let key = TileKey::new(2, 1, 1);
+        tx.send((key.clone(), DecodedTile::empty())).unwrap();
+        cache.poll_completed();
+
+        for _ in 0..3 {
+            assert!(cache.get_tile(key.z, key.x, key.y).is_some());
+        }
+        assert_eq!(
+            *calls.lock().unwrap(),
+            0,
+            "memory-hit path must not enqueue"
         );
     }
 }

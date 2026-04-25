@@ -1,14 +1,27 @@
-//! Tile subsystem — fetching, caching, decoding, and view calculations.
+//! Tile subsystem — fetching, decoding, and caching.
 //!
-//! Responsibilities:
+//! Three-layer pipeline (a tile flows left → right):
+//!
+//! ```text
+//!   fetch::FetchLane<F>     decoder      cache::TileCache
+//!   ───────────────────     ───────      ────────────────
+//!   bytes from F (HTTP,     decode()     LRU memory store
+//!   disk, mbtiles, …)
+//! ```
+//!
+//! Modules:
 //!   key.rs       — `TileKey` (z, x, y) universal address
-//!   cache.rs     — memory + disk storage, decode, stale detection, prefetch
-//!   fetch/       — backends that populate the cache (HTTP today, more later)
-//!   decode.rs    — MVT protobuf decoding
 //!   property.rs  — feature property value type and accessors
+//!   decode/      — pure protobuf → `DecodedTile` (geometry / tags / decompress)
+//!   decoder.rs   — relay thread: bytes → `DecodedTile`, off the render thread
+//!   cache.rs     — memory LRU + view state + prefetch (orchestrator)
+//!   fetch/       — backends that produce bytes (HTTP today, more later);
+//!                  `TileFetcher` is per-backend, `FetchLane<F>` is generic
+//!                  queue / workers / dedup / priority
 
 pub mod cache;
 pub mod decode;
+pub mod decoder;
 pub mod fetch;
 pub mod key;
 pub mod property;
