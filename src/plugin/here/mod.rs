@@ -12,7 +12,7 @@ use std::rc::Rc;
 use log::{info, warn};
 
 use crate::app::AppMsg;
-use crate::compositor::{Context, PaletteEntry, PaletteKind, Registrar, Task};
+use crate::compositor::{Registrar, Task};
 use crate::geo::LonLat;
 use crate::shared::async_job::AsyncJob;
 use crate::shared::geoip;
@@ -82,16 +82,9 @@ impl Task for HereTask {
 
 pub fn register(endpoint: String, timeout_ms: u64, r: &mut Registrar) {
     let state: HereHandle = Rc::new(RefCell::new(HereState::new(endpoint, timeout_ms)));
-
     r.add_task(Box::new(HereTask::new(state.clone())));
-
-    let state_for_palette = state;
-    r.add_palette_entry(PaletteEntry {
-        label: "Jump to here (current location)".to_string(),
-        hint: String::new(),
-        kind: PaletteKind::Run(Box::new(move |_ctx: &Context| -> Vec<AppMsg> {
-            state_for_palette.borrow_mut().start_lookup();
-            Vec::new() // Jump arrives later via HereTask::poll
-        })),
+    r.add_run("Jump to here (current location)", "", move |_| {
+        state.borrow_mut().start_lookup();
+        Vec::new() // Jump arrives later via HereTask::poll
     });
 }

@@ -28,7 +28,7 @@ use log::debug;
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
 use crate::plugin_api::PolledFeed;
@@ -170,13 +170,8 @@ impl Component for QuakeComponent {
 /// Wire the quake plugin into the registrar. Palette-only activation.
 pub fn register(r: &mut Registrar) {
     let state: QuakeHandle = Rc::new(RefCell::new(QuakeState::new()));
-
-    r.add_palette_entry(PaletteEntry {
-        label: "Toggle quakes".to_string(),
-        hint: String::new(),
-        kind: PaletteKind::Toggle(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
-            Box::new(QuakeComponent::new(state.clone()))
-        })),
+    r.add_toggle("Toggle quakes", "", move |_| {
+        QuakeComponent::new(state.clone())
     });
 }
 

@@ -7,7 +7,7 @@ use crossterm::event::{KeyEvent, KeyModifiers};
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::widget::{Align, Line, Paragraph, Rect, Span, StyleKind};
@@ -141,26 +141,15 @@ impl Component for HelpComponent {
 /// sibling plugins (harvested by the composition root) so help
 /// remains in sync with what's actually loaded.
 pub fn register(help_text: std::rc::Rc<HelpText>, r: &mut Registrar) {
-    {
-        let text = help_text.clone();
-        r.add_activation(Activation {
-            code: crossterm::event::KeyCode::Char('?'),
-            modifiers: KeyModifiers::NONE,
-            spawn: Box::new(move |_ctx: &Context| -> Box<dyn Component> {
-                Box::new(HelpComponent::new(text.clone()))
-            }),
-        });
-    }
-    {
-        let text = help_text;
-        r.add_palette_entry(PaletteEntry {
-            label: "Toggle help".to_string(),
-            hint: "?".to_string(),
-            kind: PaletteKind::Toggle(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
-                Box::new(HelpComponent::new(text.clone()))
-            })),
-        });
-    }
+    let text_a = help_text.clone();
+    r.bind(
+        crossterm::event::KeyCode::Char('?'),
+        KeyModifiers::NONE,
+        move |_| HelpComponent::new(text_a.clone()),
+    );
+    r.add_toggle("Toggle help", "?", move |_| {
+        HelpComponent::new(help_text.clone())
+    });
 }
 
 // ── Line builders ──────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::shared::async_job::AsyncJob;
 use crate::shared::nominatim::{NominatimClient, SearchResult};
 
@@ -118,24 +118,11 @@ impl Component for SearchComponent {
 /// - activation on `/` → push a fresh [`SearchComponent`]
 /// - palette entry so the picker can reach it
 pub fn register(nominatim: Arc<NominatimClient>, r: &mut Registrar) {
-    let spawn_for_activation = {
-        let nominatim = nominatim.clone();
-        move |_ctx: &Context| -> Box<dyn Component> {
-            Box::new(SearchComponent::new(nominatim.clone()))
-        }
-    };
-    r.add_activation(Activation {
-        code: KeyCode::Char('/'),
-        modifiers: KeyModifiers::NONE,
-        spawn: Box::new(spawn_for_activation),
+    let nominatim_for_key = nominatim.clone();
+    r.bind(KeyCode::Char('/'), KeyModifiers::NONE, move |_| {
+        SearchComponent::new(nominatim_for_key.clone())
     });
-
-    let spawn_for_palette = move |_ctx: &Context| -> Box<dyn Component> {
-        Box::new(SearchComponent::new(nominatim.clone()))
-    };
-    r.add_palette_entry(PaletteEntry {
-        label: "Search location".to_string(),
-        hint: "/".to_string(),
-        kind: PaletteKind::Spawn(Box::new(spawn_for_palette)),
+    r.add_spawn("Search location", "/", move |_| {
+        SearchComponent::new(nominatim.clone())
     });
 }

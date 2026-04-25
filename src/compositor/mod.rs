@@ -427,6 +427,79 @@ impl Registrar {
     pub fn add_task(&mut self, t: Box<dyn Task>) {
         self.tasks.push(t);
     }
+
+    // ── Convenience builders ───────────────────────────────────────────────
+    //
+    // The methods below accept an `impl Component`-returning closure
+    // and box twice internally so each plugin's `register` can drop
+    // the `Box::new(move |...| -> Box<dyn Component> { Box::new(...) })`
+    // syntactic noise. The struct-literal forms above stay for any
+    // plugin that needs full control (e.g. building entries
+    // dynamically).
+
+    /// Bind a key to spawn a fresh component on press.
+    pub fn bind<F, C>(&mut self, code: KeyCode, modifiers: KeyModifiers, factory: F)
+    where
+        F: Fn(&Context) -> C + 'static,
+        C: Component + 'static,
+    {
+        self.add_activation(Activation {
+            code,
+            modifiers,
+            spawn: Box::new(move |ctx| Box::new(factory(ctx)) as Box<dyn Component>),
+        });
+    }
+
+    /// Add a palette entry that toggles a component on/off — opens it
+    /// on first selection, closes the existing instance on
+    /// re-selection.
+    pub fn add_toggle<F, C>(
+        &mut self,
+        label: impl Into<String>,
+        hint: impl Into<String>,
+        factory: F,
+    ) where
+        F: Fn(&Context) -> C + 'static,
+        C: Component + 'static,
+    {
+        self.add_palette_entry(PaletteEntry {
+            label: label.into(),
+            hint: hint.into(),
+            kind: PaletteKind::Toggle(Box::new(move |ctx| {
+                Box::new(factory(ctx)) as Box<dyn Component>
+            })),
+        });
+    }
+
+    /// Add a palette entry that spawns a fresh instance every time —
+    /// no toggle dedup. Use when the component is meant to be rebuilt
+    /// per open (search, palette sub-modes).
+    pub fn add_spawn<F, C>(&mut self, label: impl Into<String>, hint: impl Into<String>, factory: F)
+    where
+        F: Fn(&Context) -> C + 'static,
+        C: Component + 'static,
+    {
+        self.add_palette_entry(PaletteEntry {
+            label: label.into(),
+            hint: hint.into(),
+            kind: PaletteKind::Spawn(Box::new(move |ctx| {
+                Box::new(factory(ctx)) as Box<dyn Component>
+            })),
+        });
+    }
+
+    /// Add a fire-and-forget palette entry — selecting it returns
+    /// `Vec<AppMsg>` to dispatch, no component pushed.
+    pub fn add_run<F>(&mut self, label: impl Into<String>, hint: impl Into<String>, action: F)
+    where
+        F: Fn(&Context) -> Vec<AppMsg> + 'static,
+    {
+        self.add_palette_entry(PaletteEntry {
+            label: label.into(),
+            hint: hint.into(),
+            kind: PaletteKind::Run(Box::new(action)),
+        });
+    }
 }
 
 #[cfg(test)]

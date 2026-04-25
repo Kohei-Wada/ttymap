@@ -8,12 +8,8 @@
 //! live there. The plugin itself carries no state.
 
 use crate::app::AppMsg;
-use crate::compositor::{PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::Registrar;
 
 pub fn register(r: &mut Registrar) {
-    r.add_palette_entry(PaletteEntry {
-        label: "Export frame as ANSI".to_string(),
-        hint: String::new(),
-        kind: PaletteKind::Run(Box::new(|_ctx| vec![AppMsg::ExportFrame])),
-    });
+    r.add_run("Export frame as ANSI", "", |_| vec![AppMsg::ExportFrame]);
 }

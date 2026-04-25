@@ -32,7 +32,7 @@ use log::debug;
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
 use crate::plugin_api::PolledFeed;
@@ -283,26 +283,11 @@ impl Component for WikiComponent {
 /// clone the handle so every push shares the same persistent list.
 pub fn register(language: &str, limit: u32, r: &mut Registrar) {
     let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(language, limit)));
-
-    {
-        let state = state.clone();
-        r.add_activation(Activation {
-            code: KeyCode::Char('i'),
-            modifiers: KeyModifiers::NONE,
-            spawn: Box::new(move |ctx: &Context| -> Box<dyn Component> {
-                Box::new(WikiComponent::new(state.clone(), ctx.center))
-            }),
-        });
-    }
-
-    {
-        let state = state;
-        r.add_palette_entry(PaletteEntry {
-            label: "Toggle wiki".to_string(),
-            hint: "i".to_string(),
-            kind: PaletteKind::Toggle(Box::new(move |ctx: &Context| -> Box<dyn Component> {
-                Box::new(WikiComponent::new(state.clone(), ctx.center))
-            })),
-        });
-    }
+    let state_for_key = state.clone();
+    r.bind(KeyCode::Char('i'), KeyModifiers::NONE, move |ctx| {
+        WikiComponent::new(state_for_key.clone(), ctx.center)
+    });
+    r.add_toggle("Toggle wiki", "i", move |ctx| {
+        WikiComponent::new(state.clone(), ctx.center)
+    });
 }

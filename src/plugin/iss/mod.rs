@@ -23,7 +23,7 @@ use log::debug;
 
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
 use crate::plugin_api::PolledFeed;
@@ -160,14 +160,7 @@ impl Component for IssComponent {
 /// Wire the ISS plugin into the registrar. Palette-only activation.
 pub fn register(r: &mut Registrar) {
     let state: IssHandle = Rc::new(RefCell::new(IssState::new()));
-
-    r.add_palette_entry(PaletteEntry {
-        label: "Toggle ISS".to_string(),
-        hint: String::new(),
-        kind: PaletteKind::Toggle(Box::new(move |_ctx: &Context| -> Box<dyn Component> {
-            Box::new(IssComponent::new(state.clone()))
-        })),
-    });
+    r.add_toggle("Toggle ISS", "", move |_| IssComponent::new(state.clone()));
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use crossterm::event::KeyEvent;
 use log::debug;
 
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::compositor::{Component, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
 use crate::plugin_api::PolledFeed;
@@ -141,13 +141,8 @@ impl Component for AircraftComponent {
 /// existing `a → ZoomIn` binding.
 pub fn register(r: &mut Registrar) {
     let state: AircraftHandle = Rc::new(RefCell::new(AircraftState::new()));
-
-    r.add_palette_entry(PaletteEntry {
-        label: "Toggle aircraft".to_string(),
-        hint: String::new(),
-        kind: PaletteKind::Toggle(Box::new(move |ctx: &Context| -> Box<dyn Component> {
-            Box::new(AircraftComponent::new(state.clone(), ctx.center))
-        })),
+    r.add_toggle("Toggle aircraft", "", move |ctx| {
+        AircraftComponent::new(state.clone(), ctx.center)
     });
 }
 
