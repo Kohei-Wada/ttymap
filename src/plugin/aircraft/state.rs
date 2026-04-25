@@ -20,6 +20,9 @@ pub struct AircraftState {
     /// Enter jumps to that aircraft's location. Reset to 0 when the
     /// list shrinks below the current selection.
     pub(super) selected: usize,
+    /// User-supplied panel placement override; resolved at render
+    /// time. Set from `[aircraft]` config section.
+    pub(super) layout: LayoutConfig,
     client: Arc<OpenSkyClient>,
     feed: PolledFeed<Vec<Aircraft>>,
     fetch_half_deg: f64,
@@ -30,6 +33,7 @@ impl AircraftState {
         Self {
             aircraft: Vec::new(),
             selected: 0,
+            layout: cfg.layout,
             client: Arc::new(OpenSkyClient::new()),
             feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
             fetch_half_deg: cfg.fetch_half_deg,

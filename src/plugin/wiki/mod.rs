@@ -50,11 +50,18 @@ use state::WikiHandle;
 /// out-of-box hit english Wikipedia; set this independently of the
 /// renderer's `[render].language` if the user wants e.g. Japanese
 /// map labels but English articles.
+///
+/// `anchor` / `width` / `height` (flattened from `LayoutConfig`)
+/// override the panel's position and size from the same `[wiki]`
+/// section; absent fields fall back to the plugin's defaults
+/// (right-side, ¼ map width, near-full height).
 #[derive(Deserialize)]
 #[serde(default)]
 pub struct WikiConfig {
     pub language: String,
     pub limit: u32,
+    #[serde(flatten)]
+    pub layout: LayoutConfig,
 }
 
 impl Default for WikiConfig {
@@ -62,6 +69,7 @@ impl Default for WikiConfig {
         Self {
             language: "en".to_string(),
             limit: 50,
+            layout: LayoutConfig::default(),
         }
     }
 }
@@ -71,7 +79,11 @@ impl Default for WikiConfig {
 /// clone the handle so every push shares the same persistent list.
 pub fn register(config: &Config, r: &mut Registrar) {
     let cfg: WikiConfig = config.plugin("wiki");
-    let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(&cfg.language, cfg.limit)));
+    let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(
+        &cfg.language,
+        cfg.limit,
+        cfg.layout,
+    )));
     let state_for_key = state.clone();
     r.bind(KeyCode::Char('i'), KeyModifiers::NONE, move |ctx| {
         WikiComponent::new(state_for_key.clone(), ctx.center)

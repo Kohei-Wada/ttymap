@@ -26,17 +26,21 @@ pub struct WikiState {
     /// refreshed (e.g. after the map panned and new nearby articles
     /// loaded).
     pub(in crate::plugin::wiki) detail: Option<WikiArticle>,
+    /// User-supplied panel placement override; applied at render
+    /// time. Set from `[wiki]` config section.
+    pub(in crate::plugin::wiki) layout: LayoutConfig,
     client: Arc<WikipediaClient>,
     limit: u32,
     feed: PolledFeed<Vec<WikiArticle>>,
 }
 
 impl WikiState {
-    pub fn new(language: &str, limit: u32) -> Self {
+    pub fn new(language: &str, limit: u32, layout: LayoutConfig) -> Self {
         Self {
             articles: Vec::new(),
             selected: 0,
             detail: None,
+            layout,
             client: Arc::new(WikipediaClient::new(language)),
             limit,
             feed: PolledFeed::with_cooldown(Duration::from_secs(2)),

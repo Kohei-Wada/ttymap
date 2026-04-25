@@ -39,11 +39,18 @@ pub struct IssConfig {
     /// Min seconds between fetches. ~5 s gives clearly-visible
     /// motion (38 km between samples) while staying polite.
     pub interval_secs: u64,
+    /// Optional `anchor` / `width` / `height` panel placement
+    /// overrides (flattened into the `[iss]` section).
+    #[serde(flatten)]
+    pub layout: LayoutConfig,
 }
 
 impl Default for IssConfig {
     fn default() -> Self {
-        Self { interval_secs: 5 }
+        Self {
+            interval_secs: 5,
+            layout: LayoutConfig::default(),
+        }
     }
 }
 

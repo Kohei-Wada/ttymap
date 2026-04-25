@@ -44,12 +44,14 @@
 //! ```
 
 pub mod async_job;
+pub mod layout;
 pub mod map_api;
 pub mod nominatim;
 pub mod polled_feed;
 pub mod throttle;
 
 pub use async_job::AsyncJob;
+pub use layout::{LayoutConfig, PanelAnchor};
 pub use map_api::MapApi;
 pub use polled_feed::PolledFeed;
 // `throttle::Throttle` is consumed only by `polled_feed` today;
@@ -68,7 +70,7 @@ pub use polled_feed::PolledFeed;
 /// what they need, ignore the rest.
 #[allow(unused_imports)]
 pub mod prelude {
-    pub use super::PolledFeed;
+    pub use super::{LayoutConfig, PanelAnchor, PolledFeed};
 
     pub use crate::app::AppMsg;
     pub use crate::compositor::window::{RenderWindow, Window};

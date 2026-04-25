@@ -13,15 +13,15 @@ pub fn render_panel(state: &AircraftState, win: &mut RenderWindow) {
         return;
     }
 
-    let panel_width = (area_outer.width / 4).max(28).min(area_outer.width / 3);
-    let y = area_outer.y + 3;
-    let panel_height = area_outer.height.saturating_sub(6);
-    if panel_height < 4 {
+    let default_width = (area_outer.width / 4).max(28).min(area_outer.width / 3);
+    let default_height = area_outer.height.saturating_sub(6);
+    if default_height < 4 {
         return;
     }
-
-    let x = area_outer.x + 1;
-    let area = Rect::new(x, y, panel_width, panel_height);
+    let area = state
+        .layout
+        .resolve(area_outer, PanelAnchor::Left, default_width, default_height);
+    let panel_height = area.height;
     win.clear(area);
 
     let body = win.style(StyleKind::Body);

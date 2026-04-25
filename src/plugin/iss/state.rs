@@ -19,6 +19,9 @@ pub struct IssState {
     /// timestamp, but wall-clock skew makes "now - that" surprising;
     /// monotonic local Instant is what the user actually wants.
     pub(super) last_update: Option<Instant>,
+    /// User-supplied panel placement override; resolved at render
+    /// time. Set from `[iss]` config section.
+    pub(super) layout: LayoutConfig,
     client: Arc<OpenNotifyClient>,
     feed: PolledFeed<Option<IssPosition>>,
 }
@@ -28,6 +31,7 @@ impl IssState {
         Self {
             position: None,
             last_update: None,
+            layout: cfg.layout,
             client: Arc::new(OpenNotifyClient::new()),
             feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
         }

@@ -7,6 +7,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::compositor::window::RenderWindow;
+use crate::plugin_api::PanelAnchor;
 use crate::widget::{Line, Paragraph, Rect, Span, StyleKind};
 
 use super::WikiState;
@@ -21,16 +22,16 @@ pub fn render_panel(widget: &WikiState, win: &mut RenderWindow) {
         return;
     }
 
-    let panel_width = (map_inner.width / 4).max(25).min(map_inner.width / 3);
-    let y = map_inner.y + 3;
-    let panel_height = map_inner.height.saturating_sub(6);
-
-    if panel_height < 4 {
+    let default_width = (map_inner.width / 4).max(25).min(map_inner.width / 3);
+    let default_height = map_inner.height.saturating_sub(6);
+    if default_height < 4 {
         return;
     }
-
-    let x = map_inner.right().saturating_sub(panel_width + 1);
-    let area = Rect::new(x, y, panel_width, panel_height);
+    let area = widget
+        .layout
+        .resolve(map_inner, PanelAnchor::Right, default_width, default_height);
+    let panel_width = area.width;
+    let panel_height = area.height;
     win.clear(area);
 
     let content_width = (panel_width as usize).saturating_sub(4).max(10);

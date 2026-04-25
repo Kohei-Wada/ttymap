@@ -14,9 +14,11 @@ use crate::plugin_api::prelude::*;
 
 use super::state::IssState;
 
-const PANEL_WIDTH: u16 = 30;
+/// Default panel size; user can override via `width` / `height` in
+/// the `[iss]` config section.
+const DEFAULT_WIDTH: u16 = 30;
 /// Border + 2 content rows + border.
-const PANEL_HEIGHT: u16 = 4;
+const DEFAULT_HEIGHT: u16 = 4;
 /// ISS orbits at ~408 km altitude with ~7.66 km/s ground-track speed.
 /// These are constants of the orbit, not values from the API.
 const ALTITUDE_KM: f64 = 408.0;
@@ -24,14 +26,14 @@ const VELOCITY_KMS: f64 = 7.66;
 
 pub fn render_panel(state: &IssState, win: &mut RenderWindow) {
     let area_outer = win.area();
-    if area_outer.width < PANEL_WIDTH + 2 || area_outer.height < PANEL_HEIGHT + 2 {
+    if area_outer.width < DEFAULT_WIDTH + 2 || area_outer.height < DEFAULT_HEIGHT + 2 {
         return;
     }
-    let area = Rect::new(
-        area_outer.x + 1,
-        area_outer.y + 1,
-        PANEL_WIDTH,
-        PANEL_HEIGHT,
+    let area = state.layout.resolve(
+        area_outer,
+        PanelAnchor::TopLeft,
+        DEFAULT_WIDTH,
+        DEFAULT_HEIGHT,
     );
     win.clear(area);
 

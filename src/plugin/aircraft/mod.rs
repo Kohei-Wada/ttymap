@@ -44,6 +44,10 @@ pub struct AircraftConfig {
     /// Larger keeps markers visible after small pans without a
     /// re-fetch; smaller keeps the response compact.
     pub fetch_half_deg: f64,
+    /// Optional `anchor` / `width` / `height` panel placement
+    /// overrides (flattened into the `[aircraft]` section).
+    #[serde(flatten)]
+    pub layout: LayoutConfig,
 }
 
 impl Default for AircraftConfig {
@@ -51,6 +55,7 @@ impl Default for AircraftConfig {
         Self {
             interval_secs: 12,
             fetch_half_deg: 5.0,
+            layout: LayoutConfig::default(),
         }
     }
 }
