@@ -15,7 +15,9 @@ use super::{FetchError, TileFetcher};
 use crate::map::tile::key::TileKey;
 use crate::shared::http::HttpClient;
 
-const BASE_URL: &str = "http://mapscii.me";
+// Use HTTPS directly: `http://mapscii.me/...` 301-redirects to the
+// HTTPS URL, costing an extra round-trip per fetch on cold connections.
+const BASE_URL: &str = "https://mapscii.me";
 const ATTRIBUTION: &str = "© OpenStreetMap contributors";
 
 pub struct HttpFetcher {
@@ -71,8 +73,8 @@ mod tests {
     }
 
     #[test]
-    fn default_uses_mapscii_me_base() {
+    fn default_uses_mapscii_me_https_base() {
         let fetcher = HttpFetcher::new();
-        assert_eq!(fetcher.base_url, "http://mapscii.me");
+        assert_eq!(fetcher.base_url, "https://mapscii.me");
     }
 }
