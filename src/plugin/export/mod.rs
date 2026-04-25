@@ -7,8 +7,7 @@
 //! the actual file write because the `MapFrame` + the `ProjectDirs`
 //! live there. The plugin itself carries no state.
 
-use crate::app::AppMsg;
-use crate::compositor::Registrar;
+use crate::plugin_api::prelude::*;
 
 pub fn register(r: &mut Registrar) {
     r.add_run("Export frame as ANSI", "", |_| vec![AppMsg::ExportFrame]);

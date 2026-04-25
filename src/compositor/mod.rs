@@ -40,7 +40,7 @@ use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
 use crate::geo::LonLat;
-use crate::map::MapApi;
+use crate::plugin_api::MapApi;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -98,14 +98,23 @@ pub trait Component: Any {
     /// `emit(msg)` / `ignore()` to express what should happen next.
     /// Silence (no `win.*` call) is implicit consumption — the
     /// event is treated as handled but with no state change.
-    fn handle_event(&mut self, event: KeyEvent, win: &mut Window);
+    ///
+    /// Default impl is `win.ignore()` — the non-modal "I don't bind
+    /// any keys, pass through to the base layer" behaviour. Plugins
+    /// that consume keys override this.
+    fn handle_event(&mut self, _event: KeyEvent, win: &mut Window) {
+        win.ignore();
+    }
 
     /// Paint this component into `win.area()`. Called once per
     /// frame while on the stack; compositor renders bottom-to-top.
     /// `win` carries the ratatui frame, the component's allowed
     /// area, and the current theme — plugins read all three through
     /// `win` so theme does not thread through helper signatures.
-    fn render(&self, win: &mut window::RenderWindow);
+    ///
+    /// Default impl is no-op — for marker-only components that have
+    /// no panel UI (just `paint_on_map`).
+    fn render(&self, _win: &mut window::RenderWindow) {}
 
     /// Paint world-space primitives on the map via [`MapApi`].
     /// Called every frame while on the stack, before `render`. Default

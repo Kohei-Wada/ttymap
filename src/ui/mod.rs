@@ -13,9 +13,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use overlay::OverlayManager;
 
 use crate::compositor::{Compositor, Context};
-use crate::map::MapApi;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
+use crate::plugin_api::MapApi;
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
