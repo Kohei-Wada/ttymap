@@ -276,6 +276,10 @@ impl Component for WikiComponent {
             ]
         }
     }
+
+    fn name(&self) -> &'static str {
+        "wiki"
+    }
 }
 
 /// Wire wiki into the registrar. Creates the shared state once; the

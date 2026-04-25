@@ -155,6 +155,10 @@ impl Component for IssComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("Enter", "fly to ISS")]
     }
+
+    fn name(&self) -> &'static str {
+        "iss"
+    }
 }
 
 /// Wire the ISS plugin into the registrar. Palette-only activation.

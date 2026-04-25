@@ -134,6 +134,10 @@ impl Component for AircraftComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    fn name(&self) -> &'static str {
+        "aircraft"
+    }
 }
 
 /// Wire the aircraft plugin into the registrar. Palette-only

@@ -135,6 +135,10 @@ impl Component for HelpComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("any key", "close")]
     }
+
+    fn name(&self) -> &'static str {
+        "help"
+    }
 }
 
 /// Register the help plugin. Takes pre-computed help entries from

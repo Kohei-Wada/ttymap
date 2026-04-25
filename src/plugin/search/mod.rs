@@ -112,6 +112,10 @@ impl Component for SearchComponent {
             vec![("Enter", "search"), ("Esc", "cancel"), ("C-u", "clear")]
         }
     }
+
+    fn name(&self) -> &'static str {
+        "search"
+    }
 }
 
 /// Wire the search plugin into the registrar. Adds:

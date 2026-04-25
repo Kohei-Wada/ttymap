@@ -87,6 +87,20 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
     let hints = build_hints(compositor);
     let sep = Span::styled("  ", Style::default().fg(theme.muted_color));
     let mut spans: Vec<Span> = Vec::new();
+
+    // Lead with the focused component's name (e.g. "[wiki]") so the
+    // user can tell which plugin is consuming keystrokes when modals
+    // stack. Empty for the base layer — no chrome when focus is on
+    // the map itself.
+    let focused = compositor.focused_name();
+    if !focused.is_empty() {
+        spans.push(Span::styled(
+            format!(" {} ", focused),
+            Style::default().fg(theme.bg).bg(theme.accent_alt),
+        ));
+        spans.push(sep.clone());
+    }
+
     for (i, (key, desc)) in hints.iter().enumerate() {
         if i > 0 {
             spans.push(sep.clone());

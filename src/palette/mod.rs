@@ -154,6 +154,10 @@ impl Component for PaletteComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         vec![("↑↓", "select"), ("Enter", "run"), ("Esc", "cancel")]
     }
+
+    fn name(&self) -> &'static str {
+        "palette"
+    }
 }
 
 /// Install the palette as a built-in. Unlike a plugin's `register`,

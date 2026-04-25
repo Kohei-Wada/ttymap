@@ -165,6 +165,10 @@ impl Component for QuakeComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    fn name(&self) -> &'static str {
+        "quakes"
+    }
 }
 
 /// Wire the quake plugin into the registrar. Palette-only activation.

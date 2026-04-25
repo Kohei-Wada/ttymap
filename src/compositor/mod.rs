@@ -125,6 +125,14 @@ pub trait Component: Any {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }
+
+    /// Short user-facing label shown in the footer when this
+    /// component is focused — e.g. `"wiki"`, `"aircraft"`. Defaults
+    /// to empty so the bottom layer (or any unlabelled component)
+    /// renders no chrome. Plugins return a fixed string token.
+    fn name(&self) -> &'static str {
+        ""
+    }
 }
 
 use window::{Window, WindowOps};
@@ -318,6 +326,17 @@ impl Compositor {
             .get(self.focused_idx)
             .map(|c| c.footer_hints())
             .unwrap_or_default()
+    }
+
+    /// Name of the currently focused component (empty when the focus
+    /// is on the base layer or any component that opted not to label
+    /// itself). Surfaced in the footer so the user can tell which
+    /// plugin is consuming their keystrokes when modals stack.
+    pub fn focused_name(&self) -> &'static str {
+        self.stack
+            .get(self.focused_idx)
+            .map(|c| c.name())
+            .unwrap_or("")
     }
 
     /// Rotate `focused_idx` through all components (including the
