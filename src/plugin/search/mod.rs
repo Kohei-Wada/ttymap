@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
+use crate::plugin_api::nominatim::NominatimClient;
 use crate::plugin_api::prelude::*;
-use crate::shared::nominatim::NominatimClient;
 
 /// Wire the search plugin into the registrar. Adds:
 /// - activation on `/` → push a fresh [`SearchComponent`]

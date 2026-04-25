@@ -32,7 +32,7 @@ use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
-use crate::shared::nominatim::NominatimClient;
+use crate::plugin_api::nominatim::NominatimClient;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 use mouse::MouseAdapter;

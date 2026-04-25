@@ -20,8 +20,8 @@ mod state;
 
 use std::sync::Arc;
 
+use crate::plugin_api::nominatim::NominatimClient;
 use crate::plugin_api::prelude::*;
-use crate::shared::nominatim::NominatimClient;
 
 use component::InfoComponent;
 use state::InfoState;

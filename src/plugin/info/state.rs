@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use log::debug;
 
+use crate::plugin_api::nominatim::{NominatimClient, PlaceInfo};
 use crate::plugin_api::prelude::*;
-use crate::shared::nominatim::{NominatimClient, PlaceInfo};
 
 /// Min seconds between reverse-geocode lookups. Nominatim asks
 /// callers to stay under 1 req/s; 5 s is comfortably under that
