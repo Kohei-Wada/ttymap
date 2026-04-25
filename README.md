@@ -185,7 +185,7 @@ src/
 │   └── tile/            MVT fetch + cache + decode
 │       ├── cache.rs         Memory (configurable LRU) + optional disk
 │       ├── decode.rs        Protobuf → DecodedTile
-│       └── fetch/           TileClient trait + mapscii backend + priority queue
+│       └── fetch/           TileClient trait + http backend + priority queue
 │
 ├── shared/              host-and-plugin utilities (plugin-only utilities live in plugin_api/)
 │   ├── geoip.rs         IP-based lat/lon lookup (also used by snap CLI)

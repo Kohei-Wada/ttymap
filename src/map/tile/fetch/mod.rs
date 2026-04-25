@@ -1,17 +1,17 @@
 //! Tile fetch subsystem — backends that populate the cache.
 //!
-//! Today the only backend is `mapscii` (MVT over HTTP against
+//! Today the only backend is `http` (MVT over HTTP, default base
 //! `mapscii.me`). Additional backends (mbtiles, pmtiles, local dirs,
 //! mocks for tests) plug in as new modules whose entry type
 //! `impl TileClient`. When a second backend lands, route selection
 //! (from config or from the file extension of a user-supplied path)
 //! lives here.
 
-pub mod mapscii;
+pub mod http;
 pub mod priority;
 pub mod queue;
 
-pub use mapscii::MapsciiTileClient;
+pub use http::HttpTileClient;
 pub use priority::TilePriority;
 
 use crate::map::tile::cache::TileKey;
