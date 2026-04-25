@@ -11,37 +11,31 @@ use log::debug;
 
 use crate::plugin_api::prelude::*;
 
+use super::AircraftConfig;
 use super::opensky::{Aircraft, OpenSkyClient};
-
-/// Min seconds between fetches. OpenSky anonymous quota is roughly
-/// 4000 credits/day; bbox calls cost 1 credit each, so this rate
-/// (~5/min) is well under the cap even left on for hours.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(12);
-
-/// Half-side of the bounding box (degrees) sent to OpenSky. ±5° is
-/// large enough to keep markers visible after small pans without a
-/// re-fetch, small enough that the response stays compact.
-const FETCH_HALF_DEG: f64 = 5.0;
 
 pub struct AircraftState {
     pub(super) aircraft: Vec<Aircraft>,
     client: Arc<OpenSkyClient>,
     feed: PolledFeed<Vec<Aircraft>>,
+    fetch_half_deg: f64,
 }
 
 impl AircraftState {
-    pub fn new() -> Self {
+    pub fn new(cfg: AircraftConfig) -> Self {
         Self {
             aircraft: Vec::new(),
             client: Arc::new(OpenSkyClient::new()),
-            feed: PolledFeed::ready(REFRESH_INTERVAL),
+            feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
+            fetch_half_deg: cfg.fetch_half_deg,
         }
     }
 
     pub(super) fn refresh(&mut self, center: LonLat) {
         let client = self.client.clone();
+        let half = self.fetch_half_deg;
         self.feed
-            .refresh(move || client.states_around(center.lat, center.lon, FETCH_HALF_DEG));
+            .refresh(move || client.states_around(center.lat, center.lon, half));
     }
 
     pub(super) fn poll(&mut self) {
@@ -49,12 +43,6 @@ impl AircraftState {
             debug!("aircraft: received {} states", list.len());
             self.aircraft = list;
         }
-    }
-}
-
-impl Default for AircraftState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -66,7 +54,7 @@ mod tests {
 
     #[test]
     fn fresh_state_is_empty() {
-        let s = AircraftState::new();
+        let s = AircraftState::new(AircraftConfig::default());
         assert!(s.aircraft.is_empty());
     }
 }

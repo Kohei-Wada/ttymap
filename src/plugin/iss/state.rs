@@ -9,12 +9,8 @@ use log::debug;
 
 use crate::plugin_api::prelude::*;
 
+use super::IssConfig;
 use super::opennotify::{IssPosition, OpenNotifyClient};
-
-/// Min seconds between fetches. open-notify has no published rate
-/// limit; 5 s keeps load on a free public service polite while still
-/// showing visible motion (~38 km between samples).
-const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct IssState {
     pub(super) position: Option<IssPosition>,
@@ -23,11 +19,11 @@ pub struct IssState {
 }
 
 impl IssState {
-    pub fn new() -> Self {
+    pub fn new(cfg: IssConfig) -> Self {
         Self {
             position: None,
             client: Arc::new(OpenNotifyClient::new()),
-            feed: PolledFeed::ready(REFRESH_INTERVAL),
+            feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
         }
     }
 
@@ -46,12 +42,6 @@ impl IssState {
     }
 }
 
-impl Default for IssState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub type IssHandle = Rc<RefCell<IssState>>;
 
 #[cfg(test)]
@@ -60,7 +50,7 @@ mod tests {
 
     #[test]
     fn fresh_state_has_no_position() {
-        let s = IssState::new();
+        let s = IssState::new(IssConfig::default());
         assert!(s.position.is_none());
     }
 }

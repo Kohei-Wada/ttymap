@@ -23,16 +23,43 @@ mod state;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use serde::Deserialize;
+
+use crate::config::Config;
 use crate::plugin_api::prelude::*;
 
 use component::AircraftComponent;
 use state::{AircraftHandle, AircraftState};
 
+/// Aircraft plugin config (`[aircraft]` in config.toml).
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct AircraftConfig {
+    /// Min seconds between fetches. OpenSky's anonymous quota is
+    /// ~4000 credits/day; bbox calls cost 1 each, so 12 s (=5/min)
+    /// is well under the cap.
+    pub interval_secs: u64,
+    /// Half-side of the bounding box (degrees) sent to OpenSky.
+    /// Larger keeps markers visible after small pans without a
+    /// re-fetch; smaller keeps the response compact.
+    pub fetch_half_deg: f64,
+}
+
+impl Default for AircraftConfig {
+    fn default() -> Self {
+        Self {
+            interval_secs: 12,
+            fetch_half_deg: 5.0,
+        }
+    }
+}
+
 /// Wire the aircraft plugin into the registrar. Palette-only
 /// activation for now — no dedicated key — so we don't fight the
 /// existing `a → ZoomIn` binding.
-pub fn register(r: &mut Registrar) {
-    let state: AircraftHandle = Rc::new(RefCell::new(AircraftState::new()));
+pub fn register(config: &Config, r: &mut Registrar) {
+    let cfg: AircraftConfig = config.plugin("aircraft");
+    let state: AircraftHandle = Rc::new(RefCell::new(AircraftState::new(cfg)));
     r.add_toggle("Toggle aircraft", "", move |ctx| {
         AircraftComponent::new(state.clone(), ctx.center)
     });

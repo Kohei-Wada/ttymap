@@ -7,12 +7,32 @@
 //! The `[keymap]` section deserialises into `KeybindingOverrides`
 //! (defined in `keymap.rs` alongside the `KeyMap` it configures);
 //! this module stays focused on "parse TOML into ergonomic data".
+//!
+//! ## Plugin configuration
+//!
+//! Plugin sections live under `extras` — a catch-all that captures
+//! every `[section]` not matched by the framework-known fields above.
+//! Plugins fetch their slice by typed lookup:
+//!
+//! ```ignore
+//! #[derive(Deserialize, Default)]
+//! pub struct AircraftConfig { pub interval_secs: u64 }
+//!
+//! pub fn register(config: &Config, r: &mut Registrar) {
+//!     let cfg: AircraftConfig = config.plugin("aircraft");
+//!     // ...
+//! }
+//! ```
+//!
+//! Adding a new plugin requires no modification to this module — the
+//! plugin owns its TOML schema, defaults, and field names entirely.
 
 use std::fs;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 pub use crate::keymap::KeybindingOverrides;
 
@@ -22,9 +42,34 @@ pub struct Config {
     pub map: MapConfig,
     pub render: RenderConfig,
     pub cache: CacheConfig,
-    pub wiki: WikiConfig,
     pub geoip: GeoipConfig,
     pub keymap: KeybindingOverrides,
+    /// Catch-all for plugin sections. `[aircraft]`, `[iss]`,
+    /// `[wiki]`, etc. land here as raw TOML; plugins call
+    /// [`Config::plugin`] to get their typed slice.
+    #[serde(flatten)]
+    pub extras: toml::Table,
+}
+
+impl Config {
+    /// Deserialize the named TOML section into `T`, falling back to
+    /// `T::default()` when the section is absent or the bytes don't
+    /// fit the schema. Plugins call this in `register` to read their
+    /// own configuration without the host having to know about it:
+    ///
+    /// ```ignore
+    /// let cfg: WikiConfig = config.plugin("wiki");
+    /// ```
+    pub fn plugin<T>(&self, name: &str) -> T
+    where
+        T: DeserializeOwned + Default,
+    {
+        self.extras
+            .get(name)
+            .cloned()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Deserialize)]
@@ -84,18 +129,6 @@ impl Default for CacheConfig {
             tiles: true,
             memory_tiles: 192,
         }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(default)]
-pub struct WikiConfig {
-    pub limit: u32,
-}
-
-impl Default for WikiConfig {
-    fn default() -> Self {
-        Self { limit: 50 }
     }
 }
 

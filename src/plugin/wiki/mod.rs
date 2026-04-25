@@ -36,17 +36,42 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use serde::Deserialize;
 
+use crate::config::Config;
 use crate::plugin_api::prelude::*;
 
 use component::WikiComponent;
 use state::WikiHandle;
 
+/// Wiki plugin config (`[wiki]` in config.toml).
+///
+/// `language` defaults to `"en"` so users running the plugin
+/// out-of-box hit english Wikipedia; set this independently of the
+/// renderer's `[render].language` if the user wants e.g. Japanese
+/// map labels but English articles.
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct WikiConfig {
+    pub language: String,
+    pub limit: u32,
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        Self {
+            language: "en".to_string(),
+            limit: 50,
+        }
+    }
+}
+
 /// Wire wiki into the registrar. Creates the shared state once; the
 /// spawn closures for activation (`i`) and the palette entry both
 /// clone the handle so every push shares the same persistent list.
-pub fn register(language: &str, limit: u32, r: &mut Registrar) {
-    let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(language, limit)));
+pub fn register(config: &Config, r: &mut Registrar) {
+    let cfg: WikiConfig = config.plugin("wiki");
+    let state: WikiHandle = Rc::new(RefCell::new(WikiState::new(&cfg.language, cfg.limit)));
     let state_for_key = state.clone();
     r.bind(KeyCode::Char('i'), KeyModifiers::NONE, move |ctx| {
         WikiComponent::new(state_for_key.clone(), ctx.center)

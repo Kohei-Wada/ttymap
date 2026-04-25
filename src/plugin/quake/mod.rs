@@ -29,14 +29,33 @@ mod usgs;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use serde::Deserialize;
+
+use crate::config::Config;
 use crate::plugin_api::prelude::*;
 
 use component::QuakeComponent;
 use state::{QuakeHandle, QuakeState};
 
+/// Quake plugin config (`[quake]` in config.toml).
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct QuakeConfig {
+    /// Min seconds between feed pulls. USGS itself updates ≈1/min;
+    /// 5 min keeps load polite while picking up new events promptly.
+    pub interval_secs: u64,
+}
+
+impl Default for QuakeConfig {
+    fn default() -> Self {
+        Self { interval_secs: 300 }
+    }
+}
+
 /// Wire the quake plugin into the registrar. Palette-only activation.
-pub fn register(r: &mut Registrar) {
-    let state: QuakeHandle = Rc::new(RefCell::new(QuakeState::new()));
+pub fn register(config: &Config, r: &mut Registrar) {
+    let cfg: QuakeConfig = config.plugin("quake");
+    let state: QuakeHandle = Rc::new(RefCell::new(QuakeState::new(cfg)));
     r.add_toggle("Toggle quakes", "", move |_| {
         QuakeComponent::new(state.clone())
     });

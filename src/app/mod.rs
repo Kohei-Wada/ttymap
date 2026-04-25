@@ -328,16 +328,16 @@ fn build_registrar(
     crate::plugin::scalebar::register(&mut r);
     crate::plugin::attribution::register(attribution, &mut r);
     crate::plugin::search::register(nominatim, &mut r);
-    crate::plugin::wiki::register(&config.render.language, config.wiki.limit, &mut r);
+    crate::plugin::wiki::register(config, &mut r);
     crate::plugin::here::register(
         config.geoip.endpoint.clone(),
         config.geoip.timeout_ms,
         &mut r,
     );
     crate::plugin::export::register(&mut r);
-    crate::plugin::aircraft::register(&mut r);
-    crate::plugin::iss::register(&mut r);
-    crate::plugin::quake::register(&mut r);
+    crate::plugin::aircraft::register(config, &mut r);
+    crate::plugin::iss::register(config, &mut r);
+    crate::plugin::quake::register(config, &mut r);
 
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette

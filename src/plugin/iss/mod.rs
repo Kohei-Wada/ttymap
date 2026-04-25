@@ -23,13 +23,32 @@ mod state;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use serde::Deserialize;
+
+use crate::config::Config;
 use crate::plugin_api::prelude::*;
 
 use component::IssComponent;
 use state::{IssHandle, IssState};
 
+/// ISS plugin config (`[iss]` in config.toml).
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct IssConfig {
+    /// Min seconds between fetches. ~5 s gives clearly-visible
+    /// motion (38 km between samples) while staying polite.
+    pub interval_secs: u64,
+}
+
+impl Default for IssConfig {
+    fn default() -> Self {
+        Self { interval_secs: 5 }
+    }
+}
+
 /// Wire the ISS plugin into the registrar. Palette-only activation.
-pub fn register(r: &mut Registrar) {
-    let state: IssHandle = Rc::new(RefCell::new(IssState::new()));
+pub fn register(config: &Config, r: &mut Registrar) {
+    let cfg: IssConfig = config.plugin("iss");
+    let state: IssHandle = Rc::new(RefCell::new(IssState::new(cfg)));
     r.add_toggle("Toggle ISS", "", move |_| IssComponent::new(state.clone()));
 }

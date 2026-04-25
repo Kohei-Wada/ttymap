@@ -10,12 +10,8 @@ use log::debug;
 
 use crate::plugin_api::prelude::*;
 
+use super::QuakeConfig;
 use super::usgs::{Quake, UsgsClient};
-
-/// Min seconds between fetches. The USGS feed itself updates roughly
-/// every minute; 5 minutes here keeps load on a free public service
-/// polite while still picking up new events promptly.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 pub struct QuakeState {
     pub(super) quakes: Vec<Quake>,
@@ -24,11 +20,11 @@ pub struct QuakeState {
 }
 
 impl QuakeState {
-    pub fn new() -> Self {
+    pub fn new(cfg: QuakeConfig) -> Self {
         Self {
             quakes: Vec::new(),
             client: Arc::new(UsgsClient::new()),
-            feed: PolledFeed::ready(REFRESH_INTERVAL),
+            feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
         }
     }
 
@@ -53,12 +49,6 @@ impl QuakeState {
     }
 }
 
-impl Default for QuakeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub type QuakeHandle = Rc<RefCell<QuakeState>>;
 
 #[cfg(test)]
@@ -67,14 +57,14 @@ mod tests {
 
     #[test]
     fn fresh_state_is_empty() {
-        let s = QuakeState::new();
+        let s = QuakeState::new(QuakeConfig::default());
         assert!(s.quakes.is_empty());
         assert!(s.highest_magnitude().is_none());
     }
 
     #[test]
     fn highest_magnitude_picks_max() {
-        let mut s = QuakeState::new();
+        let mut s = QuakeState::new(QuakeConfig::default());
         s.quakes = vec![
             Quake {
                 lat: 0.0,
