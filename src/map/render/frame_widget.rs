@@ -1,11 +1,11 @@
-//! ratatui Widget implementations for map rendering types.
+//! ratatui `Widget` adapter for [`MapFrame`].
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
-use crate::map::render::frame::MapFrame;
+use super::frame::MapFrame;
 
 impl Widget for &MapFrame {
     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -40,7 +40,7 @@ fn xterm_to_color(idx: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::render::frame::{MapCell, MapFrame};
+    use crate::map::render::frame::MapCell;
 
     #[test]
     fn test_xterm_to_color() {

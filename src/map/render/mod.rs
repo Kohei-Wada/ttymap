@@ -4,6 +4,7 @@ pub mod braille;
 pub mod canvas;
 pub mod earcut_worker;
 pub mod frame;
+pub mod frame_widget;
 mod geom;
 pub mod label;
 pub mod panic_silence;

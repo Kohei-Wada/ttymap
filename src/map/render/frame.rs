@@ -1,5 +1,4 @@
 //! Map frame — structured cell data produced by the render pipeline.
-//! Plugin implementation lives in ui/widget.rs.
 
 use std::fmt::Write;
 
