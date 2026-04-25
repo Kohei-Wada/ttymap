@@ -8,8 +8,9 @@
 //! defaults are `AppMsg::Map` wrappers, but nothing prevents binding
 //! a key to `AppMsg::SetTheme(...)` or `AppMsg::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
-//! are *not* `AppMsg`s — those are `Effect::Open(SurfaceId)`
-//! returned by the `BackgroundResponder` directly.)
+//! are *not* `AppMsg`s — those go through the compositor's
+//! [`Window::open`](crate::compositor::window::Window) / `toggle`
+//! queue, applied atomically after the `BaseLayer` hook returns.)
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::Deserialize;

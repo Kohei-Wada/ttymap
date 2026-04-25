@@ -22,8 +22,8 @@ us the result" stays as a direct method call.
 state changes. `App` is the Receiver (GoF): every invoker (keymap,
 palette, plugins, mouse) returns `Vec<AppMsg>` and never executes
 anything itself. Each match arm either delegates to a method on the
-domain type that owns the relevant state (`MapState` / `UiState`) or —
-for cross-cutting transitions — to a method on `App` itself
+domain type that owns the relevant state (`MapState`) or — for
+cross-cutting transitions — to a method on `App` itself
 (`apply_theme`, `handle_resize`). Arms whose effect changed the map
 frame call `self.request_map_redraw()` inline to request a fresh
 frame and notify passive widgets. This gives us:
@@ -65,10 +65,13 @@ Current examples:
 | `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
 
 Surface activations (palette open, plugin activate) deliberately do
-*not* go through `AppMsg` — they're expressed as
-`Effect::Open(SurfaceId)` returned by a `FocusSurface` and handled by
-`FocusManager::open` directly, so the focus state machine isn't
-coupled to the dispatch table.
+*not* go through `AppMsg` — they're expressed as a `Component` push
+onto the compositor stack, queued through `Window::open` /
+`Window::toggle` from the `BaseLayer`'s activation table and applied
+atomically after the hook returns. Routing focus through `AppMsg`
+would force the dispatch table to know which surfaces exist; keeping
+it on the compositor side means new plugins add zero `AppMsg`
+variants.
 
 ### When to use a direct method / setter instead
 
@@ -84,12 +87,12 @@ Use a plain method call when **any** of the following is true:
 
 Current examples:
 
-| Operation                         | Where                                    |
-| --------------------------------- | ---------------------------------------- |
-| `ui.drain_frames(&render_handle)` | Every tick, pulls completed MapFrames    |
-| `ui.info.poll()`                  | Every tick, info overlay maintenance     |
-| `widget.poll()`                   | Every tick, plugin async maintenance     |
-| `render_handle.request_draw(…)`   | Sending to another thread (not app state) |
+| Operation                              | Where                                       |
+| -------------------------------------- | ------------------------------------------- |
+| `render_handle.try_recv_frame()` loop  | Every tick, pulls completed MapFrames       |
+| `Component::poll(&mut win)`            | Every tick, every component on the stack    |
+| `Task::poll() -> Vec<AppMsg>`          | Every tick, headless plugins (here, …)      |
+| `render_handle.request_draw(…)`        | Sending to another thread (not app state)   |
 
 ### The infinite-loop trap
 
@@ -146,6 +149,55 @@ stays the single Receiver.
 
 Current threshold: not yet. Revisit when dispatch plus cross-cutting
 methods push us over.
+
+## Compositor: object lifetime is the visibility lifecycle
+
+Modal surfaces (palette, search, wiki, help, …) are `Component`s on
+a stack owned by the `Compositor`. Pushed on activation, popped when
+the component calls `win.close()`. Focus is a separate `focused_idx`
+into the stack, so `Tab` can move focus to the base layer without
+popping the modal above it.
+
+### Why a stack instead of `is_visible` / `activate` / `deactivate`
+
+A flag-driven design forces every surface to keep two pieces of
+state in sync — "am I on screen?" and "do I own focus?" — and every
+plugin author has to re-implement the activation lifecycle. Drift
+between them is the bug class the old `FocusManager` + `Plugin`
+trio kept generating.
+
+Stack presence collapses both into one fact: the component object
+**exists** while it is visible, is **dropped** the instant it
+closes. There is no second flag to forget.
+
+This lets `Component::paint_on_map` (world-space markers like the
+wiki article pins) be unconditional — every component on the stack
+paints. Markers naturally appear when the panel opens and disappear
+when it closes, with no "is this paint still active?" check.
+
+### Why a `&mut Window` queue instead of returning a result enum
+
+Hooks (`handle_event`, `poll`) receive a `&mut Window`. Plugins
+record intent through it — `win.close()`, `win.open(c)`,
+`win.emit(msg)`, `win.ignore()` — and the compositor drains the
+queue after the hook returns, applying ops atomically in a fixed
+order: `close` → `opens` (TypeId dedup) → `toggles` → `msgs`.
+
+A return-value alternative (`EventResult::CloseAndPush(...)`) does
+not scale: every new compound op needs a new variant. A queue
+expresses compounds by composition.
+
+The handle never grants `&mut Compositor`. Plugins cannot mutate
+the stack directly; the compositor is the sole applier. Stack /
+focus / dedup invariants stay framework-enforced regardless of
+plugin bugs.
+
+### Type-id dedup
+
+`push_or_focus` uses `Any::type_id` to detect that a component of
+the same concrete type is already on the stack — focus jumps to the
+existing instance instead of stacking a duplicate. A plugin author
+cannot forget to opt in: the concrete type *is* the dedup identity.
 
 ## Cleanup via `Drop`, not manual
 

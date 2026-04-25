@@ -137,10 +137,9 @@ src/
 │   └── snap.rs          `ttymap snap` / `snapshot` — headless single-frame renderer
 │
 ├── compositor/          helix-inspired focus / modal stack
-│   ├── mod.rs           Component trait, Compositor, Registrar, Task, Activation
+│   ├── mod.rs           Component, Compositor, Registrar, Activation, PaletteEntry, Task, Context
 │   ├── base.rs          BaseLayer — keymap + activation dispatch + gg sequence
-│   ├── window.rs        Window (event-side) + RenderWindow (render-side, owns UiTheme)
-│   └── painter.rs       MapPainter — world-space drawing handle for paint_on_map
+│   └── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
 │
 ├── widget/              ratatui-agnostic render vocabulary
 │   ├── geom.rs          Rect / Size
@@ -154,39 +153,45 @@ src/
 │   └── provider/        default provider + theme sub-mode
 │
 ├── plugin/              built-in plugins — each exposes `pub fn register(…, &mut Registrar)`
+│   ├── aircraft/        live ADS-B markers + side panel (OpenSky)
+│   ├── attribution/     © OpenStreetMap (always-on overlay)
 │   ├── export/          headless — dump current frame to ~/.local/share/ttymap/exports/*.ans
 │   ├── help/            help popup
 │   ├── here/            IP-geolocation "jump to here" (headless Task)
+│   ├── info/            top-right center / cursor / zoom / place readout (always-on overlay)
+│   ├── iss/             live ISS position marker + info panel
+│   ├── quake/           recent earthquakes (USGS feed)
+│   ├── scalebar/        distance ruler (always-on overlay)
 │   ├── search/          forward-geocode popup (Nominatim)
 │   └── wiki/            nearby Wikipedia panel
+│
+├── plugin_api/          plugin-author surface — services + helpers + prelude
+│   ├── mod.rs           re-exports + `prelude` glob
+│   ├── map_api.rs       MapApi — world-space + screen-space draw primitives for paint_on_map
+│   ├── async_job.rs     fire-and-poll background job
+│   ├── throttle.rs      rate-limit helper
+│   ├── polled_feed.rs   periodic feed wrapper (used by aircraft, iss, quake)
+│   ├── nominatim.rs     forward + reverse geocoding client
+│   ├── panel.rs         ListPanel — framed scrollable list panel
+│   └── layout.rs        LayoutConfig + PanelAnchor (per-plugin panel placement)
 │
 ├── map/                 domain — viewport state + rendering pipeline
 │   ├── state.rs, action.rs, mod.rs
 │   ├── render/          tiles → MapFrame on a dedicated thread
 │   │   ├── pipeline.rs, thread.rs, renderer.rs
-│   │   ├── canvas.rs, braille.rs, frame.rs
-│   │   └── view.rs, label.rs, geom/, earcut_worker.rs
+│   │   ├── canvas.rs, braille.rs, frame.rs, frame_widget.rs
+│   │   └── view.rs, label.rs, geom/, earcut_worker.rs, panic_silence.rs
 │   ├── styler/          Mapbox GL-style rules (dark / bright presets)
 │   └── tile/            MVT fetch + cache + decode
 │       ├── cache.rs         Memory (configurable LRU) + optional disk
 │       ├── decode.rs        Protobuf → DecodedTile
 │       └── fetch/           TileClient trait + mapscii backend + priority queue
 │
-├── shared/              cross-cutting utilities
-│   ├── async_job.rs     fire-and-poll background job
-│   ├── geoip.rs         IP-based lat/lon lookup
-│   ├── http/            user-agent-tagged reqwest wrapper
-│   ├── nominatim.rs     forward + reverse geocoding
-│   └── throttle.rs
+├── shared/              host-and-plugin utilities (plugin-only utilities live in plugin_api/)
+│   ├── geoip.rs         IP-based lat/lon lookup (also used by snap CLI)
+│   └── http/            user-agent-tagged reqwest wrapper
 │
-└── ui/                  non-modal UI framework
-    ├── mod.rs           UiState + draw() — owns overlay + last MapFrame
-    ├── map_view.rs      MapFrame → ratatui widget
-    └── overlay/         always-on map decorations
-        ├── attribution.rs   © OpenStreetMap
-        ├── scale_bar.rs     distance ruler
-        ├── info/            center / cursor / zoom / place readout
-        └── manager.rs       OverlayManager
+└── ui.rs                non-modal UI shell — draw() forwards to the Compositor
 ```
 
 ### Layering
@@ -195,9 +200,10 @@ src/
 - **`app/`** — the **controller**. `AppMsg` (in `app/msg.rs`) is the closed enum every input source (keymap, palette, compositor components, mouse adapter, async tasks) emits; `App::dispatch` in `app/mod.rs` is the sole place that executes them. Command pattern with `App` as the Receiver — see [`docs/design.md`](docs/design.md) for the AppMsg-vs-direct-call judgment rules.
 - **`compositor/`** — focus and modal state. A stack of `Component`s; the top is focused. No `is_visible` / `activate` / `deactivate` contract — presence on the stack *is* the lifecycle. `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted before any component sees them).
 - **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
-- **`ui/`** — non-modal chrome: map view, always-on overlays (info, attribution, scale bar), and `draw()` which forwards focused-surface rendering to the Compositor.
+- **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
+- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `ListPanel`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
 - **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
 
 ### Message flow
@@ -243,13 +249,15 @@ Rendering is decoupled from fetching. The render thread builds a `MapFrame` from
 
 ```
 main thread (ratatui draw):
-  ui::draw(f, &ui, &compositor, &theme, &ctx):
-    1. map_view renders the latest MapFrame
-    2. MapPainter set up; compositor.paint_on_map(painter)
-       — components paint world-space primitives (wiki markers, …)
-    3. always-on overlays (info, attribution, scale_bar) stamp their rects
-    4. compositor.render(f, area, theme, ctx)
-       — every Component on the stack drawn bottom-up
+  ui::draw(f, &compositor, &theme, &ctx):
+    1. latest MapFrame is rendered into the map area
+    2. MapApi set up; compositor.paint_on_map(map_api)
+       — every Component on the stack paints world-space primitives
+         (wiki / aircraft / iss / quake markers, info chrome, scale bar, …)
+    3. compositor.render(f, area, theme, ctx)
+       — every Component on the stack drawn bottom-up; focused last
+         so its panel sits on top
+    4. always-on overlays painted after the stack as a final pass
     5. footer hints from the focused component
 ```
 
@@ -270,7 +278,7 @@ trait Component: Any {
     fn render(&self, win: &mut RenderWindow);
 
     /// World-space primitives on the map (e.g. wiki markers). Default no-op.
-    fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
+    fn paint_on_map(&self, _p: &mut MapApi<'_>) {}
 
     /// Tick-driven async polling. Default no-op.
     fn poll(&mut self, _win: &mut Window) {}
@@ -287,7 +295,7 @@ trait Task {
 
 Each plugin module exposes `pub fn register(…, &mut Registrar)` which contributes some mix of: an `Activation` (key → component factory), a `PaletteEntry` (label for `:`), and/or a `Task`.
 
-Components never import ratatui or `UiTheme` directly — everything flows through `Window` (event side) and `RenderWindow` (render side). That containment lets the host own visual invariants (focused border colour, panel layout) and prevents a misbehaving plugin from painting outside its rect. `MapPainter` similarly hides projection and buffer behind primitives like `point(ll, glyph, fg)`.
+Components never import ratatui or `UiTheme` directly — everything flows through `Window` (event side) and `RenderWindow` (render side). That containment lets the host own visual invariants (focused border colour, panel layout) and prevents a misbehaving plugin from painting outside its rect. `MapApi` similarly hides projection and buffer behind primitives like `point(ll, glyph, fg)`, `line(...)`, `label(...)`, `text_anchored(...)`, and `cursor_ll(...)`.
 
 ### Concurrency
 
@@ -296,7 +304,7 @@ Components never import ratatui or `UiTheme` directly — everything flows throu
 | main | event loop, compositor, UI state, terminal draw |
 | render | MapFrame generation (tile fetch + draw) |
 | tile fetch | HTTP workers with priority queue |
-| async jobs | Nominatim / Wikipedia / geoip (fire-and-poll via `shared::async_job`) |
+| async jobs | Nominatim / Wikipedia / geoip / ADS-B / ISS / USGS (fire-and-poll via `plugin_api::async_job`) |
 
 mpsc channels connect the threads; the main thread never blocks on I/O.
 
