@@ -298,6 +298,7 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
         &mut r,
     );
     crate::plugin::export::register(&mut r);
+    crate::plugin::aircraft::register(&mut r);
 
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette
