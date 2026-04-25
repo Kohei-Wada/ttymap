@@ -12,10 +12,10 @@
 //! upstream API.
 
 mod opennotify;
-mod service;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -26,10 +26,9 @@ use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
-use crate::shared::throttle::Throttle;
+use crate::plugin_api::PolledFeed;
 
-use opennotify::IssPosition;
-use service::IssService;
+use opennotify::{IssPosition, OpenNotifyClient};
 
 /// Min seconds between fetches. open-notify has no published rate
 /// limit; 5 s keeps load on a free public service polite while still
@@ -38,27 +37,26 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct IssState {
     position: Option<IssPosition>,
-    service: IssService,
-    throttle: Throttle,
+    client: Arc<OpenNotifyClient>,
+    feed: PolledFeed<Option<IssPosition>>,
 }
 
 impl IssState {
     pub fn new() -> Self {
         Self {
             position: None,
-            service: IssService::new(),
-            throttle: Throttle::ready(REFRESH_INTERVAL),
+            client: Arc::new(OpenNotifyClient::new()),
+            feed: PolledFeed::ready(REFRESH_INTERVAL),
         }
     }
 
     fn refresh(&mut self) {
-        if self.throttle.check() {
-            self.service.fetch();
-        }
+        let client = self.client.clone();
+        self.feed.refresh(move || client.current_position());
     }
 
     fn poll(&mut self) {
-        if let Some(result) = self.service.poll() {
+        if let Some(result) = self.feed.poll() {
             if let Some(p) = result {
                 debug!("iss: position {:.2}, {:.2}", p.lat, p.lon);
             }

@@ -16,11 +16,11 @@
 //! matching the ISS plugin's "you toggled this on, see the thing
 //! immediately" UX.
 
-mod service;
 mod usgs;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::KeyEvent;
@@ -31,10 +31,9 @@ use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
-use crate::shared::throttle::Throttle;
+use crate::plugin_api::PolledFeed;
 
-use service::QuakeService;
-use usgs::Quake;
+use usgs::{Quake, UsgsClient};
 
 /// Min seconds between fetches. The USGS feed itself updates roughly
 /// every minute; 5 minutes here keeps load on a free public service
@@ -48,27 +47,26 @@ const NOTABLE_MAGNITUDE: f64 = 5.0;
 
 pub struct QuakeState {
     quakes: Vec<Quake>,
-    service: QuakeService,
-    throttle: Throttle,
+    client: Arc<UsgsClient>,
+    feed: PolledFeed<Vec<Quake>>,
 }
 
 impl QuakeState {
     pub fn new() -> Self {
         Self {
             quakes: Vec::new(),
-            service: QuakeService::new(),
-            throttle: Throttle::ready(REFRESH_INTERVAL),
+            client: Arc::new(UsgsClient::new()),
+            feed: PolledFeed::ready(REFRESH_INTERVAL),
         }
     }
 
     fn refresh(&mut self) {
-        if self.throttle.check() {
-            self.service.fetch();
-        }
+        let client = self.client.clone();
+        self.feed.refresh(move || client.recent());
     }
 
     fn poll(&mut self) {
-        if let Some(list) = self.service.poll() {
+        if let Some(list) = self.feed.poll() {
             debug!("quake: received {} events", list.len());
             self.quakes = list;
         }

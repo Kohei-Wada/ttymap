@@ -8,7 +8,6 @@
 //! and rebuilt.
 
 pub mod panel;
-mod service;
 
 use std::sync::Arc;
 
@@ -17,15 +16,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
+use crate::shared::async_job::AsyncJob;
 use crate::shared::nominatim::{NominatimClient, SearchResult};
-
-use service::SearchService;
 
 pub struct SearchComponent {
     pub(in crate::plugin::search) query: String,
     pub(in crate::plugin::search) candidates: Vec<SearchResult>,
     pub(in crate::plugin::search) selected: usize,
-    service: SearchService,
+    client: Arc<NominatimClient>,
+    job: AsyncJob<Vec<SearchResult>>,
 }
 
 impl SearchComponent {
@@ -34,7 +33,8 @@ impl SearchComponent {
             query: String::new(),
             candidates: Vec::new(),
             selected: 0,
-            service: SearchService::new(nominatim),
+            client: nominatim,
+            job: AsyncJob::new(),
         }
     }
 
@@ -73,7 +73,9 @@ impl Component for SearchComponent {
                 if self.query.is_empty() {
                     win.close();
                 } else {
-                    self.service.search(&self.query);
+                    let client = self.client.clone();
+                    let query = self.query.clone();
+                    self.job.spawn(move || client.search(&query));
                 }
             }
             KeyCode::Backspace => {
@@ -97,7 +99,7 @@ impl Component for SearchComponent {
     }
 
     fn poll(&mut self, _win: &mut Window) {
-        if let Some(results) = self.service.poll() {
+        if let Some(results) = self.job.poll() {
             self.candidates = results;
             self.selected = 0;
         }

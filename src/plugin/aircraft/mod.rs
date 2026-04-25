@@ -11,10 +11,10 @@
 //! points that should drive future MapApi primitives.
 
 mod opensky;
-mod service;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::KeyEvent;
@@ -24,10 +24,9 @@ use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
-use crate::shared::throttle::Throttle;
+use crate::plugin_api::PolledFeed;
 
-use opensky::Aircraft;
-use service::AircraftService;
+use opensky::{Aircraft, OpenSkyClient};
 
 /// Min seconds between fetches. OpenSky anonymous quota is roughly
 /// 4000 credits/day; bbox calls cost 1 credit each, so this rate
@@ -41,27 +40,27 @@ const FETCH_HALF_DEG: f64 = 5.0;
 
 pub struct AircraftState {
     aircraft: Vec<Aircraft>,
-    service: AircraftService,
-    throttle: Throttle,
+    client: Arc<OpenSkyClient>,
+    feed: PolledFeed<Vec<Aircraft>>,
 }
 
 impl AircraftState {
     pub fn new() -> Self {
         Self {
             aircraft: Vec::new(),
-            service: AircraftService::new(),
-            throttle: Throttle::ready(REFRESH_INTERVAL),
+            client: Arc::new(OpenSkyClient::new()),
+            feed: PolledFeed::ready(REFRESH_INTERVAL),
         }
     }
 
     fn refresh(&mut self, center: LonLat) {
-        if self.throttle.check() {
-            self.service.fetch(center.lat, center.lon, FETCH_HALF_DEG);
-        }
+        let client = self.client.clone();
+        self.feed
+            .refresh(move || client.states_around(center.lat, center.lon, FETCH_HALF_DEG));
     }
 
     fn poll(&mut self) {
-        if let Some(list) = self.service.poll() {
+        if let Some(list) = self.feed.poll() {
             debug!("aircraft: received {} states", list.len());
             self.aircraft = list;
         }

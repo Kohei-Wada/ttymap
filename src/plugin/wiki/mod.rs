@@ -19,12 +19,12 @@
 //! closures in `register` and lives for the app's lifetime.
 
 pub mod panel;
-mod service;
 mod wikipedia;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -35,10 +35,9 @@ use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
-use crate::shared::throttle::Throttle;
+use crate::plugin_api::PolledFeed;
 
-use service::WikiService;
-use wikipedia::WikiArticle;
+use wikipedia::{WikiArticle, WikipediaClient};
 
 /// Shared state for the wiki subsystem. Lives behind an
 /// `Rc<RefCell<_>>` so every [`WikiComponent`] push (and any future
@@ -51,8 +50,9 @@ pub struct WikiState {
     /// refreshed (e.g. after the map panned and new nearby articles
     /// loaded).
     pub(in crate::plugin::wiki) detail: Option<WikiArticle>,
-    service: WikiService,
-    throttle: Throttle,
+    client: Arc<WikipediaClient>,
+    limit: u32,
+    feed: PolledFeed<Vec<WikiArticle>>,
 }
 
 impl WikiState {
@@ -61,8 +61,9 @@ impl WikiState {
             articles: Vec::new(),
             selected: 0,
             detail: None,
-            service: WikiService::new(language, limit),
-            throttle: Throttle::with_cooldown(Duration::from_secs(2)),
+            client: Arc::new(WikipediaClient::new(language)),
+            limit,
+            feed: PolledFeed::with_cooldown(Duration::from_secs(2)),
         }
     }
 
@@ -71,9 +72,10 @@ impl WikiState {
     }
 
     fn refresh(&mut self, center: LonLat) {
-        if self.throttle.check() {
-            self.service.geosearch(center.lat, center.lon);
-        }
+        let client = self.client.clone();
+        let limit = self.limit;
+        self.feed
+            .refresh(move || client.geosearch(center.lat, center.lon, limit));
     }
 
     /// Merge fresh fetch results into the existing list.
@@ -96,7 +98,7 @@ impl WikiState {
 
     /// Advance async fetch, merging new results when available.
     pub fn poll(&mut self) -> bool {
-        if let Some(articles) = self.service.poll() {
+        if let Some(articles) = self.feed.poll() {
             debug!("wiki: received {} articles", articles.len());
             self.set_articles(articles);
             true
