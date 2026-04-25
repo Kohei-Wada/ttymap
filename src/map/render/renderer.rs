@@ -21,7 +21,18 @@ use crate::map::tile::property::{extract_label, extract_sort};
 /// Pre-collected tile data ready for rendering.
 pub struct TileData {
     pub vis: VisibleTile,
-    pub layers: Vec<(String, Vec<Feature>)>,
+    pub layers: Vec<LayerData>,
+}
+
+/// One layer's worth of features plus the MVT `extent` reported by that
+/// layer. Extent is per-layer (not a tile-wide constant) and varies
+/// across tile sources — `mapscii.me` uses 4096 but other OpenMapTiles
+/// deployments use 2048 / 8192. The draw path needs it to compute the
+/// tile-coord → screen-pixel scale.
+pub struct LayerData {
+    pub name: String,
+    pub extent: u32,
+    pub features: Vec<Feature>,
 }
 
 /// Scratch buffers reused across `draw_non_symbol` calls within a
@@ -78,6 +89,7 @@ struct ResolvedSymbol<'a> {
     feature: &'a Feature,
     color: u8,
     sort: i64,
+    extent: f64,
 }
 
 impl Renderer {
@@ -130,7 +142,7 @@ impl Renderer {
         let total_features: usize = tile_data
             .iter()
             .flat_map(|t| t.layers.iter())
-            .map(|(_, f)| f.len())
+            .map(|l| l.features.len())
             .sum();
         debug!("draw: tiles={}, features={}", tiles_found, total_features);
 
@@ -146,8 +158,9 @@ impl Renderer {
 
         'outer: for td in tile_data {
             let tile_size = td.vis.size;
-            for (_, features) in &td.layers {
-                for feature in features {
+            for layer in &td.layers {
+                let extent = layer.extent as f64;
+                for feature in &layer.features {
                     if std::time::Instant::now() > deadline {
                         debug!("draw: time budget exceeded");
                         break 'outer;
@@ -175,6 +188,7 @@ impl Renderer {
                             feature,
                             color: rule.color,
                             sort: extract_sort(&feature.properties),
+                            extent,
                         });
                     } else {
                         let mut ctx = DrawCtx {
@@ -183,7 +197,7 @@ impl Renderer {
                             width: self.width,
                             height: self.height,
                         };
-                        Self::draw_non_symbol(&mut ctx, &td.vis, feature, rule, tile_size);
+                        Self::draw_non_symbol(&mut ctx, &td.vis, feature, rule, tile_size, extent);
                     }
                 }
             }
@@ -267,8 +281,8 @@ impl Renderer {
         feature: &Feature,
         rule: &StyleRule,
         scale_denom: f64,
+        extent: f64,
     ) {
-        let extent = 4096.0_f64;
         let scale = extent / scale_denom;
         let (width, height) = (ctx.width, ctx.height);
 
@@ -325,8 +339,7 @@ impl Renderer {
     fn draw_symbol(&mut self, resolved: &ResolvedSymbol) {
         let feature = resolved.feature;
         let vis = resolved.vis;
-        let extent = 4096.0_f64;
-        let scale = extent / vis.size;
+        let scale = resolved.extent / vis.size;
 
         let Some(label) = extract_label(&feature.properties, &self.language) else {
             return;
@@ -397,5 +410,146 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
         assert!(renderer.draw(&[], 1.0).is_some());
+    }
+
+    /// Regression test for issue #100. A polygon described in tile-local
+    /// coords scaled to its layer's `extent` must render to the exact
+    /// same screen-space output regardless of which extent the source
+    /// reports (4096 / 2048 / 8192 are all valid in MVT). Previously the
+    /// renderer hardcoded extent=4096, so non-default sources rendered
+    /// at the wrong scale.
+    #[test]
+    fn extent_invariance_across_layer_extents() {
+        use std::collections::HashMap;
+
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+
+        // A diamond polygon expressed as fractions of `extent`. At any
+        // valid extent, the resulting screen-space polygon is identical.
+        fn make(extent: u32) -> TileData {
+            let e = extent as i32;
+            let p = |fx: i32, fy: i32| TilePoint {
+                x: e * fx / 10,
+                y: e * fy / 10,
+            };
+            let points = Arc::new(vec![vec![p(2, 5), p(5, 2), p(8, 5), p(5, 8), p(2, 5)]]);
+            let feature = Feature {
+                layer_name: Arc::from("water"),
+                properties: Arc::new(HashMap::new()),
+                points,
+                min_x: 0.0,
+                max_x: 0.0,
+                min_y: 0.0,
+                max_y: 0.0,
+            };
+            TileData {
+                vis: VisibleTile {
+                    x: 0,
+                    y: 0,
+                    z: 14,
+                    pos_x: 0.0,
+                    pos_y: 0.0,
+                    size: 256.0,
+                },
+                layers: vec![LayerData {
+                    name: "water".to_string(),
+                    extent,
+                    features: vec![feature],
+                }],
+            }
+        }
+
+        // Canvas dims are in *pixels* (braille sub-pixels), not cells —
+        // 320×320 px ≈ 160×80 cells. Comfortably larger than `vis.size`
+        // so the test geometry lands inside the frame.
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let cells = |extent: u32| -> Vec<(char, u8, u8)> {
+            let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
+            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
+        };
+
+        // Sanity: at least one non-empty cell — without this guard the
+        // test could pass trivially if everything fell off-canvas.
+        let baseline = cells(4096);
+        let nonempty = baseline.iter().filter(|(ch, _, _)| *ch != '⠀').count();
+        assert!(
+            nonempty > 0,
+            "test setup: expected polygon to render some cells"
+        );
+
+        assert_eq!(
+            baseline,
+            cells(2048),
+            "extent=2048 must render identically to extent=4096"
+        );
+        assert_eq!(
+            baseline,
+            cells(8192),
+            "extent=8192 must render identically to extent=4096"
+        );
+    }
+
+    /// Same invariance check for the symbol pass (`draw_symbol`),
+    /// which had its own hardcoded `extent = 4096.0`.
+    #[test]
+    fn extent_invariance_for_symbols() {
+        use std::collections::HashMap;
+
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+        use crate::map::tile::property::PropertyValue;
+
+        // `place_label` in the mapscii schema renders as a Symbol whose
+        // text comes from `name`. A single point near tile center.
+        fn make(extent: u32) -> TileData {
+            let e = extent as i32;
+            let mut props: HashMap<Arc<str>, PropertyValue> = HashMap::new();
+            props.insert(Arc::from("name"), PropertyValue::String("X".into()));
+            props.insert(Arc::from("type"), PropertyValue::String("city".into()));
+            let feature = Feature {
+                layer_name: Arc::from("place_label"),
+                properties: Arc::new(props),
+                points: Arc::new(vec![vec![TilePoint { x: e / 2, y: e / 2 }]]),
+                min_x: 0.0,
+                max_x: 0.0,
+                min_y: 0.0,
+                max_y: 0.0,
+            };
+            TileData {
+                vis: VisibleTile {
+                    x: 0,
+                    y: 0,
+                    z: 14,
+                    pos_x: 0.0,
+                    pos_y: 0.0,
+                    size: 256.0,
+                },
+                layers: vec![LayerData {
+                    name: "place_label".to_string(),
+                    extent,
+                    features: vec![feature],
+                }],
+            }
+        }
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let cells = |extent: u32| -> Vec<(char, u8, u8)> {
+            let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
+            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
+        };
+
+        // Sanity: confirm the symbol pass actually placed the label.
+        let baseline = cells(4096);
+        let label_cells = baseline.iter().filter(|(ch, _, _)| *ch == 'X').count();
+        assert!(
+            label_cells > 0,
+            "test setup: expected the symbol pass to draw the label"
+        );
+
+        assert_eq!(baseline, cells(2048));
+        assert_eq!(baseline, cells(8192));
     }
 }
