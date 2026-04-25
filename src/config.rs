@@ -136,9 +136,12 @@ impl Default for RenderConfig {
 pub struct CacheConfig {
     /// Write decoded tiles to `~/.cache/ttymap/` so they survive restarts.
     pub tiles: bool,
-    /// Decoded-tile LRU capacity. Sized to cover the steady-state
-    /// footprint of the z±1 prefetch ring with headroom for panning;
-    /// raise further if working with very large viewports.
+    /// Decoded-tile LRU capacity. Each "view" (visible 9 + prefetch
+    /// z±1) costs ~22 tiles; sized to keep a handful of recently-
+    /// visited views resident across pan and zoom-step churn so a
+    /// quick zoom-in / zoom-out doesn't re-fetch every level.
+    /// Raise further if working with very large viewports or long
+    /// pan trails.
     pub memory_tiles: usize,
 }
 
@@ -146,7 +149,11 @@ impl Default for CacheConfig {
     fn default() -> Self {
         Self {
             tiles: true,
-            memory_tiles: 192,
+            // 22 tiles/view × ~23 distinct views ≈ 512. With the old
+            // 192 default a fast zoom across ~9 levels exhausted the
+            // LRU and evicted earlier levels mid-flight, producing
+            // visible black squares on zoom-back.
+            memory_tiles: 512,
         }
     }
 }
@@ -208,7 +215,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.map.max_zoom, 18.0);
         assert_eq!(cfg.render.style, "dark");
-        assert_eq!(cfg.cache.memory_tiles, 192);
+        assert_eq!(cfg.cache.memory_tiles, 512);
     }
 
     #[test]
@@ -272,7 +279,7 @@ quit = ["Q", "C-q"]
         // is what makes this work.
         let cfg: Config = toml::from_str(r#"[keymap]"#).unwrap();
         assert_eq!(cfg.render.style, "dark");
-        assert_eq!(cfg.cache.memory_tiles, 192);
+        assert_eq!(cfg.cache.memory_tiles, 512);
         assert!(!cfg.geoip.on_startup);
     }
 
