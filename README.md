@@ -184,7 +184,7 @@ src/
 │   ├── styler/          Mapbox GL-style rules — schema/mapscii.rs single source; theme swaps ColorPalette only
 │   └── tile/            MVT fetch + cache + decode
 │       ├── cache.rs         Memory (configurable LRU) + optional disk
-│       ├── decode.rs        Protobuf → DecodedTile
+│       ├── decode/          Protobuf → DecodedTile (geometry / tags / decompress sub-modules)
 │       └── fetch/           TileClient trait + http backend + priority queue
 │
 ├── shared/              host-and-plugin utilities (plugin-only utilities live in plugin_api/)
