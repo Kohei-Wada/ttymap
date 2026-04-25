@@ -7,7 +7,7 @@ use std::sync::Arc;
 use rstar::AABB;
 
 use super::frame::MapFrame;
-use super::renderer::{Renderer, TileData};
+use super::renderer::{LayerData, Renderer, TileData};
 use super::view::{VisibleTile, visible_tiles};
 use crate::map::Viewport;
 use crate::map::styler::Styler;
@@ -170,7 +170,7 @@ impl RenderPipeline {
             };
 
             let tile_size = vis.size;
-            let mut layers: Vec<(String, Vec<Feature>)> = Vec::new();
+            let mut layers: Vec<LayerData> = Vec::new();
 
             for layer_name in &draw_order {
                 let name = layer_name.to_string();
@@ -190,7 +190,11 @@ impl RenderPipeline {
                         .cloned()
                         .collect();
                     if !features.is_empty() {
-                        layers.push((name, features));
+                        layers.push(LayerData {
+                            name,
+                            extent: tile_layer.extent,
+                            features,
+                        });
                     }
                 }
             }

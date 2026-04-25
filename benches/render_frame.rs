@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::map::render::renderer::{Renderer, TileData};
+use ttymap::map::render::renderer::{LayerData, Renderer, TileData};
 use ttymap::map::render::view::VisibleTile;
 use ttymap::map::styler::Styler;
 use ttymap::map::tile::decode;
@@ -31,8 +31,12 @@ fn build_tile_data(decoded: ttymap::map::tile::decode::DecodedTile) -> Vec<TileD
         .layers
         .into_iter()
         .map(|(name, tl)| {
-            let feats = tl.tree.iter().cloned().collect::<Vec<_>>();
-            (name, feats)
+            let features = tl.tree.iter().cloned().collect::<Vec<_>>();
+            LayerData {
+                name,
+                extent: tl.extent,
+                features,
+            }
         })
         .collect();
     vec![TileData { vis, layers }]
