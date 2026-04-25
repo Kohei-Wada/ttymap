@@ -181,7 +181,7 @@ src/
 │   │   ├── pipeline.rs, thread.rs, renderer.rs
 │   │   ├── canvas.rs, braille.rs, frame.rs, frame_widget.rs
 │   │   └── view.rs, label.rs, geom/, earcut_worker.rs, panic_silence.rs
-│   ├── styler/          Mapbox GL-style rules (dark / bright presets)
+│   ├── styler/          Mapbox GL-style rules — schema/mapscii.rs single source; theme swaps ColorPalette only
 │   └── tile/            MVT fetch + cache + decode
 │       ├── cache.rs         Memory (configurable LRU) + optional disk
 │       ├── decode.rs        Protobuf → DecodedTile
