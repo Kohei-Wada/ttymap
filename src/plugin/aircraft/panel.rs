@@ -1,7 +1,7 @@
 //! Aircraft side panel — list of visible aircraft. Lives on the
-//! **left** side of the map area to stay clear of wiki's right-side
-//! panel; if a future user opens both at once they get one on each
-//! flank without overlap.
+//! **left** side by default; uses the shared `ListPanel` chrome so
+//! the framing / windowing / empty state are framework-managed and
+//! this file only owns row formatting.
 
 use crate::plugin_api::prelude::*;
 
@@ -21,38 +21,16 @@ pub fn render_panel(state: &AircraftState, win: &mut RenderWindow) {
     let area = state
         .layout
         .resolve(area_outer, PanelAnchor::Left, default_width, default_height);
-    let panel_height = area.height;
-    win.clear(area);
 
     let body = win.style(StyleKind::Body);
-    let muted = win.style(StyleKind::Muted);
     let selected = win.style(StyleKind::Selected);
 
-    let visible_rows = (panel_height as usize).saturating_sub(2);
-    let total = state.aircraft.len();
-
-    let header = format!(" aircraft  ({} tracked)", total);
-
-    let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + 1);
-    lines.push(Line::from_span(Span::styled(header, body)));
-
-    if total == 0 {
-        lines.push(Line::from_span(Span::styled(" (no data yet)", muted)));
-    } else {
-        // Show a window of `visible_rows` items centred on `state.selected`.
-        let start = state
-            .selected
-            .saturating_sub(visible_rows / 2)
-            .min(total.saturating_sub(visible_rows.min(total)));
-        let end = (start + visible_rows).min(total);
-
-        for (i, a) in state.aircraft[start..end].iter().enumerate() {
-            let idx = start + i;
-            let style = if idx == state.selected {
-                selected
-            } else {
-                body
-            };
+    let rows: Vec<Line> = state
+        .aircraft
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let style = if i == state.selected { selected } else { body };
             let cs = a.callsign.as_deref().unwrap_or("(no callsign)");
             let alt = a
                 .altitude_m
@@ -63,18 +41,19 @@ pub fn render_panel(state: &AircraftState, win: &mut RenderWindow) {
                 .map(|m| format!("{:>3}m/s", m as i32))
                 .unwrap_or_else(|| "  -m/s".to_string());
             let ground = if a.on_ground { " ●" } else { "  " };
-            lines.push(Line::from_span(Span::styled(
+            Line::from_span(Span::styled(
                 format!(" {:8} {} {} {}", cs, alt, spd, ground),
                 style,
-            )));
-        }
-    }
+            ))
+        })
+        .collect();
 
-    let paragraph = Paragraph {
-        lines,
-        style: body,
-        framed_title: Some("aircraft".to_string()),
-        ..Default::default()
-    };
-    win.paragraph(paragraph, area);
+    ListPanel {
+        title: "aircraft".to_string(),
+        subtitle: Some(format!("{} tracked", state.aircraft.len())),
+        rows,
+        selected: state.selected,
+        empty: "(no data yet)".to_string(),
+    }
+    .render(area, win);
 }
