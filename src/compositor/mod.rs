@@ -348,9 +348,20 @@ impl Compositor {
         all_msgs
     }
 
-    /// Render bottom-up so later pushes draw on top.
+    /// Render bottom-up so later pushes draw on top — with one
+    /// twist: the **focused** component renders last (on top of
+    /// everything else), regardless of where it sits in the stack.
+    /// This lets multiple panels overlap freely; whichever the user
+    /// is currently driving with the keyboard pops to the front.
     pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme, ctx: &Context) {
-        for c in self.stack.iter() {
+        for (i, c) in self.stack.iter().enumerate() {
+            if i == self.focused_idx {
+                continue;
+            }
+            let mut win = window::RenderWindow::new(f, area, theme, ctx);
+            c.render(&mut win);
+        }
+        if let Some(c) = self.stack.get(self.focused_idx) {
             let mut win = window::RenderWindow::new(f, area, theme, ctx);
             c.render(&mut win);
         }
