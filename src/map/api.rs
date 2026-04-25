@@ -1,10 +1,11 @@
-//! Drawing API handed to widgets during the paint phase.
+//! Plugin-facing map API — the surface plugins use to interact with
+//! the map during rendering.
 //!
-//! `MapPainter` wraps the ratatui buffer, the active `MapProjection`,
-//! and the theme. Widgets call methods like `point` to plot world-space
+//! `MapApi` wraps the ratatui buffer, the active `MapProjection`, and
+//! the theme. Plugins call methods like `point` to plot world-space
 //! primitives without touching the buffer or doing projection math
 //! themselves. Adding more primitives (label, line, polygon) here
-//! extends every widget uniformly.
+//! extends every plugin uniformly.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -14,14 +15,14 @@ use crate::geo::{LonLat, MapProjection};
 use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
 
-pub struct MapPainter<'a> {
+pub struct MapApi<'a> {
     buf: &'a mut Buffer,
     map_area: Rect,
     proj: MapProjection,
     theme: &'a UiTheme,
 }
 
-impl<'a> MapPainter<'a> {
+impl<'a> MapApi<'a> {
     pub fn new(buf: &'a mut Buffer, map_area: Rect, frame: &MapFrame, theme: &'a UiTheme) -> Self {
         let proj = MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows);
         Self {

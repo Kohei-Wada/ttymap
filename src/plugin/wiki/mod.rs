@@ -31,10 +31,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
 use crate::app::AppMsg;
-use crate::compositor::MapPainter;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Activation, Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
+use crate::map::MapApi;
 use crate::shared::throttle::Throttle;
 
 use service::WikiService;
@@ -229,7 +229,7 @@ impl Component for WikiComponent {
         panel::render_panel(&self.state.borrow(), win);
     }
 
-    fn paint_on_map(&self, p: &mut MapPainter<'_>) {
+    fn paint_on_map(&self, p: &mut MapApi<'_>) {
         let state = self.state.borrow();
         let primary = p.accent_color();
         let highlight = p.accent_alt_color();

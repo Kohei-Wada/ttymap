@@ -28,11 +28,9 @@
 //! the one place that imports each plugin.
 
 pub mod base;
-pub mod painter;
 pub mod window;
 
 pub use base::BaseLayer;
-pub use painter::MapPainter;
 
 use std::any::Any;
 
@@ -42,6 +40,7 @@ use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
 use crate::geo::LonLat;
+use crate::map::MapApi;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -108,13 +107,13 @@ pub trait Component: Any {
     /// `win` so theme does not thread through helper signatures.
     fn render(&self, win: &mut window::RenderWindow);
 
-    /// Paint world-space primitives on the map via [`MapPainter`].
+    /// Paint world-space primitives on the map via [`MapApi`].
     /// Called every frame while on the stack, before `render`. Default
     /// no-op for components with no map presence (search, palette,
     /// help). Wiki uses this for article markers — because it's gated
     /// on stack presence, the markers naturally disappear when the
     /// panel is popped.
-    fn paint_on_map(&self, _p: &mut MapPainter<'_>) {}
+    fn paint_on_map(&self, _p: &mut MapApi<'_>) {}
 
     /// Advance async work and surface new messages. Called every tick
     /// on every component on the stack. Use `win.emit(msg)` to
@@ -305,9 +304,9 @@ impl Compositor {
     }
 
     /// Walk every component on the stack and let it paint world-space
-    /// primitives through the supplied [`MapPainter`]. Drawn before
+    /// primitives through the supplied [`MapApi`]. Drawn before
     /// `render` so modal popups sit on top of any map markers.
-    pub fn paint_on_map(&self, p: &mut MapPainter<'_>) {
+    pub fn paint_on_map(&self, p: &mut MapApi<'_>) {
         for c in self.stack.iter() {
             c.paint_on_map(p);
         }

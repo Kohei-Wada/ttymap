@@ -12,10 +12,12 @@
 //! `MapFrame` (from `render`) without knowing how it was produced.
 
 pub mod action;
+pub mod api;
 pub mod render;
 pub mod state;
 pub mod styler;
 pub mod tile;
 
 pub use action::Action;
+pub use api::MapApi;
 pub use state::{MapState, MapStateOptions, Viewport};

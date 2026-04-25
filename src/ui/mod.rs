@@ -12,8 +12,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use overlay::OverlayManager;
 
-use crate::compositor::MapPainter;
 use crate::compositor::{Compositor, Context};
+use crate::map::MapApi;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
 use crate::shared::nominatim::NominatimClient;
@@ -73,8 +73,8 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
         // stack (wiki markers etc.). Focus-gated: closing the panel
         // drops the component, which drops the paint hook.
         {
-            let mut painter = MapPainter::new(f.buffer_mut(), map_inner, map_frame, theme);
-            compositor.paint_on_map(&mut painter);
+            let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme);
+            compositor.paint_on_map(&mut api);
         }
 
         ui.overlay
