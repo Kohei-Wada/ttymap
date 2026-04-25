@@ -125,6 +125,10 @@ impl Component for BaseLayer {
             ("q", "quit"),
         ]
     }
+
+    fn name(&self) -> &'static str {
+        "map"
+    }
 }
 
 #[cfg(test)]
