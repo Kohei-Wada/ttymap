@@ -22,6 +22,9 @@ pub(super) struct Aircraft {
     pub lon: f64,
     pub altitude_m: Option<f64>,
     pub velocity_ms: Option<f64>,
+    /// True track in degrees (0 = north, clockwise). `None` when
+    /// the aircraft hasn't reported heading yet.
+    pub heading_deg: Option<f64>,
     pub on_ground: bool,
 }
 
@@ -85,12 +88,14 @@ fn parse_one(state: &serde_json::Value) -> Option<Aircraft> {
     let altitude_m = arr.get(7).and_then(|v| v.as_f64());
     let on_ground = arr.get(8).and_then(|v| v.as_bool()).unwrap_or(false);
     let velocity_ms = arr.get(9).and_then(|v| v.as_f64());
+    let heading_deg = arr.get(10).and_then(|v| v.as_f64());
     Some(Aircraft {
         callsign,
         lat,
         lon,
         altitude_m,
         velocity_ms,
+        heading_deg,
         on_ground,
     })
 }

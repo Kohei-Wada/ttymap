@@ -76,15 +76,21 @@ impl Component for AircraftComponent {
     }
 
     fn paint_on_map(&self, p: &mut MapApi<'_>) {
-        // Direction-neutral glyphs only — `✈` would lock every marker
-        // to the same heading regardless of true_track. The selected
-        // aircraft renders with the alt-accent so it stands out.
+        // Heading-aware glyphs: 8 unicode arrows for the eight 45°
+        // sectors based on true_track. Aircraft with no heading
+        // (no track yet, or on the ground with no movement) fall
+        // back to a diamond. Selected row in the panel renders in
+        // alt-accent so the eye can match panel ↔ marker.
         let state = self.state.borrow();
         let fg = p.accent_color();
         let alt = p.accent_alt_color();
         for (i, a) in state.aircraft.iter().enumerate() {
             let selected = i == state.selected;
-            let glyph = if a.on_ground { '◇' } else { '◆' };
+            let glyph = if a.on_ground {
+                '◇'
+            } else {
+                a.heading_deg.map(heading_arrow).unwrap_or('◆')
+            };
             let color = if selected { alt } else { fg };
             p.point(
                 LonLat {
@@ -111,5 +117,49 @@ impl Component for AircraftComponent {
 
     fn name(&self) -> &'static str {
         "aircraft"
+    }
+}
+
+/// Map a true-track in degrees (0 = north, clockwise) to one of
+/// eight unicode arrows. Each arrow covers a 45° sector centred on
+/// its cardinal/intercardinal direction, e.g. north spans
+/// `[337.5°, 22.5°)`.
+fn heading_arrow(degrees: f64) -> char {
+    // Normalise to [0, 360) then offset by +22.5° so each sector
+    // index lines up with `(deg + 22.5) / 45` rounding down.
+    let normalised = degrees.rem_euclid(360.0);
+    let sector = ((normalised + 22.5) / 45.0).floor() as usize % 8;
+    // 0 = N, 1 = NE, 2 = E, ...
+    const ARROWS: [char; 8] = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+    ARROWS[sector]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::heading_arrow;
+
+    #[test]
+    fn cardinal_directions() {
+        assert_eq!(heading_arrow(0.0), '↑');
+        assert_eq!(heading_arrow(90.0), '→');
+        assert_eq!(heading_arrow(180.0), '↓');
+        assert_eq!(heading_arrow(270.0), '←');
+    }
+
+    #[test]
+    fn intercardinal_directions() {
+        assert_eq!(heading_arrow(45.0), '↗');
+        assert_eq!(heading_arrow(135.0), '↘');
+        assert_eq!(heading_arrow(225.0), '↙');
+        assert_eq!(heading_arrow(315.0), '↖');
+    }
+
+    #[test]
+    fn sector_boundaries_round_to_neighbour() {
+        // Just past the boundary picks the next sector.
+        assert_eq!(heading_arrow(22.4), '↑');
+        assert_eq!(heading_arrow(22.5), '↗');
+        assert_eq!(heading_arrow(360.0), '↑'); // wraps
+        assert_eq!(heading_arrow(-1.0), '↑'); // clamps via rem_euclid
     }
 }
