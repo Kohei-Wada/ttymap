@@ -28,6 +28,7 @@ log = { version = "0.4", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 toml = "1.1.2"
 indexmap = "2.14.0"
+lru = "0.16"
 
 [dev-dependencies]
 criterion = "0.5"
