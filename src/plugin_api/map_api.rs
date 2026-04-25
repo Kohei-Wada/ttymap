@@ -2,12 +2,17 @@
 //! the map during rendering.
 //!
 //! `MapApi` wraps the ratatui buffer, the active `MapProjection`, and
-//! the theme. Plugins call methods like `point` / `label` / `line` to
-//! plot world-space primitives without touching the buffer or doing
-//! projection math themselves.
+//! the theme. Two flavours of primitive:
 //!
-//! Internally each primitive routes through [`Self::cell_for`] which
-//! does projection + bounds-clip in one shot, so adding more
+//! - **World-space** (`point`, `label`, `line`, ...) — input is a
+//!   `LonLat`; projection + clipping handled internally.
+//! - **Screen-space** (`text_anchored`, `cursor_ll`, ...) — input is
+//!   anchored to a corner of the visible map area; useful for chrome
+//!   overlays (info bar, scale, attribution) that don't track world
+//!   coordinates.
+//!
+//! Internally world primitives route through [`Self::cell_for`]
+//! which does projection + bounds-clip in one shot, so adding more
 //! primitives (polygon fill, rotated marker, ...) reuses the same
 //! gate.
 
@@ -18,6 +23,17 @@ use ratatui::style::{Color, Style};
 use crate::geo::{LonLat, MapProjection};
 use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
+
+/// Corner-anchor for screen-space primitives like
+/// [`MapApi::text_anchored`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // plugin-author API; in-tree consumers (info / scalebar / attribution plugins) land later
+pub enum Anchor {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
 
 pub struct MapApi<'a> {
     buf: &'a mut Buffer,
@@ -144,6 +160,75 @@ impl<'a> MapApi<'a> {
                 y += sy;
             }
         }
+    }
+
+    // ── Screen-space primitives ─────────────────────────────────────
+
+    /// Write a single line of `text` anchored to a corner of the map
+    /// area, offset `rows_in` rows from that corner toward the
+    /// interior. Right-side anchors right-align; left-side anchors
+    /// left-align. Truncated when the map area is too narrow.
+    /// Background uses the theme's `bg` so the overlay reads against
+    /// the rendered map.
+    ///
+    /// Used by chrome overlays (info bar in the top-right, scale bar
+    /// in the bottom-left, attribution in the bottom-right) that
+    /// don't track world coordinates.
+    #[allow(dead_code)] // plugin-author API; in-tree consumers land in later steps
+    pub fn text_anchored(&mut self, anchor: Anchor, rows_in: u16, text: &str, fg: Color) {
+        if self.map_area.width == 0 || self.map_area.height == 0 {
+            return;
+        }
+        if rows_in >= self.map_area.height {
+            return;
+        }
+
+        let row = match anchor {
+            Anchor::TopLeft | Anchor::TopRight => self.map_area.y + rows_in,
+            Anchor::BottomLeft | Anchor::BottomRight => {
+                self.map_area.y + self.map_area.height - 1 - rows_in
+            }
+        };
+
+        let chars: Vec<char> = text.chars().collect();
+        let text_width = chars.len() as u16;
+        let area_width = self.map_area.width;
+
+        let start_x = match anchor {
+            Anchor::TopLeft | Anchor::BottomLeft => self.map_area.x,
+            Anchor::TopRight | Anchor::BottomRight => {
+                let right = self.map_area.x + area_width;
+                right.saturating_sub(text_width.min(area_width))
+            }
+        };
+
+        let style = Style::default().fg(fg).bg(self.theme.bg);
+        let right_edge = self.map_area.x + area_width;
+        for (i, &ch) in chars.iter().enumerate() {
+            let x = start_x.saturating_add(i as u16);
+            if x >= right_edge {
+                break;
+            }
+            self.buf[(x, row)].set_char(ch).set_style(style);
+        }
+    }
+
+    /// Project an absolute terminal cursor position (as surfaced via
+    /// [`Context::cursor`](crate::compositor::Context::cursor)) into
+    /// world coordinates. Returns `None` when the cursor is outside
+    /// the visible map area.
+    #[allow(dead_code)] // plugin-author API; in-tree consumer (info plugin) lands later
+    pub fn cursor_ll(&self, cursor: (u16, u16)) -> Option<LonLat> {
+        let (cx, cy) = cursor;
+        if cx < self.map_area.x || cy < self.map_area.y {
+            return None;
+        }
+        let local_col = cx - self.map_area.x;
+        let local_row = cy - self.map_area.y;
+        if local_col >= self.map_area.width || local_row >= self.map_area.height {
+            return None;
+        }
+        self.proj.cell_to_ll(local_col, local_row)
     }
 
     // ── Internal: project + clip in one place ───────────────────────
@@ -279,5 +364,61 @@ mod tests {
             drawn >= 2,
             "line should mark at least two cells, got {drawn}"
         );
+    }
+
+    fn text_at_row(buf: &Buffer, area: Rect, row: u16) -> String {
+        (0..area.width)
+            .map(|x| buf[(area.x + x, area.y + row)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn text_anchored_top_right_writes_at_right_edge() {
+        let (mut buf, area, frame, theme) = fixture(20, 5);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        api.text_anchored(Anchor::TopRight, 0, "ABC", Color::Reset);
+        let line = text_at_row(&buf, area, 0);
+        assert!(
+            line.ends_with("ABC"),
+            "TopRight should land at right edge, got {line:?}"
+        );
+        assert!(
+            !line.starts_with("ABC"),
+            "TopRight should not be left-aligned, got {line:?}"
+        );
+    }
+
+    #[test]
+    fn text_anchored_bottom_left_writes_at_left_edge_last_row() {
+        let (mut buf, area, frame, theme) = fixture(20, 5);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        api.text_anchored(Anchor::BottomLeft, 0, "XY", Color::Reset);
+        let last_row = text_at_row(&buf, area, area.height - 1);
+        assert!(
+            last_row.starts_with("XY"),
+            "BottomLeft, rows_in=0 should hit the very bottom row, got {last_row:?}"
+        );
+    }
+
+    #[test]
+    fn text_anchored_rows_in_offsets_from_corner() {
+        let (mut buf, area, frame, theme) = fixture(20, 5);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        // Row 2 from the top-left corner should be the third row.
+        api.text_anchored(Anchor::TopLeft, 2, "Q", Color::Reset);
+        assert_eq!(buf[(area.x, area.y + 2)].symbol(), "Q");
+    }
+
+    #[test]
+    fn text_anchored_too_deep_is_noop() {
+        let (mut buf, area, frame, theme) = fixture(20, 3);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        // rows_in == height should be rejected (no row to land on).
+        api.text_anchored(Anchor::TopLeft, 3, "Q", Color::Reset);
+        for x in 0..area.width {
+            for y in 0..area.height {
+                assert_eq!(buf[(x, y)].symbol(), " ");
+            }
+        }
     }
 }
