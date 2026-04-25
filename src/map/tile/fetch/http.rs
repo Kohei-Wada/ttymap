@@ -1,10 +1,10 @@
-//! Client for `mapscii.me` — fetches MVT (`.pbf`) tiles over HTTP
-//! using the slippy-map URL scheme `{base}/{z}/{x}/{y}.pbf`. The base
-//! URL and attribution are hardcoded: ttymap's map rendering assumes
-//! OSM-derived OpenMapTiles data, and mapscii.me is the only public
-//! server that serves it without an API key. Fixed worker pool pops
-//! from an internal queue, GETs bytes, and forwards the payload to
-//! the cache through an `mpsc` channel.
+//! HTTP `TileClient` — fetches MVT (`.pbf`) tiles over the slippy-map
+//! URL scheme `{base}/{z}/{x}/{y}.pbf`. ttymap's map rendering
+//! assumes OSM-derived OpenMapTiles data, and `mapscii.me` is the
+//! only public server that serves it without an API key, so the base
+//! URL is hardcoded for now. A fixed worker pool pops from an
+//! internal queue, GETs bytes, and forwards the payload to the cache
+//! through an `mpsc` channel.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,12 +30,12 @@ struct SharedState {
     shutdown: AtomicBool,
 }
 
-pub struct MapsciiTileClient {
+pub struct HttpTileClient {
     shared: Arc<SharedState>,
     _workers: Vec<thread::JoinHandle<()>>,
 }
 
-impl MapsciiTileClient {
+impl HttpTileClient {
     pub fn new(tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
         let shared = Arc::new(SharedState {
             queue: Mutex::new(PriorityQueue::new()),
@@ -59,14 +59,14 @@ impl MapsciiTileClient {
             }));
         }
 
-        MapsciiTileClient {
+        HttpTileClient {
             shared,
             _workers: workers,
         }
     }
 }
 
-impl TileClient for MapsciiTileClient {
+impl TileClient for HttpTileClient {
     /// Enqueue a tile for fetching. Skips if already queued or in-flight.
     fn enqueue(&self, key: &TileKey, priority: TilePriority) {
         {
@@ -120,7 +120,7 @@ impl TileClient for MapsciiTileClient {
     }
 }
 
-impl Drop for MapsciiTileClient {
+impl Drop for HttpTileClient {
     fn drop(&mut self) {
         self.shared.shutdown.store(true, Ordering::Relaxed);
         self.shared.condvar.notify_all();
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_enqueue_dedup_in_flight() {
         let (tx, _rx) = mpsc::channel();
-        let client = MapsciiTileClient::new(tx);
+        let client = HttpTileClient::new(tx);
         let key = TileKey::new(0, 0, 0);
 
         // Manually mark as in-flight

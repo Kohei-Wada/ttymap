@@ -297,7 +297,7 @@ impl App {
 pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
     use crate::map::tile::fetch::TileClient;
     let (tx, rx) = std::sync::mpsc::channel();
-    let client = crate::map::tile::fetch::MapsciiTileClient::new(tx);
+    let client = crate::map::tile::fetch::HttpTileClient::new(tx);
     let attribution = {
         let s = client.attribution();
         (!s.is_empty()).then(|| s.to_string())
