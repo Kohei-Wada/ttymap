@@ -256,6 +256,11 @@ impl Renderer {
             if pt == last {
                 continue;
             }
+            // Capture the previous processed point *before* advancing
+            // `last`, so the re-entry branch below can emit the actual
+            // last-outside point (the kink the polyline turns at)
+            // rather than the current inside point.
+            let prev = last;
             last = pt;
 
             if clip {
@@ -267,7 +272,7 @@ impl Renderer {
                     outside = true;
                 } else if outside {
                     outside = false;
-                    out.push(last);
+                    out.push(prev);
                 }
             }
             out.push(pt);
@@ -400,6 +405,76 @@ mod tests {
     fn test_draw_order_high_zoom() {
         let order = Renderer::draw_order(5.0);
         assert!(order.len() >= 18);
+    }
+
+    /// Regression for issue #103. `scale_ring_into` collapses runs of
+    /// consecutive outside points into a single emitted point, but on
+    /// re-entry it must emit the *last* outside point (so the renderer
+    /// draws the segment from there to the inside re-entry point). The
+    /// pre-fix code reassigned `last` before the clip check and ended
+    /// up pushing the *current* (inside) point twice — producing a
+    /// straight chord across the viewport instead of following the
+    /// off-screen geometry.
+    #[test]
+    fn scale_ring_into_preserves_last_outside_point_on_reentry() {
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::TilePoint;
+
+        // Canvas 100×100 px with VIEWPORT_PADDING=64 → clip box
+        // [-64, 164] × [-64, 164]. scale=1.0 → tile coords map 1:1
+        // to screen pixels.
+        let vis = VisibleTile {
+            x: 0,
+            y: 0,
+            z: 0,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            size: 256.0,
+        };
+        let ring = vec![
+            TilePoint { x: 50, y: 50 },  // inside
+            TilePoint { x: 200, y: 50 }, // outside (x > 164)
+            TilePoint { x: 250, y: 50 }, // outside
+            TilePoint { x: 50, y: 80 },  // inside (re-entry)
+        ];
+        let mut out: Vec<(i32, i32)> = Vec::new();
+        Renderer::scale_ring_into(&mut out, &vis, &ring, 1.0, 100, 100, true);
+
+        // Expected: emit first-inside, first-outside (so the in→out
+        // segment renders), last-outside (so the out→in segment
+        // renders correctly), and the re-entry inside point. No
+        // duplicates.
+        assert_eq!(
+            out,
+            vec![(50, 50), (200, 50), (250, 50), (50, 80)],
+            "re-entry must preserve the last outside point as the kink \
+             before resuming inside, not duplicate the inside point"
+        );
+    }
+
+    /// All-inside path is unaffected: every point is emitted in order,
+    /// with consecutive duplicates collapsed.
+    #[test]
+    fn scale_ring_into_all_inside_emits_every_point() {
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::TilePoint;
+
+        let vis = VisibleTile {
+            x: 0,
+            y: 0,
+            z: 0,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            size: 256.0,
+        };
+        let ring = vec![
+            TilePoint { x: 10, y: 10 },
+            TilePoint { x: 20, y: 20 },
+            TilePoint { x: 30, y: 30 },
+        ];
+        let mut out: Vec<(i32, i32)> = Vec::new();
+        Renderer::scale_ring_into(&mut out, &vis, &ring, 1.0, 100, 100, true);
+        assert_eq!(out, vec![(10, 10), (20, 20), (30, 30)]);
     }
 
     #[test]
