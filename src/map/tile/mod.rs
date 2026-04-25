@@ -22,6 +22,7 @@
 pub mod cache;
 pub mod decode;
 pub mod decoder;
+pub mod disk;
 pub mod fetch;
 pub mod key;
 pub mod property;

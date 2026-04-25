@@ -295,31 +295,38 @@ impl App {
 
 /// Composition root for the tile subsystem.
 ///
-/// Wires the three-layer pipeline:
+/// Wires the three-layer pipeline plus the optional disk fast path:
 ///
 /// ```text
-///   FetchLane<HttpFetcher>  ──bytes──▶  decoder thread  ──DecodedTile──▶  TileCache
+///                   ┌── render-thread disk fast path ──────────────────┐
+///                   ▼                                                   │
+///   FetchLane<F>  ──bytes──▶  decoder thread  ──DecodedTile──▶  TileCache
 /// ```
 ///
+/// where `F` is `DiskCachedFetcher<HttpFetcher>` when disk cache is
+/// enabled, else just `HttpFetcher`. The fast path lets `TileCache`
+/// read disk synchronously and push bytes directly to the decoder,
+/// skipping the worker queue.
+///
 /// Backend dispatch happens here: a future MBTiles / PMTiles backend
-/// would branch on `config.source` and pick a different
-/// `TileFetcher`. `FetchLane` provides queue / dedup / priority for
-/// any of them; `decoder::spawn_decoder` and the cache are backend-
-/// agnostic.
+/// would pick a different `TileFetcher`. `FetchLane` provides queue
+/// / dedup / priority for any of them; `decoder::spawn_decoder` and
+/// the cache are backend-agnostic.
 pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
     use directories::ProjectDirs;
     use std::fs;
 
+    use crate::map::tile::cache::DiskFastPath;
     use crate::map::tile::decoder;
-    use crate::map::tile::fetch::{FetchLane, HttpFetcher, TileFetchLane, TileFetcher};
+    use crate::map::tile::fetch::{
+        DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane, TileFetcher,
+    };
 
     /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
     /// small pool covers the typical visible-tile + prefetch fan-out
     /// without saturating the upstream.
     const HTTP_WORKERS: usize = 6;
 
-    // Disk cache lives inside the HTTP fetcher now; we just decide
-    // here whether to enable it based on config.
     let cache_dir = if config.cache.tiles {
         ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
             let dir = proj_dirs.cache_dir().to_path_buf();
@@ -331,15 +338,42 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
     };
 
     let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
-    let fetcher = HttpFetcher::with_cache_dir(cache_dir);
+    let http = HttpFetcher::new();
     let attribution = {
-        let s = fetcher.attribution();
+        let s = http.attribution();
         (!s.is_empty()).then(|| s.to_string())
     };
-    let lane: Box<dyn TileFetchLane> = Box::new(FetchLane::new(fetcher, HTTP_WORKERS, bytes_tx));
+
+    // The lane wraps an HTTP fetcher; if disk cache is enabled, layer
+    // a `DiskCachedFetcher` decorator on top so worker-side hits
+    // short-circuit the network and on miss we write through.
+    let lane: Box<dyn TileFetchLane> = match cache_dir.clone() {
+        Some(dir) => Box::new(FetchLane::new(
+            DiskCachedFetcher::new(http, dir),
+            HTTP_WORKERS,
+            bytes_tx.clone(),
+        )),
+        None => Box::new(FetchLane::new(http, HTTP_WORKERS, bytes_tx.clone())),
+    };
+
     let (decoded_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
+
+    // The render-thread fast path needs its own bytes_tx clone (to
+    // push past the worker queue straight into the decoder) plus the
+    // disk directory. Bundled into `DiskFastPath` so the cache
+    // constructor stays tidy.
+    let disk_fast_path = cache_dir.map(|cache_dir| DiskFastPath {
+        bytes_tx,
+        cache_dir,
+    });
+
     (
-        crate::map::tile::TileCache::new(lane, decoded_rx, config.cache.memory_tiles),
+        crate::map::tile::TileCache::new(
+            lane,
+            decoded_rx,
+            config.cache.memory_tiles,
+            disk_fast_path,
+        ),
         attribution,
     )
 }
