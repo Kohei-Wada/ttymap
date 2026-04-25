@@ -29,8 +29,15 @@ pub fn visible_tiles(
 
     let mut tiles = Vec::new();
 
-    for dy in -1i32..=1 {
-        for dx in -1i32..=1 {
+    // Dynamic scan radius: cover the viewport plus one tile of slack
+    // on each side so we never leave a gap at the edges (issue #95).
+    // The per-tile visibility check below filters anything that falls
+    // off-screen, so being generous here is cheap.
+    let half_w_tiles = (width as f64 / 2.0 / tile_size).ceil() as i32 + 1;
+    let half_h_tiles = (height as f64 / 2.0 / tile_size).ceil() as i32 + 1;
+
+    for dy in -half_h_tiles..=half_h_tiles {
+        for dx in -half_w_tiles..=half_w_tiles {
             let tile_x = center.x.floor() as i32 + dx;
             let tile_y = center.y.floor() as i32 + dy;
 
@@ -108,6 +115,35 @@ mod tests {
                 grid
             );
         }
+    }
+
+    /// Regression for issue #95. A 3×3 fixed scan covers at most
+    /// `3 × tile_size` pixels in each direction (~768 at z≥1). On
+    /// large terminals, the viewport edges are left blank — visible
+    /// black gaps. The visible tile set must scale with screen size.
+    #[test]
+    fn visible_tiles_cover_large_viewport() {
+        // 2000×1000 px viewport at z=4 → tile_size=256. The viewport
+        // is ~7.8 tiles wide and ~3.9 tall; a 3×3 scan reaches only
+        // 768 px on each axis so the right/bottom would be uncovered.
+        let tiles = visible_tiles(0.0, 0.0, 4.0, 2000, 1000);
+        assert!(!tiles.is_empty());
+
+        let min_x = tiles.iter().map(|t| t.pos_x).fold(f64::INFINITY, f64::min);
+        let max_x = tiles
+            .iter()
+            .map(|t| t.pos_x + t.size)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_y = tiles.iter().map(|t| t.pos_y).fold(f64::INFINITY, f64::min);
+        let max_y = tiles
+            .iter()
+            .map(|t| t.pos_y + t.size)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        assert!(min_x <= 0.0, "left edge uncovered (min_x={min_x})");
+        assert!(max_x >= 2000.0, "right edge uncovered (max_x={max_x})");
+        assert!(min_y <= 0.0, "top edge uncovered (min_y={min_y})");
+        assert!(max_y >= 1000.0, "bottom edge uncovered (max_y={max_y})");
     }
 
     #[test]
