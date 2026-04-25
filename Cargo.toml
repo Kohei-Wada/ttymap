@@ -2,6 +2,14 @@
 name = "ttymap"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A terminal map viewer that renders Mapbox Vector Tiles as Unicode Braille characters."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Kohei-Wada/ttymap"
+homepage = "https://github.com/Kohei-Wada/ttymap"
+readme = "README.md"
+keywords = ["map", "tui", "mapbox", "terminal", "braille"]
+categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
 crossterm = "0.28"
