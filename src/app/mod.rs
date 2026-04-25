@@ -97,6 +97,17 @@ impl App {
         // pushed on top.
         let mut compositor = Compositor::new();
         compositor.push(Box::new(BaseLayer::new(keymap, registrar.activations)));
+        // Drain always-on overlay factories from the registrar and
+        // install each overlay. The seed Context uses the same
+        // values App::context produces; cursor starts as None.
+        let overlay_ctx = Context {
+            center: map.center(),
+            theme_id,
+            cursor: None,
+        };
+        for factory in registrar.overlays {
+            compositor.add_overlay(factory(&overlay_ctx));
+        }
 
         App {
             map,

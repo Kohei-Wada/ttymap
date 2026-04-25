@@ -166,6 +166,12 @@ use window::{Window, WindowOps};
 /// how the old `Focus::Background` state maps into this design.
 pub struct Compositor {
     stack: Vec<Box<dyn Component>>,
+    /// Always-on, non-focusable Components painted **after** the
+    /// stack so chrome (info bar, scale, attribution) sits on top of
+    /// any toggleable plugin's markers. Populated once at startup
+    /// from `Registrar::overlays`; never receive key events and
+    /// never participate in focus cycling.
+    overlays: Vec<Box<dyn Component>>,
     /// Index of the component that receives key events first.
     /// Invariant: `focused_idx < stack.len()` whenever the stack is
     /// non-empty. After every push, this becomes the new top; after
@@ -177,6 +183,7 @@ impl Compositor {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
+            overlays: Vec::new(),
             focused_idx: 0,
         }
     }
@@ -184,6 +191,14 @@ impl Compositor {
     pub fn push(&mut self, c: Box<dyn Component>) {
         self.stack.push(c);
         self.focused_idx = self.stack.len() - 1;
+    }
+
+    /// Install an always-on overlay. Called once at app init from
+    /// the registrar; the component stays for the app's lifetime,
+    /// paints after every regular stack component, and never
+    /// receives key events.
+    pub fn add_overlay(&mut self, c: Box<dyn Component>) {
+        self.overlays.push(c);
     }
 
     pub fn len(&self) -> usize {
@@ -300,7 +315,11 @@ impl Compositor {
 
     /// Poll every component; drain all queued `win.emit(...)` /
     /// `win.close()` / `win.open(...)` ops and apply them in the
-    /// same way [`handle_event`](Self::handle_event) does.
+    /// same way [`handle_event`](Self::handle_event) does. Always-on
+    /// overlays poll too — they may have async work (geocoding,
+    /// throttle ticks) but the only ops they emit are
+    /// `win.emit(AppMsg)`; close/open are ignored on overlays
+    /// because they aren't on the focusable stack.
     pub fn poll(&mut self, ctx: &Context) -> Vec<AppMsg> {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; apply
@@ -316,6 +335,16 @@ impl Compositor {
             let msgs = self.apply_ops(i, ops);
             all_msgs.extend(msgs);
         }
+        for c in self.overlays.iter_mut() {
+            let mut ops = WindowOps::default();
+            {
+                let mut win = Window::new(&mut ops, ctx);
+                c.poll(&mut win);
+            }
+            // Overlays only meaningfully emit; close/open are silently
+            // dropped because overlays don't live on the focusable stack.
+            all_msgs.extend(ops.msgs);
+        }
         all_msgs
     }
 
@@ -327,11 +356,16 @@ impl Compositor {
         }
     }
 
-    /// Walk every component on the stack and let it paint world-space
-    /// primitives through the supplied [`MapApi`]. Drawn before
-    /// `render` so modal popups sit on top of any map markers.
+    /// Walk every component and let it paint world-space primitives
+    /// through the supplied [`MapApi`]. Stack first (markers from
+    /// toggleable plugins), then always-on overlays (chrome on top
+    /// of those markers). Drawn before `render` so modal popups sit
+    /// on top of everything.
     pub fn paint_on_map(&self, p: &mut MapApi<'_>) {
         for c in self.stack.iter() {
+            c.paint_on_map(p);
+        }
+        for c in self.overlays.iter() {
             c.paint_on_map(p);
         }
     }
@@ -450,6 +484,10 @@ pub struct Registrar {
     pub activations: Vec<Activation>,
     pub palette_entries: Vec<PaletteEntry>,
     pub tasks: Vec<Box<dyn Task>>,
+    /// Always-on overlay factories — invoked once at app init and
+    /// pushed into [`Compositor::overlays`]. Used for chrome that's
+    /// always on screen (info bar, scale bar, attribution).
+    pub overlays: Vec<SpawnComponent>,
 }
 
 impl Registrar {
@@ -534,6 +572,21 @@ impl Registrar {
             hint: hint.into(),
             kind: PaletteKind::Run(Box::new(action)),
         });
+    }
+
+    /// Register an always-on overlay component. Pushed once at app
+    /// init into [`Compositor::overlays`]; paints after every
+    /// regular stack component, never receives key events. Use for
+    /// chrome that's always on screen (info bar, scale, attribution).
+    #[allow(dead_code)] // plugin-author API; in-tree consumers (info / scalebar / attribution plugins) land later
+    pub fn add_overlay<F, C>(&mut self, factory: F)
+    where
+        F: Fn(&Context) -> C + 'static,
+        C: Component + 'static,
+    {
+        self.overlays.push(Box::new(move |ctx| {
+            Box::new(factory(ctx)) as Box<dyn Component>
+        }));
     }
 }
 
