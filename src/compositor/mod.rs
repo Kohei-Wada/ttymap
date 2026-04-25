@@ -74,6 +74,13 @@ fn intercept_focus_key(event: KeyEvent) -> Option<AppMsg> {
 pub struct Context {
     pub center: LonLat,
     pub theme_id: ThemeId,
+    /// Latest mouse cursor position in absolute terminal cells.
+    /// `None` until the first mouse event arrives (or always, on
+    /// terminals without mouse support). Project to a `LonLat` via
+    /// [`MapApi::cursor_ll`](crate::plugin_api::MapApi::cursor_ll)
+    /// at paint time.
+    #[allow(dead_code)] // plugin-author API; the in-tree reader (info plugin) lands later
+    pub cursor: Option<(u16, u16)>,
 }
 
 /// A focus-capable UI entity. Pushed on activation, popped on close.
@@ -650,6 +657,7 @@ mod tests {
         let ctx = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
             theme_id: ThemeId::Dark,
+            cursor: None,
         };
 
         let mut c = Compositor::new();
@@ -704,6 +712,7 @@ mod tests {
         let ctx = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
             theme_id: ThemeId::Dark,
+            cursor: None,
         };
 
         let mut c = Compositor::new();
@@ -745,6 +754,7 @@ mod tests {
         let ctx = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
             theme_id: ThemeId::Dark,
+            cursor: None,
         };
 
         let mut c = Compositor::new();

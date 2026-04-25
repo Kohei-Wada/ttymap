@@ -46,6 +46,12 @@ pub struct App {
     tasks: Vec<Box<dyn Task>>,
     theme_id: ThemeId,
     ui_theme: UiTheme,
+    /// Latest mouse cursor position in absolute terminal cells.
+    /// `None` until the first mouse event arrives (or always, on
+    /// terminals without mouse support). Surfaced to components via
+    /// [`Context`](crate::compositor::Context) so plugins can build
+    /// cursor-aware overlays.
+    cursor: Option<(u16, u16)>,
 }
 
 impl App {
@@ -101,6 +107,7 @@ impl App {
             tasks: registrar.tasks,
             theme_id,
             ui_theme,
+            cursor: None,
         }
     }
 
@@ -184,6 +191,7 @@ impl App {
         Context {
             center: self.map.center(),
             theme_id: self.theme_id,
+            cursor: self.cursor,
         }
     }
 
@@ -200,6 +208,9 @@ impl App {
             }
             AppMsg::SetTheme(new_id) => self.apply_theme(new_id),
             AppMsg::CursorMoved(col, row) => {
+                self.cursor = Some((col, row));
+                // Legacy: info overlay still owns its own cursor copy
+                // until the overlay → plugin migration replaces it.
                 self.ui.overlay.set_cursor((col, row));
             }
             AppMsg::CycleFocus(forward) => {

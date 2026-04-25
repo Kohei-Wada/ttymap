@@ -139,6 +139,7 @@ mod tests {
     const CTX: Context = Context {
         center: LonLat { lon: 0.0, lat: 0.0 },
         theme_id: ThemeId::Dark,
+        cursor: None,
     };
 
     fn bg() -> BaseLayer {
