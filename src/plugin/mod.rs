@@ -10,5 +10,6 @@ pub mod aircraft;
 pub mod export;
 pub mod help;
 pub mod here;
+pub mod iss;
 pub mod search;
 pub mod wiki;
