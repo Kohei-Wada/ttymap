@@ -93,7 +93,12 @@ impl RenderHandle {
     pub fn shutdown(&mut self) {
         self.should_quit.store(true, Ordering::Relaxed);
         let _ = self.task_tx.send(RenderTask::Shutdown);
-        self.thread.take();
+        // `Option::take` alone only **drops** the JoinHandle — that's
+        // detach, not join. Wait for the thread to actually finish so
+        // anything sequenced after shutdown sees it gone (issue #107).
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -153,6 +158,67 @@ fn send_frame(frame_tx: &mpsc::Sender<MapFrame>, frame: Option<MapFrame>) -> boo
         return false; // channel closed
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Regression for issue #107. `shutdown` previously did
+    /// `self.thread.take()` which only **drops** the `JoinHandle` —
+    /// `Drop for JoinHandle` is detach, not join. So control returned
+    /// to the caller while the render thread was still running,
+    /// contradicting CLAUDE.md's claim that "RenderHandle's thread
+    /// shutdown is handled by its Drop impl".
+    ///
+    /// Probe: a thread that does a brief wind-down sleep before
+    /// flipping a flag. After shutdown, the flag must be set —
+    /// otherwise the join didn't actually wait.
+    #[test]
+    fn shutdown_joins_the_render_thread() {
+        let exited = Arc::new(Mutex::new(false));
+        let exited_clone = Arc::clone(&exited);
+
+        let (task_tx, task_rx) = mpsc::channel::<RenderTask>();
+        let (_frame_tx, frame_rx) = mpsc::channel::<MapFrame>();
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let should_quit_clone = Arc::clone(&should_quit);
+
+        let thread = thread::spawn(move || {
+            // Wait for the shutdown signal …
+            loop {
+                if should_quit_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+                match task_rx.recv_timeout(Duration::from_millis(20)) {
+                    Ok(RenderTask::Shutdown) => break,
+                    Ok(_) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+            // … then do measurable wind-down work before exit.
+            thread::sleep(Duration::from_millis(80));
+            *exited_clone.lock().unwrap() = true;
+        });
+
+        let mut handle = RenderHandle {
+            task_tx,
+            frame_rx,
+            should_quit,
+            thread: Some(thread),
+        };
+
+        handle.shutdown();
+
+        assert!(
+            *exited.lock().unwrap(),
+            "shutdown must wait for the render thread to finish (join), \
+             not detach (drop the JoinHandle)"
+        );
+    }
 }
 
 fn run_loop(
