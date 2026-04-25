@@ -324,20 +324,43 @@ fn build_registrar(
 
     let mut r = Registrar::default();
 
-    crate::plugin::info::register(nominatim.clone(), &mut r);
-    crate::plugin::scalebar::register(&mut r);
-    crate::plugin::attribution::register(attribution, &mut r);
-    crate::plugin::search::register(nominatim, &mut r);
-    crate::plugin::wiki::register(config, &mut r);
-    crate::plugin::here::register(
-        config.geoip.endpoint.clone(),
-        config.geoip.timeout_ms,
-        &mut r,
-    );
-    crate::plugin::export::register(&mut r);
-    crate::plugin::aircraft::register(config, &mut r);
-    crate::plugin::iss::register(config, &mut r);
-    crate::plugin::quake::register(config, &mut r);
+    // Each block: skip the register call when the user disabled the
+    // plugin via `[<name>] enabled = false`. plugin_enabled defaults
+    // to true so absent sections behave as before.
+    if config.plugin_enabled("info") {
+        crate::plugin::info::register(nominatim.clone(), &mut r);
+    }
+    if config.plugin_enabled("scalebar") {
+        crate::plugin::scalebar::register(&mut r);
+    }
+    if config.plugin_enabled("attribution") {
+        crate::plugin::attribution::register(attribution, &mut r);
+    }
+    if config.plugin_enabled("search") {
+        crate::plugin::search::register(nominatim, &mut r);
+    }
+    if config.plugin_enabled("wiki") {
+        crate::plugin::wiki::register(config, &mut r);
+    }
+    if config.plugin_enabled("here") {
+        crate::plugin::here::register(
+            config.geoip.endpoint.clone(),
+            config.geoip.timeout_ms,
+            &mut r,
+        );
+    }
+    if config.plugin_enabled("export") {
+        crate::plugin::export::register(&mut r);
+    }
+    if config.plugin_enabled("aircraft") {
+        crate::plugin::aircraft::register(config, &mut r);
+    }
+    if config.plugin_enabled("iss") {
+        crate::plugin::iss::register(config, &mut r);
+    }
+    if config.plugin_enabled("quake") {
+        crate::plugin::quake::register(config, &mut r);
+    }
 
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette
@@ -348,11 +371,13 @@ fn build_registrar(
         .filter(|e| !e.hint.is_empty())
         .map(|e| (e.hint.clone(), e.label.clone()))
         .collect();
-    let help_text = Rc::new(crate::plugin::help::HelpText::build(
-        keymap,
-        &plugin_help_entries,
-    ));
-    crate::plugin::help::register(help_text, &mut r);
+    if config.plugin_enabled("help") {
+        let help_text = Rc::new(crate::plugin::help::HelpText::build(
+            keymap,
+            &plugin_help_entries,
+        ));
+        crate::plugin::help::register(help_text, &mut r);
+    }
 
     // Palette is a built-in, not a plugin. `install` drains every
     // palette_entry contributed above and bakes them into the default

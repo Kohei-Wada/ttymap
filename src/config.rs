@@ -70,6 +70,25 @@ impl Config {
             .and_then(|v| v.try_into().ok())
             .unwrap_or_default()
     }
+
+    /// Whether the named plugin is enabled. Reads `[<name>].enabled
+    /// = false` from the user's TOML; defaults to `true` when the
+    /// section or field is absent. The composition root (in
+    /// `App::build_registrar`) consults this before invoking each
+    /// plugin's `register`, so disabled plugins contribute no
+    /// activations / palette entries / overlays / tasks.
+    ///
+    /// ```toml
+    /// [aircraft]
+    /// enabled = false   # plugin completely off
+    /// ```
+    pub fn plugin_enabled(&self, name: &str) -> bool {
+        self.extras
+            .get(name)
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+    }
 }
 
 #[derive(Deserialize)]
@@ -255,5 +274,29 @@ quit = ["Q", "C-q"]
         assert_eq!(cfg.render.style, "dark");
         assert_eq!(cfg.cache.memory_tiles, 192);
         assert!(!cfg.geoip.on_startup);
+    }
+
+    #[test]
+    fn plugin_enabled_defaults_true_when_section_absent() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.plugin_enabled("aircraft"));
+    }
+
+    #[test]
+    fn plugin_enabled_defaults_true_when_field_absent() {
+        let cfg: Config = toml::from_str("[aircraft]\nanchor = \"left\"").unwrap();
+        assert!(cfg.plugin_enabled("aircraft"));
+    }
+
+    #[test]
+    fn plugin_enabled_honours_explicit_false() {
+        let cfg: Config = toml::from_str("[aircraft]\nenabled = false").unwrap();
+        assert!(!cfg.plugin_enabled("aircraft"));
+    }
+
+    #[test]
+    fn plugin_enabled_honours_explicit_true() {
+        let cfg: Config = toml::from_str("[aircraft]\nenabled = true").unwrap();
+        assert!(cfg.plugin_enabled("aircraft"));
     }
 }
