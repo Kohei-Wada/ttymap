@@ -1,15 +1,16 @@
-//! ISS component — single moving marker pushed onto the compositor
-//! stack while the plugin is toggled on.
+//! ISS component — moving marker + compact info panel pushed onto
+//! the compositor stack while the plugin is toggled on.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::plugin_api::prelude::*;
 
+use super::panel;
 use super::state::IssHandle;
 
-/// ISS component — markers only, no panel. Shared handle so toggling
-/// off / on inherits the last fetched position (avoids a stale gap
-/// while the next fetch is in flight).
+/// ISS component — marker on the map + a compact info panel. Shared
+/// handle so toggling off / on inherits the last fetched position
+/// (avoids a stale gap while the next fetch is in flight).
 pub struct IssComponent {
     state: IssHandle,
     /// True until the first jump-to-ISS is emitted after activation.
@@ -47,6 +48,10 @@ impl Component for IssComponent {
         // Non-modal otherwise: defer to the base layer so pan / zoom /
         // quit keep working with the marker on.
         win.ignore();
+    }
+
+    fn render(&self, win: &mut RenderWindow) {
+        panel::render_panel(&self.state.borrow(), win);
     }
 
     fn paint_on_map(&self, p: &mut MapApi<'_>) {

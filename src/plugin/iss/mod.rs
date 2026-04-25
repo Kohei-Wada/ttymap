@@ -18,6 +18,7 @@
 
 mod component;
 mod opennotify;
+mod panel;
 mod state;
 
 use std::cell::RefCell;

@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use log::debug;
 
@@ -14,6 +14,11 @@ use super::opennotify::{IssPosition, OpenNotifyClient};
 
 pub struct IssState {
     pub(super) position: Option<IssPosition>,
+    /// When the last successful position arrived. The panel renders
+    /// "updated Ns ago" off this — the API itself returns a unix
+    /// timestamp, but wall-clock skew makes "now - that" surprising;
+    /// monotonic local Instant is what the user actually wants.
+    pub(super) last_update: Option<Instant>,
     client: Arc<OpenNotifyClient>,
     feed: PolledFeed<Option<IssPosition>>,
 }
@@ -22,6 +27,7 @@ impl IssState {
     pub fn new(cfg: IssConfig) -> Self {
         Self {
             position: None,
+            last_update: None,
             client: Arc::new(OpenNotifyClient::new()),
             feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
         }
@@ -36,6 +42,7 @@ impl IssState {
         if let Some(result) = self.feed.poll() {
             if let Some(p) = result {
                 debug!("iss: position {:.2}, {:.2}", p.lat, p.lon);
+                self.last_update = Some(Instant::now());
             }
             self.position = result;
         }
