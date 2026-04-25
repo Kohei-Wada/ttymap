@@ -3,13 +3,14 @@
 //! Interacts with the fetch backend only through the `TileClient` trait.
 
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use directories::ProjectDirs;
 use log::debug;
+use lru::LruCache;
 
 use super::decode::{self, DecodedTile};
 use super::fetch::{TileClient, TilePriority};
@@ -36,9 +37,7 @@ impl std::fmt::Display for TileKey {
 pub struct TileCache {
     client: Box<dyn TileClient>,
     cache_dir: Option<PathBuf>,
-    memory_cache: HashMap<TileKey, DecodedTile>,
-    cache_order: VecDeque<TileKey>,
-    cache_size: usize,
+    memory_cache: LruCache<TileKey, DecodedTile>,
     current_z: u32,
     center_x: f64,
     center_y: f64,
@@ -68,12 +67,13 @@ impl TileCache {
             None
         };
 
+        // `cache_size` may legitimately be configured to 0 by paranoid
+        // users; clamp to 1 since `NonZeroUsize::new` rejects zero.
+        let capacity = NonZeroUsize::new(cache_size.max(1)).unwrap();
         TileCache {
             client,
             cache_dir,
-            memory_cache: HashMap::new(),
-            cache_order: VecDeque::new(),
-            cache_size,
+            memory_cache: LruCache::new(capacity),
             current_z: 0,
             center_x: 0.0,
             center_y: 0.0,
@@ -137,10 +137,14 @@ impl TileCache {
     }
 
     /// Get a tile. Checks: memory → disk → enqueue HTTP fetch.
+    ///
+    /// On a memory hit, `LruCache::get` promotes the key to MRU so a
+    /// hot tile can survive a long pan across many cold tiles (issue
+    /// #105).
     pub fn get_tile(&mut self, z: u32, x: i32, y: i32) -> Option<&DecodedTile> {
         let key = TileKey::new(z, x, y);
 
-        if self.memory_cache.contains_key(&key) {
+        if self.memory_cache.contains(&key) {
             return self.memory_cache.get(&key);
         }
 
@@ -236,13 +240,9 @@ impl TileCache {
     }
 
     fn insert_memory(&mut self, key: TileKey, decoded: DecodedTile) {
-        if self.cache_order.len() >= self.cache_size
-            && let Some(oldest) = self.cache_order.pop_front()
-        {
-            self.memory_cache.remove(&oldest);
-        }
-        self.memory_cache.insert(key.clone(), decoded);
-        self.cache_order.push_back(key);
+        // `LruCache::put` evicts the least-recently-used entry when at
+        // capacity and treats the inserted key as MRU.
+        self.memory_cache.put(key, decoded);
     }
 }
 
@@ -269,6 +269,56 @@ mod tests {
     fn test_tile_distance_sq() {
         let d = tile_distance_sq(&TileKey::new(0, 5, 5), 5.5, 5.5);
         assert!(d < 0.01);
+    }
+
+    /// A no-op `TileClient` that swallows everything. Suitable for
+    /// tests that exercise cache state without checking dispatch.
+    struct NoopClient;
+    impl TileClient for NoopClient {
+        fn enqueue(&self, _: &TileKey, _: TilePriority) {}
+        fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
+        fn attribution(&self) -> &str {
+            "noop"
+        }
+        fn is_idle(&self) -> bool {
+            true
+        }
+    }
+
+    /// Regression for issue #105. The doc comment / data-structure
+    /// names promise LRU eviction, but the implementation used FIFO
+    /// (insertion order) — a hot tile that was hit between inserts
+    /// got evicted at the same time as cold ones. Under true LRU,
+    /// recent access promotes the tile to MRU and protects it.
+    #[test]
+    fn lru_eviction_keeps_recently_accessed_tile() {
+        // cache_size = 2. Inject A, B via empty-bytes negative-cache
+        // path (poll_completed inserts an empty DecodedTile). Hit A
+        // (which under LRU bumps it to MRU). Insert C. With LRU, B
+        // (LRU) is evicted; A survives. With FIFO, A (oldest insert)
+        // is evicted regardless of the hit.
+        let (tx, rx) = mpsc::channel();
+        let mut cache = TileCache::new(Box::new(NoopClient), rx, false, 2);
+
+        let a = TileKey::new(0, 0, 0);
+        let b = TileKey::new(0, 1, 0);
+        let c = TileKey::new(0, 2, 0);
+
+        tx.send((a.clone(), Vec::new())).unwrap();
+        tx.send((b.clone(), Vec::new())).unwrap();
+        cache.poll_completed();
+
+        // Access A: bumps to MRU under LRU.
+        assert!(cache.get_tile(a.z, a.x, a.y).is_some());
+
+        tx.send((c.clone(), Vec::new())).unwrap();
+        cache.poll_completed();
+
+        assert!(
+            cache.get_tile(a.z, a.x, a.y).is_some(),
+            "recently-accessed tile A must survive when C displaces \
+             the LRU entry (B), not the most-recently-touched one"
+        );
     }
 
     /// Proves `TileCache` drives its backend purely through the `TileClient`

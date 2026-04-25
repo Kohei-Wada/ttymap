@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn classify_polygon_groups_empty_input_yields_no_groups() {
         let rings: Vec<Vec<(i32, i32)>> = Vec::new();
-        assert_eq!(Renderer::classify_polygon_groups(&rings), Vec::new());
+        assert!(Renderer::classify_polygon_groups(&rings).is_empty());
     }
 
     /// Single outer ring → one group spanning the whole slice.
