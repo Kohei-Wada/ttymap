@@ -294,17 +294,27 @@ impl App {
 }
 
 /// Composition root for the tile subsystem.
+///
+/// Backend dispatch happens here: a future MBTiles / PMTiles backend
+/// would branch on `config.source` and pick a different `TileFetcher`.
+/// `FetchLane` provides queue / dedup / priority for any of them.
 pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
-    use crate::map::tile::fetch::TileClient;
+    use crate::map::tile::fetch::{FetchLane, HttpFetcher, TileFetchLane, TileFetcher};
+
+    /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
+    /// small pool covers the typical visible-tile + prefetch fan-out
+    /// without saturating the upstream.
+    const HTTP_WORKERS: usize = 6;
+
     let (tx, rx) = std::sync::mpsc::channel();
-    let client = crate::map::tile::fetch::HttpTileClient::new(tx);
+    let fetcher = HttpFetcher::new();
     let attribution = {
-        let s = client.attribution();
+        let s = fetcher.attribution();
         (!s.is_empty()).then(|| s.to_string())
     };
-    let boxed: Box<dyn TileClient> = Box::new(client);
+    let lane: Box<dyn TileFetchLane> = Box::new(FetchLane::new(fetcher, HTTP_WORKERS, tx));
     (
-        crate::map::tile::TileCache::new(boxed, rx, config.cache.tiles, config.cache.memory_tiles),
+        crate::map::tile::TileCache::new(lane, rx, config.cache.tiles, config.cache.memory_tiles),
         attribution,
     )
 }

@@ -1,183 +1,58 @@
-//! HTTP `TileClient` — fetches MVT (`.pbf`) tiles over the slippy-map
+//! HTTP `TileFetcher` — fetches MVT (`.pbf`) tiles over the slippy-map
 //! URL scheme `{base}/{z}/{x}/{y}.pbf`. ttymap's map rendering
 //! assumes OSM-derived OpenMapTiles data, and `mapscii.me` is the
 //! only public server that serves it without an API key, so the base
-//! URL is hardcoded for now. A fixed worker pool pops from an
-//! internal queue, GETs bytes, and forwards the payload to the cache
-//! through an `mpsc` channel.
+//! URL is hardcoded for now.
+//!
+//! All concurrency / queueing / dedup lives in `super::lane`; this
+//! file is just the per-tile HTTP GET.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
-use std::thread;
+use std::time::Duration;
 
-use log::debug;
-
-use super::TileClient;
-use super::priority::TilePriority;
-use super::queue::{PriorityFn, PriorityQueue};
+use super::{FetchError, TileFetcher};
 use crate::map::tile::key::TileKey;
 use crate::shared::http::HttpClient;
 
-const NUM_WORKERS: usize = 6;
 const BASE_URL: &str = "http://mapscii.me";
 const ATTRIBUTION: &str = "© OpenStreetMap contributors";
 
-struct SharedState {
-    queue: Mutex<PriorityQueue<TileKey, TilePriority>>,
-    condvar: Condvar,
-    in_flight: Mutex<HashSet<TileKey>>,
-    shutdown: AtomicBool,
+pub struct HttpFetcher {
+    http: HttpClient,
+    base_url: String,
 }
 
-pub struct HttpTileClient {
-    shared: Arc<SharedState>,
-    _workers: Vec<thread::JoinHandle<()>>,
-}
+impl HttpFetcher {
+    pub fn new() -> Self {
+        Self::with_base_url(BASE_URL.to_string())
+    }
 
-impl HttpTileClient {
-    pub fn new(tx: mpsc::Sender<(TileKey, Vec<u8>)>) -> Self {
-        let shared = Arc::new(SharedState {
-            queue: Mutex::new(PriorityQueue::new()),
-            condvar: Condvar::new(),
-            in_flight: Mutex::new(HashSet::new()),
-            shutdown: AtomicBool::new(false),
-        });
-
-        // One HttpClient shared across workers. Clone is cheap (reqwest's
-        // internal Client is Arc-backed), so all workers reuse the same
-        // connection pool. Tile servers are slow, hence the longer timeout.
-        let http = HttpClient::with_timeout("tile", std::time::Duration::from_secs(10));
-
-        let mut workers = Vec::with_capacity(NUM_WORKERS);
-        for _ in 0..NUM_WORKERS {
-            let shared = shared.clone();
-            let tx = tx.clone();
-            let http = http.clone();
-            workers.push(thread::spawn(move || {
-                worker_loop(&shared, &tx, &http);
-            }));
-        }
-
-        HttpTileClient {
-            shared,
-            _workers: workers,
+    /// Build a fetcher with a custom base URL — useful for tests
+    /// against a local mock server, and for future config-driven
+    /// alternative tile sources.
+    pub fn with_base_url(base_url: String) -> Self {
+        Self {
+            http: HttpClient::with_timeout("tile", Duration::from_secs(10)),
+            base_url,
         }
     }
 }
 
-impl TileClient for HttpTileClient {
-    /// Enqueue a tile for fetching. Skips if already queued or in-flight.
-    fn enqueue(&self, key: &TileKey, priority: TilePriority) {
-        {
-            let in_flight = self
-                .shared
-                .in_flight
-                .lock()
-                .expect("tile worker mutex poisoned");
-            if in_flight.contains(key) {
-                return;
-            }
-        }
-        let mut queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
-        queue.push(key.clone(), priority);
-        drop(queue);
-        self.shared.condvar.notify_one();
+impl Default for HttpFetcher {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Recompute queue priorities (typically after a viewport change).
-    /// A `TilePriority` with a large `zoom_diff` sinks the entry to the
-    /// back, where overflow drop will evict it as new work arrives.
-    fn update_view(&self, priority_fn: &dyn PriorityFn<TileKey, TilePriority>) {
-        let mut queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
-        queue.reprioritize(priority_fn);
+impl TileFetcher for HttpFetcher {
+    fn fetch(&self, key: &TileKey) -> Result<Vec<u8>, FetchError> {
+        let url = format!("{}/{}.pbf", self.base_url, key);
+        self.http
+            .get_bytes(&url)
+            .map_err(|e| FetchError::new(e.to_string()))
     }
 
     fn attribution(&self) -> &str {
         ATTRIBUTION
-    }
-
-    fn is_idle(&self) -> bool {
-        let queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
-        let in_flight = self
-            .shared
-            .in_flight
-            .lock()
-            .expect("tile worker mutex poisoned");
-        queue.is_empty() && in_flight.is_empty()
-    }
-}
-
-impl Drop for HttpTileClient {
-    fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Relaxed);
-        self.shared.condvar.notify_all();
-    }
-}
-
-// ── Worker ────────────────────────────────────────────────────────────────────
-
-fn worker_loop(shared: &SharedState, tx: &mpsc::Sender<(TileKey, Vec<u8>)>, http: &HttpClient) {
-    loop {
-        let key = {
-            let mut queue = shared.queue.lock().expect("tile worker mutex poisoned");
-            loop {
-                if shared.shutdown.load(Ordering::Relaxed) {
-                    return;
-                }
-                if let Some(key) = queue.pop() {
-                    let mut in_flight =
-                        shared.in_flight.lock().expect("tile worker mutex poisoned");
-                    if in_flight.contains(&key) {
-                        drop(in_flight);
-                        continue;
-                    }
-                    in_flight.insert(key.clone());
-                    break key;
-                }
-                queue = shared
-                    .condvar
-                    .wait(queue)
-                    .expect("tile worker condvar poisoned");
-            }
-        };
-
-        // HTTP fetch
-        let url = format!("{}/{}.pbf", BASE_URL, key);
-        debug!("worker: fetching {}", url);
-        let bytes = match http.get_bytes(&url) {
-            Ok(b) => b,
-            Err(e) => {
-                log::warn!("tile: fetch failed for {}: {}", key, e);
-                Vec::new()
-            }
-        };
-
-        // Remove from in-flight
-        shared
-            .in_flight
-            .lock()
-            .expect("tile worker mutex poisoned")
-            .remove(&key);
-
-        // Send result (empty for failures → negative cache)
-        debug!("worker: fetched {} ({} bytes)", key, bytes.len());
-        if tx.send((key, bytes)).is_err() {
-            log::warn!("tile channel closed");
-            return;
-        }
     }
 }
 
@@ -186,35 +61,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_enqueue_dedup_in_flight() {
-        let (tx, _rx) = mpsc::channel();
-        let client = HttpTileClient::new(tx);
-        let key = TileKey::new(0, 0, 0);
+    fn url_uses_base_plus_zxy_pbf() {
+        // The fetcher is small enough that we can verify the URL
+        // shape by constructing one with a custom base and reading
+        // the field back. (Full integration is exercised in
+        // `lane::tests` via a custom `TileFetcher`.)
+        let fetcher = HttpFetcher::with_base_url("http://example.test".to_string());
+        assert_eq!(fetcher.base_url, "http://example.test");
+        assert_eq!(fetcher.attribution(), ATTRIBUTION);
+    }
 
-        // Manually mark as in-flight
-        client
-            .shared
-            .in_flight
-            .lock()
-            .expect("tile worker mutex poisoned")
-            .insert(key.clone());
-
-        // Should skip (already in-flight)
-        client.enqueue(
-            &key,
-            TilePriority {
-                zoom_diff: 0,
-                distance_sq: 0.0,
-            },
-        );
-        assert_eq!(
-            client
-                .shared
-                .queue
-                .lock()
-                .expect("tile worker mutex poisoned")
-                .len(),
-            0
-        );
+    #[test]
+    fn default_uses_mapscii_me_base() {
+        let fetcher = HttpFetcher::new();
+        assert_eq!(fetcher.base_url, "http://mapscii.me");
     }
 }

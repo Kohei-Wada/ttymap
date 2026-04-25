@@ -1,6 +1,6 @@
 //! Tile cache — memory + disk storage with background tile fetching.
 //! Owns the full tile lifecycle and all domain logic.
-//! Interacts with the fetch backend only through the `TileClient` trait.
+//! Interacts with the fetch backend only through the `TileFetchLane` trait.
 
 use std::collections::HashMap;
 use std::fs;
@@ -13,11 +13,11 @@ use log::debug;
 use lru::LruCache;
 
 use super::decode::{self, DecodedTile};
-use super::fetch::{TileClient, TilePriority};
+use super::fetch::{TileFetchLane, TilePriority};
 use super::key::TileKey;
 
 pub struct TileCache {
-    client: Box<dyn TileClient>,
+    client: Box<dyn TileFetchLane>,
     cache_dir: Option<PathBuf>,
     memory_cache: LruCache<TileKey, DecodedTile>,
     current_z: u32,
@@ -27,14 +27,14 @@ pub struct TileCache {
 }
 
 impl TileCache {
-    /// Build a cache around an injected `TileClient`. The `rx` channel
-    /// is the receiving end of the pair whose `tx` was handed to the
-    /// client — completed fetches arrive on it.
+    /// Build a cache around an injected `TileFetchLane`. The `rx`
+    /// channel is the receiving end of the pair whose `tx` was handed
+    /// to the lane — completed fetches arrive on it.
     ///
-    /// Wiring (channel + client construction) lives at the composition
+    /// Wiring (channel + lane construction) lives at the composition
     /// root in `app::build_tile_cache`, where backend selection is made.
     pub fn new(
-        client: Box<dyn TileClient>,
+        client: Box<dyn TileFetchLane>,
         rx: mpsc::Receiver<(TileKey, Vec<u8>)>,
         enable_disk_cache: bool,
         cache_size: usize,
@@ -309,10 +309,10 @@ mod tests {
         assert!(d > 40.0, "y must not wrap (got {d})");
     }
 
-    /// A no-op `TileClient` that swallows everything. Suitable for
-    /// tests that exercise cache state without checking dispatch.
-    struct NoopClient;
-    impl TileClient for NoopClient {
+    /// A no-op `TileFetchLane` that swallows everything. Suitable
+    /// for tests that exercise cache state without checking dispatch.
+    struct NoopLane;
+    impl TileFetchLane for NoopLane {
         fn enqueue(&self, _: &TileKey, _: TilePriority) {}
         fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
         fn attribution(&self) -> &str {
@@ -336,7 +336,7 @@ mod tests {
         // (LRU) is evicted; A survives. With FIFO, A (oldest insert)
         // is evicted regardless of the hit.
         let (tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(Box::new(NoopClient), rx, false, 2);
+        let mut cache = TileCache::new(Box::new(NoopLane), rx, false, 2);
 
         let a = TileKey::new(0, 0, 0);
         let b = TileKey::new(0, 1, 0);
@@ -359,13 +359,13 @@ mod tests {
         );
     }
 
-    /// Proves `TileCache` drives its backend purely through the `TileClient`
-    /// trait: cache misses dispatch to the injected client, with no HTTP
-    /// or worker threads involved.
+    /// Proves `TileCache` drives its backend purely through the
+    /// `TileFetchLane` trait: cache misses dispatch to the injected
+    /// lane, with no HTTP or worker threads involved.
     #[test]
     fn test_cache_misses_dispatch_through_injected_client() {
-        struct RecordingClient(Arc<Mutex<Vec<TileKey>>>);
-        impl TileClient for RecordingClient {
+        struct RecordingLane(Arc<Mutex<Vec<TileKey>>>);
+        impl TileFetchLane for RecordingLane {
             fn enqueue(&self, key: &TileKey, _: TilePriority) {
                 self.0.lock().unwrap().push(key.clone());
             }
@@ -379,7 +379,7 @@ mod tests {
         }
 
         let log = Arc::new(Mutex::new(Vec::<TileKey>::new()));
-        let client: Box<dyn TileClient> = Box::new(RecordingClient(log.clone()));
+        let client: Box<dyn TileFetchLane> = Box::new(RecordingLane(log.clone()));
         let (_tx, rx) = mpsc::channel();
         let mut cache = TileCache::new(client, rx, false, 64);
 
