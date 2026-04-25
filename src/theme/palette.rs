@@ -32,8 +32,6 @@ pub struct ColorPalette {
     pub road_street: u8,
     pub road_path_pedestrian: u8,
     pub road_rail: u8,
-    pub road_casing_major: u8,
-    pub road_casing_minor: u8,
     // tunnels
     pub tunnel_motorway: u8,
     pub tunnel_link: u8,
@@ -83,8 +81,6 @@ pub const DARK: ColorPalette = ColorPalette {
     road_street: 231,          // #fff
     road_path_pedestrian: 181, // #cba
     road_rail: 250,            // #bbb
-    road_casing_major: 222,    // same as motorway in dark
-    road_casing_minor: 231,    // same as street in dark
     tunnel_motorway: 223,      // #ffdaa6
     tunnel_link: 230,          // #fff4c6
     admin_level_2: 231,        // #fff
@@ -128,34 +124,32 @@ pub const BRIGHT: ColorPalette = ColorPalette {
     building: 249,             // light gray (#b2b2b2)
     aeroway: 250,              // silver (#bcbcbc)
     road_motorway: 166,        // dark orange (#d75f00)
-    road_trunk_primary: 130,   // brown (#af5f00)
-    road_street: 245,          // mid gray (#8a8a8a)
+    road_trunk_primary: 166, // dark orange — matches motorway in bright (was 130 brown, never visible)
+    road_street: 245,        // mid gray (#8a8a8a)
     road_path_pedestrian: 138, // rosy brown (#af8787)
-    road_rail: 240,            // dark gray (#585858)
-    road_casing_major: 166,    // dark orange (#d75f00)
-    road_casing_minor: 245,    // mid gray
-    tunnel_motorway: 180,      // muted orange (#d7af87)
-    tunnel_link: 180,          // muted orange
-    admin_level_2: 238,        // dark gray (#444444)
-    admin_level_3: 243,        // mid gray (#767676)
-    admin_level_4: 247,        // light gray (#9e9e9e)
-    admin_disputed: 243,       // mid gray, dashed feel
-    admin_maritime_2: 67,      // slate blue (#5f87af)
-    admin_maritime_3: 103,     // dull blue (#8787af)
-    place_city: 160,           // dark red (#d70000)
-    place_town: 130,           // brown (#af5f00)
-    place_village: 95,         // mauve (#875f5f)
-    place_other: 242,          // gray (#6c6c6c)
-    marine_label: 67,          // slate blue (#5f87af)
-    water_label: 67,           // slate blue
-    poi_label_1: 130,          // brown (#af5f00)
-    poi_label_2: 137,          // tan (#af875f)
-    poi_label_3: 101,          // olive (#87875f)
-    poi_label_4: 243,          // gray (#767676)
-    rail_station_label: 90,    // plum (#870087... actually #8700d7 area)
-    airport_label: 25,         // dark blue (#005faf)
-    road_label: 242,           // gray (#6c6c6c)
-    housenum_label: 247,       // light gray (#9e9e9e)
+    road_rail: 240,          // dark gray (#585858)
+    tunnel_motorway: 166,    // dark orange — uniform with road in bright
+    tunnel_link: 166,        // dark orange — uniform with road in bright
+    admin_level_2: 238,      // dark gray (#444444)
+    admin_level_3: 243,      // mid gray (#767676)
+    admin_level_4: 247,      // light gray (#9e9e9e)
+    admin_disputed: 243,     // mid gray, dashed feel
+    admin_maritime_2: 67,    // slate blue (#5f87af)
+    admin_maritime_3: 103,   // dull blue (#8787af)
+    place_city: 160,         // dark red (#d70000)
+    place_town: 130,         // brown (#af5f00)
+    place_village: 95,       // mauve (#875f5f)
+    place_other: 242,        // gray (#6c6c6c)
+    marine_label: 67,        // slate blue (#5f87af)
+    water_label: 67,         // slate blue
+    poi_label_1: 130,        // brown (#af5f00)
+    poi_label_2: 137,        // tan (#af875f)
+    poi_label_3: 101,        // olive (#87875f)
+    poi_label_4: 243,        // gray (#767676)
+    rail_station_label: 90,  // plum (#870087... actually #8700d7 area)
+    airport_label: 25,       // dark blue (#005faf)
+    road_label: 242,         // gray (#6c6c6c)
+    housenum_label: 247,     // light gray (#9e9e9e)
 };
 
 #[cfg(test)]

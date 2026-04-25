@@ -1,6 +1,5 @@
 pub mod filter;
-mod preset_bright;
-mod preset_dark;
+mod schema;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,10 +39,7 @@ impl Styler {
     /// layer.
     pub fn new(theme: ThemeId) -> Self {
         let p = theme.palette();
-        let rules = match theme {
-            ThemeId::Dark => preset_dark::rules(p),
-            ThemeId::Bright => preset_bright::rules(p),
-        };
+        let rules = schema::mapscii::rules(p);
 
         let mut rules_by_layer: HashMap<String, Vec<StyleRule>> = HashMap::new();
         for rule in rules {
@@ -283,9 +279,11 @@ mod tests {
 
     #[test]
     fn all_draw_order_layers_have_rules() {
-        // Layers common to both presets
-        let common_layers = vec![
+        // Both themes share the same rule shape (single source of truth
+        // in `schema/mapscii.rs`); the only difference is `ColorPalette`.
+        let layers = vec![
             "landuse",
+            "landuse_overlay",
             "water",
             "waterway",
             "marine_label",
@@ -300,12 +298,13 @@ mod tests {
             "airport_label",
             "poi_label",
             "road_label",
+            "housenum_label",
         ];
 
         for theme in [ThemeId::Dark, ThemeId::Bright] {
             let styler = Styler::new(theme);
             let name = theme.name();
-            for layer in &common_layers {
+            for layer in &layers {
                 assert!(
                     styler.rules_by_layer.contains_key(*layer),
                     "Preset {:?} missing rules for layer '{}'",
@@ -314,13 +313,27 @@ mod tests {
                 );
             }
         }
+    }
 
-        // Dark-only layers
-        let dark_styler = Styler::new(ThemeId::Dark);
-        assert!(dark_styler.rules_by_layer.contains_key("landuse_overlay"));
+    #[test]
+    fn both_themes_have_identical_layer_set_and_rule_count() {
+        // Structural guard: schema/theme orthogonality means every rule
+        // exists in both themes. If this assertion fires, someone added a
+        // theme-conditional rule path — see `docs/design.md`.
+        let dark = Styler::new(ThemeId::Dark);
+        let bright = Styler::new(ThemeId::Bright);
 
-        // Bright-only layers
-        let bright_styler = Styler::new(ThemeId::Bright);
-        assert!(bright_styler.rules_by_layer.contains_key("housenum_label"));
+        let dark_layers: std::collections::BTreeSet<_> = dark.rules_by_layer.keys().collect();
+        let bright_layers: std::collections::BTreeSet<_> = bright.rules_by_layer.keys().collect();
+        assert_eq!(dark_layers, bright_layers, "layer sets diverged");
+
+        for layer in dark_layers {
+            assert_eq!(
+                dark.rules_by_layer[layer.as_str()].len(),
+                bright.rules_by_layer[layer.as_str()].len(),
+                "rule count differs for layer '{}'",
+                layer
+            );
+        }
     }
 }

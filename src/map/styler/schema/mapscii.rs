@@ -1,7 +1,14 @@
+//! Mapscii MVT schema rules — single source of truth, theme-agnostic.
+//!
+//! Replaces the old `preset_dark.rs` / `preset_bright.rs` parallel
+//! files. Both themes consume the same `Vec<StyleRule>`; theme
+//! variation comes through `ColorPalette` only. See `docs/design.md`
+//! ("Schema-theme orthogonality") for the rationale.
+
 use crate::theme::ColorPalette;
 
-use super::filter::Filter;
-use super::{StyleRule, StyleType};
+use super::super::filter::Filter;
+use super::super::{StyleRule, StyleType};
 use crate::map::tile::PropertyValue as PV;
 
 fn s(v: &str) -> PV {
@@ -14,7 +21,7 @@ fn n(v: f64) -> PV {
 
 pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
     vec![
-        // 1. landuse_overlay_national_park
+        // landuse_overlay_national_park
         StyleRule {
             source_layer: "landuse_overlay".into(),
             style_type: StyleType::Fill,
@@ -23,7 +30,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 2. landuse_park
+        // landuse_park
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Fill,
@@ -32,7 +39,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 3. landuse_cemetery
+        // landuse_cemetery
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Line,
@@ -41,7 +48,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 4. landuse_hospital
+        // landuse_hospital
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Line,
@@ -50,7 +57,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 5. landuse_school
+        // landuse_school
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Line,
@@ -59,7 +66,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 6. landuse_wood
+        // landuse_wood
         StyleRule {
             source_layer: "landuse".into(),
             style_type: StyleType::Line,
@@ -68,11 +75,11 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 7. waterway
+        // waterway (everything except river/stream/canal)
         StyleRule {
             source_layer: "waterway".into(),
             style_type: StyleType::Line,
-            color: p.waterway,
+            color: p.waterway_deep,
             filter: Filter::All(vec![
                 Filter::NotEq("class".into(), s("river")),
                 Filter::NotEq("class".into(), s("stream")),
@@ -81,16 +88,16 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 8. waterway_river
+        // waterway_river
         StyleRule {
             source_layer: "waterway".into(),
             style_type: StyleType::Line,
-            color: p.waterway,
+            color: p.waterway_deep,
             filter: Filter::Eq("class".into(), s("river")),
             min_zoom: None,
             max_zoom: None,
         },
-        // 9. waterway_stream_canal
+        // waterway_stream_canal
         StyleRule {
             source_layer: "waterway".into(),
             style_type: StyleType::Line,
@@ -99,7 +106,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 10. water
+        // water
         StyleRule {
             source_layer: "water".into(),
             style_type: StyleType::Fill,
@@ -108,7 +115,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 11. aeroway_fill
+        // aeroway_fill
         StyleRule {
             source_layer: "aeroway".into(),
             style_type: StyleType::Fill,
@@ -117,7 +124,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(11.0),
             max_zoom: None,
         },
-        // 12. aeroway_runway
+        // aeroway_runway
         StyleRule {
             source_layer: "aeroway".into(),
             style_type: StyleType::Line,
@@ -129,7 +136,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(11.0),
             max_zoom: None,
         },
-        // 13. aeroway_taxiway
+        // aeroway_taxiway
         StyleRule {
             source_layer: "aeroway".into(),
             style_type: StyleType::Line,
@@ -141,16 +148,16 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(11.0),
             max_zoom: None,
         },
-        // 14. building
+        // building
         StyleRule {
             source_layer: "building".into(),
             style_type: StyleType::Line,
             color: p.building,
             filter: Filter::Always,
-            min_zoom: None,
+            min_zoom: Some(14.5),
             max_zoom: None,
         },
-        // 15. tunnel_path_pedestrian
+        // tunnel_path_pedestrian
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -165,7 +172,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 16. tunnel_motorway_link
+        // tunnel_motorway_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -177,7 +184,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 17. tunnel_service_track
+        // tunnel_service_track
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -189,7 +196,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 18. tunnel_link
+        // tunnel_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -201,7 +208,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 19. tunnel_street
+        // tunnel_street
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -213,7 +220,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 20. tunnel_secondary_tertiary
+        // tunnel_secondary_tertiary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -225,7 +232,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 21. tunnel_trunk_primary
+        // tunnel_trunk_primary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -237,7 +244,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 22. tunnel_motorway
+        // tunnel_motorway
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -249,7 +256,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 23. tunnel_major_rail
+        // tunnel_major_rail
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -261,7 +268,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 24. tunnel_major_rail_hatching
+        // tunnel_major_rail_hatching
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -273,7 +280,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 25. road_path_pedestrian
+        // road_path_pedestrian
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -288,7 +295,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 26. road_motorway_link
+        // road_motorway_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -300,7 +307,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(12.0),
             max_zoom: None,
         },
-        // 27. road_service_track
+        // road_service_track
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -312,7 +319,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 28. road_link
+        // road_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -324,7 +331,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(13.0),
             max_zoom: None,
         },
-        // 29. road_street
+        // road_street
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -339,7 +346,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 30. road_secondary_tertiary
+        // road_secondary_tertiary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -351,7 +358,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 31. road_trunk_primary
+        // road_trunk_primary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -363,7 +370,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 32. road_motorway
+        // road_motorway
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -375,7 +382,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(5.0),
             max_zoom: None,
         },
-        // 33. road_major_rail
+        // road_major_rail
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -387,7 +394,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 34. road_major_rail_hatching
+        // road_major_rail_hatching
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -399,7 +406,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 35. bridge_path_pedestrian
+        // bridge_path_pedestrian
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -414,7 +421,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 36. bridge_motorway_link
+        // bridge_motorway_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -426,7 +433,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 37. bridge_service_track
+        // bridge_service_track
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -438,7 +445,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 38. bridge_link
+        // bridge_link
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -450,7 +457,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 39. bridge_street
+        // bridge_street
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -462,7 +469,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 40. bridge_secondary_tertiary
+        // bridge_secondary_tertiary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -474,7 +481,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 41. bridge_trunk_primary
+        // bridge_trunk_primary
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -486,7 +493,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 42. bridge_motorway
+        // bridge_motorway
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -498,7 +505,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 43. bridge_major_rail
+        // bridge_major_rail
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -510,7 +517,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 44. bridge_major_rail_hatching
+        // bridge_major_rail_hatching
         StyleRule {
             source_layer: "road".into(),
             style_type: StyleType::Line,
@@ -522,11 +529,11 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 45. admin_level_3 (>=4)
+        // admin_level_4 (admin_level >= 4, non-maritime)
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
-            color: p.admin_level_3,
+            color: p.admin_level_4,
             filter: Filter::All(vec![
                 Filter::Gte("admin_level".into(), 4.0),
                 Filter::Eq("maritime".into(), n(0.0)),
@@ -534,7 +541,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 46. admin_level_3 (==3)
+        // admin_level_3 (admin_level == 3, non-maritime)
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
@@ -546,7 +553,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 47. admin_level_2
+        // admin_level_2 (national, non-disputed, non-maritime)
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
@@ -559,7 +566,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 48. admin_level_2_disputed
+        // admin_level_2_disputed
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
@@ -572,7 +579,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 49. admin_level_3_maritime
+        // admin_level_3_maritime (admin_level >= 3, maritime)
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
@@ -584,7 +591,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 50. admin_level_2_maritime
+        // admin_level_2_maritime
         StyleRule {
             source_layer: "admin".into(),
             style_type: StyleType::Line,
@@ -596,7 +603,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 51. water_label
+        // water_label
         StyleRule {
             source_layer: "water_label".into(),
             style_type: StyleType::Symbol,
@@ -605,7 +612,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 52. poi_label_4
+        // poi_label_4
         StyleRule {
             source_layer: "poi_label".into(),
             style_type: StyleType::Symbol,
@@ -617,7 +624,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(16.0),
             max_zoom: None,
         },
-        // 53. poi_label_3
+        // poi_label_3
         StyleRule {
             source_layer: "poi_label".into(),
             style_type: StyleType::Symbol,
@@ -629,7 +636,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(15.0),
             max_zoom: None,
         },
-        // 54. poi_label_2
+        // poi_label_2
         StyleRule {
             source_layer: "poi_label".into(),
             style_type: StyleType::Symbol,
@@ -641,7 +648,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(14.0),
             max_zoom: None,
         },
-        // 55. rail_station_label
+        // rail_station_label
         StyleRule {
             source_layer: "rail_station_label".into(),
             style_type: StyleType::Symbol,
@@ -650,7 +657,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 56. poi_label_1
+        // poi_label_1
         StyleRule {
             source_layer: "poi_label".into(),
             style_type: StyleType::Symbol,
@@ -662,7 +669,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(13.0),
             max_zoom: None,
         },
-        // 57. airport_label
+        // airport_label
         StyleRule {
             source_layer: "airport_label".into(),
             style_type: StyleType::Symbol,
@@ -674,7 +681,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(11.0),
             max_zoom: None,
         },
-        // 58. road_label
+        // road_label
         StyleRule {
             source_layer: "road_label".into(),
             style_type: StyleType::Symbol,
@@ -683,7 +690,16 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: Some(15.5),
             max_zoom: None,
         },
-        // 59. place_label_other
+        // housenum_label
+        StyleRule {
+            source_layer: "housenum_label".into(),
+            style_type: StyleType::Symbol,
+            color: p.housenum_label,
+            filter: Filter::Always,
+            min_zoom: Some(16.5),
+            max_zoom: None,
+        },
+        // place_label_other (hamlet/suburb/neighbourhood/island/islet)
         StyleRule {
             source_layer: "place_label".into(),
             style_type: StyleType::Symbol,
@@ -701,7 +717,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 60. place_label_village
+        // place_label_village
         StyleRule {
             source_layer: "place_label".into(),
             style_type: StyleType::Symbol,
@@ -710,7 +726,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 61. place_label_town
+        // place_label_town
         StyleRule {
             source_layer: "place_label".into(),
             style_type: StyleType::Symbol,
@@ -719,7 +735,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 62. place_label_city
+        // place_label_city
         StyleRule {
             source_layer: "place_label".into(),
             style_type: StyleType::Symbol,
@@ -728,7 +744,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 63. marine_label_line_4
+        // marine_label_line_4 (labelrank >= 4)
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -740,7 +756,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 64. marine_label_4
+        // marine_label_4
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -752,7 +768,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 65. marine_label_line_3
+        // marine_label_line_3
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -764,7 +780,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 66. marine_label_point_3
+        // marine_label_point_3
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -776,7 +792,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 67. marine_label_line_2
+        // marine_label_line_2
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -788,7 +804,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 68. marine_label_point_2
+        // marine_label_point_2
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -800,7 +816,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 69. marine_label_line_1
+        // marine_label_line_1
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -812,7 +828,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 70. marine_label_point_1
+        // marine_label_point_1
         StyleRule {
             source_layer: "marine_label".into(),
             style_type: StyleType::Symbol,
@@ -824,7 +840,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 71. country_label_4
+        // country_label_4 (scalerank >= 4)
         StyleRule {
             source_layer: "country_label".into(),
             style_type: StyleType::Symbol,
@@ -833,7 +849,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 72. country_label_3
+        // country_label_3
         StyleRule {
             source_layer: "country_label".into(),
             style_type: StyleType::Symbol,
@@ -842,7 +858,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 73. country_label_2
+        // country_label_2
         StyleRule {
             source_layer: "country_label".into(),
             style_type: StyleType::Symbol,
@@ -851,7 +867,7 @@ pub fn rules(p: &ColorPalette) -> Vec<StyleRule> {
             min_zoom: None,
             max_zoom: None,
         },
-        // 74. country_label_1
+        // country_label_1
         StyleRule {
             source_layer: "country_label".into(),
             style_type: StyleType::Symbol,
