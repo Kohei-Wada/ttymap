@@ -11,5 +11,6 @@ pub mod export;
 pub mod help;
 pub mod here;
 pub mod iss;
+pub mod quake;
 pub mod search;
 pub mod wiki;
