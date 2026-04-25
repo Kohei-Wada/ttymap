@@ -11,28 +11,29 @@
 //! produces visible motion across the map without hammering the
 //! upstream API.
 
+mod opennotify;
 mod service;
-mod wheretheiss;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use log::debug;
 
+use crate::app::AppMsg;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::compositor::{Component, Context, PaletteEntry, PaletteKind, Registrar};
 use crate::geo::LonLat;
 use crate::map::MapApi;
 use crate::shared::throttle::Throttle;
 
+use opennotify::IssPosition;
 use service::IssService;
-use wheretheiss::IssPosition;
 
-/// Min seconds between fetches. Where The ISS At has no documented
-/// rate limit but a fair-use cap around 1 req/s; 5 s is conservative
-/// while still showing visible motion (~38 km between samples).
+/// Min seconds between fetches. open-notify has no published rate
+/// limit; 5 s keeps load on a free public service polite while still
+/// showing visible motion (~38 km between samples).
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct IssState {
@@ -79,18 +80,39 @@ pub type IssHandle = Rc<RefCell<IssState>>;
 /// while the next fetch is in flight).
 pub struct IssComponent {
     state: IssHandle,
+    /// True until the first jump-to-ISS is emitted after activation.
+    /// Cleared once the component nudges the map onto the station so
+    /// the marker is immediately visible — user can press Enter
+    /// afterwards to re-centre at any time.
+    pending_initial_jump: bool,
 }
 
 impl IssComponent {
     pub fn new(state: IssHandle) -> Self {
         state.borrow_mut().refresh();
-        Self { state }
+        Self {
+            state,
+            pending_initial_jump: true,
+        }
     }
 }
 
 impl Component for IssComponent {
-    fn handle_event(&mut self, _event: KeyEvent, win: &mut Window) {
-        // Non-modal: defer all keys to the base layer so pan / zoom /
+    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+        // Enter recentres the map on the cached ISS position — the
+        // wiki Enter-to-jump idiom adapted for a single-target panel.
+        // Pre-fetch (no cached position yet) we silently swallow Enter
+        // so it doesn't leak through to the base layer mid-load.
+        if event.code == KeyCode::Enter && event.modifiers == KeyModifiers::NONE {
+            if let Some(pos) = self.state.borrow().position {
+                win.emit(AppMsg::Jump(LonLat {
+                    lat: pos.lat,
+                    lon: pos.lon,
+                }));
+            }
+            return;
+        }
+        // Non-modal otherwise: defer to the base layer so pan / zoom /
         // quit keep working with the marker on.
         win.ignore();
     }
@@ -113,15 +135,27 @@ impl Component for IssComponent {
         }
     }
 
-    fn poll(&mut self, _win: &mut Window) {
-        let mut state = self.state.borrow_mut();
-        state.poll();
-        // Periodic re-fetch so the marker tracks the live position.
-        state.refresh();
+    fn poll(&mut self, win: &mut Window) {
+        let pos = {
+            let mut state = self.state.borrow_mut();
+            state.poll();
+            // Periodic re-fetch so the marker tracks the live position.
+            state.refresh();
+            state.position
+        };
+        if self.pending_initial_jump
+            && let Some(p) = pos
+        {
+            win.emit(AppMsg::Jump(LonLat {
+                lat: p.lat,
+                lon: p.lon,
+            }));
+            self.pending_initial_jump = false;
+        }
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        Vec::new()
+        vec![("Enter", "fly to ISS")]
     }
 }
 
