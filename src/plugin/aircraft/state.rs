@@ -16,6 +16,10 @@ use super::opensky::{Aircraft, OpenSkyClient};
 
 pub struct AircraftState {
     pub(super) aircraft: Vec<Aircraft>,
+    /// Index of the highlighted row in the panel. Up/Down move it;
+    /// Enter jumps to that aircraft's location. Reset to 0 when the
+    /// list shrinks below the current selection.
+    pub(super) selected: usize,
     client: Arc<OpenSkyClient>,
     feed: PolledFeed<Vec<Aircraft>>,
     fetch_half_deg: f64,
@@ -25,6 +29,7 @@ impl AircraftState {
     pub fn new(cfg: AircraftConfig) -> Self {
         Self {
             aircraft: Vec::new(),
+            selected: 0,
             client: Arc::new(OpenSkyClient::new()),
             feed: PolledFeed::ready(Duration::from_secs(cfg.interval_secs)),
             fetch_half_deg: cfg.fetch_half_deg,
@@ -42,6 +47,9 @@ impl AircraftState {
         if let Some(list) = self.feed.poll() {
             debug!("aircraft: received {} states", list.len());
             self.aircraft = list;
+            if self.selected >= self.aircraft.len() {
+                self.selected = self.aircraft.len().saturating_sub(1);
+            }
         }
     }
 }

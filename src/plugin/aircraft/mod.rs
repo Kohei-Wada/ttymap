@@ -18,6 +18,7 @@
 
 mod component;
 mod opensky;
+mod panel;
 mod state;
 
 use std::cell::RefCell;

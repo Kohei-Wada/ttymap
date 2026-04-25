@@ -11,16 +11,17 @@ use log::debug;
 
 use crate::shared::http::HttpClient;
 
-/// One state vector — what OpenSky returns per aircraft.
-///
-/// The full response carries icao24, callsign, heading, altitude,
-/// velocity, etc.; v1 only paints a marker so we keep the struct
-/// narrow and grow it as MapApi gains primitives that consume the
-/// extra fields (heading-aware glyph, callsign label, ...).
+/// One state vector — what OpenSky returns per aircraft. Optional
+/// fields are kept Option-typed because the API freely emits null
+/// for fields a fresh track hasn't reported yet (no callsign, no
+/// altitude lock, etc.).
 #[derive(Debug, Clone)]
 pub(super) struct Aircraft {
+    pub callsign: Option<String>,
     pub lat: f64,
     pub lon: f64,
+    pub altitude_m: Option<f64>,
+    pub velocity_ms: Option<f64>,
     pub on_ground: bool,
 }
 
@@ -74,12 +75,22 @@ fn parse_one(state: &serde_json::Value) -> Option<Aircraft> {
     let arr = state.as_array()?;
     // Required: longitude (5), latitude (6). Anything else is null-
     // tolerated; on_ground (8) defaults to false when absent.
+    let callsign = arr
+        .get(1)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let lon = arr.get(5)?.as_f64()?;
     let lat = arr.get(6)?.as_f64()?;
+    let altitude_m = arr.get(7).and_then(|v| v.as_f64());
     let on_ground = arr.get(8).and_then(|v| v.as_bool()).unwrap_or(false);
+    let velocity_ms = arr.get(9).and_then(|v| v.as_f64());
     Some(Aircraft {
+        callsign,
         lat,
         lon,
+        altitude_m,
+        velocity_ms,
         on_ground,
     })
 }
