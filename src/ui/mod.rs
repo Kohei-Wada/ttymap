@@ -2,8 +2,6 @@
 
 pub mod overlay;
 
-use std::sync::Arc;
-
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
@@ -16,11 +14,11 @@ use crate::compositor::{Compositor, Context};
 use crate::map::render::frame::MapFrame;
 use crate::map::render::thread::RenderHandle;
 use crate::plugin_api::MapApi;
-use crate::shared::nominatim::NominatimClient;
 use crate::theme::UiTheme;
 
 /// Thin container for UI-level state. Owns:
-/// - [`OverlayManager`] (info / attribution / scale-bar)
+/// - [`OverlayManager`] (attribution / scale-bar — info migrated to
+///   the info plugin)
 /// - the latest map frame snapshot
 ///
 /// Focus / modal state lives on the [`Compositor`] owned by `App`;
@@ -36,9 +34,9 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn new(nominatim: Arc<NominatimClient>, attribution: Option<String>) -> Self {
+    pub fn new(attribution: Option<String>) -> Self {
         Self {
-            overlay: OverlayManager::new(nominatim, attribution),
+            overlay: OverlayManager::new(attribution),
             map_frame: None,
         }
     }
@@ -73,7 +71,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
         // stack (wiki markers etc.). Focus-gated: closing the panel
         // drops the component, which drops the paint hook.
         {
-            let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme);
+            let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme, ctx.cursor);
             compositor.paint_on_map(&mut api);
         }
 

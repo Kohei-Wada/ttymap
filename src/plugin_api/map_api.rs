@@ -40,17 +40,58 @@ pub struct MapApi<'a> {
     map_area: Rect,
     proj: MapProjection,
     theme: &'a UiTheme,
+    /// Centre of the rendered frame this API draws over. Distinct
+    /// from `App`'s current `MapState::center` because the frame is
+    /// a snapshot the render thread already produced — chrome
+    /// (info bar) shows the displayed view's centre, not the
+    /// in-flight target.
+    frame_center: LonLat,
+    /// Zoom level baked into the rendered frame, same caveat as
+    /// `frame_center`.
+    frame_zoom: f64,
+    /// Latest mouse cursor in absolute terminal cells. Surfaced
+    /// here (in addition to `Context.cursor`) so paint_on_map can
+    /// reach it without the plugin stashing a copy in its own state.
+    cursor: Option<(u16, u16)>,
 }
 
 impl<'a> MapApi<'a> {
-    pub fn new(buf: &'a mut Buffer, map_area: Rect, frame: &MapFrame, theme: &'a UiTheme) -> Self {
+    pub fn new(
+        buf: &'a mut Buffer,
+        map_area: Rect,
+        frame: &MapFrame,
+        theme: &'a UiTheme,
+        cursor: Option<(u16, u16)>,
+    ) -> Self {
         let proj = MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows);
         Self {
             buf,
             map_area,
             proj,
             theme,
+            frame_center: frame.center,
+            frame_zoom: frame.zoom,
+            cursor,
         }
+    }
+
+    /// Centre coordinate of the rendered map snapshot — what the
+    /// user is actually looking at this frame.
+    pub fn center(&self) -> LonLat {
+        self.frame_center
+    }
+
+    /// Zoom level baked into the rendered map snapshot.
+    pub fn zoom(&self) -> f64 {
+        self.frame_zoom
+    }
+
+    /// Mouse cursor projected to world coordinates, or `None` when
+    /// the cursor is outside the map area or no mouse event has
+    /// arrived yet. Convenience over [`cursor_ll`](Self::cursor_ll)
+    /// — the cursor is already known to the API.
+    pub fn cursor(&self) -> Option<LonLat> {
+        self.cursor_ll(self.cursor?)
     }
 
     // ── Theme accessors ──────────────────────────────────────────────
@@ -269,7 +310,7 @@ mod tests {
     #[test]
     fn label_writes_chars_starting_after_marker() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         api.label(LonLat { lon: 0.0, lat: 0.0 }, "AB", Color::Reset);
         // Marker cell stays untouched; label writes the next two cells.
         // We don't know the exact projected column without re-running
@@ -289,7 +330,7 @@ mod tests {
     #[test]
     fn label_off_map_is_noop() {
         let (mut buf, area, frame, theme) = fixture(10, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         // Far-off coordinate that won't project into the canvas.
         api.label(
             LonLat {
@@ -309,7 +350,7 @@ mod tests {
     #[test]
     fn point_styled_uses_caller_style() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         let style = Style::default()
             .fg(Color::Indexed(42))
             .bg(Color::Indexed(7));
@@ -343,7 +384,7 @@ mod tests {
             zoom: 4.0,
         };
         let theme = UiTheme::from_palette(&DARK);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         api.line(
             LonLat {
                 lon: -1.0,
@@ -375,7 +416,7 @@ mod tests {
     #[test]
     fn text_anchored_top_right_writes_at_right_edge() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         api.text_anchored(Anchor::TopRight, 0, "ABC", Color::Reset);
         let line = text_at_row(&buf, area, 0);
         assert!(
@@ -391,7 +432,7 @@ mod tests {
     #[test]
     fn text_anchored_bottom_left_writes_at_left_edge_last_row() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         api.text_anchored(Anchor::BottomLeft, 0, "XY", Color::Reset);
         let last_row = text_at_row(&buf, area, area.height - 1);
         assert!(
@@ -403,7 +444,7 @@ mod tests {
     #[test]
     fn text_anchored_rows_in_offsets_from_corner() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         // Row 2 from the top-left corner should be the third row.
         api.text_anchored(Anchor::TopLeft, 2, "Q", Color::Reset);
         assert_eq!(buf[(area.x, area.y + 2)].symbol(), "Q");
@@ -412,7 +453,7 @@ mod tests {
     #[test]
     fn text_anchored_too_deep_is_noop() {
         let (mut buf, area, frame, theme) = fixture(20, 3);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         // rows_in == height should be rejected (no row to land on).
         api.text_anchored(Anchor::TopLeft, 3, "Q", Color::Reset);
         for x in 0..area.width {

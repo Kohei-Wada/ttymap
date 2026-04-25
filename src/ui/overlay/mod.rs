@@ -1,7 +1,11 @@
 //! Built-in map overlays — part of the map-viewer identity, not
-//! plugin territory. Info, attribution, and scale-bar are always on
-//! screen; they implement [`MapOverlay`] and stamp themselves onto the
+//! plugin territory. Attribution and scale-bar are always on screen;
+//! they implement [`MapOverlay`] and stamp themselves onto the
 //! ratatui buffer after the base map.
+//!
+//! Info (top-right cursor / centre / zoom / place readout) used to
+//! live here too; it migrated to [`crate::plugin::info`] when the
+//! plugin model gained always-on overlay support.
 //!
 //! World-space primitives contributed by widgets (e.g. wiki markers)
 //! go through [`crate::plugin_api::MapApi`], not an overlay.
@@ -13,12 +17,10 @@ use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
 
 pub mod attribution;
-pub mod info;
 pub mod manager;
 pub mod scale_bar;
 
 pub use attribution::AttributionOverlay;
-pub use info::InfoOverlay;
 pub use manager::OverlayManager;
 pub use scale_bar::ScaleBarOverlay;
 

@@ -36,7 +36,8 @@ pub mod throttle;
 pub use async_job::AsyncJob;
 pub use map_api::MapApi;
 pub use polled_feed::PolledFeed;
-pub use throttle::Throttle;
+// `throttle::Throttle` is consumed only by `polled_feed` today;
+// re-export lands when a plugin needs raw throttle access.
 
 /// Plugin author prelude — re-exports the items every plugin reaches
 /// for. Glob-imported at the top of plugin modules so the file's

@@ -68,8 +68,8 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
-        let registrar = build_registrar(&config, nominatim.clone(), &keymap);
-        let ui = UiState::new(nominatim, attribution);
+        let registrar = build_registrar(&config, nominatim, &keymap);
+        let ui = UiState::new(attribution);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -147,8 +147,6 @@ impl App {
                 self.dispatch(msg);
             }
 
-            self.ui.overlay.poll();
-
             let ctx = self.context();
             terminal
                 .draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme, &ctx))?;
@@ -220,9 +218,6 @@ impl App {
             AppMsg::SetTheme(new_id) => self.apply_theme(new_id),
             AppMsg::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
-                // Legacy: info overlay still owns its own cursor copy
-                // until the overlay → plugin migration replaces it.
-                self.ui.overlay.set_cursor((col, row));
             }
             AppMsg::CycleFocus(forward) => {
                 self.compositor.cycle(forward);
@@ -282,7 +277,6 @@ impl App {
         }
         let viewport = self.map.viewport();
         self.render_handle.request_draw(viewport);
-        self.ui.overlay.on_map_moved(viewport.center);
     }
 }
 
@@ -312,6 +306,7 @@ fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &Ke
 
     let mut r = Registrar::default();
 
+    crate::plugin::info::register(nominatim.clone(), &mut r);
     crate::plugin::search::register(nominatim, &mut r);
     crate::plugin::wiki::register(&config.render.language, config.wiki.limit, &mut r);
     crate::plugin::here::register(
