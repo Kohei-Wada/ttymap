@@ -91,10 +91,15 @@ impl TileCache {
         let cx = self.center_x;
         let cy = self.center_y;
         let cz = self.current_z;
+        // Modular distance is computed in `cz`-space (matching cx/cy)
+        // so the antimeridian wrap is correct for same-z keys. Cross-z
+        // scoring is approximate but `zoom_diff` already dominates the
+        // composite priority.
+        let grid_size = 1i32.checked_shl(cz).unwrap_or(i32::MAX);
 
         self.client.update_view(&|key: &TileKey| TilePriority {
             zoom_diff: key.z.abs_diff(cz),
-            distance_sq: tile_distance_sq(key, cx, cy),
+            distance_sq: tile_distance_sq(key, cx, cy, grid_size),
         });
     }
 
@@ -155,9 +160,10 @@ impl TileCache {
             return self.memory_cache.get(&key);
         }
 
+        let grid_size = 1i32.checked_shl(self.current_z).unwrap_or(i32::MAX);
         let priority = TilePriority {
             zoom_diff: key.z.abs_diff(self.current_z),
-            distance_sq: tile_distance_sq(&key, self.center_x, self.center_y),
+            distance_sq: tile_distance_sq(&key, self.center_x, self.center_y, grid_size),
         };
         self.client.enqueue(&key, priority);
         None
@@ -247,8 +253,19 @@ impl TileCache {
 }
 
 /// Distance² from tile center to view center (for priority sorting).
-fn tile_distance_sq(key: &TileKey, center_x: f64, center_y: f64) -> f64 {
-    let dx = key.x as f64 + 0.5 - center_x;
+///
+/// X is modular: when the view straddles the antimeridian, a tile on
+/// the wrap side is geographically adjacent and must score that way
+/// (issue #106). `grid_size` is `1 << z` for the relevant zoom.
+/// Y is **not** modular — slippy maps have no polar wrap.
+fn tile_distance_sq(key: &TileKey, center_x: f64, center_y: f64, grid_size: i32) -> f64 {
+    let raw_dx = key.x as f64 + 0.5 - center_x;
+    let g = grid_size as f64;
+    let dx = if g > 0.0 && raw_dx.abs() > g / 2.0 {
+        raw_dx - raw_dx.signum() * g
+    } else {
+        raw_dx
+    };
     let dy = key.y as f64 + 0.5 - center_y;
     dx * dx + dy * dy
 }
@@ -267,8 +284,52 @@ mod tests {
 
     #[test]
     fn test_tile_distance_sq() {
-        let d = tile_distance_sq(&TileKey::new(0, 5, 5), 5.5, 5.5);
+        // Same hemisphere, centred on the tile.
+        let d = tile_distance_sq(&TileKey::new(0, 5, 5), 5.5, 5.5, 1024);
         assert!(d < 0.01);
+    }
+
+    /// Regression for issue #106. Near the antimeridian, a tile that
+    /// is geographically adjacent on the wrap side has a tiny
+    /// modular distance — but with a naked `key.x - center_x`
+    /// subtract it scored as `~grid_size²` and the priority queue
+    /// dropped it. Distance must wrap on the x axis.
+    #[test]
+    fn tile_distance_sq_wraps_x_at_antimeridian() {
+        // grid_size = 8 (z=3). View centred on the right edge.
+        // center_x = 7.5 → on tile (7, _). Key (0, _) is the
+        // wrapped-around tile across the date line.
+        let d = tile_distance_sq(&TileKey::new(3, 0, 5), 7.5, 5.5, 8);
+        assert!(d < 2.0, "wrap-side tile must score as ~adjacent (got {d})");
+    }
+
+    #[test]
+    fn tile_distance_sq_wraps_x_other_direction() {
+        // Mirror: center near left edge, key on the right edge.
+        // center_x=0.5, key.x=7, grid_size=8 → wrapped distance is 1.
+        let d = tile_distance_sq(&TileKey::new(3, 7, 5), 0.5, 5.5, 8);
+        assert!(d < 2.0, "wrap on the other side too (got {d})");
+    }
+
+    #[test]
+    fn tile_distance_sq_does_not_wrap_when_direct_path_is_shorter() {
+        // Center mid-grid, key at left edge — direct path (3.5) is
+        // shorter than wrap (4.5). No wrap.
+        // raw_dx = 0.5 - 4 = -3.5; |raw| = 3.5 <= grid/2 = 4 → keep.
+        let d = tile_distance_sq(&TileKey::new(3, 0, 5), 4.0, 5.0, 8);
+        let expected = 3.5_f64.powi(2) + 0.5_f64.powi(2);
+        assert!((d - expected).abs() < 0.01, "expected {expected}, got {d}");
+    }
+
+    /// Y axis is **not** modular — no polar wrap exists for slippy-
+    /// map tiles, so a key with a wildly different y must keep its
+    /// large distance even if x is close.
+    #[test]
+    fn tile_distance_sq_does_not_wrap_y() {
+        // grid_size large enough to avoid any x wrap. Difference is
+        // pure y.
+        let d = tile_distance_sq(&TileKey::new(3, 5, 0), 5.5, 7.5, 8);
+        assert!(d > 40.0, "y must not wrap (got {d})");
     }
 
     /// A no-op `TileClient` that swallows everything. Suitable for
