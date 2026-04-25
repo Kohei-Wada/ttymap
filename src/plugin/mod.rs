@@ -7,11 +7,13 @@
 //! Component / Painter / Task traits plugins implement.
 
 pub mod aircraft;
+pub mod attribution;
 pub mod export;
 pub mod help;
 pub mod here;
 pub mod info;
 pub mod iss;
 pub mod quake;
+pub mod scalebar;
 pub mod search;
 pub mod wiki;

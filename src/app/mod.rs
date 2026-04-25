@@ -68,8 +68,8 @@ impl App {
         let (tile_cache, attribution) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
-        let registrar = build_registrar(&config, nominatim, &keymap);
-        let ui = UiState::new(attribution);
+        let registrar = build_registrar(&config, nominatim, attribution, &keymap);
+        let ui = UiState::new();
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -301,12 +301,19 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
 /// plugin-agnostic. Order matters: the palette is installed last so
 /// its default provider can harvest every other plugin's palette
 /// entries.
-fn build_registrar(config: &Config, nominatim: Arc<NominatimClient>, keymap: &KeyMap) -> Registrar {
+fn build_registrar(
+    config: &Config,
+    nominatim: Arc<NominatimClient>,
+    attribution: Option<String>,
+    keymap: &KeyMap,
+) -> Registrar {
     use std::rc::Rc;
 
     let mut r = Registrar::default();
 
     crate::plugin::info::register(nominatim.clone(), &mut r);
+    crate::plugin::scalebar::register(&mut r);
+    crate::plugin::attribution::register(attribution, &mut r);
     crate::plugin::search::register(nominatim, &mut r);
     crate::plugin::wiki::register(&config.render.language, config.wiki.limit, &mut r);
     crate::plugin::here::register(

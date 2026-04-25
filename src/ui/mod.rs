@@ -1,14 +1,10 @@
 //! UI layer — widget state and screen rendering.
 
-pub mod overlay;
-
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-
-use overlay::OverlayManager;
 
 use crate::compositor::{Compositor, Context};
 use crate::map::render::frame::MapFrame;
@@ -16,35 +12,38 @@ use crate::map::render::thread::RenderHandle;
 use crate::plugin_api::MapApi;
 use crate::theme::UiTheme;
 
-/// Thin container for UI-level state. Owns:
-/// - [`OverlayManager`] (attribution / scale-bar — info migrated to
-///   the info plugin)
-/// - the latest map frame snapshot
+/// Thin container for UI-level state. Owns the latest rendered map
+/// frame snapshot.
 ///
 /// Focus / modal state lives on the [`Compositor`] owned by `App`;
-/// UiState forwards rendering through it via [`draw`].
+/// UiState forwards rendering through it via [`draw`]. Built-in
+/// chrome (info / scale_bar / attribution) all migrated to plugins
+/// (`crate::plugin::{info,scalebar,attribution}`); nothing in the
+/// UI layer carries chrome state today.
 ///
 /// **Theme is intentionally not here.** Theme is a cross-cutting
 /// concern (UI colours + map render styler) and lives on `App` as the
 /// single source of truth; UI rendering receives `&UiTheme` as a
 /// parameter on `draw()`. See `docs/design.md` for the rationale.
 pub struct UiState {
-    pub overlay: OverlayManager,
     pub map_frame: Option<MapFrame>,
 }
 
 impl UiState {
-    pub fn new(attribution: Option<String>) -> Self {
-        Self {
-            overlay: OverlayManager::new(attribution),
-            map_frame: None,
-        }
+    pub fn new() -> Self {
+        Self { map_frame: None }
     }
 
     pub fn drain_frames(&mut self, render_handle: &RenderHandle) {
         while let Some(frame) = render_handle.try_recv_frame() {
             self.map_frame = Some(frame);
         }
+    }
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -67,16 +66,12 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
     if let Some(ref map_frame) = ui.map_frame {
         f.render_widget(map_frame, map_inner);
 
-        // World-space overlays from components on the compositor
-        // stack (wiki markers etc.). Focus-gated: closing the panel
-        // drops the component, which drops the paint hook.
-        {
-            let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme, ctx.cursor);
-            compositor.paint_on_map(&mut api);
-        }
-
-        ui.overlay
-            .render(f.buffer_mut(), map_inner, map_frame, theme);
+        // World-space overlays + always-on chrome from components on
+        // the compositor (wiki markers, info bar, scale, attribution).
+        // Focus-gated: closing a panel drops the component which drops
+        // its paint hook.
+        let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme, ctx.cursor);
+        compositor.paint_on_map(&mut api);
     }
 
     // Modal panels on top of the map, bottom-up.

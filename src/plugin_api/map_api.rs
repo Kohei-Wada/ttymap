@@ -94,6 +94,12 @@ impl<'a> MapApi<'a> {
         self.cursor_ll(self.cursor?)
     }
 
+    /// Width of the visible map area in terminal cells. Useful for
+    /// chrome that scales with the canvas (e.g. the scale bar).
+    pub fn area_width(&self) -> u16 {
+        self.map_area.width
+    }
+
     // ── Theme accessors ──────────────────────────────────────────────
 
     /// Primary accent colour — used by plugins to highlight features
@@ -107,6 +113,12 @@ impl<'a> MapApi<'a> {
     /// selected / focused feature from the rest.
     pub fn accent_alt_color(&self) -> Color {
         self.theme.accent_alt
+    }
+
+    /// Muted foreground for chrome that should fade into the
+    /// background — attribution text, less-important readouts.
+    pub fn muted_color(&self) -> Color {
+        self.theme.muted_color
     }
 
     // ── Drawing primitives ──────────────────────────────────────────
