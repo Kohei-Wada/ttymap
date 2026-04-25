@@ -183,7 +183,8 @@ src/
 │   │   └── view.rs, label.rs, geom/, earcut_worker.rs, panic_silence.rs
 │   ├── styler/          Mapbox GL-style rules — schema/mapscii.rs single source; theme swaps ColorPalette only
 │   └── tile/            MVT fetch + cache + decode
-│       ├── cache.rs         Memory (configurable LRU) + optional disk
+│       ├── cache.rs         Memory LRU + view state + prefetch (orchestrator)
+│       ├── decoder.rs       Relay thread: bytes → DecodedTile (off the render thread)
 │       ├── decode/          Protobuf → DecodedTile (geometry / tags / decompress sub-modules)
 │       └── fetch/           TileFetcher trait + FetchLane (queue/workers/dedup) + http backend
 │

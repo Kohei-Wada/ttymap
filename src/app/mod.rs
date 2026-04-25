@@ -295,10 +295,22 @@ impl App {
 
 /// Composition root for the tile subsystem.
 ///
+/// Wires the three-layer pipeline:
+///
+/// ```text
+///   FetchLane<HttpFetcher>  ──bytes──▶  decoder thread  ──DecodedTile──▶  TileCache
+/// ```
+///
 /// Backend dispatch happens here: a future MBTiles / PMTiles backend
-/// would branch on `config.source` and pick a different `TileFetcher`.
-/// `FetchLane` provides queue / dedup / priority for any of them.
+/// would branch on `config.source` and pick a different
+/// `TileFetcher`. `FetchLane` provides queue / dedup / priority for
+/// any of them; `decoder::spawn_decoder` and the cache are backend-
+/// agnostic.
 pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
+    use directories::ProjectDirs;
+    use std::fs;
+
+    use crate::map::tile::decoder;
     use crate::map::tile::fetch::{FetchLane, HttpFetcher, TileFetchLane, TileFetcher};
 
     /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
@@ -306,15 +318,28 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
     /// without saturating the upstream.
     const HTTP_WORKERS: usize = 6;
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let fetcher = HttpFetcher::new();
+    // Disk cache lives inside the HTTP fetcher now; we just decide
+    // here whether to enable it based on config.
+    let cache_dir = if config.cache.tiles {
+        ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
+            let dir = proj_dirs.cache_dir().to_path_buf();
+            let _ = fs::create_dir_all(&dir);
+            dir
+        })
+    } else {
+        None
+    };
+
+    let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
+    let fetcher = HttpFetcher::with_cache_dir(cache_dir);
     let attribution = {
         let s = fetcher.attribution();
         (!s.is_empty()).then(|| s.to_string())
     };
-    let lane: Box<dyn TileFetchLane> = Box::new(FetchLane::new(fetcher, HTTP_WORKERS, tx));
+    let lane: Box<dyn TileFetchLane> = Box::new(FetchLane::new(fetcher, HTTP_WORKERS, bytes_tx));
+    let (decoded_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
     (
-        crate::map::tile::TileCache::new(lane, rx, config.cache.tiles, config.cache.memory_tiles),
+        crate::map::tile::TileCache::new(lane, decoded_rx, config.cache.memory_tiles),
         attribution,
     )
 }

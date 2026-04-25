@@ -76,6 +76,17 @@ pub struct DecodedTile {
     pub layers: HashMap<String, TileLayer>,
 }
 
+impl DecodedTile {
+    /// A `DecodedTile` with no layers — used as the negative-cache
+    /// sentinel for failed fetches and as the result for genuinely
+    /// empty tile bodies.
+    pub fn empty() -> Self {
+        Self {
+            layers: HashMap::new(),
+        }
+    }
+}
+
 // ── Bounds calculator ──────────────────────────────────────────────────────────
 
 fn calculate_bounds(points: &[Vec<TilePoint>]) -> (f64, f64, f64, f64) {
