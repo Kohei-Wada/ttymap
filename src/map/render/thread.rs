@@ -264,23 +264,8 @@ fn run_loop(
             pipeline.prefetch(viewport);
         }
 
-        // 4. Wait for tasks.
-        //
-        // The poll interval is also the worst-case latency between
-        // a tile arriving on the cache's decoded channel and the
-        // render frame that includes it: nothing wakes us up on
-        // tile arrival, so we have to come around in the loop and
-        // re-check `pipeline.poll_tiles()`. The architectural cost
-        // of the fetch → decoder → cache pipeline is ~430 µs (see
-        // benches/tile_disk_hit.rs), so a 50 ms poll dominated
-        // user-perceived latency by ~100×.
-        //
-        // 16 ms = 60 fps wakeup. Average tile-arrival delay drops
-        // from ~25 ms to ~8 ms; idle CPU is still negligible since
-        // each wake just `try_recv`s an empty queue. A proper
-        // push-notify on tile arrival (issue #62) would close the
-        // remaining gap entirely.
-        const POLL_MS: u64 = 16;
+        // 4. Wait for tasks
+        const POLL_MS: u64 = 50;
         match task_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
             Ok(task) => match apply_task(task, &mut pipeline) {
                 TaskOutcome::Draw(viewport) => {
