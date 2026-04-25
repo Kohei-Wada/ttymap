@@ -1,4 +1,10 @@
-//! UI layer — widget state and screen rendering.
+//! UI layer — the single screen-rendering pass.
+//!
+//! No state of its own. App owns the latest [`MapFrame`] (drained
+//! from the render thread each tick) and passes it through to
+//! [`draw`] alongside the compositor. Built-in chrome
+//! (info / scale_bar / attribution) all migrated to plugins, so this
+//! module is now a thin layout + draw routine.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
@@ -8,50 +14,22 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::compositor::{Compositor, Context};
 use crate::map::render::frame::MapFrame;
-use crate::map::render::thread::RenderHandle;
 use crate::plugin_api::MapApi;
 use crate::theme::UiTheme;
 
-/// Thin container for UI-level state. Owns the latest rendered map
-/// frame snapshot.
-///
-/// Focus / modal state lives on the [`Compositor`] owned by `App`;
-/// UiState forwards rendering through it via [`draw`]. Built-in
-/// chrome (info / scale_bar / attribution) all migrated to plugins
-/// (`crate::plugin::{info,scalebar,attribution}`); nothing in the
-/// UI layer carries chrome state today.
-///
-/// **Theme is intentionally not here.** Theme is a cross-cutting
-/// concern (UI colours + map render styler) and lives on `App` as the
-/// single source of truth; UI rendering receives `&UiTheme` as a
-/// parameter on `draw()`. See `docs/design.md` for the rationale.
-pub struct UiState {
-    pub map_frame: Option<MapFrame>,
-}
-
-impl UiState {
-    pub fn new() -> Self {
-        Self { map_frame: None }
-    }
-
-    pub fn drain_frames(&mut self, render_handle: &RenderHandle) {
-        while let Some(frame) = render_handle.try_recv_frame() {
-            self.map_frame = Some(frame);
-        }
-    }
-}
-
-impl Default for UiState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Draw the full screen. App passes the compositor so world-space
-/// overlays (wiki markers via `Component::paint_on_map`) and on-top
-/// panels (via `Component::render`) go through the same draw pass
-/// as the map.
-pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiTheme, ctx: &Context) {
+/// Draw the full screen. Caller passes the latest map snapshot
+/// (or `None` if the render thread hasn't produced one yet) plus
+/// the compositor; world-space overlays (wiki markers via
+/// `Component::paint_on_map`) and on-top panels
+/// (via `Component::render`) go through the same draw pass as the
+/// map.
+pub fn draw(
+    f: &mut Frame,
+    map_frame: Option<&MapFrame>,
+    compositor: &Compositor,
+    theme: &UiTheme,
+    ctx: &Context,
+) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
     let map_area = chunks[0];
@@ -63,7 +41,7 @@ pub fn draw(f: &mut Frame, ui: &UiState, compositor: &Compositor, theme: &UiThem
         .title(" world ");
     let map_inner = map_block.inner(map_area);
     f.render_widget(map_block, map_area);
-    if let Some(ref map_frame) = ui.map_frame {
+    if let Some(map_frame) = map_frame {
         f.render_widget(map_frame, map_inner);
 
         // World-space overlays + always-on chrome from components on

@@ -27,6 +27,7 @@ use log::{debug, info};
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar, Task};
 use crate::config::Config;
 use crate::keymap::KeyMap;
+use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
@@ -34,13 +35,15 @@ use crate::map::{Action, MapState, MapStateOptions};
 use crate::shared::nominatim::NominatimClient;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
-use crate::ui::UiState;
 use mouse::MouseAdapter;
 
 pub struct App {
     map: MapState,
     render_handle: RenderHandle,
-    ui: UiState,
+    /// Latest rendered map snapshot drained from the render thread.
+    /// `None` until the first frame arrives. Owned here directly —
+    /// no UiState wrapper now that built-in chrome lives in plugins.
+    map_frame: Option<MapFrame>,
     mouse: MouseAdapter,
     compositor: Compositor,
     tasks: Vec<Box<dyn Task>>,
@@ -69,7 +72,6 @@ impl App {
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
         let registrar = build_registrar(&config, nominatim, attribution, &keymap);
-        let ui = UiState::new();
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -112,7 +114,7 @@ impl App {
         App {
             map,
             render_handle,
-            ui,
+            map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
             tasks: registrar.tasks,
@@ -132,7 +134,11 @@ impl App {
         self.dispatch(AppMsg::Map(Action::Redraw));
 
         while self.map.is_running() {
-            self.ui.drain_frames(&self.render_handle);
+            // Drain every frame the render thread has produced; the
+            // last one wins (stale ones are discarded).
+            while let Some(frame) = self.render_handle.try_recv_frame() {
+                self.map_frame = Some(frame);
+            }
 
             // Drain per-tick messages: compositor components first,
             // then tasks. Both borrow &mut self transitively through
@@ -148,8 +154,15 @@ impl App {
             }
 
             let ctx = self.context();
-            terminal
-                .draw(|f| crate::ui::draw(f, &self.ui, &self.compositor, &self.ui_theme, &ctx))?;
+            terminal.draw(|f| {
+                crate::ui::draw(
+                    f,
+                    self.map_frame.as_ref(),
+                    &self.compositor,
+                    &self.ui_theme,
+                    &ctx,
+                )
+            })?;
 
             let mut poll_timeout = Duration::from_millis(4);
             while event::poll(poll_timeout)? {
@@ -228,7 +241,7 @@ impl App {
     }
 
     fn export_current_frame(&self) {
-        let Some(frame) = self.ui.map_frame.as_ref() else {
+        let Some(frame) = self.map_frame.as_ref() else {
             log::warn!("export: no frame to write yet");
             return;
         };
