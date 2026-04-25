@@ -91,7 +91,17 @@ impl MapProjection {
     /// the canvas or the projection is not finite (e.g. poles).
     pub fn ll_to_cell(&self, ll: LonLat) -> Option<(u16, u16)> {
         let pt = ll2tile(ll.lon, ll.lat, self.z);
-        let px = self.canvas_w / 2.0 + (pt.x - self.center_tile.x) * self.tile_size;
+        // x is modular (lon wraps): pick the shorter path across the
+        // antimeridian so a feature on the wrap side lands next to the
+        // centre instead of way off-screen (issue #96). y is not.
+        let grid = (1u64 << self.z) as f64;
+        let raw_dx = pt.x - self.center_tile.x;
+        let dx = if grid > 0.0 && raw_dx.abs() > grid / 2.0 {
+            raw_dx - raw_dx.signum() * grid
+        } else {
+            raw_dx
+        };
+        let px = self.canvas_w / 2.0 + dx * self.tile_size;
         let py = self.canvas_h / 2.0 + (pt.y - self.center_tile.y) * self.tile_size;
         if !px.is_finite() || !py.is_finite() || px < 0.0 || py < 0.0 {
             return None;
@@ -312,6 +322,67 @@ mod tests {
                 "row drift: {row} -> {back_row}"
             );
         }
+    }
+
+    /// Regression for issue #96. When the view centre is near the
+    /// antimeridian and a feature sits on the other side (geographically
+    /// adjacent across the date line), `pt.x - center_tile.x` is ~the
+    /// full grid width — projecting the overlay way off-screen instead
+    /// of right next to the centre. The projection must take the
+    /// shorter modular path on x.
+    #[test]
+    fn projection_handles_antimeridian_wrap_for_overlays() {
+        // Center at lon ≈ 179.9, zoom 5 (grid = 32). A feature at lon
+        // ≈ -179.9 is ~0.2° away across the date line — visually
+        // inseparable from the centre on a 200×60-cell canvas.
+        let proj = MapProjection::new(
+            LonLat {
+                lon: 179.9,
+                lat: 0.0,
+            },
+            5.0,
+            200,
+            60,
+        );
+        let near = LonLat {
+            lon: -179.9,
+            lat: 0.0,
+        };
+        let cell = proj
+            .ll_to_cell(near)
+            .expect("wrap-side feature must project on-screen, not be dropped");
+        // Should land within a few cells of the canvas centre (col 100).
+        assert!(
+            cell.0.abs_diff(100) < 5,
+            "expected near centre, got col={}",
+            cell.0
+        );
+    }
+
+    #[test]
+    fn projection_handles_antimeridian_wrap_other_direction() {
+        // Mirror: centre near -180, feature near +180.
+        let proj = MapProjection::new(
+            LonLat {
+                lon: -179.9,
+                lat: 0.0,
+            },
+            5.0,
+            200,
+            60,
+        );
+        let near = LonLat {
+            lon: 179.9,
+            lat: 0.0,
+        };
+        let cell = proj
+            .ll_to_cell(near)
+            .expect("wrap-side feature must project on-screen");
+        assert!(
+            cell.0.abs_diff(100) < 5,
+            "expected near centre, got col={}",
+            cell.0
+        );
     }
 
     #[test]
