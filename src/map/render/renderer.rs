@@ -216,6 +216,47 @@ impl Renderer {
         Some(frame)
     }
 
+    // ── Polygon multi-ring classification (issue #101) ────────────────
+
+    /// Surveyor's-formula signed area of a closed ring, accumulated in
+    /// `i64` to avoid overflow at typical screen-pixel magnitudes.
+    /// In MVT tile coords (Y-down) and screen coords (also Y-down), a
+    /// CW ring has positive signed area and is the **exterior**; CCW
+    /// (negative area) is a **hole**.
+    fn signed_area(ring: &[(i32, i32)]) -> i64 {
+        if ring.len() < 3 {
+            return 0;
+        }
+        let mut acc: i64 = 0;
+        for i in 0..ring.len() {
+            let (x0, y0) = ring[i];
+            let (x1, y1) = ring[(i + 1) % ring.len()];
+            acc += (x0 as i64) * (y1 as i64) - (x1 as i64) * (y0 as i64);
+        }
+        acc
+    }
+
+    /// Group a flat ring list into polygon groups. Each group starts
+    /// at an exterior ring (signed area > 0) and runs through any
+    /// following interior rings until the next exterior. Leading
+    /// interior rings (malformed input) are dropped. Returns
+    /// half-open ranges into the input slice.
+    fn classify_polygon_groups(rings: &[Vec<(i32, i32)>]) -> Vec<std::ops::Range<usize>> {
+        let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
+        for (i, ring) in rings.iter().enumerate() {
+            if Self::signed_area(ring) > 0 {
+                if let Some(last) = groups.last_mut() {
+                    last.end = i;
+                }
+                groups.push(i..i + 1);
+            }
+        }
+        if let Some(last) = groups.last_mut() {
+            last.end = rings.len();
+        }
+        groups
+    }
+
     // ── Feature drawing ───────────────────────────────────────────────────
 
     /// Project tile-local points into integer screen pixels and append
@@ -329,12 +370,22 @@ impl Renderer {
                 if kept == 0 {
                     return;
                 }
-                let clipped_count = ctx
-                    .canvas
-                    .clip_polygon_into(&rings[..kept], &mut ctx.scratches.clipped);
-                if clipped_count > 0 {
-                    ctx.canvas
-                        .polygon(&ctx.scratches.clipped[..clipped_count], rule.color);
+                // A single MVT polygon feature may pack multiple
+                // non-overlapping outer rings (multi-polygon, common
+                // for "all lakes / all parks in tile" features).
+                // Group rings by winding (issue #101) and draw each
+                // outer-with-its-holes independently — otherwise
+                // earcut treats the second outer as a hole of the
+                // first, mangling the fill.
+                for group in Self::classify_polygon_groups(&rings[..kept]) {
+                    let clipped_count = ctx.canvas.clip_polygon_into(
+                        &rings[group.start..group.end],
+                        &mut ctx.scratches.clipped,
+                    );
+                    if clipped_count > 0 {
+                        ctx.canvas
+                            .polygon(&ctx.scratches.clipped[..clipped_count], rule.color);
+                    }
                 }
             }
             StyleType::Symbol => {}
@@ -475,6 +526,181 @@ mod tests {
         let mut out: Vec<(i32, i32)> = Vec::new();
         Renderer::scale_ring_into(&mut out, &vis, &ring, 1.0, 100, 100, true);
         assert_eq!(out, vec![(10, 10), (20, 20), (30, 30)]);
+    }
+
+    // ── Multi-polygon ring classification (issue #101) ────────────────
+
+    /// MVT spec: in tile (Y-down) coords, a CW ring has positive
+    /// signed area and is the **exterior**; CCW (negative area) is a
+    /// hole.
+    #[test]
+    fn signed_area_positive_for_clockwise_ring_in_y_down() {
+        // Square traversed top-left → top-right → bottom-right →
+        // bottom-left → close. CW visually in Y-down (screen) coords.
+        let ring = vec![(0, 0), (10, 0), (10, 10), (0, 10)];
+        assert!(
+            Renderer::signed_area(&ring) > 0,
+            "CW ring in Y-down coords must report positive signed area"
+        );
+    }
+
+    #[test]
+    fn signed_area_negative_for_counterclockwise_ring_in_y_down() {
+        // Same square, reversed → CCW in Y-down.
+        let ring = vec![(0, 0), (0, 10), (10, 10), (10, 0)];
+        assert!(
+            Renderer::signed_area(&ring) < 0,
+            "CCW ring in Y-down coords must report negative signed area"
+        );
+    }
+
+    #[test]
+    fn signed_area_zero_for_degenerate_ring() {
+        let ring = vec![(0, 0), (10, 0)]; // < 3 points
+        assert_eq!(Renderer::signed_area(&ring), 0);
+    }
+
+    /// Empty input → no groups.
+    #[test]
+    fn classify_polygon_groups_empty_input_yields_no_groups() {
+        let rings: Vec<Vec<(i32, i32)>> = Vec::new();
+        assert_eq!(Renderer::classify_polygon_groups(&rings), Vec::new());
+    }
+
+    /// Single outer ring → one group spanning the whole slice.
+    #[test]
+    fn classify_polygon_groups_single_outer() {
+        let rings = vec![vec![(0, 0), (10, 0), (10, 10), (0, 10)]];
+        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..1]);
+    }
+
+    /// Outer + hole → one group [0..2].
+    #[test]
+    fn classify_polygon_groups_outer_with_hole() {
+        let rings = vec![
+            vec![(0, 0), (100, 0), (100, 100), (0, 100)], // CW = outer
+            vec![(20, 20), (20, 40), (40, 40), (40, 20)], // CCW = hole
+        ];
+        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..2]);
+    }
+
+    /// Two disjoint outer rings (multi-polygon) → two separate
+    /// groups. This is the case the pre-fix renderer mishandled — it
+    /// treated the second outer as a hole of the first.
+    #[test]
+    fn classify_polygon_groups_two_outers_are_two_groups() {
+        let rings = vec![
+            vec![(0, 0), (10, 0), (10, 10), (0, 10)],
+            vec![(50, 50), (60, 50), (60, 60), (50, 60)],
+        ];
+        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..1, 1..2]);
+    }
+
+    /// Mixed: outer, hole, outer, hole → two groups, each [outer,
+    /// hole].
+    #[test]
+    fn classify_polygon_groups_outer_hole_outer_hole() {
+        let rings = vec![
+            vec![(0, 0), (100, 0), (100, 100), (0, 100)], // outer A
+            vec![(20, 20), (20, 40), (40, 40), (40, 20)], // hole of A
+            vec![(200, 0), (300, 0), (300, 100), (200, 100)], // outer B
+            vec![(220, 20), (220, 40), (240, 40), (240, 20)], // hole of B
+        ];
+        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..2, 2..4]);
+    }
+
+    /// Leading hole (malformed input) is skipped; valid outer behind
+    /// it still becomes a group.
+    #[test]
+    fn classify_polygon_groups_drops_leading_holes() {
+        let rings = vec![
+            vec![(0, 0), (0, 10), (10, 10), (10, 0)], // CCW: hole, no parent
+            vec![(50, 50), (60, 50), (60, 60), (50, 60)], // CW: outer
+        ];
+        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![1..2]);
+    }
+
+    /// Regression for issue #101. A POLYGON feature that packs two
+    /// disjoint outer rings (multi-polygon, common for "all lakes /
+    /// all parks in tile" features) must fill **both** screen
+    /// regions. The pre-fix renderer fed the flat ring list straight
+    /// to earcut, which mistreated the second outer as a hole of the
+    /// first → only one polygon (or none) drew.
+    #[test]
+    fn fill_renders_both_outers_of_a_multi_polygon_feature() {
+        use std::collections::HashMap;
+
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+
+        // Canvas 320×320 px (160×80 cells). vis.size=256, extent=4096
+        // → scale = 4096/256 = 16, so tile-coord 16 = 1 screen pixel.
+        let vis = VisibleTile {
+            x: 0,
+            y: 0,
+            z: 14,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            size: 256.0,
+        };
+
+        // Two CW (= outer in Y-down) rings packed into one feature.
+        // Ring A occupies upper-left; ring B occupies lower-right.
+        let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
+            vec![
+                TilePoint { x: x0, y: y0 },
+                TilePoint { x: x1, y: y0 },
+                TilePoint { x: x1, y: y1 },
+                TilePoint { x: x0, y: y1 },
+            ]
+        };
+        let points = Arc::new(vec![
+            cw_square(100, 100, 1000, 1000),
+            cw_square(2000, 2000, 3000, 3000),
+        ]);
+        let feature = Feature {
+            layer_name: Arc::from("water"),
+            properties: Arc::new(HashMap::new()),
+            points,
+            min_x: 0.0,
+            max_x: 0.0,
+            min_y: 0.0,
+            max_y: 0.0,
+        };
+        let tile = TileData {
+            vis,
+            layers: vec![LayerData {
+                name: "water".to_string(),
+                extent: 4096,
+                features: vec![feature],
+            }],
+        };
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+        let frame = renderer.draw(&[tile], 14.0).expect("frame");
+
+        // Ring A's screen bbox in pixels: (6,6)..(62,62) → cells
+        // (3,1)..(31,15). Ring B's: (125,125)..(187,187) → cells
+        // (62,31)..(93,46). Sample a cell deep inside each region.
+        let cell_at = |col: usize, row: usize| {
+            let idx = row * frame.cols as usize + col;
+            frame.cells[idx].ch
+        };
+        // Empty braille char is U+2800 ('⠀'). Anything else means
+        // some pixel was drawn.
+        const EMPTY: char = '⠀';
+        assert_ne!(
+            cell_at(15, 7),
+            EMPTY,
+            "ring A (upper-left outer) must be filled"
+        );
+        assert_ne!(
+            cell_at(75, 38),
+            EMPTY,
+            "ring B (lower-right outer) must be filled too — pre-fix \
+             treats it as a hole of A and leaves it empty"
+        );
     }
 
     #[test]
