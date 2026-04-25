@@ -16,7 +16,7 @@ use log::debug;
 use super::TileClient;
 use super::priority::TilePriority;
 use super::queue::{PriorityFn, PriorityQueue};
-use crate::map::tile::cache::TileKey;
+use crate::map::tile::key::TileKey;
 use crate::shared::http::HttpClient;
 
 const NUM_WORKERS: usize = 6;

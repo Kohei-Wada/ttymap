@@ -14,25 +14,7 @@ use lru::LruCache;
 
 use super::decode::{self, DecodedTile};
 use super::fetch::{TileClient, TilePriority};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TileKey {
-    pub z: u32,
-    pub x: i32,
-    pub y: i32,
-}
-
-impl TileKey {
-    pub fn new(z: u32, x: i32, y: i32) -> Self {
-        Self { z, x, y }
-    }
-}
-
-impl std::fmt::Display for TileKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}/{}", self.z, self.x, self.y)
-    }
-}
+use super::key::TileKey;
 
 pub struct TileCache {
     client: Box<dyn TileClient>,
@@ -276,11 +258,6 @@ mod tests {
 
     use super::super::fetch::queue::PriorityFn;
     use super::*;
-
-    #[test]
-    fn test_tile_key_display() {
-        assert_eq!(TileKey::new(5, 17, 10).to_string(), "5/17/10");
-    }
 
     #[test]
     fn test_tile_distance_sq() {
