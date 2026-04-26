@@ -322,12 +322,10 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
         DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane, TileFetcher,
     };
 
-    /// Worker count for the HTTP backend. HTTP is I/O-bound and
-    /// `mapscii.me` responds at ~1–2 s per tile, so a slightly
-    /// larger pool helps the visible-tile + prefetch fan-out
-    /// (~22 tiles per fresh viewport) finish in fewer batches
-    /// without measurably stressing the upstream.
-    const HTTP_WORKERS: usize = 12;
+    /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
+    /// small pool covers the typical visible-tile + prefetch fan-out
+    /// without saturating the upstream.
+    const HTTP_WORKERS: usize = 6;
 
     let cache_dir = if config.cache.tiles {
         ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
