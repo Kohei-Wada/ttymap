@@ -1,12 +1,18 @@
 //! Render thread — runs a RenderPipeline on a background thread.
 //! Does not know about tiles, caching, or drawing internals.
+//!
+//! The loop is **purely event-driven** since #62: it parks on a
+//! `crossbeam_channel::select!` over (task channel, decoder wake
+//! channel) and never times out. Tile arrivals push-notify the
+//! render thread directly, so the previous 50 ms upper-bound on
+//! arrival-to-frame latency is gone.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
+use crossbeam_channel as cb;
 use log::{debug, error, info};
 
 use super::frame::MapFrame;
@@ -22,22 +28,28 @@ pub enum RenderTask {
 }
 
 pub struct RenderHandle {
-    task_tx: mpsc::Sender<RenderTask>,
+    task_tx: cb::Sender<RenderTask>,
     frame_rx: mpsc::Receiver<MapFrame>,
     should_quit: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl RenderHandle {
-    pub fn spawn(pipeline: RenderPipeline) -> Self {
-        let (task_tx, task_rx) = mpsc::channel();
+    /// Spawn the render thread.
+    ///
+    /// `wake_rx` is the push-notify channel from the decoder thread:
+    /// each ping says "at least one tile arrived in the cache, drain
+    /// it on the next render cycle". It replaces the polling timeout
+    /// that used to bound tile-arrival → frame latency to 50 ms.
+    pub fn spawn(pipeline: RenderPipeline, wake_rx: cb::Receiver<()>) -> Self {
+        let (task_tx, task_rx) = cb::unbounded();
         let (frame_tx, frame_rx) = mpsc::channel();
         let should_quit = Arc::new(AtomicBool::new(false));
         let should_quit_clone = should_quit.clone();
 
         let thread = thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_loop(task_rx, frame_tx, should_quit_clone, pipeline);
+                run_loop(task_rx, wake_rx, frame_tx, should_quit_clone, pipeline);
             }));
             if let Err(e) = result {
                 let msg = if let Some(s) = e.downcast_ref::<String>() {
@@ -135,12 +147,14 @@ fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
     }
 }
 
+/// Drain anything already buffered on `task_rx`. Returns the latest
+/// `Draw` viewport (older ones are stale) or `Err(())` if a
+/// `Shutdown` was seen.
 fn drain_tasks(
-    task_rx: &mpsc::Receiver<RenderTask>,
+    task_rx: &cb::Receiver<RenderTask>,
     pipeline: &mut RenderPipeline,
 ) -> Result<Option<Viewport>, ()> {
     let mut latest_draw: Option<Viewport> = None;
-
     while let Ok(task) = task_rx.try_recv() {
         match apply_task(task, pipeline) {
             TaskOutcome::Draw(viewport) => latest_draw = Some(viewport),
@@ -158,6 +172,93 @@ fn send_frame(frame_tx: &mpsc::Sender<MapFrame>, frame: Option<MapFrame>) -> boo
         return false; // channel closed
     }
     true
+}
+
+fn run_loop(
+    task_rx: cb::Receiver<RenderTask>,
+    wake_rx: cb::Receiver<()>,
+    frame_tx: mpsc::Sender<MapFrame>,
+    should_quit: Arc<AtomicBool>,
+    mut pipeline: RenderPipeline,
+) {
+    let mut last_viewport: Option<Viewport> = None;
+    info!("render thread started");
+
+    loop {
+        if should_quit.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Park until something happens. Either a task (Draw / Resize
+        // / SetStyler / Shutdown) arrives on `task_rx`, or the
+        // decoder pings `wake_rx` because at least one tile is now
+        // in the cache.
+        cb::select! {
+            recv(task_rx) -> task => {
+                // The select! arm pops one message — process it
+                // first, then drain anything else already queued so
+                // redundant draws collapse to the latest viewport
+                // and side-effecting tasks (Resize / SetStyler) apply
+                // in order.
+                let first = match task {
+                    Ok(t) => t,
+                    Err(_) => break, // all senders dropped
+                };
+                let mut latest_draw: Option<Viewport> = None;
+                match apply_task(first, &mut pipeline) {
+                    TaskOutcome::Draw(vp) => latest_draw = Some(vp),
+                    TaskOutcome::Continue => {}
+                    TaskOutcome::Shutdown => break,
+                }
+                let drained = match drain_tasks(&task_rx, &mut pipeline) {
+                    Err(()) => break,
+                    Ok(d) => d,
+                };
+                if let Some(vp) = drained {
+                    latest_draw = Some(vp);
+                }
+                match latest_draw {
+                    Some(viewport) => {
+                        debug!("render: drawing (zoom={:.1})", viewport.zoom);
+                        if !send_frame(&frame_tx, pipeline.render(&viewport)) {
+                            return;
+                        }
+                        last_viewport = Some(viewport);
+                        // Prefetch on viewport changes only —
+                        // anchored to user input, not idle ticks, so
+                        // we don't trigger a feedback loop where
+                        // prefetch arrivals wake the loop and queue
+                        // more prefetch.
+                        pipeline.prefetch(&viewport);
+                    }
+                    None => {
+                        // Side-effecting task with no new viewport —
+                        // re-render the previous one if we have one
+                        // (e.g. theme change should refresh the
+                        // visible frame).
+                        if let Some(ref vp) = last_viewport
+                            && !send_frame(&frame_tx, pipeline.render(vp))
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+            recv(wake_rx) -> _ => {
+                // Coalesce a burst of pings — the cache drain below
+                // picks up everything regardless of count.
+                while wake_rx.try_recv().is_ok() {}
+                if let Some(ref viewport) = last_viewport
+                    && pipeline.poll_tiles()
+                    && !send_frame(&frame_tx, pipeline.render(viewport))
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    info!("render thread exited");
 }
 
 #[cfg(test)]
@@ -181,7 +282,7 @@ mod tests {
         let exited = Arc::new(Mutex::new(false));
         let exited_clone = Arc::clone(&exited);
 
-        let (task_tx, task_rx) = mpsc::channel::<RenderTask>();
+        let (task_tx, task_rx) = cb::unbounded::<RenderTask>();
         let (_frame_tx, frame_rx) = mpsc::channel::<MapFrame>();
         let should_quit = Arc::new(AtomicBool::new(false));
         let should_quit_clone = Arc::clone(&should_quit);
@@ -192,15 +293,15 @@ mod tests {
                 if should_quit_clone.load(Ordering::Relaxed) {
                     break;
                 }
-                match task_rx.recv_timeout(Duration::from_millis(20)) {
+                match task_rx.recv_timeout(std::time::Duration::from_millis(20)) {
                     Ok(RenderTask::Shutdown) => break,
                     Ok(_) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(cb::RecvTimeoutError::Disconnected) => break,
+                    Err(cb::RecvTimeoutError::Timeout) => {}
                 }
             }
             // … then do measurable wind-down work before exit.
-            thread::sleep(Duration::from_millis(80));
+            thread::sleep(std::time::Duration::from_millis(80));
             *exited_clone.lock().unwrap() = true;
         });
 
@@ -219,67 +320,4 @@ mod tests {
              not detach (drop the JoinHandle)"
         );
     }
-}
-
-fn run_loop(
-    task_rx: mpsc::Receiver<RenderTask>,
-    frame_tx: mpsc::Sender<MapFrame>,
-    should_quit: Arc<AtomicBool>,
-    mut pipeline: RenderPipeline,
-) {
-    let mut last_viewport: Option<Viewport> = None;
-    info!("render thread started");
-
-    loop {
-        if should_quit.load(Ordering::Relaxed) {
-            break;
-        }
-
-        // 1. Drain tasks — newest viewport wins
-        match drain_tasks(&task_rx, &mut pipeline) {
-            Err(()) => break,
-            Ok(Some(viewport)) => {
-                debug!("render: drawing (zoom={:.1})", viewport.zoom);
-                if !send_frame(&frame_tx, pipeline.render(&viewport)) {
-                    return;
-                }
-                last_viewport = Some(viewport);
-                continue;
-            }
-            Ok(None) => {}
-        }
-
-        // 2. Poll tile completions
-        if let Some(ref viewport) = last_viewport
-            && pipeline.poll_tiles()
-        {
-            if !send_frame(&frame_tx, pipeline.render(viewport)) {
-                return;
-            }
-            continue;
-        }
-
-        // 3. Idle — prefetch
-        if let Some(ref viewport) = last_viewport {
-            pipeline.prefetch(viewport);
-        }
-
-        // 4. Wait for tasks
-        const POLL_MS: u64 = 50;
-        match task_rx.recv_timeout(Duration::from_millis(POLL_MS)) {
-            Ok(task) => match apply_task(task, &mut pipeline) {
-                TaskOutcome::Draw(viewport) => {
-                    if !send_frame(&frame_tx, pipeline.render(&viewport)) {
-                        return;
-                    }
-                    last_viewport = Some(viewport);
-                }
-                TaskOutcome::Continue => {}
-                TaskOutcome::Shutdown => break,
-            },
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    info!("render thread exited");
 }

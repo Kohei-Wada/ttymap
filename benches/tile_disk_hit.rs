@@ -111,7 +111,7 @@ fn bench_disk_read_then_decode(c: &mut Criterion) {
 /// up to 50 ms of jitter on top, addressed separately by issue #62.
 fn bench_decoder_pipeline(c: &mut Criterion) {
     let (bytes_tx, bytes_rx) = mpsc::channel();
-    let (decoded_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
+    let (decoded_rx, _wake_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
 
     c.bench_function("decoder_pipeline", |b| {
         b.iter_custom(|iters| {

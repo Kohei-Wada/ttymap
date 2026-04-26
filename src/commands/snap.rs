@@ -128,7 +128,7 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     // build_tile_cache spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
-    let (tile_cache, _attribution) = app::build_tile_cache(&config);
+    let (tile_cache, _attribution, _wake_rx) = app::build_tile_cache(&config);
     let theme_id = ThemeId::from_name(&config.render.style);
     let styler = Arc::new(Styler::new(theme_id));
     let mut pipeline = RenderPipeline::new(
