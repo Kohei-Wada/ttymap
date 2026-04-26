@@ -136,14 +136,12 @@ fn bench_decoder_pipeline(c: &mut Criterion) {
 /// `LruCache`.
 fn bench_memory_hit(c: &mut Criterion) {
     let dir = BenchDir::new("mem-hit");
-    let (bytes_tx, _bytes_rx) = mpsc::channel();
     let (_decoded_tx, decoded_rx) = mpsc::channel();
     let cache = TileCache::new(
         Box::new(NoopLane),
         decoded_rx,
         4096,
         Some(DiskFastPath {
-            bytes_tx,
             cache_dir: dir.0.clone(),
         }),
     );

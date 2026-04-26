@@ -358,14 +358,12 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
 
     let (decoded_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
 
-    // The render-thread fast path needs its own bytes_tx clone (to
-    // push past the worker queue straight into the decoder) plus the
-    // disk directory. Bundled into `DiskFastPath` so the cache
-    // constructor stays tidy.
-    let disk_fast_path = cache_dir.map(|cache_dir| DiskFastPath {
-        bytes_tx,
-        cache_dir,
-    });
+    // The render-thread fast path: on a memory miss the cache reads
+    // and decodes the file synchronously, putting the tile into the
+    // LRU in the same render frame. This restores pre-refactor disk-
+    // hit responsiveness; HTTP fetches still flow through the slow
+    // lane below.
+    let disk_fast_path = cache_dir.map(|cache_dir| DiskFastPath { cache_dir });
 
     (
         crate::map::tile::TileCache::new(
