@@ -16,11 +16,13 @@
 //! pmtiles, local dirs), route selection (from config or from the
 //! file extension of a user-supplied path) lives here.
 
+pub mod disk_cached;
 pub mod http;
 pub mod lane;
 pub mod priority;
 pub mod queue;
 
+pub use disk_cached::DiskCachedFetcher;
 pub use http::HttpFetcher;
 pub use lane::FetchLane;
 pub use priority::TilePriority;

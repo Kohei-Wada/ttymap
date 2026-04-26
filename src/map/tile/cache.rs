@@ -1,20 +1,40 @@
 //! Tile cache (orchestrator) — memory LRU + view state + prefetch.
 //!
-//! After the three-layer-pipe refactor, this module no longer touches
-//! disk or runs `decode()`: bytes-from-network and disk-cache live in
-//! the `TileFetcher` (currently `HttpFetcher`), and decoding runs on
-//! its own thread (`super::decoder`). Arrivals here are already
-//! `DecodedTile`s; `poll_completed` is a thin "drain channel into LRU".
+//! After the three-layer-pipe refactor, decoding is on its own thread
+//! (`super::decoder`) and arrivals here are already `DecodedTile`s.
+//!
+//! In addition to that "slow path" (FetchLane → decoder → cache), the
+//! cache holds an optional **synchronous disk fast path** for tiles
+//! the user already has on disk. On a memory miss we read the file
+//! directly on the render thread and push the bytes straight to the
+//! decoder lane, **bypassing the worker queue entirely**. This avoids
+//! the worker handoff latency and the queue-overflow drops that fast
+//! pan / zoom would otherwise inflict on disk-resident tiles.
+//!
+//! Writes still go through the `TileFetcher` layer (specifically
+//! `DiskCachedFetcher`'s write-through). The two readers (decorator
+//! and this fast path) share the layout in `super::disk`.
 
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use log::debug;
 use lru::LruCache;
 
 use super::decode::DecodedTile;
+use super::disk;
 use super::fetch::{TileFetchLane, TilePriority};
 use super::key::TileKey;
+
+/// The render-thread fast path for disk-resident tiles. On a
+/// memory miss the cache reads + decodes the file synchronously and
+/// inserts into the LRU, so a disk hit lands in the same render
+/// frame instead of paying a poll-cycle round trip through the
+/// decoder lane.
+pub struct DiskFastPath {
+    pub cache_dir: PathBuf,
+}
 
 pub struct TileCache {
     client: Box<dyn TileFetchLane>,
@@ -23,16 +43,22 @@ pub struct TileCache {
     center_x: f64,
     center_y: f64,
     rx: mpsc::Receiver<(TileKey, DecodedTile)>,
+    disk_fast_path: Option<DiskFastPath>,
 }
 
 impl TileCache {
     /// Build a cache around an injected `TileFetchLane` and the
-    /// receiving end of the **decoder** channel. Bytes-and-disk and
-    /// `decode()` are no longer this module's concern.
+    /// receiving end of the **decoder** channel.
+    ///
+    /// `disk_fast_path` is optional: if disk caching is configured,
+    /// the composition root passes a `DiskFastPath` that lets the
+    /// cache short-circuit memory misses against disk on the render
+    /// thread, sending the bytes straight to the decoder.
     pub fn new(
         client: Box<dyn TileFetchLane>,
         rx: mpsc::Receiver<(TileKey, DecodedTile)>,
         cache_size: usize,
+        disk_fast_path: Option<DiskFastPath>,
     ) -> Self {
         // `cache_size` may legitimately be configured to 0 by paranoid
         // users; clamp to 1 since `NonZeroUsize::new` rejects zero.
@@ -44,6 +70,7 @@ impl TileCache {
             center_x: 0.0,
             center_y: 0.0,
             rx,
+            disk_fast_path,
         }
     }
 
@@ -94,15 +121,33 @@ impl TileCache {
         any_new
     }
 
-    /// Get a tile. Memory LRU hit returns immediately (and bumps to
-    /// MRU); a miss enqueues the key for the fetch lane and returns
-    /// `None`. Disk-cache lookups now live inside the fetcher itself,
-    /// so a disk hit there will arrive through `poll_completed` like
-    /// any other fetch.
+    /// Get a tile.
+    ///
+    /// 1. Memory LRU hit → return immediately, bumping to MRU.
+    /// 2. **Disk fast path** (if configured): synchronous file read
+    ///    **and decode** on the render thread, then insert into
+    ///    memory and return the reference. This restores the
+    ///    pre-refactor "disk hit = same frame" behaviour: previously
+    ///    a disk hit had to round-trip through the decoder thread +
+    ///    one render poll cycle (≥25 ms latency). At ~320 µs decode
+    ///    per tile, doing it on the render thread is cheaper than
+    ///    the cross-thread hop for the common-case responsive path.
+    /// 3. Otherwise enqueue the key on the fetch lane (HTTP
+    ///    fetches still go through the decoder thread, since they
+    ///    arrive at random times and would otherwise block the
+    ///    render thread on each completion).
     pub fn get_tile(&mut self, z: u32, x: i32, y: i32) -> Option<&DecodedTile> {
         let key = TileKey::new(z, x, y);
 
         if self.memory_cache.contains(&key) {
+            return self.memory_cache.get(&key);
+        }
+
+        if let Some(fast) = &self.disk_fast_path
+            && let Some(bytes) = disk::read_disk(&fast.cache_dir, &key)
+        {
+            let decoded = super::decode::decode(&bytes);
+            self.memory_cache.put(key.clone(), decoded);
             return self.memory_cache.get(&key);
         }
 
@@ -274,7 +319,7 @@ mod tests {
         // With LRU, B is evicted; A survives. With FIFO, A (oldest
         // insert) is evicted regardless of the hit.
         let (tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(Box::new(NoopLane), rx, 2);
+        let mut cache = TileCache::new(Box::new(NoopLane), rx, 2, None);
 
         let a = TileKey::new(0, 0, 0);
         let b = TileKey::new(0, 1, 0);
@@ -319,7 +364,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::<TileKey>::new()));
         let client: Box<dyn TileFetchLane> = Box::new(RecordingLane(log.clone()));
         let (_tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(client, rx, 64);
+        let mut cache = TileCache::new(client, rx, 64, None);
 
         cache.get_tile(3, 1, 2);
         cache.get_tile(3, 5, 6);
@@ -351,7 +396,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(0usize));
         let client: Box<dyn TileFetchLane> = Box::new(CountingLane(calls.clone()));
         let (tx, rx) = mpsc::channel();
-        let mut cache = TileCache::new(client, rx, 4);
+        let mut cache = TileCache::new(client, rx, 4, None);
 
         let key = TileKey::new(2, 1, 1);
         tx.send((key.clone(), DecodedTile::empty())).unwrap();
@@ -365,5 +410,121 @@ mod tests {
             0,
             "memory-hit path must not enqueue"
         );
+    }
+
+    /// Disk fast path: a tile that's already on disk must be read,
+    /// decoded, and inserted into the memory LRU **on the same
+    /// `get_tile` call** — so the visible-tile path can use it
+    /// immediately. Verified by sending no bytes through any
+    /// channel: the cache resolves the tile entirely on the render
+    /// thread.
+    #[test]
+    fn disk_fast_path_resolves_synchronously_on_hit() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        struct CountingLane(Arc<Mutex<usize>>);
+        impl TileFetchLane for CountingLane {
+            fn enqueue(&self, _: &TileKey, _: TilePriority) {
+                *self.0.lock().unwrap() += 1;
+            }
+            fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
+            fn attribution(&self) -> &str {
+                ""
+            }
+            fn is_idle(&self) -> bool {
+                true
+            }
+        }
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ttymap-cache-fastpath-{}", nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Plant a (degenerate but parseable) tile: empty PBF body
+        // decodes to `DecodedTile { layers: empty }`, which is
+        // enough to verify the fast path inserted *something* into
+        // the LRU.
+        let key = TileKey::new(3, 1, 2);
+        super::disk::write_disk(&dir, &key, b"");
+
+        let enqueue_calls = Arc::new(Mutex::new(0usize));
+        let client: Box<dyn TileFetchLane> = Box::new(CountingLane(enqueue_calls.clone()));
+
+        let (_decoded_tx, decoded_rx) = mpsc::channel();
+        let mut cache = TileCache::new(
+            client,
+            decoded_rx,
+            4,
+            Some(DiskFastPath {
+                cache_dir: dir.clone(),
+            }),
+        );
+
+        // Memory miss → fast path → returns the just-inserted tile.
+        assert!(
+            cache.get_tile(key.z, key.x, key.y).is_some(),
+            "disk-resident tile must be available in the same call"
+        );
+        // No worker dispatch.
+        assert_eq!(
+            *enqueue_calls.lock().unwrap(),
+            0,
+            "disk hit must not dispatch to the worker queue"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Disk miss with `disk_fast_path = Some(...)` must fall through
+    /// to the lane (the slow path), not silently drop the request.
+    #[test]
+    fn disk_fast_path_misses_fall_through_to_enqueue() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        struct RecordingLane(Arc<Mutex<Vec<TileKey>>>);
+        impl TileFetchLane for RecordingLane {
+            fn enqueue(&self, key: &TileKey, _: TilePriority) {
+                self.0.lock().unwrap().push(key.clone());
+            }
+            fn update_view(&self, _: &dyn PriorityFn<TileKey, TilePriority>) {}
+            fn attribution(&self) -> &str {
+                ""
+            }
+            fn is_idle(&self) -> bool {
+                true
+            }
+        }
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ttymap-cache-fastpath-miss-{}", nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let client: Box<dyn TileFetchLane> = Box::new(RecordingLane(log.clone()));
+
+        let (_decoded_tx, decoded_rx) = mpsc::channel();
+        let mut cache = TileCache::new(
+            client,
+            decoded_rx,
+            4,
+            Some(DiskFastPath {
+                cache_dir: dir.clone(),
+            }),
+        );
+
+        let key = TileKey::new(3, 9, 9);
+        assert!(cache.get_tile(key.z, key.x, key.y).is_none());
+
+        let recorded = log.lock().unwrap().clone();
+        assert_eq!(recorded, vec![key], "disk miss must reach the lane");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

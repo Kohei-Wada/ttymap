@@ -50,5 +50,9 @@ harness = false
 name = "render_frame"
 harness = false
 
+[[bench]]
+name = "tile_disk_hit"
+harness = false
+
 [profile.release]
 strip = "symbols"

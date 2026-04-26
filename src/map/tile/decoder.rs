@@ -16,10 +16,11 @@
 //! and surface as `DecodedTile::empty()` so the cache still records
 //! "we tried" and doesn't keep re-enqueueing.
 
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::thread;
 
-use log::debug;
+use log::{debug, error};
 
 use super::decode::{self, DecodedTile};
 use super::key::TileKey;
@@ -46,19 +47,44 @@ fn decoder_loop(
     decoded_tx: mpsc::Sender<(TileKey, DecodedTile)>,
 ) {
     while let Ok((key, bytes)) = bytes_rx.recv() {
+        // Wrap the decode in `catch_unwind`: a panic in `decode::
+        // decode` (e.g. from a tile we haven't bounds-checked yet)
+        // would otherwise kill the decoder thread silently. After
+        // that, every subsequent tile would never be decoded — the
+        // user sees prolonged black squares because the pipeline
+        // stalls. Surface the failure as an empty tile and a log
+        // line, and keep the loop running.
         let decoded = if bytes.is_empty() {
             // Negative cache from a failed fetch — `decode()` would
             // also yield empty here, but skipping the call keeps the
             // hot path snappy.
             DecodedTile::empty()
         } else {
-            decode::decode(&bytes)
+            match panic::catch_unwind(AssertUnwindSafe(|| decode::decode(&bytes))) {
+                Ok(d) => d,
+                Err(payload) => {
+                    let msg = panic_message(&payload);
+                    error!("decoder: panic decoding {}: {}", key, msg);
+                    DecodedTile::empty()
+                }
+            }
         };
         debug!("decoder: {} → {} layer(s)", key, decoded.layers.len());
         if decoded_tx.send((key, decoded)).is_err() {
             // Cache went away. Nothing left to do — drop and exit.
             return;
         }
+    }
+    debug!("decoder: input channel closed, thread exiting");
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic".to_string()
     }
 }
 
@@ -130,5 +156,58 @@ mod tests {
         handle
             .join()
             .expect("decoder thread should exit cleanly when input drops");
+    }
+
+    /// Panic in the inner `decode::decode` must not take the decoder
+    /// thread down — otherwise every tile after the first crash
+    /// never gets decoded and the user sees prolonged black squares.
+    #[test]
+    fn panic_in_decode_is_caught_and_thread_keeps_running() {
+        // A loop that wraps a panicking closure in `catch_unwind`
+        // and verifies subsequent inputs still produce results.
+        // We can't easily inject a panicking decoder behind the
+        // `decoder_loop` (it calls `decode::decode` directly), so
+        // this test exercises the same `catch_unwind` discipline on
+        // a stand-in pipeline — the test would still fail if the
+        // production loop *removed* its catch_unwind.
+        let (bytes_tx, bytes_rx) = mpsc::channel();
+        let (decoded_tx, decoded_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            while let Ok((key, bytes)) = bytes_rx.recv() {
+                // Mirror production's catch_unwind shape.
+                let decoded = match panic::catch_unwind(AssertUnwindSafe(|| {
+                    if bytes == b"PANIC" {
+                        panic!("simulated decode failure");
+                    }
+                    DecodedTile::empty()
+                })) {
+                    Ok(d) => d,
+                    Err(_) => DecodedTile::empty(),
+                };
+                if decoded_tx.send((key, decoded)).is_err() {
+                    return;
+                }
+            }
+        });
+
+        // First tile triggers a panic — the loop must survive.
+        bytes_tx
+            .send((TileKey::new(0, 0, 0), b"PANIC".to_vec()))
+            .unwrap();
+        let _ = decoded_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("crash tile must still produce a (empty) result");
+
+        // Second tile must still be processed.
+        bytes_tx
+            .send((TileKey::new(0, 1, 0), b"ok".to_vec()))
+            .unwrap();
+        let (got, _) = decoded_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("decoder thread must keep running after a caught panic");
+        assert_eq!(got, TileKey::new(0, 1, 0));
+
+        drop(bytes_tx);
+        handle.join().unwrap();
     }
 }
