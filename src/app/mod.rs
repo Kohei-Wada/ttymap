@@ -68,7 +68,7 @@ impl App {
         );
 
         let nominatim = Arc::new(NominatimClient::new());
-        let (tile_cache, attribution) = build_tile_cache(&config);
+        let (tile_cache, attribution, wake_rx) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
         let registrar = build_registrar(&config, nominatim, attribution, &keymap);
@@ -92,7 +92,7 @@ impl App {
             width,
             height,
         );
-        let render_handle = RenderHandle::spawn(pipeline);
+        let render_handle = RenderHandle::spawn(pipeline, wake_rx);
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -312,7 +312,13 @@ impl App {
 /// would pick a different `TileFetcher`. `FetchLane` provides queue
 /// / dedup / priority for any of them; `decoder::spawn_decoder` and
 /// the cache are backend-agnostic.
-pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache, Option<String>) {
+pub(crate) fn build_tile_cache(
+    config: &Config,
+) -> (
+    crate::map::tile::TileCache,
+    Option<String>,
+    crossbeam_channel::Receiver<()>,
+) {
     use directories::ProjectDirs;
     use std::fs;
 
@@ -356,7 +362,7 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
         None => Box::new(FetchLane::new(http, HTTP_WORKERS, bytes_tx.clone())),
     };
 
-    let (decoded_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
+    let (decoded_rx, wake_rx, _decoder_handle) = decoder::spawn_decoder(bytes_rx);
 
     // The render-thread fast path: on a memory miss the cache reads
     // and decodes the file synchronously, putting the tile into the
@@ -373,6 +379,7 @@ pub(crate) fn build_tile_cache(config: &Config) -> (crate::map::tile::TileCache,
             disk_fast_path,
         ),
         attribution,
+        wake_rx,
     )
 }
 
