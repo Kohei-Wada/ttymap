@@ -15,10 +15,10 @@ const NOTABLE_MAGNITUDE: f64 = 5.0;
 /// without an extra fetch.
 pub struct QuakeComponent {
     state: QuakeHandle,
-    /// True until the auto-jump to the highest-magnitude quake has
-    /// fired after activation. Cleared on first successful fetch
-    /// that yields any data.
-    pending_initial_jump: bool,
+    /// Auto-jump to the highest-magnitude quake the first time a
+    /// fetch yields data, so the user lands somewhere meaningful
+    /// after toggling on.
+    initial_jump: InitialJump,
 }
 
 impl QuakeComponent {
@@ -26,7 +26,7 @@ impl QuakeComponent {
         state.borrow_mut().refresh();
         Self {
             state,
-            pending_initial_jump: true,
+            initial_jump: InitialJump::new(),
         }
     }
 }
@@ -62,15 +62,13 @@ impl Component for QuakeComponent {
             state.refresh();
             state.highest_magnitude().copied()
         };
-        if self.pending_initial_jump
-            && let Some(q) = highest
-        {
-            win.emit(AppMsg::Jump(LonLat {
+        self.initial_jump.try_fire(
+            highest.map(|q| LonLat {
                 lat: q.lat,
                 lon: q.lon,
-            }));
-            self.pending_initial_jump = false;
-        }
+            }),
+            win,
+        );
     }
 
     fn name(&self) -> &'static str {

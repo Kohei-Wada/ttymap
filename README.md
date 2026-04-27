@@ -171,6 +171,7 @@ src/
 │   ├── async_job.rs     fire-and-poll background job
 │   ├── throttle.rs      rate-limit helper
 │   ├── polled_feed.rs   periodic feed wrapper (used by aircraft, iss, quake)
+│   ├── initial_jump.rs  one-shot auto-recentre helper (used by iss, quake)
 │   ├── nominatim.rs     forward + reverse geocoding client
 │   ├── panel.rs         ListPanel — framed scrollable list panel
 │   └── layout.rs        LayoutConfig + PanelAnchor (per-plugin panel placement)
@@ -205,7 +206,7 @@ src/
 - **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
-- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `ListPanel`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
+- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `InitialJump`, `ListPanel`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
 - **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
 
 ### Message flow

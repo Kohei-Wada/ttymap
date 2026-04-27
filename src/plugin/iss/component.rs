@@ -13,11 +13,9 @@ use super::state::IssHandle;
 /// (avoids a stale gap while the next fetch is in flight).
 pub struct IssComponent {
     state: IssHandle,
-    /// True until the first jump-to-ISS is emitted after activation.
-    /// Cleared once the component nudges the map onto the station so
-    /// the marker is immediately visible — user can press Enter
-    /// afterwards to re-centre at any time.
-    pending_initial_jump: bool,
+    /// Auto-recentre on the station the first time a position arrives,
+    /// so the marker is immediately visible after toggling on.
+    initial_jump: InitialJump,
 }
 
 impl IssComponent {
@@ -25,7 +23,7 @@ impl IssComponent {
         state.borrow_mut().refresh();
         Self {
             state,
-            pending_initial_jump: true,
+            initial_jump: InitialJump::new(),
         }
     }
 }
@@ -75,15 +73,13 @@ impl Component for IssComponent {
             state.refresh();
             state.position
         };
-        if self.pending_initial_jump
-            && let Some(p) = pos
-        {
-            win.emit(AppMsg::Jump(LonLat {
+        self.initial_jump.try_fire(
+            pos.map(|p| LonLat {
                 lat: p.lat,
                 lon: p.lon,
-            }));
-            self.pending_initial_jump = false;
-        }
+            }),
+            win,
+        );
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {

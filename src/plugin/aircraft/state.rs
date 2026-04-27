@@ -50,10 +50,17 @@ impl AircraftState {
     pub(super) fn poll(&mut self) {
         if let Some(list) = self.feed.poll() {
             debug!("aircraft: received {} states", list.len());
-            self.aircraft = list;
-            if self.selected >= self.aircraft.len() {
-                self.selected = self.aircraft.len().saturating_sub(1);
-            }
+            self.apply(list);
+        }
+    }
+
+    /// Replace the cached list and clamp the selection. Pulled out of
+    /// [`poll`](Self::poll) so the clamping behaviour is testable
+    /// without going through the threaded feed.
+    fn apply(&mut self, list: Vec<Aircraft>) {
+        self.aircraft = list;
+        if self.selected >= self.aircraft.len() {
+            self.selected = self.aircraft.len().saturating_sub(1);
         }
     }
 }
@@ -64,9 +71,59 @@ pub type AircraftHandle = Rc<RefCell<AircraftState>>;
 mod tests {
     use super::*;
 
+    fn ac(lat: f64, lon: f64) -> Aircraft {
+        Aircraft {
+            lat,
+            lon,
+            callsign: None,
+            altitude_m: None,
+            velocity_ms: None,
+            heading_deg: None,
+            on_ground: false,
+        }
+    }
+
     #[test]
     fn fresh_state_is_empty() {
         let s = AircraftState::new(AircraftConfig::default());
         assert!(s.aircraft.is_empty());
+        assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn apply_replaces_list() {
+        let mut s = AircraftState::new(AircraftConfig::default());
+        s.apply(vec![ac(0.0, 0.0), ac(1.0, 1.0)]);
+        assert_eq!(s.aircraft.len(), 2);
+    }
+
+    #[test]
+    fn apply_clamps_selection_when_list_shrinks() {
+        let mut s = AircraftState::new(AircraftConfig::default());
+        s.apply(vec![ac(0.0, 0.0), ac(1.0, 1.0), ac(2.0, 2.0)]);
+        s.selected = 2;
+        s.apply(vec![ac(0.0, 0.0)]);
+        assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn apply_clamps_selection_to_zero_when_list_empties() {
+        let mut s = AircraftState::new(AircraftConfig::default());
+        s.apply(vec![ac(0.0, 0.0), ac(1.0, 1.0)]);
+        s.selected = 1;
+        s.apply(Vec::new());
+        // saturating_sub(1) on len 0 keeps selected at 0 — the panel
+        // renders no list, so the value is meaningless until data
+        // returns, but it must stay in-bounds for the empty case.
+        assert_eq!(s.selected, 0);
+    }
+
+    #[test]
+    fn apply_preserves_selection_when_still_in_range() {
+        let mut s = AircraftState::new(AircraftConfig::default());
+        s.apply(vec![ac(0.0, 0.0), ac(1.0, 1.0), ac(2.0, 2.0)]);
+        s.selected = 1;
+        s.apply(vec![ac(9.0, 9.0), ac(8.0, 8.0), ac(7.0, 7.0)]);
+        assert_eq!(s.selected, 1);
     }
 }
