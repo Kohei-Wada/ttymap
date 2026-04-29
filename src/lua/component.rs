@@ -13,8 +13,8 @@
 //! Bridge surface so far: `name`, `render` (text lines wrapped in a
 //! framed Paragraph), `handle_event` (Lua-side keymap → close /
 //! ignore / silent consume), `paint_on_map` (Lua draws map markers
-//! via [`MapApi`]). `poll` and the wider widget / map vocabulary
-//! land in follow-ups.
+//! via [`MapApi`]), `poll` (Lua-side tick + `host:fetch_url(url)`).
+//! Wider widget / map vocabulary lands in follow-ups.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, RegistryKey, Table};
@@ -46,6 +46,15 @@ impl LuaComponent {
     /// file name (or any identifier) so backtraces are readable.
     pub fn from_source(source: &str, chunk_name: &str) -> mlua::Result<Self> {
         let lua = super::new_lua();
+
+        // Persistent host services (HTTP fetch etc.) are exposed as
+        // a global so plugins can reach them from any callback. Set
+        // *before* loading the source so a top-level `host:foo()`
+        // call in the chunk would see it (none today, but cheap).
+        let host = super::host::LuaHost::new("lua-host");
+        let host_ud = lua.create_userdata(host)?;
+        lua.globals().set("host", host_ud)?;
+
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
         let name: &'static str = Box::leak(raw_name.into_boxed_str());
@@ -102,6 +111,24 @@ impl LuaComponent {
                 log::warn!("lua[{}]: handle_event() failed: {}", self.name, e);
                 KeyAction::Consume
             }
+        }
+    }
+
+    /// Run the Lua side of `poll`. The plugin's `poll()` function
+    /// gets no arguments today — async work is reached through the
+    /// `host` global (`host:fetch_url(url)` etc.). Missing function
+    /// is a no-op; runtime errors are logged + recovered.
+    fn dispatch_poll(&self) {
+        let result: mlua::Result<()> = (|| {
+            let module: Table = self.lua.registry_value(&self.module)?;
+            let poll: Option<mlua::Function> = module.get("poll").ok();
+            let Some(poll) = poll else {
+                return Ok(());
+            };
+            poll.call(())
+        })();
+        if let Err(e) = result {
+            log::warn!("lua[{}]: poll() failed: {}", self.name, e);
         }
     }
 
@@ -219,6 +246,10 @@ impl Component for LuaComponent {
 
     fn paint_on_map(&self, p: &mut MapApi<'_>) {
         self.dispatch_paint(p);
+    }
+
+    fn poll(&mut self, _win: &mut Window) {
+        self.dispatch_poll();
     }
 
     fn render(&self, win: &mut RenderWindow) {
@@ -472,6 +503,95 @@ mod tests {
         let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         // No panic; warning is logged.
         c.dispatch_paint(&mut api);
+    }
+
+    // ── poll ────────────────────────────────────────────────────
+
+    #[test]
+    fn poll_missing_handler_is_no_op() {
+        let c = LuaComponent::from_source(r#"return { name = "static" }"#, "static").expect("load");
+        // Should not panic, no warning meaningful enough to assert.
+        c.dispatch_poll();
+    }
+
+    #[test]
+    fn poll_runs_lua_handler_each_call() {
+        // Counter side-effect: each dispatch_poll bumps it. Using a
+        // module field rather than a global so we can read it back
+        // through the registry-held module table.
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "ticker",
+                ticks = 0,
+                poll = function()
+                    -- Re-read the module table from the closure's
+                    -- captured upvalue path; simplest is to bump a
+                    -- global counter we can inspect from Rust.
+                    _G.lua_test_ticks = (_G.lua_test_ticks or 0) + 1
+                end,
+            }"#,
+            "ticker",
+        )
+        .expect("load");
+        c.dispatch_poll();
+        c.dispatch_poll();
+        c.dispatch_poll();
+        let n: i64 = c
+            .lua
+            .globals()
+            .get("lua_test_ticks")
+            .expect("global set by lua");
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn poll_runtime_error_is_recovered() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "broken",
+                poll = function() error("kaboom") end,
+            }"#,
+            "broken",
+        )
+        .expect("load");
+        // Should not panic.
+        c.dispatch_poll();
+    }
+
+    #[test]
+    fn host_global_is_set_for_plugins() {
+        // A poll handler that errors out only if `host` is missing —
+        // proves the global is wired and reachable from Lua.
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "checker",
+                poll = function()
+                    assert(host ~= nil, "host must be set")
+                    assert(type(host.fetch_url) == "function", "host:fetch_url must exist")
+                end,
+            }"#,
+            "checker",
+        )
+        .expect("load");
+        // If the assertions fail, dispatch_poll would log a warning;
+        // the test passes either way (we'd need a stub log capture
+        // to fail loudly). Round-trip via a Lua-side flag instead:
+        let _: () = c
+            .lua
+            .load(
+                r#"
+                _G.checker_ok = false
+                local ok = pcall(function()
+                    assert(host ~= nil)
+                    assert(type(host.fetch_url) == "function")
+                end)
+                _G.checker_ok = ok
+                "#,
+            )
+            .exec()
+            .expect("exec");
+        let ok: bool = c.lua.globals().get("checker_ok").expect("get");
+        assert!(ok, "host global must be present and have fetch_url");
     }
 
     #[test]
