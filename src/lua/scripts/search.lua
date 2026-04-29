@@ -20,29 +20,9 @@ local state = {
     candidates = {},  -- list of { name, lon, lat }
 }
 
--- Percent-encode RFC 3986 unreserved characters and pass everything
--- else through. Mirrors the Rust `urlencoded` helper used by the
--- original NominatimClient.
-local function urlencode(s)
-    local out = {}
-    for i = 1, #s do
-        local b = s:byte(i)
-        local ch = string.char(b)
-        if (b >= 0x30 and b <= 0x39)            -- 0-9
-            or (b >= 0x41 and b <= 0x5A)        -- A-Z
-            or (b >= 0x61 and b <= 0x7A)        -- a-z
-            or ch == "-" or ch == "_" or ch == "." or ch == "~" then
-            table.insert(out, ch)
-        else
-            table.insert(out, string.format("%%%02X", b))
-        end
-    end
-    return table.concat(out)
-end
-
 local function search_url(query)
     return string.format("%s?q=%s&format=json&limit=%d",
-        SEARCH_URL, urlencode(query), LIMIT)
+        SEARCH_URL, host:url_encode(query), LIMIT)
 end
 
 local function parse_results(payload)

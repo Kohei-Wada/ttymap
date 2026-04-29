@@ -35,18 +35,19 @@ local function geosearch_url(lat, lon)
 end
 
 local function extracts_url(titles)
-    -- Wikipedia accepts pipe-separated titles. Caller is responsible
-    -- for URL-encoding pipes and ampersands within titles; for our
-    -- limit of ~50 entries the URL fits well under the host's path
-    -- length limits.
-    local joined = table.concat(titles, "|")
-    -- Encode | as %7C and & as %26 — the only two characters in our
-    -- input that would otherwise corrupt the query.
-    joined = joined:gsub("%%", "%%25"):gsub("|", "%%7C"):gsub("&", "%%26")
+    -- Wikipedia accepts pipe-separated titles. Encode each title
+    -- individually (host:url_encode handles spaces / non-ASCII /
+    -- reserved chars) and join with a literal `|`, which the API
+    -- treats as the separator. For our ~50-entry limit the URL
+    -- fits well under the host's path length limits.
+    local encoded = {}
+    for _, t in ipairs(titles) do
+        table.insert(encoded, host:url_encode(t))
+    end
     return string.format(
         "https://%s.wikipedia.org/w/api.php?action=query&prop=extracts"
         .. "&exintro=1&explaintext=1&exsentences=5&titles=%s&format=json",
-        LANGUAGE, joined
+        LANGUAGE, table.concat(encoded, "|")
     )
 end
 
