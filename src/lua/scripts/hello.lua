@@ -11,6 +11,7 @@
 --   host:fetch_url(url) -> Job   -- spawns a background HTTP GET
 --   job:try_take()      -> string | nil  -- non-blocking
 --   host:jump(lon, lat)            -- recentre the map (fire-and-forget)
+--   host:parse_json(s)  -> value | nil   -- JSON → nested Lua tables
 --
 -- `handle_event(key)` is optional. The host calls it for every key
 -- press while this component owns focus. The `key` table looks like:

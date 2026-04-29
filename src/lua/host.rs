@@ -10,6 +10,11 @@
 //!   `poll` / `handle_event` dispatch and emits `AppMsg::Jump`
 //!   through the host `Window`. This keeps the Lua call site
 //!   independent of when a `Window` is actually available.
+//! - `host:parse_json(s) -> value | nil` — turn a JSON string into
+//!   nested Lua tables. Objects become string-keyed tables, arrays
+//!   become 1-indexed tables, `null` is `nil`. Parse errors return
+//!   `nil` and log a warning, so a flaky upstream doesn't crash a
+//!   plugin.
 //!
 //! Both [`LuaHost`] and [`LuaJob`] are `'static`, so they go through
 //! mlua's regular `UserData` mechanism (no `Lua::scope` gymnastics
@@ -71,6 +76,60 @@ impl UserData for LuaHost {
             let _ = this.jump_tx.send(LonLat { lon, lat });
             Ok(())
         });
+
+        // `host:parse_json(s) -> value | nil` — JSON → Lua. Errors
+        // (invalid input, non-finite numbers, etc.) become `nil`
+        // with a warning log; the caller can fall back to a default
+        // without a stack trace.
+        methods.add_method(
+            "parse_json",
+            |lua, _this, source: String| match serde_json::from_str::<serde_json::Value>(&source) {
+                Ok(v) => json_to_lua(lua, &v).map(Some),
+                Err(e) => {
+                    log::warn!("lua-host: parse_json failed: {}", e);
+                    Ok(None)
+                }
+            },
+        );
+    }
+}
+
+/// Recursive translation of a `serde_json::Value` into a
+/// `mlua::Value`. Objects map to string-keyed tables, arrays to
+/// 1-indexed tables (Lua convention), null to nil, integers to
+/// `Integer` when they fit and `Number` otherwise.
+fn json_to_lua(lua: &mlua::Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value> {
+    match value {
+        serde_json::Value::Null => Ok(mlua::Value::Nil),
+        serde_json::Value::Bool(b) => Ok(mlua::Value::Boolean(*b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(mlua::Value::Integer(i))
+            } else if let Some(f) = n.as_f64() {
+                Ok(mlua::Value::Number(f))
+            } else {
+                // Numbers that fit neither i64 nor f64 are
+                // exotic (large unsigned). Surface as nil rather
+                // than panic; plugins can do their own handling.
+                Ok(mlua::Value::Nil)
+            }
+        }
+        serde_json::Value::String(s) => Ok(mlua::Value::String(lua.create_string(s)?)),
+        serde_json::Value::Array(items) => {
+            let table = lua.create_table()?;
+            // Lua arrays are 1-indexed.
+            for (i, item) in items.iter().enumerate() {
+                table.set(i + 1, json_to_lua(lua, item)?)?;
+            }
+            Ok(mlua::Value::Table(table))
+        }
+        serde_json::Value::Object(map) => {
+            let table = lua.create_table()?;
+            for (k, v) in map {
+                table.set(k.as_str(), json_to_lua(lua, v)?)?;
+            }
+            Ok(mlua::Value::Table(table))
+        }
     }
 }
 
@@ -145,6 +204,100 @@ mod tests {
         let ll = jump_rx.try_recv().expect("jump must be queued");
         assert!((ll.lon - 139.7595).abs() < 1e-9);
         assert!((ll.lat - 35.6828).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_json_round_trips_primitives() {
+        let lua = mlua::Lua::new();
+        let (host, _) = LuaHost::new("lua-test");
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        let n: i64 = lua
+            .load(r#"return host:parse_json("42")"#)
+            .eval()
+            .expect("eval");
+        assert_eq!(n, 42);
+        let s: String = lua
+            .load(r#"return host:parse_json('"hi"')"#)
+            .eval()
+            .expect("eval");
+        assert_eq!(s, "hi");
+        let b: bool = lua
+            .load(r#"return host:parse_json("true")"#)
+            .eval()
+            .expect("eval");
+        assert!(b);
+    }
+
+    #[test]
+    fn parse_json_object_becomes_string_keyed_table() {
+        let lua = mlua::Lua::new();
+        let (host, _) = LuaHost::new("lua-test");
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        let (name, age): (String, i64) = lua
+            .load(
+                r#"
+                local t = host:parse_json('{"name": "alice", "age": 30}')
+                return t.name, t.age
+                "#,
+            )
+            .eval()
+            .expect("eval");
+        assert_eq!(name, "alice");
+        assert_eq!(age, 30);
+    }
+
+    #[test]
+    fn parse_json_array_is_one_indexed_in_lua() {
+        let lua = mlua::Lua::new();
+        let (host, _) = LuaHost::new("lua-test");
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        // Lua arrays are 1-indexed; t[1] is the first element.
+        let (first, third, len): (i64, i64, i64) = lua
+            .load(
+                r#"
+                local t = host:parse_json("[10, 20, 30]")
+                return t[1], t[3], #t
+                "#,
+            )
+            .eval()
+            .expect("eval");
+        assert_eq!(first, 10);
+        assert_eq!(third, 30);
+        assert_eq!(len, 3);
+    }
+
+    #[test]
+    fn parse_json_invalid_returns_nil() {
+        let lua = mlua::Lua::new();
+        let (host, _) = LuaHost::new("lua-test");
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        let v: mlua::Value = lua
+            .load(r#"return host:parse_json("not json !")"#)
+            .eval()
+            .expect("eval");
+        assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
+    }
+
+    #[test]
+    fn parse_json_null_is_nil() {
+        let lua = mlua::Lua::new();
+        let (host, _) = LuaHost::new("lua-test");
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        let v: mlua::Value = lua
+            .load(r#"return host:parse_json("null")"#)
+            .eval()
+            .expect("eval");
+        assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
     }
 
     #[test]
