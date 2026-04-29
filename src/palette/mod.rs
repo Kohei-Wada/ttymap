@@ -19,6 +19,7 @@ pub mod panel;
 pub mod provider;
 
 use std::rc::Rc;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -27,21 +28,26 @@ use crate::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
 use crate::theme::ThemeId;
 
-use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider};
+use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider, SubmitMode};
 
 pub struct PaletteComponent {
     pub(super) query: String,
     pub(super) selected: usize,
     pub(super) provider: Box<dyn PaletteProvider>,
+    /// Set when the query mutates under a debounced provider; cleared
+    /// once we forward the query via `provider.filter`. The `Instant`
+    /// records the most recent keystroke.
+    pub(super) pending_since: Option<Instant>,
 }
 
 impl PaletteComponent {
-    fn with_provider(mut provider: Box<dyn PaletteProvider>) -> Self {
+    pub fn with_provider(mut provider: Box<dyn PaletteProvider>) -> Self {
         provider.filter("");
         Self {
             query: String::new(),
             selected: 0,
             provider,
+            pending_since: None,
         }
     }
 
@@ -53,11 +59,29 @@ impl PaletteComponent {
         self.provider.items().len()
     }
 
+    /// Whether the palette is showing a "..." loading indicator —
+    /// either the provider is awaiting a result, or the query has
+    /// changed under a debounced provider but we haven't dispatched
+    /// `filter()` yet.
+    pub(super) fn is_loading(&self) -> bool {
+        self.provider.is_loading() || self.pending_since.is_some()
+    }
+
     fn refilter(&mut self) {
         self.provider.filter(&self.query);
+        self.pending_since = None;
         let n = self.items_len();
         if self.selected >= n {
             self.selected = n.saturating_sub(1);
+        }
+    }
+
+    /// React to a query mutation. Sync providers refilter immediately;
+    /// debounced ones defer — `poll` flushes once the timer elapses.
+    fn on_query_changed(&mut self) {
+        match self.provider.submit_mode() {
+            SubmitMode::OnEachKey => self.refilter(),
+            SubmitMode::Debounced(_) => self.pending_since = Some(Instant::now()),
         }
     }
 }
@@ -129,19 +153,19 @@ impl Component for PaletteComponent {
             }
             KeyCode::Backspace => {
                 self.query.pop();
-                self.refilter();
+                self.on_query_changed();
             }
             KeyCode::Char('h') if ctrl => {
                 self.query.pop();
-                self.refilter();
+                self.on_query_changed();
             }
             KeyCode::Char('u') if ctrl => {
                 self.query.clear();
-                self.refilter();
+                self.on_query_changed();
             }
             KeyCode::Char(c) => {
                 self.query.push(c);
-                self.refilter();
+                self.on_query_changed();
             }
             _ => {}
         }
@@ -149,6 +173,19 @@ impl Component for PaletteComponent {
 
     fn render(&self, win: &mut RenderWindow) {
         panel::render_panel(self, win);
+    }
+
+    fn poll(&mut self, _win: &mut Window) {
+        // Debounced providers: forward the query once the keystroke
+        // burst has been quiet for `interval`. No-op for OnEachKey
+        // because `pending_since` is never set in that mode.
+        if let (Some(t), SubmitMode::Debounced(interval)) =
+            (self.pending_since, self.provider.submit_mode())
+            && t.elapsed() >= interval
+        {
+            self.refilter();
+        }
+        self.provider.poll();
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
@@ -388,5 +425,89 @@ mod tests {
         dispatch(&mut p, KeyCode::Char('b'), NONE);
         dispatch(&mut p, KeyCode::Char('u'), KeyModifiers::CONTROL);
         assert_eq!(p.query, "");
+    }
+
+    /// Provider that records each `filter()` invocation and reports a
+    /// debounced submit mode. Used to verify `PaletteComponent` defers
+    /// dispatch until `poll()` finds the debounce window has elapsed.
+    struct DebouncedProvider {
+        interval: std::time::Duration,
+        calls: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        items: Vec<PaletteItem>,
+    }
+
+    impl DebouncedProvider {
+        fn new(
+            interval: std::time::Duration,
+        ) -> (Self, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+            let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            (
+                Self {
+                    interval,
+                    calls: calls.clone(),
+                    items: Vec::new(),
+                },
+                calls,
+            )
+        }
+    }
+
+    impl PaletteProvider for DebouncedProvider {
+        fn prompt(&self) -> &str {
+            "/"
+        }
+        fn filter(&mut self, query: &str) {
+            self.calls.borrow_mut().push(query.to_string());
+        }
+        fn items(&self) -> &[PaletteItem] {
+            &self.items
+        }
+        fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
+            PaletteAction::Close
+        }
+        fn submit_mode(&self) -> SubmitMode {
+            SubmitMode::Debounced(self.interval)
+        }
+    }
+
+    #[test]
+    fn debounced_provider_does_not_filter_per_keystroke() {
+        let (prov, calls) = DebouncedProvider::new(std::time::Duration::from_millis(100));
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        // Construction calls `filter("")` once.
+        assert_eq!(*calls.borrow(), vec!["".to_string()]);
+        dispatch(&mut p, KeyCode::Char('t'), NONE);
+        dispatch(&mut p, KeyCode::Char('o'), NONE);
+        dispatch(&mut p, KeyCode::Char('k'), NONE);
+        // No additional filter calls — query is buffered.
+        assert_eq!(*calls.borrow(), vec!["".to_string()]);
+        assert!(p.pending_since.is_some());
+    }
+
+    #[test]
+    fn debounced_provider_filters_after_interval_in_poll() {
+        let (prov, calls) = DebouncedProvider::new(std::time::Duration::from_millis(0));
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        dispatch(&mut p, KeyCode::Char('t'), NONE);
+        dispatch(&mut p, KeyCode::Char('o'), NONE);
+        // pending; poll should flush since interval is 0.
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            p.poll(&mut win);
+        }
+        assert_eq!(*calls.borrow(), vec!["".to_string(), "to".to_string()]);
+        assert!(p.pending_since.is_none());
+    }
+
+    #[test]
+    fn on_each_key_provider_filters_synchronously() {
+        let mut p = palette_with(&["A", "B"]);
+        // Mutating the query should refilter immediately under the
+        // default `OnEachKey` mode. Use an existing provider whose
+        // filter we can observe via items.
+        dispatch(&mut p, KeyCode::Char('a'), NONE);
+        assert_eq!(filtered_labels(&p), vec!["A"]);
+        assert!(p.pending_since.is_none());
     }
 }

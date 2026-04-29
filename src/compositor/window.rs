@@ -236,14 +236,6 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.frame.render_widget(r, clamped);
     }
 
-    /// Draw a [`widget::List`] descriptor into `rect`.
-    pub fn list(&mut self, l: widget::List, rect: impl Into<widget::Rect>) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        let r: ratatui::widgets::List = l.into();
-        self.frame.render_widget(r, clamped);
-    }
-
     /// Draw a [`widget::Table`] descriptor into `rect`, using `sel`
     /// as the selection state.
     pub fn table(

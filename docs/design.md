@@ -61,7 +61,7 @@ Current examples:
 | `Resize(w, h)`      | crossterm `Resize` event        | Cross-cutting: map state + render canvas |
 | `SetTheme`          | palette entry                   | Cross-cutting: UI theme + render styler |
 | `CursorMoved`       | mouse router (every event)      | Overlay readout through the same boundary |
-| `Jump(LonLat)`      | search result, geoip plugin     | Plugin async → map state change        |
+| `Jump(LonLat)`      | search provider result, geoip plugin | Plugin async → map state change   |
 | `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
 
 Surface activations (palette open, plugin activate) deliberately do
@@ -152,7 +152,7 @@ methods push us over.
 
 ## Compositor: object lifetime is the visibility lifecycle
 
-Modal surfaces (palette, search, wiki, help, …) are `Component`s on
+Modal surfaces (palette, wiki, help, …) are `Component`s on
 a stack owned by the `Compositor`. Pushed on activation, popped when
 the component calls `win.close()`. Focus is a separate `focused_idx`
 into the stack, so `Tab` can move focus to the base layer without
