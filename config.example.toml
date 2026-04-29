@@ -99,19 +99,24 @@
 # [info]
 # enabled = false      # turns off the top-right cursor / centre / zoom readout
 
-# ── Lua scripted plugins (opt-in) ───────────────────────────────────
-# Each Lua plugin is gated by its own `[<name>] enabled = true`
-# block. Default off because they're being validated against the
-# Rust counterparts; flip on to dogfood. See
-# docs/lua-bridge-surface.md for the bridge surface.
+# ── Lua scripted plugins ────────────────────────────────────────────
+# Drop `*.lua` files into ~/.config/ttymap/plugins/ — each becomes
+# a plugin named after its stem (`my_thing.lua` → `my_thing`),
+# loaded automatically at startup. Gated by `[<stem>] enabled = …`
+# below, default on like every other plugin. No rebuild needed to
+# add or edit a plugin. See docs/lua-bridge-surface.md.
+
+# Bundled demo scripts (still opt-in). These live inside the
+# binary and are wired through the older per-script entry points;
+# the directory-based discovery above will replace this once
+# they're moved out.
 
 # `hello` — demo / template for new Lua plugin authors.
 # [lua]
 # enabled = true
 
-# `aircraft` (Lua port) — runs side by side with the Rust
+# `aircraft` (bundled Lua port). Runs side by side with the Rust
 # `[aircraft]` plugin during the migration. Disable the Rust one
-# (`[aircraft] enabled = false`) when comparing, or both will
-# show up under the same "Toggle aircraft" palette label.
+# (`[aircraft] enabled = false`) when comparing.
 # [lua_aircraft]
 # enabled = true
