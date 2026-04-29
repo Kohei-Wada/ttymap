@@ -7,11 +7,9 @@
 //! Focus/modal state lives on [`Compositor`] — a stack of
 //! [`Component`]s that replaced the old `FocusManager` + `Plugin`
 //! trilogy. Components render map overlays through
-//! `Component::paint_on_map`. Headless async jobs (here plugin's
-//! geoip) live in a [`Task`] list. Neither channel carries a
-//! concrete plugin type — they contain only `Box<dyn Component>` /
-//! `Box<dyn Task>`, populated by each plugin's `register` function
-//! at composition time.
+//! `Component::paint_on_map`. The compositor never names a concrete
+//! plugin type — it carries only `Box<dyn Component>`s populated by
+//! the Lua dispatcher at composition time.
 
 mod mouse;
 pub mod msg;
@@ -24,7 +22,7 @@ use std::sync::Arc;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
-use crate::compositor::{BaseLayer, Compositor, Context, Registrar, Task};
+use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
 use crate::keymap::KeyMap;
 use crate::map::render::frame::MapFrame;
@@ -45,7 +43,6 @@ pub struct App {
     map_frame: Option<MapFrame>,
     mouse: MouseAdapter,
     compositor: Compositor,
-    tasks: Vec<Box<dyn Task>>,
     theme_id: ThemeId,
     ui_theme: UiTheme,
     /// Latest mouse cursor position in absolute terminal cells.
@@ -125,7 +122,6 @@ impl App {
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
-            tasks: registrar.tasks,
             theme_id,
             ui_theme,
             cursor: None,
@@ -148,16 +144,12 @@ impl App {
                 self.map_frame = Some(frame);
             }
 
-            // Drain per-tick messages: compositor components first,
-            // then tasks. Both borrow &mut self transitively through
-            // dispatch, so collect into a Vec first.
+            // Drain per-tick messages from compositor components.
+            // Borrows &mut self transitively through dispatch, so
+            // collect into a Vec first.
             let ctx = self.context();
             let compositor_msgs = self.compositor.poll(&ctx);
             for msg in compositor_msgs {
-                self.dispatch(msg);
-            }
-            let task_msgs: Vec<AppMsg> = self.tasks.iter_mut().flat_map(|t| t.poll()).collect();
-            for msg in task_msgs {
                 self.dispatch(msg);
             }
 

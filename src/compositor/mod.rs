@@ -431,15 +431,6 @@ impl Default for Compositor {
     }
 }
 
-// ── Async tasks (headless plugins) ─────────────────────────────────
-
-/// Headless async job — the shape `here` (geoip lookup → `Jump`)
-/// needs. Polled every tick by `App`; may emit messages when
-/// background work completes. No UI, no focus, no component.
-pub trait Task {
-    fn poll(&mut self) -> Vec<AppMsg>;
-}
-
 // ── Plugin self-registration (App is plugin-agnostic) ──────────────
 
 /// Factory closure producing a fresh [`Component`] when the user
@@ -448,12 +439,6 @@ pub trait Task {
 /// (e.g. palette seeds its "(current)" theme hint from `theme_id`)
 /// can do so without a separate lifecycle hook.
 pub type SpawnComponent = Box<dyn Fn(&Context) -> Box<dyn Component>>;
-
-/// Closure that kicks off a headless action (typically: start an
-/// async `Task` or emit one-shot `AppMsg`s) when a palette entry is
-/// selected. Receives `Context` for the same reason as
-/// [`SpawnComponent`].
-pub type RunAction = Box<dyn Fn(&Context) -> Vec<AppMsg>>;
 
 /// One activation entry — "when this key is pressed while nothing
 /// modal is above the bottom layer, invoke `spawn` and push the
@@ -473,12 +458,6 @@ pub enum PaletteKind {
     /// selection, but closes the existing instance on re-selection.
     /// Used by palette labels of the form "Toggle X".
     Toggle(SpawnComponent),
-    /// Fire-and-forget action — selection dispatches `Vec<AppMsg>`
-    /// without pushing a component. No in-tree caller after the
-    /// plugin migration; kept as an extension point for future
-    /// bridges that emit AppMsg directly from a palette entry.
-    #[allow(dead_code)]
-    Run(RunAction),
 }
 
 /// Palette entry description owned by the registrar.
@@ -488,17 +467,13 @@ pub struct PaletteEntry {
     pub kind: PaletteKind,
 }
 
-/// Collector passed to each plugin's `register` function. Every
-/// channel is optional — headless plugins add only a task + palette
-/// entry; visual plugins add an activation + palette entry; wiki's
-/// map markers live on the component itself (via
-/// [`Component::paint_on_map`]) so they flow through activations,
-/// not a separate registrar field.
+/// Collector passed to each plugin's `register` function. Plugins
+/// add an activation, a palette entry, and / or an overlay; the
+/// compositor stays agnostic of any specific plugin.
 #[derive(Default)]
 pub struct Registrar {
     pub activations: Vec<Activation>,
     pub palette_entries: Vec<PaletteEntry>,
-    pub tasks: Vec<Box<dyn Task>>,
     /// Always-on overlay factories — invoked once at app init and
     /// pushed into [`Compositor::overlays`]. Used for chrome that's
     /// always on screen (info bar, scale bar, attribution).
@@ -511,13 +486,6 @@ impl Registrar {
     }
     pub fn add_palette_entry(&mut self, e: PaletteEntry) {
         self.palette_entries.push(e);
-    }
-    /// Register a background task polled every tick. No in-tree
-    /// caller after the plugin migration; kept as an extension
-    /// point for future Lua bridge work or Rust-only plugins.
-    #[allow(dead_code)]
-    pub fn add_task(&mut self, t: Box<dyn Task>) {
-        self.tasks.push(t);
     }
 
     // ── Convenience builders ───────────────────────────────────────────────
@@ -577,22 +545,6 @@ impl Registrar {
             kind: PaletteKind::Spawn(Box::new(move |ctx| {
                 Box::new(factory(ctx)) as Box<dyn Component>
             })),
-        });
-    }
-
-    /// Add a fire-and-forget palette entry — selecting it returns
-    /// `Vec<AppMsg>` to dispatch, no component pushed. No in-tree
-    /// caller after the plugin migration; kept as an extension
-    /// point for future bridges.
-    #[allow(dead_code)]
-    pub fn add_run<F>(&mut self, label: impl Into<String>, hint: impl Into<String>, action: F)
-    where
-        F: Fn(&Context) -> Vec<AppMsg> + 'static,
-    {
-        self.add_palette_entry(PaletteEntry {
-            label: label.into(),
-            hint: hint.into(),
-            kind: PaletteKind::Run(Box::new(action)),
         });
     }
 
