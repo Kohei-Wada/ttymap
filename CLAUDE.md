@@ -64,7 +64,7 @@ Key modules:
 - **`src/geo.rs`**: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`src/map/render/label.rs`**: Collision-free label placement buffer.
 - **`src/plugin/`**: Plugins (aircraft, attribution, export, help, here, info, iss, quake, scalebar, search, wiki) — composable UI panels with async work via `poll()`. Built-in chrome (info / scalebar / attribution) is structured as plugins too. Search is the unusual one: instead of being a `Component`, it's a `PaletteProvider` (in `src/plugin/search/mod.rs`) — its `register()` binds `/` to push the palette pre-loaded with the provider.
-- **`src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). `LuaComponent` (`component.rs`) implements `Component` by dispatching to a Lua module table; `register()` (in `mod.rs`) wires bundled scripts in `scripts/*.lua` into the registrar. **Opt-in only** — `app::build_registrar` calls it solely when `[lua] enabled = true` is set in config, because today's bundled scripts (`hello.lua`) are demos, not features. See `docs/lua-bridge-surface.md` for the bridge surface scope.
+- **`src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). `LuaComponent` (`component.rs`) implements `Component` by dispatching to a Lua module table. `host` (`host.rs`) is a per-component global exposing `host:fetch_url(url)`, `host:jump(lon, lat)`, `host:parse_json(s)`. `MapApi` is bridged via a per-frame Lua table built inside `Lua::scope` (`map_api.rs`). Bundled scripts in `scripts/*.lua` register through per-script entry points (`register_hello`, `register_aircraft`); each is **opt-in** via its own `[<name>] enabled = true` block in config. See `docs/lua-bridge-surface.md` for the bridge surface scope.
 
 ## Rust Edition
 
