@@ -15,12 +15,16 @@
 //!   become 1-indexed tables, `null` is `nil`. Parse errors return
 //!   `nil` and log a warning, so a flaky upstream doesn't crash a
 //!   plugin.
+//! - `host:center() -> lon, lat` — current map centre. The host
+//!   refreshes the value at the start of every dispatch path that
+//!   carries a `Window` / `MapApi`, so callbacks see the latest
+//!   centre without threading anything through their signatures.
 //!
 //! Both [`LuaHost`] and [`LuaJob`] are `'static`, so they go through
 //! mlua's regular `UserData` mechanism (no `Lua::scope` gymnastics
 //! like `MapApi`).
 
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use mlua::UserData;
@@ -31,24 +35,32 @@ use crate::shared::http::HttpClient;
 /// Per-component host handle. Owns the `HttpClient` used by
 /// `fetch_url` and a sender for jump requests. The matching
 /// `Receiver` lives on the `LuaComponent` so it can drain pending
-/// jumps after a callback returns.
+/// jumps after a callback returns. The `center` is shared with
+/// the component so `host:center()` can return the current map
+/// centre even though the userdata itself never sees a `Window`.
 pub struct LuaHost {
     http: HttpClient,
     jump_tx: mpsc::Sender<LonLat>,
+    center: Arc<Mutex<LonLat>>,
 }
 
 impl LuaHost {
-    /// Build a fresh host + the matching jump-channel receiver.
-    /// The receiver belongs on the [`LuaComponent`] that owns this
-    /// `LuaHost`'s Lua state.
-    pub fn new(tag: &'static str) -> (Self, mpsc::Receiver<LonLat>) {
+    /// Build a fresh host along with the channel ends the
+    /// [`LuaComponent`] needs to drive it: the jump-request
+    /// receiver and the shared centre cell. The component refreshes
+    /// the centre at the start of each dispatch path that carries
+    /// a `Window` / `MapApi`.
+    pub fn new(tag: &'static str) -> (Self, mpsc::Receiver<LonLat>, Arc<Mutex<LonLat>>) {
         let (jump_tx, jump_rx) = mpsc::channel();
+        let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
         (
             Self {
                 http: HttpClient::new(tag),
                 jump_tx,
+                center: center.clone(),
             },
             jump_rx,
+            center,
         )
     }
 }
@@ -91,6 +103,15 @@ impl UserData for LuaHost {
                 }
             },
         );
+
+        // `host:center() -> lon, lat` — current map centre, kept
+        // fresh by the LuaComponent before each dispatch. Plugins
+        // use this to scope upstream queries (e.g. an OpenSky
+        // bounding box around the user's view).
+        methods.add_method("center", |_, this, _: ()| {
+            let ll = *this.center.lock().expect("center mutex poisoned");
+            Ok((ll.lon, ll.lat))
+        });
     }
 }
 
@@ -180,7 +201,7 @@ mod tests {
     #[test]
     fn host_userdata_can_be_constructed() {
         let lua = mlua::Lua::new();
-        let (host, _jump_rx) = LuaHost::new("lua-test");
+        let (host, _jump_rx, _) = LuaHost::new("lua-test");
         let ud = lua.create_userdata(host).expect("create_userdata");
         // Just confirm we can set it as a global and round-trip the
         // userdata reference back out — fetch_url itself hits the
@@ -192,7 +213,7 @@ mod tests {
     #[test]
     fn host_jump_pushes_to_channel() {
         let lua = mlua::Lua::new();
-        let (host, jump_rx) = LuaHost::new("lua-test");
+        let (host, jump_rx, _) = LuaHost::new("lua-test");
         let ud = lua.create_userdata(host).expect("create_userdata");
         lua.globals().set("host", ud).expect("set global");
 
@@ -209,7 +230,7 @@ mod tests {
     #[test]
     fn parse_json_round_trips_primitives() {
         let lua = mlua::Lua::new();
-        let (host, _) = LuaHost::new("lua-test");
+        let (host, _, _) = LuaHost::new("lua-test");
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -233,7 +254,7 @@ mod tests {
     #[test]
     fn parse_json_object_becomes_string_keyed_table() {
         let lua = mlua::Lua::new();
-        let (host, _) = LuaHost::new("lua-test");
+        let (host, _, _) = LuaHost::new("lua-test");
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -253,7 +274,7 @@ mod tests {
     #[test]
     fn parse_json_array_is_one_indexed_in_lua() {
         let lua = mlua::Lua::new();
-        let (host, _) = LuaHost::new("lua-test");
+        let (host, _, _) = LuaHost::new("lua-test");
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -275,7 +296,7 @@ mod tests {
     #[test]
     fn parse_json_invalid_returns_nil() {
         let lua = mlua::Lua::new();
-        let (host, _) = LuaHost::new("lua-test");
+        let (host, _, _) = LuaHost::new("lua-test");
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -289,7 +310,7 @@ mod tests {
     #[test]
     fn parse_json_null_is_nil() {
         let lua = mlua::Lua::new();
-        let (host, _) = LuaHost::new("lua-test");
+        let (host, _, _) = LuaHost::new("lua-test");
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
