@@ -445,19 +445,25 @@ fn build_registrar(
         crate::plugin::quake::register(config, &mut r);
     }
 
-    // Lua scripted plugins. Opt-in via `[lua] enabled = true` —
-    // unlike the rest of the plugins, default is *false* because
-    // these are demo / dogfood, not user-facing features. The
-    // detection inlines the lookup so we don't perturb
-    // `Config::plugin_enabled`'s default-true semantics.
-    let lua_enabled = config
-        .extras
-        .get("lua")
-        .and_then(|v| v.get("enabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if lua_enabled {
-        crate::lua::register(&mut r);
+    // Lua scripted plugins. Each is opt-in via its own `[<name>]
+    // enabled = true` block — unlike the rest of the plugin set,
+    // default is *false* because these are still being validated
+    // against their Rust counterparts. The detection inlines the
+    // lookup so we don't perturb `Config::plugin_enabled`'s
+    // default-true semantics.
+    let opt_in = |name: &str| -> bool {
+        config
+            .extras
+            .get(name)
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    if opt_in("lua") {
+        crate::lua::register_hello(&mut r);
+    }
+    if opt_in("lua_aircraft") {
+        crate::lua::register_aircraft(&mut r);
     }
 
     // Help needs to know the other plugins' activation hints, so build

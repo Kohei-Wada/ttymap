@@ -168,7 +168,7 @@ src/
 ├── lua/                 Lua scripted plugins (mlua + Lua 5.4, opt-in via `[lua] enabled = true`)
 │   ├── mod.rs           shared VM + register() for bundled scripts
 │   ├── component.rs     LuaComponent — Component impl backed by a Lua module
-│   └── scripts/         bundled .lua sources (hello.lua: demo / template)
+│   └── scripts/         bundled .lua sources (hello.lua, aircraft.lua)
 │
 ├── plugin_api/          plugin-author surface — services + helpers + prelude
 │   ├── mod.rs           re-exports + `prelude` glob

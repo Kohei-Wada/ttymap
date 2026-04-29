@@ -100,9 +100,18 @@
 # enabled = false      # turns off the top-right cursor / centre / zoom readout
 
 # ── Lua scripted plugins (opt-in) ───────────────────────────────────
-# Loads bundled scripts under src/lua/scripts/. Today: a `hello`
-# demo. Off by default because the bundled scripts are demos /
-# templates, not user-facing features. See docs/lua-bridge-surface.md
-# for the bridge surface.
+# Each Lua plugin is gated by its own `[<name>] enabled = true`
+# block. Default off because they're being validated against the
+# Rust counterparts; flip on to dogfood. See
+# docs/lua-bridge-surface.md for the bridge surface.
+
+# `hello` — demo / template for new Lua plugin authors.
 # [lua]
+# enabled = true
+
+# `aircraft` (Lua port) — runs side by side with the Rust
+# `[aircraft]` plugin during the migration. Disable the Rust one
+# (`[aircraft] enabled = false`) when comparing, or both will
+# show up under the same "Toggle aircraft" palette label.
+# [lua_aircraft]
 # enabled = true

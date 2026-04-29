@@ -33,17 +33,27 @@ pub fn new_lua() -> Lua {
 /// reference template for future Lua plugin authors.
 const HELLO_LUA: &str = include_str!("scripts/hello.lua");
 
-/// Wire the bundled Lua plugins into the registrar. Today that's
-/// just `hello`. New bundled plugins go in `scripts/<name>.lua` and
-/// register here alongside `hello`.
-///
-/// Lua failures (parse error, missing fields) are logged and the
-/// plugin is silently skipped rather than aborting startup — the
-/// host always boots even with a broken Lua plugin.
-pub fn register(r: &mut Registrar) {
+/// Aircraft plugin (Lua port). Opt-in side-by-side with the Rust
+/// version during the migration; once validated the Rust plugin
+/// goes away and this becomes the only aircraft implementation.
+const AIRCRAFT_LUA: &str = include_str!("scripts/aircraft.lua");
+
+/// Wire the `hello` demo plugin. Called from `app::build_registrar`
+/// when `[lua] enabled = true`.
+pub fn register_hello(r: &mut Registrar) {
     register_script("hello", HELLO_LUA, r);
 }
 
+/// Wire the Lua port of the aircraft plugin. Called from
+/// `app::build_registrar` when `[lua_aircraft] enabled = true`.
+pub fn register_aircraft(r: &mut Registrar) {
+    register_script("aircraft", AIRCRAFT_LUA, r);
+}
+
+/// Validate + register one bundled script. Lua failures (parse
+/// error, missing fields) are logged and the plugin is silently
+/// skipped rather than aborting startup — the host always boots
+/// even with a broken Lua plugin.
 fn register_script(name: &'static str, source: &'static str, r: &mut Registrar) {
     // Validate the script up front so a syntax error surfaces as one
     // log line instead of a noisy first-toggle failure.
@@ -110,14 +120,28 @@ mod tests {
     #[test]
     fn register_adds_a_palette_entry_for_hello() {
         let mut r = Registrar::default();
-        register(&mut r);
-        // We don't need to assert the count exactly — just that the
-        // bundled hello plugin produced *some* palette entry. The
-        // label substring guards against silent regressions.
+        register_hello(&mut r);
         let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
         assert!(
             labels.iter().any(|l| l.contains("hello")),
             "expected a 'hello' palette entry, got {:?}",
+            labels,
+        );
+    }
+
+    #[test]
+    fn bundled_aircraft_script_parses() {
+        LuaComponent::from_source(AIRCRAFT_LUA, "aircraft").expect("aircraft.lua should parse");
+    }
+
+    #[test]
+    fn register_aircraft_adds_a_palette_entry() {
+        let mut r = Registrar::default();
+        register_aircraft(&mut r);
+        let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
+        assert!(
+            labels.iter().any(|l| l.contains("aircraft")),
+            "expected an 'aircraft' palette entry, got {:?}",
             labels,
         );
     }
