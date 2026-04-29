@@ -21,10 +21,9 @@ pub use component::LuaComponent;
 
 use std::path::{Path, PathBuf};
 
-use mlua::Lua;
+use mlua::{Lua, Table};
 
 use crate::compositor::Registrar;
-use crate::config::Config;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM.
@@ -57,15 +56,18 @@ pub fn register_aircraft(r: &mut Registrar) {
 /// plugin. The whole point: dropping a `.lua` file in that
 /// directory adds a plugin without touching Rust.
 ///
-/// Each file is named after its plugin: `aircraft.lua` becomes the
-/// `aircraft` plugin and is gated by `[aircraft] enabled = …` in
-/// config (default true, same as Rust plugins). A read or parse
-/// failure on a single file logs a warning and skips that file —
-/// the rest of the directory still loads.
+/// Each file becomes a plugin named after its stem (`my.lua` →
+/// `my`). Whether a plugin is *active* is decided by the script
+/// itself via the optional `enabled` field on its returned
+/// module table — `enabled = false` keeps the file in place but
+/// skips registration, which is the natural shape for
+/// user-edited scripts (the file *is* the config).
 ///
-/// Files are loaded in alphabetical order so the palette entries
-/// surface in a predictable order across runs.
-pub fn register_user_plugins(r: &mut Registrar, config: &Config) {
+/// A read / parse failure on a single file logs a warning and
+/// skips it — the rest of the directory still loads. Files are
+/// loaded in alphabetical order so palette entries surface in a
+/// predictable order across runs.
+pub fn register_user_plugins(r: &mut Registrar) {
     let Some(dir) = user_plugins_dir() else {
         // No XDG directory available (no $HOME, weird host) — the
         // user just doesn't get directory-based plugins. Bundled
@@ -77,17 +79,14 @@ pub fn register_user_plugins(r: &mut Registrar, config: &Config) {
         // never wrote a plugin). Silent skip — nothing to log.
         return;
     }
-    register_user_plugins_from(&dir, r, |name| config.plugin_enabled(name));
+    register_user_plugins_from(&dir, r);
 }
 
-/// Inner half of [`register_user_plugins`] split out so unit tests
-/// can hand a tempdir + a custom gate predicate without faking the
-/// XDG layout. Walks `dir`, loads every `*.lua` whose `enabled`
-/// gate returns true.
-fn register_user_plugins_from<F>(dir: &Path, r: &mut Registrar, mut enabled: F)
-where
-    F: FnMut(&str) -> bool,
-{
+/// Inner half of [`register_user_plugins`] split out so unit
+/// tests can hand a tempdir without faking the XDG layout. Walks
+/// `dir`, loads every `*.lua`, and respects each script's own
+/// `enabled` flag (default true).
+fn register_user_plugins_from(dir: &Path, r: &mut Registrar) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -105,10 +104,6 @@ where
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        if !enabled(stem) {
-            log::debug!("lua: {} disabled by config, skipping", stem);
-            continue;
-        }
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -116,6 +111,13 @@ where
                 continue;
             }
         };
+        if !script_enabled(&source, stem) {
+            log::info!(
+                "lua[{}]: disabled via module.enabled = false, skipping",
+                stem,
+            );
+            continue;
+        }
         // `register_script` requires `&'static str` for the
         // re-load closure that lives for the program lifetime, so
         // the source + name are leaked here. Cost: a few KB per
@@ -125,6 +127,29 @@ where
         let source: &'static str = Box::leak(source.into_boxed_str());
         register_script(name, source, r);
     }
+}
+
+/// Pre-flight a script just to read its `enabled` field. Anything
+/// other than an explicit `false` (parse error, missing module,
+/// non-bool value, missing field) is treated as "enabled" — it's
+/// safer for the user to see a warning at register time than to
+/// have a plugin silently disappear because of a typo.
+fn script_enabled(source: &str, name: &str) -> bool {
+    let lua = new_lua();
+    let module: Table = match lua.load(source).set_name(name).eval() {
+        Ok(m) => m,
+        Err(_) => return true, // let the real load surface the error
+    };
+    // mlua coerces nil to `false` for `get::<bool>`, so a missing
+    // `enabled` field would *look* like `enabled = false` and turn
+    // every plugin off. Read as `Value` and only treat the *explicit*
+    // boolean `false` as disabled — nil / missing / wrong type all
+    // leave the plugin active so the real load can surface any
+    // structural issues.
+    !matches!(
+        module.get::<mlua::Value>("enabled"),
+        Ok(mlua::Value::Boolean(false))
+    )
 }
 
 /// Resolve `~/.config/ttymap/plugins/` (or the platform-specific
@@ -270,7 +295,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r, |_| true);
+        register_user_plugins_from(&dir, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -285,24 +310,46 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r, |_| true);
+        register_user_plugins_from(&dir, &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
     }
 
     #[test]
-    fn dir_discovery_honours_disabled_gate() {
-        let dir = temp_plugins_dir("gate");
+    fn dir_discovery_honours_module_enabled_false() {
+        let dir = temp_plugins_dir("self-disable");
         write_plugin(&dir, "alpha.lua", r#"return { name = "alpha" }"#);
-        write_plugin(&dir, "beta.lua", r#"return { name = "beta" }"#);
+        // beta opts itself out — the file stays, but the plugin
+        // doesn't register.
+        write_plugin(
+            &dir,
+            "beta.lua",
+            r#"return { name = "beta", enabled = false }"#,
+        );
 
         let mut r = Registrar::default();
-        // Pretend `[beta] enabled = false` was set in config.
-        register_user_plugins_from(&dir, &mut r, |name| name != "beta");
+        register_user_plugins_from(&dir, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
+    }
+
+    #[test]
+    fn dir_discovery_module_enabled_true_is_explicit_default() {
+        // Belt-and-suspenders: a plugin that explicitly sets
+        // `enabled = true` registers same as one that omits the
+        // field. Guards against accidental tightening of the gate.
+        let dir = temp_plugins_dir("self-enable");
+        write_plugin(
+            &dir,
+            "explicit.lua",
+            r#"return { name = "explicit", enabled = true }"#,
+        );
+
+        let mut r = Registrar::default();
+        register_user_plugins_from(&dir, &mut r);
+        assert!(labels(&r).iter().any(|l| l.contains("explicit")));
     }
 
     #[test]
@@ -316,7 +363,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r, |_| true);
+        register_user_plugins_from(&dir, &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -335,7 +382,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r, |_| true);
+        register_user_plugins_from(&dir, &mut r);
         assert!(r.palette_entries.is_empty());
     }
 }
