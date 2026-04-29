@@ -16,11 +16,15 @@
 //! via [`MapApi`]), `poll` (Lua-side tick + `host:fetch_url(url)`).
 //! Wider widget / map vocabulary lands in follow-ups.
 
+use std::sync::mpsc;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, RegistryKey, Table};
 
+use crate::app::AppMsg;
 use crate::compositor::Component;
 use crate::compositor::window::{RenderWindow, Window};
+use crate::geo::LonLat;
 use crate::plugin_api::MapApi;
 use crate::widget::{self, Line, Span, StyleKind};
 
@@ -35,6 +39,12 @@ pub struct LuaComponent {
     /// `&'static str`. Leaked once per component; total cost is a
     /// few dozen bytes for the lifetime of the program.
     name: &'static str,
+    /// Receiver for `host:jump(lon, lat)` requests. The Lua side
+    /// pushes a `LonLat`; we drain after each `poll` /
+    /// `handle_event` and emit `AppMsg::Jump` through the host
+    /// `Window`. Keeps the Lua call site decoupled from when a
+    /// `Window` is actually available.
+    jump_rx: mpsc::Receiver<LonLat>,
 }
 
 #[allow(dead_code)] // mirrors the LuaComponent struct attribute; same reason
@@ -51,7 +61,7 @@ impl LuaComponent {
         // a global so plugins can reach them from any callback. Set
         // *before* loading the source so a top-level `host:foo()`
         // call in the chunk would see it (none today, but cheap).
-        let host = super::host::LuaHost::new("lua-host");
+        let (host, jump_rx) = super::host::LuaHost::new("lua-host");
         let host_ud = lua.create_userdata(host)?;
         lua.globals().set("host", host_ud)?;
 
@@ -59,7 +69,22 @@ impl LuaComponent {
         let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
         let name: &'static str = Box::leak(raw_name.into_boxed_str());
         let module = lua.create_registry_value(module)?;
-        Ok(Self { lua, module, name })
+        Ok(Self {
+            lua,
+            module,
+            name,
+            jump_rx,
+        })
+    }
+
+    /// Drain any `host:jump(...)` requests the Lua side queued
+    /// during the most recent callback and emit them as
+    /// `AppMsg::Jump`. Called after `dispatch_event` /
+    /// `dispatch_poll` while we still hold a `Window`.
+    fn drain_jumps(&self, win: &mut Window) {
+        while let Ok(ll) = self.jump_rx.try_recv() {
+            win.emit(AppMsg::Jump(ll));
+        }
     }
 
     /// Pull the `render()` lines from the Lua module. Returns an
@@ -237,7 +262,9 @@ fn key_code_to_lua(code: KeyCode) -> (&'static str, Option<char>) {
 
 impl Component for LuaComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-        match self.dispatch_event(event) {
+        let action = self.dispatch_event(event);
+        self.drain_jumps(win);
+        match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),
             KeyAction::Consume => {}
@@ -248,8 +275,9 @@ impl Component for LuaComponent {
         self.dispatch_paint(p);
     }
 
-    fn poll(&mut self, _win: &mut Window) {
+    fn poll(&mut self, win: &mut Window) {
         self.dispatch_poll();
+        self.drain_jumps(win);
     }
 
     fn render(&self, win: &mut RenderWindow) {
@@ -556,6 +584,48 @@ mod tests {
         .expect("load");
         // Should not panic.
         c.dispatch_poll();
+    }
+
+    #[test]
+    fn host_jump_drains_into_window_emit() {
+        // A handler that requests a jump but doesn't return any
+        // host action — the jump should still surface as an
+        // AppMsg::Jump on the next drain.
+        let mut c = LuaComponent::from_source(
+            r#"return {
+                name = "jumper",
+                handle_event = function(key)
+                    host:jump(139.7595, 35.6828)
+                    return nil
+                end,
+            }"#,
+            "jumper",
+        )
+        .expect("load");
+
+        use crate::compositor::Context;
+        use crate::compositor::window::WindowOps;
+        const CTX: Context = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: crate::theme::ThemeId::Dark,
+            cursor: None,
+        };
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            c.handle_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut win);
+        }
+        let jumps: Vec<&LonLat> = ops
+            .msgs
+            .iter()
+            .filter_map(|m| match m {
+                AppMsg::Jump(ll) => Some(ll),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jumps.len(), 1);
+        assert!((jumps[0].lon - 139.7595).abs() < 1e-9);
+        assert!((jumps[0].lat - 35.6828).abs() < 1e-9);
     }
 
     #[test]

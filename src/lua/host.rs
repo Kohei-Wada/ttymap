@@ -1,16 +1,15 @@
 //! Lua-side host services: persistent state a Lua plugin can reach
 //! at any time via the `host` global.
 //!
-//! Today: `host:fetch_url(url) -> Job` — kicks off a background HTTP
-//! GET (UTF-8 text response) and returns a [`LuaJob`] handle. The
-//! plugin polls the job each frame:
-//!
-//! ```lua
-//! local job = host:fetch_url("https://example.com/")
-//! -- ...later, in poll():
-//! local body = job:try_take()
-//! if body then ... end
-//! ```
+//! Today:
+//! - `host:fetch_url(url) -> Job` — kicks off a background HTTP GET
+//!   (UTF-8 text). The plugin polls the [`LuaJob`] each frame.
+//! - `host:jump(lon, lat)` — fire-and-forget request to recentre
+//!   the map on the given coordinate. The Lua side just enqueues a
+//!   `LonLat`; [`LuaComponent`] drains the channel after each
+//!   `poll` / `handle_event` dispatch and emits `AppMsg::Jump`
+//!   through the host `Window`. This keeps the Lua call site
+//!   independent of when a `Window` is actually available.
 //!
 //! Both [`LuaHost`] and [`LuaJob`] are `'static`, so they go through
 //! mlua's regular `UserData` mechanism (no `Lua::scope` gymnastics
@@ -21,20 +20,31 @@ use std::thread;
 
 use mlua::UserData;
 
+use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
 
-/// Per-component host handle. Holds the `HttpClient` used by
-/// `fetch_url` so Lua plugins don't have to thread a reference
-/// through every call.
+/// Per-component host handle. Owns the `HttpClient` used by
+/// `fetch_url` and a sender for jump requests. The matching
+/// `Receiver` lives on the `LuaComponent` so it can drain pending
+/// jumps after a callback returns.
 pub struct LuaHost {
     http: HttpClient,
+    jump_tx: mpsc::Sender<LonLat>,
 }
 
 impl LuaHost {
-    pub fn new(tag: &'static str) -> Self {
-        Self {
-            http: HttpClient::new(tag),
-        }
+    /// Build a fresh host + the matching jump-channel receiver.
+    /// The receiver belongs on the [`LuaComponent`] that owns this
+    /// `LuaHost`'s Lua state.
+    pub fn new(tag: &'static str) -> (Self, mpsc::Receiver<LonLat>) {
+        let (jump_tx, jump_rx) = mpsc::channel();
+        (
+            Self {
+                http: HttpClient::new(tag),
+                jump_tx,
+            },
+            jump_rx,
+        )
     }
 }
 
@@ -44,15 +54,23 @@ impl UserData for LuaHost {
         // Job. Body is decoded as UTF-8; non-text or fetch errors
         // surface as the Job never producing a result (try_take
         // keeps returning nil).
-        methods.add_method(
-            "fetch_url",
-            |_, this, (_self, url): (mlua::Value, String)| {
-                // The first arg is the receiver (`host` itself) from
-                // Lua's colon syntax `host:fetch_url(url)` — discard.
-                let _ = _self;
-                Ok(LuaJob::spawn(&this.http, url))
-            },
-        );
+        // `add_method` auto-extracts `self` from Lua's colon
+        // syntax, so the closure args are just the actual user
+        // params — `(url)` here.
+        methods.add_method("fetch_url", |_, this, url: String| {
+            Ok(LuaJob::spawn(&this.http, url))
+        });
+
+        // `host:jump(lon, lat)` — request the map recentre on the
+        // given coordinate. The actual `AppMsg::Jump` emit happens
+        // when the matching `LuaComponent` drains the channel after
+        // its current callback returns, so this is fire-and-forget
+        // from the Lua side. Send errors (channel disconnected)
+        // mean the component is being torn down — silently ignore.
+        methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
+            let _ = this.jump_tx.send(LonLat { lon, lat });
+            Ok(())
+        });
     }
 }
 
@@ -103,13 +121,30 @@ mod tests {
     #[test]
     fn host_userdata_can_be_constructed() {
         let lua = mlua::Lua::new();
-        let host = LuaHost::new("lua-test");
+        let (host, _jump_rx) = LuaHost::new("lua-test");
         let ud = lua.create_userdata(host).expect("create_userdata");
         // Just confirm we can set it as a global and round-trip the
         // userdata reference back out — fetch_url itself hits the
         // network and isn't safe to call in a unit test.
         lua.globals().set("host", ud).expect("set global");
         let _: mlua::AnyUserData = lua.globals().get("host").expect("get global");
+    }
+
+    #[test]
+    fn host_jump_pushes_to_channel() {
+        let lua = mlua::Lua::new();
+        let (host, jump_rx) = LuaHost::new("lua-test");
+        let ud = lua.create_userdata(host).expect("create_userdata");
+        lua.globals().set("host", ud).expect("set global");
+
+        // Lua-side call: longitude first, then latitude.
+        lua.load("host:jump(139.7595, 35.6828)")
+            .exec()
+            .expect("exec");
+
+        let ll = jump_rx.try_recv().expect("jump must be queued");
+        assert!((ll.lon - 139.7595).abs() < 1e-9);
+        assert!((ll.lat - 35.6828).abs() < 1e-9);
     }
 
     #[test]
