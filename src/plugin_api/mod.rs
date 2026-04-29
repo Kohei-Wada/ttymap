@@ -84,7 +84,6 @@ pub mod prelude {
     pub use crate::geo::LonLat;
     pub use crate::plugin_api::MapApi;
     pub use crate::widget::{
-        Align, Cell, Line, List, ListItem, Paragraph, Rect, Row, Size, Span, StyleKind, Table,
-        TableSel, TextStyle,
+        Align, Cell, Line, Paragraph, Rect, Row, Size, Span, StyleKind, Table, TableSel, TextStyle,
     };
 }

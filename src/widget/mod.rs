@@ -15,14 +15,12 @@
 //! `ratatui::*` is imported.
 
 pub mod geom;
-pub mod list;
 pub mod paragraph;
 pub mod style;
 pub mod table;
 pub mod text;
 
 pub use geom::{Rect, Size, split_rows};
-pub use list::{List, ListItem};
 pub use paragraph::Paragraph;
 pub use style::{StyleKind, TextStyle};
 pub use table::{Cell, Row, Table, TableSel};
