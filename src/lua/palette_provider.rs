@@ -58,10 +58,21 @@ impl LuaPaletteProvider {
         lua.globals().set("host", host_ud)?;
 
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
+        // The script declares palette-provider semantics by exposing
+        // a `palette = {...}` sub-table — the dispatcher already
+        // checked this. Pull it out and use it as the registry-held
+        // table; everything else (filter / items / execute / poll /
+        // is_loading / prompt / submit_mode) reads from this scope.
+        let palette: Table = module.get("palette").map_err(|e| {
+            mlua::Error::RuntimeError(format!(
+                "lua-palette: module.palette missing or not a table: {}",
+                e
+            ))
+        })?;
 
-        let prompt: String = module.get("prompt").unwrap_or_else(|_| ":".to_string());
-        let submit_mode = parse_submit_mode(&module);
-        let module = lua.create_registry_value(module)?;
+        let prompt: String = palette.get("prompt").unwrap_or_else(|_| ":".to_string());
+        let submit_mode = parse_submit_mode(&palette);
+        let module = lua.create_registry_value(palette)?;
 
         Ok(Box::new(Self {
             lua,
@@ -249,9 +260,9 @@ mod tests {
     }
 
     #[test]
-    fn prompt_falls_back_to_colon_when_module_omits_it() {
+    fn prompt_falls_back_to_colon_when_palette_omits_it() {
         let p = LuaPaletteProvider::from_source(
-            "return {}",
+            "return { palette = {} }",
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
@@ -260,9 +271,9 @@ mod tests {
     }
 
     #[test]
-    fn prompt_picks_up_module_value() {
+    fn prompt_picks_up_palette_value() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { prompt = "/" }"#,
+            r#"return { palette = { prompt = "/" } }"#,
             "named",
             super::super::host::LuaHostShared::empty(),
         )
@@ -271,9 +282,19 @@ mod tests {
     }
 
     #[test]
+    fn from_source_rejects_module_without_palette_subtable() {
+        let err = LuaPaletteProvider::from_source(
+            "return {}",
+            "missing-palette",
+            super::super::host::LuaHostShared::empty(),
+        );
+        assert!(err.is_err(), "no palette sub-table should fail to load");
+    }
+
+    #[test]
     fn submit_mode_defaults_on_each_key() {
         let p = LuaPaletteProvider::from_source(
-            "return {}",
+            "return { palette = {} }",
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
@@ -284,7 +305,7 @@ mod tests {
     #[test]
     fn submit_mode_string_debounced_uses_default_ms() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { submit_mode = "debounced" }"#,
+            r#"return { palette = { submit_mode = "debounced" } }"#,
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
@@ -298,7 +319,7 @@ mod tests {
     #[test]
     fn submit_mode_table_lets_plugin_pick_ms() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { submit_mode = { kind = "debounced", ms = 250 } }"#,
+            r#"return { palette = { submit_mode = { kind = "debounced", ms = 250 } } }"#,
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
@@ -315,14 +336,16 @@ mod tests {
             r#"
             local items_list = {}
             return {
-                filter = function(q)
-                    items_list = {}
-                    if q ~= "" then
-                        table.insert(items_list, { label = q .. " a", hint = "ha" })
-                        table.insert(items_list, { label = q .. " b", hint = "hb" })
-                    end
-                end,
-                items = function() return items_list end,
+                palette = {
+                    filter = function(q)
+                        items_list = {}
+                        if q ~= "" then
+                            table.insert(items_list, { label = q .. " a", hint = "ha" })
+                            table.insert(items_list, { label = q .. " b", hint = "hb" })
+                        end
+                    end,
+                    items = function() return items_list end,
+                },
             }
             "#,
             "round-trip",
@@ -340,10 +363,12 @@ mod tests {
         let mut p = LuaPaletteProvider::from_source(
             r#"
             return {
-                execute = function(idx)
-                    host:jump(139.7, 35.7)
-                    return nil
-                end,
+                palette = {
+                    execute = function(idx)
+                        host:jump(139.7, 35.7)
+                        return nil
+                    end,
+                },
             }
             "#,
             "exec-jump",
@@ -362,7 +387,7 @@ mod tests {
     #[test]
     fn execute_close_table_returns_close() {
         let mut p = LuaPaletteProvider::from_source(
-            r#"return { execute = function(_) return { close = true } end }"#,
+            r#"return { palette = { execute = function(_) return { close = true } end } }"#,
             "exec-close",
             super::super::host::LuaHostShared::empty(),
         )
@@ -373,7 +398,7 @@ mod tests {
     #[test]
     fn is_loading_defaults_false() {
         let p = LuaPaletteProvider::from_source(
-            "return {}",
+            "return { palette = {} }",
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
@@ -382,9 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn is_loading_reads_module_function() {
+    fn is_loading_reads_palette_function() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { is_loading = function() return true end }"#,
+            r#"return { palette = { is_loading = function() return true end } }"#,
             "loading",
             super::super::host::LuaHostShared::empty(),
         )

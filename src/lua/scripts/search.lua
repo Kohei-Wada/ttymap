@@ -49,58 +49,62 @@ end
 
 return {
     name = "search",
-    kind = "provider",
     key = "/",
     label = "Search location",
-    prompt = "/",
-    submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
 
-    filter = function(query)
-        local trimmed = query:match("^%s*(.-)%s*$") or ""
-        if trimmed == "" then
-            state.candidates = {}
-            state.pending = false
-            state.last_query = ""
-            return
-        end
-        if trimmed == state.last_query and (state.pending or #state.candidates > 0) then
-            return
-        end
-        state.last_query = trimmed
-        state.candidates = {}
-        state.job = host:fetch_url(search_url(trimmed))
-        state.pending = true
-    end,
+    -- Presence of `palette` makes this script a palette provider.
+    -- The dispatcher reads `kind` from the shape, not a field.
+    palette = {
+        prompt = "/",
+        submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
 
-    items = function()
-        local out = {}
-        for _, c in ipairs(state.candidates) do
-            table.insert(out, { label = c.name, hint = "" })
-        end
-        return out
-    end,
-
-    execute = function(idx)
-        local c = state.candidates[idx]
-        if c then
-            host:jump(c.lon, c.lat)
-            return nil
-        end
-        return { close = true }
-    end,
-
-    poll = function()
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                state.candidates = parse_results(host:parse_json(body))
+        filter = function(query)
+            local trimmed = query:match("^%s*(.-)%s*$") or ""
+            if trimmed == "" then
+                state.candidates = {}
                 state.pending = false
-                state.job = nil
+                state.last_query = ""
+                return
             end
-        end
-    end,
+            if trimmed == state.last_query and (state.pending or #state.candidates > 0) then
+                return
+            end
+            state.last_query = trimmed
+            state.candidates = {}
+            state.job = host:fetch_url(search_url(trimmed))
+            state.pending = true
+        end,
 
-    is_loading = function()
-        return state.pending
-    end,
+        items = function()
+            local out = {}
+            for _, c in ipairs(state.candidates) do
+                table.insert(out, { label = c.name, hint = "" })
+            end
+            return out
+        end,
+
+        execute = function(idx)
+            local c = state.candidates[idx]
+            if c then
+                host:jump(c.lon, c.lat)
+                return nil
+            end
+            return { close = true }
+        end,
+
+        poll = function()
+            if state.job then
+                local body = state.job:try_take()
+                if body then
+                    state.candidates = parse_results(host:parse_json(body))
+                    state.pending = false
+                    state.job = nil
+                end
+            end
+        end,
+
+        is_loading = function()
+            return state.pending
+        end,
+    },
 }

@@ -216,12 +216,11 @@ A plugin is a Lua module — a table the script returns. Module metadata drives 
 ```lua
 return {
     name = "wiki",                              -- required identifier
-    kind = "component",                         -- "component" (default) or "provider"
     activation = "toggle",                      -- "toggle" (default) | "overlay" | "spawn"
     key = "i",                                  -- optional activation key char
     label = "Toggle wiki",                      -- palette entry label
     enabled = true,                             -- default true; opt-out hook
-    layout = { anchor = "right", width = 32 },  -- panel placement (Component only)
+    layout = { anchor = "right", width = 56 },  -- panel placement (Component only)
     footer_hints = { { "C-n/C-p", "select" } }, -- shown while focused
 
     render       = function() ... end,                -- panel: list of strings or styled-span tables
@@ -248,7 +247,7 @@ Per-frame `host` and `map` accessors (a partial list):
 | `map:text_anchored(anchor, row, text, color)` | corner-anchored text (info / scalebar / attribution) |
 | `map:center()` / `map:zoom()` / `map:cursor()` / `map:area_width()` | frame state |
 
-A plugin with `kind = "provider"` returns an entry-point for the universal palette picker (search uses this) — fields are `prompt` / `submit_mode` / `filter` / `items` / `execute` / `poll` / `is_loading`.
+To register as a palette provider (search uses this), expose a `palette = { prompt, submit_mode, filter, items, execute, poll, is_loading }` sub-table on the returned module. The dispatcher reads palette-provider semantics from the *shape* of the returned table — there is no separate `kind` field.
 
 Adding a bundled plugin = drop a `.lua` under `src/lua/scripts/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
 

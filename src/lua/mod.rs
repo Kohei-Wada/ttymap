@@ -151,9 +151,16 @@ impl ModuleMeta {
                 };
             }
         };
-        let kind = match module.get::<String>("kind").as_deref() {
-            Ok("provider") => Kind::Provider,
-            _ => Kind::Component,
+        // Presence of a `palette` sub-table is the only signal that
+        // the script wants palette-provider semantics. There is no
+        // separate `kind` field — the shape *is* the declaration.
+        let kind = if matches!(
+            module.get::<mlua::Value>("palette"),
+            Ok(mlua::Value::Table(_))
+        ) {
+            Kind::Provider
+        } else {
+            Kind::Component
         };
         let activation_str: Option<String> = module.get("activation").ok();
         let activation = match activation_str.as_deref() {
@@ -477,10 +484,17 @@ mod tests {
     }
 
     #[test]
-    fn module_meta_provider_default_activation_is_spawn() {
-        let meta = ModuleMeta::parse(r#"return { name = "x", kind = "provider" }"#, "x");
+    fn palette_subtable_marks_module_as_provider() {
+        let meta = ModuleMeta::parse(r#"return { name = "x", palette = {} }"#, "x");
         assert!(matches!(meta.kind, Kind::Provider));
+        // Providers default to spawn (each open is a fresh provider).
         assert!(matches!(meta.activation, Activation::Spawn));
+    }
+
+    #[test]
+    fn no_palette_subtable_means_component() {
+        let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
+        assert!(matches!(meta.kind, Kind::Component));
     }
 
     #[test]
