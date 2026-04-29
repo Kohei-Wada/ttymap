@@ -10,29 +10,18 @@
 //!
 //! ## Plugin configuration
 //!
-//! Plugin sections live under `extras` — a catch-all that captures
-//! every `[section]` not matched by the framework-known fields above.
-//! Plugins fetch their slice by typed lookup:
-//!
-//! ```ignore
-//! #[derive(Deserialize, Default)]
-//! pub struct AircraftConfig { pub interval_secs: u64 }
-//!
-//! pub fn register(config: &Config, r: &mut Registrar) {
-//!     let cfg: AircraftConfig = config.plugin("aircraft");
-//!     // ...
-//! }
-//! ```
-//!
-//! Adding a new plugin requires no modification to this module — the
-//! plugin owns its TOML schema, defaults, and field names entirely.
+//! All in-tree plugins are now Lua (see `src/lua/scripts/`). Plugin
+//! settings live as constants inside each `.lua` script — there is
+//! no per-plugin TOML knob and no `[<name>] enabled = false` toggle.
+//! The `extras` catch-all is kept only so old `config.toml` files
+//! that still mention plugin sections parse without error; the
+//! captured TOML is otherwise unused.
 
 use std::fs;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 
 pub use crate::keymap::KeybindingOverrides;
 
@@ -44,51 +33,13 @@ pub struct Config {
     pub cache: CacheConfig,
     pub geoip: GeoipConfig,
     pub keymap: KeybindingOverrides,
-    /// Catch-all for plugin sections. `[aircraft]`, `[iss]`,
-    /// `[wiki]`, etc. land here as raw TOML; plugins call
-    /// [`Config::plugin`] to get their typed slice.
+    /// Catch-all for unrecognised TOML sections. Kept for backward
+    /// compatibility with existing `config.toml` files that still
+    /// mention `[aircraft]`, `[wiki]`, etc. — there are no readers
+    /// today, so the captured table is silently ignored.
     #[serde(flatten)]
+    #[allow(dead_code)]
     pub extras: toml::Table,
-}
-
-impl Config {
-    /// Deserialize the named TOML section into `T`, falling back to
-    /// `T::default()` when the section is absent or the bytes don't
-    /// fit the schema. Plugins call this in `register` to read their
-    /// own configuration without the host having to know about it:
-    ///
-    /// ```ignore
-    /// let cfg: WikiConfig = config.plugin("wiki");
-    /// ```
-    pub fn plugin<T>(&self, name: &str) -> T
-    where
-        T: DeserializeOwned + Default,
-    {
-        self.extras
-            .get(name)
-            .cloned()
-            .and_then(|v| v.try_into().ok())
-            .unwrap_or_default()
-    }
-
-    /// Whether the named plugin is enabled. Reads `[<name>].enabled
-    /// = false` from the user's TOML; defaults to `true` when the
-    /// section or field is absent. The composition root (in
-    /// `App::build_registrar`) consults this before invoking each
-    /// plugin's `register`, so disabled plugins contribute no
-    /// activations / palette entries / overlays / tasks.
-    ///
-    /// ```toml
-    /// [aircraft]
-    /// enabled = false   # plugin completely off
-    /// ```
-    pub fn plugin_enabled(&self, name: &str) -> bool {
-        self.extras
-            .get(name)
-            .and_then(|v| v.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true)
-    }
 }
 
 #[derive(Deserialize)]
@@ -281,29 +232,5 @@ quit = ["Q", "C-q"]
         assert_eq!(cfg.render.style, "dark");
         assert_eq!(cfg.cache.memory_tiles, 512);
         assert!(!cfg.geoip.on_startup);
-    }
-
-    #[test]
-    fn plugin_enabled_defaults_true_when_section_absent() {
-        let cfg: Config = toml::from_str("").unwrap();
-        assert!(cfg.plugin_enabled("aircraft"));
-    }
-
-    #[test]
-    fn plugin_enabled_defaults_true_when_field_absent() {
-        let cfg: Config = toml::from_str("[aircraft]\nanchor = \"left\"").unwrap();
-        assert!(cfg.plugin_enabled("aircraft"));
-    }
-
-    #[test]
-    fn plugin_enabled_honours_explicit_false() {
-        let cfg: Config = toml::from_str("[aircraft]\nenabled = false").unwrap();
-        assert!(!cfg.plugin_enabled("aircraft"));
-    }
-
-    #[test]
-    fn plugin_enabled_honours_explicit_true() {
-        let cfg: Config = toml::from_str("[aircraft]\nenabled = true").unwrap();
-        assert!(cfg.plugin_enabled("aircraft"));
     }
 }

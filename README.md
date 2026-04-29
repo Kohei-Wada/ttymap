@@ -57,59 +57,7 @@ ttymap snapshot --lat 40.71 --lon -74.01 --zoom 12 > nyc.ans
 
 ### Keybindings
 
-| Key | Action |
-|-----|--------|
-| `h` `j` `k` `l` / Arrow keys | Pan |
-| `w` `b` | Fast pan (left/right) |
-| `Ctrl-d` `Ctrl-u` | Fast pan (down/up) |
-| `a` `+` / `z` `-` | Zoom in / out |
-| `gg` | Zoom to world |
-| `0` | Reset to initial position |
-| `:` | Command palette |
-| `/` | Search location (autocomplete) |
-| `i` | Toggle Wikipedia panel |
-| `?` | Toggle help |
-| `Tab` / `Shift-Tab` | Cycle focus across visible plugins |
-| `q` / `Ctrl-C` | Quit |
-
-**Mouse:**
-
-| Action | Effect |
-|--------|--------|
-| Drag | Pan |
-| Scroll | Zoom towards cursor |
-| Move | Live cursor lat/lon in the info readout |
-
-**Search mode (`/`):**
-
-| Key | Action |
-|-----|--------|
-| Type | Query Nominatim (debounced, fires after typing pauses) |
-| `↑` `↓` / `Ctrl-N` `Ctrl-P` | Navigate results |
-| `Enter` | Jump to selected result |
-| `Ctrl-U` | Clear query |
-| `Esc` | Cancel |
-
-**Wikipedia panel (`i`):**
-
-| Key | Action |
-|-----|--------|
-| `Ctrl-N` `Ctrl-P` | Navigate articles |
-| `Enter` | Open article detail / jump to location |
-| `r` | Refresh from current map center |
-| `Esc` | Close detail / close panel |
-
-**Command palette (`:`):**
-
-| Key | Action |
-|-----|--------|
-| Type | Filter commands (substring match on label) |
-| `↑` `↓` / `Ctrl-N` `Ctrl-P` | Move selection |
-| `Enter` | Run the selected command |
-| `Ctrl-U` | Clear query |
-| `Esc` | Cancel |
-
-Keybindings are customizable via `~/.config/ttymap/config.toml`.
+Press `?` for the in-app cheatsheet — it reflects the live keymap and any plugin keys that are loaded. Keybindings can be overridden in `~/.config/ttymap/config.toml`.
 
 ## Architecture
 
@@ -367,7 +315,7 @@ The following are fun ideas, but belong **outside this repo** as separate plugin
 ttymap is small, the code is documented, and the roadmap is deliberately open. If you want to:
 
 - **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job via `Task`). For a modal `Component` with its own keymap and a side panel, see `src/plugin/wiki/`. For a one-shot picker (type → debounced fetch → pick → run), see `src/plugin/search/mod.rs` — it implements `PaletteProvider` instead of `Component`. Once the subprocess architecture lands, plugins can live in their own repos.
+- **Write a plugin** — every in-tree plugin is a Lua script under `src/lua/scripts/`. Drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding; the file *is* the config (set `enabled = false` on the returned table to disable). The simplest fetch+render example is `quake.lua`; for a full panel + selection + modal detail flow see `wiki.lua`; for a debounced palette picker see `search.lua`. The bridge surface is documented in the `src/lua/` module-level docs.
 - **Fix a bug or clean something up** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt; follow its lead.
 
 Issues on GitHub carry the current opinion of what's easy, what's hard, and what's deferred. Skim them before designing.

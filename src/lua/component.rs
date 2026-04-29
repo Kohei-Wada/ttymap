@@ -25,6 +25,7 @@ use crate::app::AppMsg;
 use crate::compositor::Component;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::geo::LonLat;
+use crate::lua::host::LuaHostShared;
 use crate::plugin_api::MapApi;
 use crate::plugin_api::layout::PanelAnchor;
 use crate::widget::{self, Line, Span, StyleKind};
@@ -95,12 +96,31 @@ pub struct LuaComponent {
     /// Stored on the component so `render` can compute the sub-rect
     /// without touching Lua every frame.
     layout: LuaLayout,
+    /// Whether the module exposes a `render` function. Marker-only
+    /// plugins (quake-style) omit it; without this flag the adapter
+    /// would still paint an empty framed Paragraph over the map.
+    has_render: bool,
+    /// Static footer hints from `module.footer_hints`. Read once at
+    /// construction so [`Component::footer_hints`] can satisfy the
+    /// `&'static str` return type without leaking per call. Empty
+    /// when the module omits the field.
+    footer_hints: Vec<(&'static str, &'static str)>,
     /// Receiver for `host:jump(lon, lat)` requests. The Lua side
     /// pushes a `LonLat`; we drain after each `poll` /
     /// `handle_event` and emit `AppMsg::Jump` through the host
     /// `Window`. Keeps the Lua call site decoupled from when a
     /// `Window` is actually available.
     jump_rx: mpsc::Receiver<LonLat>,
+    /// Receiver for `host:close()` requests. Same pattern as
+    /// `jump_rx`: the Lua side fires-and-forgets; we drain after
+    /// each callback while still holding the `Window` and call
+    /// `Window::close()`. Used by one-shot plugins (here-jump) that
+    /// pop themselves once their work is done.
+    close_rx: mpsc::Receiver<()>,
+    /// Receiver for `host:export_frame()` requests. Drained beside
+    /// jump/close after each callback; emits `AppMsg::ExportFrame`
+    /// through the host `Window`.
+    export_rx: mpsc::Receiver<()>,
     /// Map centre cell shared with the host so `host:center()` can
     /// return the latest value. We refresh it at the start of every
     /// dispatch path that carries a `Window` / `MapApi`.
@@ -114,14 +134,33 @@ impl LuaComponent {
     ///
     /// `chunk_name` is used in Lua error messages — pass the source
     /// file name (or any identifier) so backtraces are readable.
+    /// Convenience constructor for tests / standalone Lua use that
+    /// don't need real runtime data. Wraps [`Self::from_source_full`]
+    /// with an empty [`LuaHostShared`]; production callers should use
+    /// `from_source_full` directly.
+    #[cfg(test)]
     pub fn from_source(source: &str, chunk_name: &str) -> mlua::Result<Self> {
+        Self::from_source_full(source, chunk_name, super::host::LuaHostShared::empty())
+    }
+
+    pub fn from_source_full(
+        source: &str,
+        chunk_name: &str,
+        shared: Arc<LuaHostShared>,
+    ) -> mlua::Result<Self> {
         let lua = super::new_lua();
 
         // Persistent host services (HTTP fetch etc.) are exposed as
         // a global so plugins can reach them from any callback. Set
         // *before* loading the source so a top-level `host:foo()`
         // call in the chunk would see it (none today, but cheap).
-        let (host, jump_rx, center) = super::host::LuaHost::new("lua-host");
+        let (host, handles) = super::host::LuaHost::new("lua-host", shared);
+        let super::host::LuaHostHandles {
+            jump_rx,
+            close_rx,
+            export_rx,
+            center,
+        } = handles;
         let host_ud = lua.create_userdata(host)?;
         lua.globals().set("host", host_ud)?;
 
@@ -129,13 +168,22 @@ impl LuaComponent {
         let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
         let name: &'static str = Box::leak(raw_name.into_boxed_str());
         let layout = LuaLayout::from_module(&module);
+        let has_render = matches!(
+            module.get::<mlua::Value>("render"),
+            Ok(mlua::Value::Function(_))
+        );
+        let footer_hints = parse_footer_hints(&module);
         let module = lua.create_registry_value(module)?;
         Ok(Self {
             lua,
             module,
             name,
             layout,
+            has_render,
+            footer_hints,
             jump_rx,
+            close_rx,
+            export_rx,
             center,
         })
     }
@@ -161,13 +209,46 @@ impl LuaComponent {
         }
     }
 
-    /// Pull the `render()` lines from the Lua module. Returns an
-    /// empty vec on any error (with a warning logged).
-    fn render_lines(&self) -> Vec<String> {
-        let result: mlua::Result<Vec<String>> = (|| {
+    /// Drain any `host:close()` requests the Lua side queued and
+    /// pop the component off the stack. One drain per dispatch is
+    /// enough — extra queued closes collapse into one `Window::close`
+    /// because the compositor only respects the request once.
+    fn drain_close(&self, win: &mut Window) {
+        if self.close_rx.try_recv().is_ok() {
+            // Drain any further close requests so they don't leak
+            // into the next dispatch path.
+            while self.close_rx.try_recv().is_ok() {}
+            win.close();
+        }
+    }
+
+    /// Drain any `host:export_frame()` requests and emit one
+    /// `AppMsg::ExportFrame` per request. Multiple requests in
+    /// the same dispatch each emit (App::dispatch handles each).
+    fn drain_export(&self, win: &mut Window) {
+        while self.export_rx.try_recv().is_ok() {
+            win.emit(AppMsg::ExportFrame);
+        }
+    }
+
+    /// Pull the `render()` lines from the Lua module as raw line
+    /// descriptors. Each line is a vec of `(text, style_kind)` spans.
+    /// Returns an empty vec on any error (with a warning logged).
+    ///
+    /// Lua-side return shape (each list element is one line):
+    /// - **string** → single Body span: `"hello"`
+    /// - **array of `{text, style}` records** — multi-span line:
+    ///   `{ { text = "Tokyo", style = "highlight" },
+    ///      { text = "  10m", style = "muted" } }`
+    ///
+    /// Style keyword falls back to `Body` on unknown values so a typo
+    /// still renders, just in the default colour.
+    fn render_lines(&self) -> Vec<Vec<(String, StyleKind)>> {
+        let result: mlua::Result<Vec<Vec<(String, StyleKind)>>> = (|| {
             let module: Table = self.lua.registry_value(&self.module)?;
             let render: mlua::Function = module.get("render")?;
-            render.call(())
+            let raw: Vec<mlua::Value> = render.call(())?;
+            Ok(raw.into_iter().map(parse_line_value).collect())
         })();
         match result {
             Ok(lines) => lines,
@@ -272,6 +353,94 @@ impl LuaComponent {
     }
 }
 
+/// Read `module.footer_hints` as a sequence of `{key, label}` pairs.
+/// Each pair leaks its strings once so [`Component::footer_hints`]
+/// can hand back `&'static str`. Bounded leak (a plugin declares a
+/// finite list at construction). Missing field → empty hints.
+///
+/// Two accepted shapes per pair:
+/// - `{ "Enter", "open" }` — positional 1-based array.
+/// - `{ key = "Enter", label = "open" }` — named.
+fn parse_footer_hints(module: &Table) -> Vec<(&'static str, &'static str)> {
+    let Ok(list): mlua::Result<Table> = module.get("footer_hints") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in list.sequence_values::<mlua::Value>().flatten() {
+        let mlua::Value::Table(pair) = entry else {
+            continue;
+        };
+        let key: String = pair
+            .get::<String>("key")
+            .or_else(|_| pair.get::<String>(1))
+            .unwrap_or_default();
+        let label: String = pair
+            .get::<String>("label")
+            .or_else(|_| pair.get::<String>(2))
+            .unwrap_or_default();
+        if key.is_empty() && label.is_empty() {
+            continue;
+        }
+        let key: &'static str = Box::leak(key.into_boxed_str());
+        let label: &'static str = Box::leak(label.into_boxed_str());
+        out.push((key, label));
+    }
+    out
+}
+
+/// Convert one Lua-returned line value into a vec of `(text, kind)`
+/// spans. A bare string becomes a single Body span; a table is read
+/// as an array of `{text, style}` records and each becomes its own
+/// span. Unknown style keywords fall back to Body. Anything else
+/// (number, boolean, malformed table) yields a single Body span
+/// using the value's display form so a buggy plugin still renders
+/// instead of disappearing.
+fn parse_line_value(value: mlua::Value) -> Vec<(String, StyleKind)> {
+    match value {
+        mlua::Value::String(s) => {
+            let text = s.to_str().map(|c| c.to_string()).unwrap_or_default();
+            vec![(text, StyleKind::Body)]
+        }
+        mlua::Value::Table(t) => {
+            let mut spans = Vec::new();
+            for pair in t.sequence_values::<mlua::Value>().flatten() {
+                if let mlua::Value::Table(span_t) = pair {
+                    let text: String = span_t.get("text").unwrap_or_default();
+                    let style: Option<String> = span_t.get("style").ok();
+                    spans.push((text, style_from_str(style.as_deref())));
+                } else if let mlua::Value::String(s) = pair {
+                    let text = s.to_str().map(|c| c.to_string()).unwrap_or_default();
+                    spans.push((text, StyleKind::Body));
+                }
+            }
+            if spans.is_empty() {
+                spans.push((String::new(), StyleKind::Body));
+            }
+            spans
+        }
+        other => {
+            // Stringify unexpected variants so the plugin still
+            // produces visible output.
+            vec![(format!("{:?}", other), StyleKind::Body)]
+        }
+    }
+}
+
+/// Map a Lua-side style keyword to a `StyleKind`. Unknown values fall
+/// back to `Body` so a typo paints in the default colour rather than
+/// breaking the plugin.
+fn style_from_str(name: Option<&str>) -> StyleKind {
+    match name {
+        Some("muted") => StyleKind::Muted,
+        Some("accent") => StyleKind::Accent,
+        Some("highlight") => StyleKind::Highlight,
+        Some("selected") => StyleKind::Selected,
+        Some("muted_fg") => StyleKind::MutedFg,
+        Some("link") => StyleKind::Link,
+        _ => StyleKind::Body,
+    }
+}
+
 /// What the Lua `handle_event` handler asked the host to do.
 #[derive(Debug, PartialEq, Eq)]
 enum KeyAction {
@@ -339,6 +508,8 @@ impl Component for LuaComponent {
         self.update_center(win.ctx().center);
         let action = self.dispatch_event(event);
         self.drain_jumps(win);
+        self.drain_export(win);
+        self.drain_close(win);
         match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),
@@ -355,9 +526,17 @@ impl Component for LuaComponent {
         self.update_center(win.ctx().center);
         self.dispatch_poll();
         self.drain_jumps(win);
+        self.drain_export(win);
+        self.drain_close(win);
     }
 
     fn render(&self, win: &mut RenderWindow) {
+        if !self.has_render {
+            // Marker-only plugins (no panel) opt out of side-area
+            // chrome; without this guard we'd paint an empty framed
+            // Paragraph over the map.
+            return;
+        }
         let outer = win.area();
         // Anchor the panel inside the map area so the framed
         // Paragraph doesn't paint over the rendered tiles. Height
@@ -382,7 +561,13 @@ impl Component for LuaComponent {
         let lines: Vec<Line> = self
             .render_lines()
             .into_iter()
-            .map(|s| Line::from_span(Span::styled(s, body)))
+            .map(|spans| {
+                let rendered: Vec<Span> = spans
+                    .into_iter()
+                    .map(|(text, kind)| Span::styled(text, win.style(kind)))
+                    .collect();
+                Line::from_spans(rendered)
+            })
             .collect();
         let paragraph = widget::Paragraph {
             lines,
@@ -395,6 +580,10 @@ impl Component for LuaComponent {
 
     fn name(&self) -> &'static str {
         self.name
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        self.footer_hints.clone()
     }
 }
 
@@ -429,7 +618,11 @@ mod tests {
             "demo",
         )
         .expect("load");
-        assert_eq!(c.render_lines(), vec!["alpha", "beta", "gamma"]);
+        let lines = c.render_lines();
+        let texts: Vec<&str> = lines.iter().map(|spans| spans[0].0.as_str()).collect();
+        assert_eq!(texts, vec!["alpha", "beta", "gamma"]);
+        // All bare strings render as Body.
+        assert!(lines.iter().all(|spans| spans[0].1 == StyleKind::Body));
     }
 
     #[test]
@@ -443,14 +636,43 @@ mod tests {
         )
         .expect("load");
         // Should not panic — error is logged, we get an empty result.
-        assert_eq!(c.render_lines(), Vec::<String>::new());
+        assert!(c.render_lines().is_empty());
     }
 
     #[test]
     fn render_lines_recovers_when_field_is_missing() {
         let c = LuaComponent::from_source(r#"return { name = "noop" }"#, "noop").expect("load");
         // No `render` key → graceful fallback.
-        assert_eq!(c.render_lines(), Vec::<String>::new());
+        assert!(c.render_lines().is_empty());
+    }
+
+    #[test]
+    fn render_lines_parses_styled_span_tables() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "styled",
+                render = function()
+                    return {
+                        {
+                            { text = "Title", style = "highlight" },
+                            { text = "  10m", style = "muted" },
+                        },
+                        "plain body line",
+                    }
+                end,
+            }"#,
+            "styled",
+        )
+        .expect("load");
+        let lines = c.render_lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 2);
+        assert_eq!(lines[0][0].0, "Title");
+        assert_eq!(lines[0][0].1, StyleKind::Highlight);
+        assert_eq!(lines[0][1].0, "  10m");
+        assert_eq!(lines[0][1].1, StyleKind::Muted);
+        assert_eq!(lines[1][0].0, "plain body line");
+        assert_eq!(lines[1][0].1, StyleKind::Body);
     }
 
     #[test]

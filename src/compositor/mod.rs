@@ -473,7 +473,11 @@ pub enum PaletteKind {
     /// selection, but closes the existing instance on re-selection.
     /// Used by palette labels of the form "Toggle X".
     Toggle(SpawnComponent),
-    /// Fire-and-forget action (here's "jump to current location").
+    /// Fire-and-forget action — selection dispatches `Vec<AppMsg>`
+    /// without pushing a component. No in-tree caller after the
+    /// plugin migration; kept as an extension point for future
+    /// bridges that emit AppMsg directly from a palette entry.
+    #[allow(dead_code)]
     Run(RunAction),
 }
 
@@ -508,6 +512,10 @@ impl Registrar {
     pub fn add_palette_entry(&mut self, e: PaletteEntry) {
         self.palette_entries.push(e);
     }
+    /// Register a background task polled every tick. No in-tree
+    /// caller after the plugin migration; kept as an extension
+    /// point for future Lua bridge work or Rust-only plugins.
+    #[allow(dead_code)]
     pub fn add_task(&mut self, t: Box<dyn Task>) {
         self.tasks.push(t);
     }
@@ -573,7 +581,10 @@ impl Registrar {
     }
 
     /// Add a fire-and-forget palette entry — selecting it returns
-    /// `Vec<AppMsg>` to dispatch, no component pushed.
+    /// `Vec<AppMsg>` to dispatch, no component pushed. No in-tree
+    /// caller after the plugin migration; kept as an extension
+    /// point for future bridges.
+    #[allow(dead_code)]
     pub fn add_run<F>(&mut self, label: impl Into<String>, hint: impl Into<String>, action: F)
     where
         F: Fn(&Context) -> Vec<AppMsg> + 'static,

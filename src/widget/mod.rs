@@ -24,4 +24,4 @@ pub use geom::{Rect, Size, split_rows};
 pub use paragraph::Paragraph;
 pub use style::{StyleKind, TextStyle};
 pub use table::{Cell, Row, Table, TableSel};
-pub use text::{Align, Line, Span};
+pub use text::{Line, Span};

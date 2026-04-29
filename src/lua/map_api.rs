@@ -19,6 +19,7 @@ use mlua::{Lua, Scope, Table};
 
 use crate::geo::LonLat;
 use crate::plugin_api::MapApi;
+use crate::plugin_api::map_api::Anchor;
 
 /// Build the Lua-facing `map` table for a single `paint_on_map`
 /// call. The closures borrow `cell` for `'scope`; once the host's
@@ -35,7 +36,51 @@ where
     let table = lua.create_table()?;
     table.set("point", scope.create_function(|_, args| point(cell, args))?)?;
     table.set("label", scope.create_function(|_, args| label(cell, args))?)?;
+    table.set(
+        "text_anchored",
+        scope.create_function(|_, args| text_anchored(cell, args))?,
+    )?;
+    table.set(
+        "center",
+        scope.create_function(|_, _: mlua::Table| {
+            let p = cell.borrow();
+            let ll = p.center();
+            Ok((ll.lon, ll.lat))
+        })?,
+    )?;
+    table.set(
+        "zoom",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().zoom()))?,
+    )?;
+    table.set(
+        "area_width",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().area_width()))?,
+    )?;
+    // `map:cursor() -> lon, lat | nil, nil` — returns two values so
+    // a plugin can `local lon, lat = map:cursor() if lon then ... end`
+    // without unwrapping a tuple. `Option<(f64,f64)>` doesn't satisfy
+    // mlua's `IntoLuaMulti`, hence the pair of `Option<f64>`.
+    table.set(
+        "cursor",
+        scope.create_function(|_, _: mlua::Table| match cell.borrow().cursor() {
+            Some(ll) => Ok((Some(ll.lon), Some(ll.lat))),
+            None => Ok((None, None)),
+        })?,
+    )?;
     Ok(table)
+}
+
+/// Parse a Lua-side anchor keyword. Hyphenated form matches the
+/// `layout.anchor` convention used elsewhere in the bridge.
+/// Unknown values default to `TopLeft` so a typo paints somewhere
+/// visible instead of being silently dropped.
+fn anchor_from_str(s: &str) -> Anchor {
+    match s {
+        "top-right" | "topright" => Anchor::TopRight,
+        "bottom-left" | "bottomleft" => Anchor::BottomLeft,
+        "bottom-right" | "bottomright" => Anchor::BottomRight,
+        _ => Anchor::TopLeft,
+    }
 }
 
 /// Resolve a Lua-side colour keyword. Unknown keywords fall back to
@@ -68,6 +113,29 @@ fn point(
     let mut p = cell.borrow_mut();
     let color = resolve_color(&p, color_name.as_ref());
     p.point(LonLat { lon, lat }, glyph_char, color);
+    Ok(())
+}
+
+// `map:text_anchored(anchor, rows_in, text, color?)` — paints `text`
+// at one of the four screen-space corners. Anchor is a hyphenated
+// keyword ("top-left" / "top-right" / "bottom-left" / "bottom-right");
+// `rows_in` offsets toward the interior.
+fn text_anchored(
+    cell: &RefCell<&mut MapApi<'_>>,
+    (_self, anchor, rows_in, text, color_name): (
+        mlua::Table,
+        mlua::String,
+        u16,
+        mlua::String,
+        Option<mlua::String>,
+    ),
+) -> mlua::Result<()> {
+    let anchor_str = anchor.to_str()?;
+    let anchor = anchor_from_str(&anchor_str);
+    let text_str = text.to_str()?;
+    let mut p = cell.borrow_mut();
+    let color = resolve_color(&p, color_name.as_ref());
+    p.text_anchored(anchor, rows_in, &text_str, color);
     Ok(())
 }
 
