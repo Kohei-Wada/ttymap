@@ -1,26 +1,10 @@
 //! Panel layout helpers for plugin-side rendering.
 //!
-//! Two pieces:
-//!
-//! - [`PanelAnchor`] — where to anchor a panel within the map area
-//!   (left / right / corner / centre).
-//! - [`LayoutConfig`] — a small struct plugins flatten into their
-//!   own `XxxConfig` so users can adjust position and size from
-//!   `config.toml` without leaving the plugin's section:
-//!
-//!   ```toml
-//!   [wiki]
-//!   language = "en"
-//!   limit    = 50
-//!   anchor   = "right"   # ← layout override
-//!   width    = 30
-//!   ```
-//!
-//! Plugins call [`LayoutConfig::resolve`] at render time with their
-//! preferred defaults; the user's overrides win when set.
+//! [`PanelAnchor`] is the anchor vocabulary the Lua bridge maps
+//! `module.layout.anchor` strings into. Each variant places a
+//! `width × height` panel inside an outer `Rect` via [`PanelAnchor::rect`].
 
 use crate::widget::Rect;
-use serde::Deserialize;
 
 /// Anchor for a panel inside the map area. Side anchors place
 /// full-height stripes; corner anchors place a fixed-size box;
@@ -79,48 +63,6 @@ impl PanelAnchor {
     }
 }
 
-/// User-overridable layout knobs for a panel. Designed to be
-/// `#[serde(flatten)]`'d into a plugin's own config struct so the
-/// fields surface at the top level of the plugin's TOML section.
-///
-/// Every field is optional; absent fields fall back to the plugin's
-/// hardcoded defaults supplied to [`Self::resolve`].
-///
-/// No in-tree caller after the plugin migration (Lua scripts read
-/// their own `layout = {...}` field directly into [`super::super::lua::component::LuaLayout`]).
-/// Kept as an extension point for future Rust-side helpers.
-#[allow(dead_code)]
-#[derive(Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct LayoutConfig {
-    pub anchor: Option<String>,
-    pub width: Option<u16>,
-    pub height: Option<u16>,
-}
-
-#[allow(dead_code)]
-impl LayoutConfig {
-    /// Resolve the panel rectangle by combining plugin defaults with
-    /// any user-supplied overrides. Unknown anchor strings are
-    /// silently ignored (default anchor wins).
-    pub fn resolve(
-        &self,
-        outer: Rect,
-        default_anchor: PanelAnchor,
-        default_width: u16,
-        default_height: u16,
-    ) -> Rect {
-        let anchor = self
-            .anchor
-            .as_deref()
-            .and_then(PanelAnchor::from_str)
-            .unwrap_or(default_anchor);
-        let width = self.width.unwrap_or(default_width);
-        let height = self.height.unwrap_or(default_height);
-        anchor.rect(outer, width, height)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,38 +93,5 @@ mod tests {
         let r = PanelAnchor::Center.rect(outer(), 20, 10);
         assert_eq!(r.x, 40); // (100-20)/2
         assert_eq!(r.y, 15); // (40-10)/2
-    }
-
-    #[test]
-    fn config_overrides_default_anchor_when_present() {
-        let cfg = LayoutConfig {
-            anchor: Some("left".to_string()),
-            ..Default::default()
-        };
-        let r = cfg.resolve(outer(), PanelAnchor::Right, 20, 30);
-        assert_eq!(r.x, 1); // left edge with 1-cell margin
-    }
-
-    #[test]
-    fn config_falls_back_to_default_when_unknown_anchor() {
-        let cfg = LayoutConfig {
-            anchor: Some("middle".to_string()),
-            ..Default::default()
-        };
-        let r = cfg.resolve(outer(), PanelAnchor::TopLeft, 25, 5);
-        assert_eq!(r.x, 1);
-        assert_eq!(r.y, 1);
-    }
-
-    #[test]
-    fn config_overrides_dimensions() {
-        let cfg = LayoutConfig {
-            width: Some(40),
-            height: Some(8),
-            ..Default::default()
-        };
-        let r = cfg.resolve(outer(), PanelAnchor::TopLeft, 20, 4);
-        assert_eq!(r.width, 40);
-        assert_eq!(r.height, 8);
     }
 }

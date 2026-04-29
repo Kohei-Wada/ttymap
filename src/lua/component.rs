@@ -129,21 +129,7 @@ pub struct LuaComponent {
 
 #[allow(dead_code)] // mirrors the LuaComponent struct attribute; same reason
 impl LuaComponent {
-    /// Load `source` as a Lua chunk and capture its returned table as
-    /// the component's module.
-    ///
-    /// `chunk_name` is used in Lua error messages — pass the source
-    /// file name (or any identifier) so backtraces are readable.
-    /// Convenience constructor for tests / standalone Lua use that
-    /// don't need real runtime data. Wraps [`Self::from_source_full`]
-    /// with an empty [`LuaHostShared`]; production callers should use
-    /// `from_source_full` directly.
-    #[cfg(test)]
-    pub fn from_source(source: &str, chunk_name: &str) -> mlua::Result<Self> {
-        Self::from_source_full(source, chunk_name, super::host::LuaHostShared::empty())
-    }
-
-    pub fn from_source_full(
+    pub fn from_source(
         source: &str,
         chunk_name: &str,
         shared: Arc<LuaHostShared>,
@@ -594,7 +580,12 @@ mod tests {
     #[test]
     fn name_falls_back_when_module_omits_it() {
         // Module with no `name` field — adapter substitutes "lua".
-        let c = LuaComponent::from_source("return {}", "anon").expect("load");
+        let c = LuaComponent::from_source(
+            "return {}",
+            "anon",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert_eq!(c.name(), "lua");
     }
 
@@ -603,6 +594,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "hello", render = function() return {} end }"#,
             "named",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.name(), "hello");
@@ -616,6 +608,7 @@ mod tests {
                 render = function() return { "alpha", "beta", "gamma" } end,
             }"#,
             "demo",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         let lines = c.render_lines();
@@ -633,6 +626,7 @@ mod tests {
                 render = function() error("kaboom") end,
             }"#,
             "broken",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic — error is logged, we get an empty result.
@@ -641,7 +635,12 @@ mod tests {
 
     #[test]
     fn render_lines_recovers_when_field_is_missing() {
-        let c = LuaComponent::from_source(r#"return { name = "noop" }"#, "noop").expect("load");
+        let c = LuaComponent::from_source(
+            r#"return { name = "noop" }"#,
+            "noop",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         // No `render` key → graceful fallback.
         assert!(c.render_lines().is_empty());
     }
@@ -662,6 +661,7 @@ mod tests {
                 end,
             }"#,
             "styled",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         let lines = c.render_lines();
@@ -677,7 +677,11 @@ mod tests {
 
     #[test]
     fn loading_invalid_lua_returns_error() {
-        let err = LuaComponent::from_source("this is not lua syntax !", "bad");
+        let err = LuaComponent::from_source(
+            "this is not lua syntax !",
+            "bad",
+            super::super::host::LuaHostShared::empty(),
+        );
         assert!(err.is_err());
     }
 
@@ -687,7 +691,12 @@ mod tests {
 
     #[test]
     fn missing_handler_dispatches_to_ignore() {
-        let c = LuaComponent::from_source(r#"return { name = "noop" }"#, "noop").expect("load");
+        let c = LuaComponent::from_source(
+            r#"return { name = "noop" }"#,
+            "noop",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Ignore);
     }
 
@@ -699,6 +708,7 @@ mod tests {
                 handle_event = function(_) return nil end,
             }"#,
             "modal",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(
@@ -718,6 +728,7 @@ mod tests {
                 end,
             }"#,
             "esc",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Close);
@@ -735,6 +746,7 @@ mod tests {
                 handle_event = function(_) return { ignore = true } end,
             }"#,
             "passthrough",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Char('q'))), KeyAction::Ignore);
@@ -757,6 +769,7 @@ mod tests {
                 end,
             }"#,
             "echo",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // Use the recovery branch as a poor man's assertion: a
@@ -778,6 +791,7 @@ mod tests {
                 handle_event = function(_) error("kaboom") end,
             }"#,
             "broken",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic, should not leak as Ignore (we don't want
@@ -797,6 +811,7 @@ mod tests {
                 handle_event = function(_) return "yolo" end,
             }"#,
             "weird",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(
@@ -828,7 +843,12 @@ mod tests {
 
     #[test]
     fn paint_on_map_missing_handler_is_no_op() {
-        let c = LuaComponent::from_source(r#"return { name = "blank" }"#, "blank").expect("load");
+        let c = LuaComponent::from_source(
+            r#"return { name = "blank" }"#,
+            "blank",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
         let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         // Should not panic; nothing is written.
@@ -843,6 +863,7 @@ mod tests {
                 paint_on_map = function(_) error("kaboom") end,
             }"#,
             "boom",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
@@ -855,7 +876,12 @@ mod tests {
 
     #[test]
     fn poll_missing_handler_is_no_op() {
-        let c = LuaComponent::from_source(r#"return { name = "static" }"#, "static").expect("load");
+        let c = LuaComponent::from_source(
+            r#"return { name = "static" }"#,
+            "static",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         // Should not panic, no warning meaningful enough to assert.
         c.dispatch_poll();
     }
@@ -877,6 +903,7 @@ mod tests {
                 end,
             }"#,
             "ticker",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         c.dispatch_poll();
@@ -898,6 +925,7 @@ mod tests {
                 poll = function() error("kaboom") end,
             }"#,
             "broken",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic.
@@ -908,7 +936,12 @@ mod tests {
 
     #[test]
     fn layout_falls_back_when_module_omits_it() {
-        let c = LuaComponent::from_source(r#"return { name = "noop" }"#, "noop").expect("load");
+        let c = LuaComponent::from_source(
+            r#"return { name = "noop" }"#,
+            "noop",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         // Default fallback: TopLeft, 32x10. Asserting on the
         // resolved sub-rect inside a 100x40 outer is the cleanest
         // proxy for "didn't paint over the map".
@@ -929,6 +962,7 @@ mod tests {
                 layout = { anchor = "right", width = 24, height = 8 },
             }"#,
             "configured",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.layout.anchor, PanelAnchor::Right);
@@ -944,6 +978,7 @@ mod tests {
                 layout = { anchor = "norkeast" },
             }"#,
             "typo",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // Default fallback anchor is TopLeft (see LuaLayout::fallback).
@@ -964,6 +999,7 @@ mod tests {
                 end,
             }"#,
             "jumper",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
 
@@ -1005,6 +1041,7 @@ mod tests {
                 end,
             }"#,
             "checker",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         // If the assertions fail, dispatch_poll would log a warning;
@@ -1038,6 +1075,7 @@ mod tests {
                 end,
             }"#,
             "marker",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
@@ -1068,6 +1106,7 @@ mod tests {
                 end,
             }"#,
             "marker",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);

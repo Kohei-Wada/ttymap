@@ -219,6 +219,16 @@ impl UserData for LuaHost {
             Ok(())
         });
 
+        // `host:url_encode(s) -> string` — percent-encode a query
+        // string per RFC 3986: unreserved (A-Za-z0-9-_.~) pass
+        // through, space becomes `+`, everything else `%HH`. Wired
+        // here so plugins constructing URLs (search query, wiki
+        // titles) don't need to reinvent it — the Lua versions that
+        // did mishandled `?` / `#` / non-ASCII titles.
+        methods.add_method("url_encode", |_, _this, s: String| {
+            Ok(crate::shared::http::url::urlencoded(&s))
+        });
+
         // `host:attribution() -> string | nil` — active TileClient's
         // attribution string (typically "© OpenStreetMap …"). The
         // attribution overlay paints this; other plugins may use it
@@ -383,6 +393,27 @@ mod tests {
         let ll = jump_rx.try_recv().expect("jump must be queued");
         assert!((ll.lon - 139.7595).abs() < 1e-9);
         assert!((ll.lat - 35.6828).abs() < 1e-9);
+    }
+
+    #[test]
+    fn url_encode_round_trips_query_chars() {
+        let lua = mlua::Lua::new();
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
+        lua.globals()
+            .set("host", lua.create_userdata(host).unwrap())
+            .unwrap();
+        // Spaces become `+`, reserved chars become `%HH`, unicode is
+        // percent-encoded byte by byte.
+        let encoded: String = lua
+            .load(r#"return host:url_encode("São Paulo?")"#)
+            .eval()
+            .expect("eval");
+        assert_eq!(encoded, "S%C3%A3o+Paulo%3F");
+        let plain: String = lua
+            .load(r#"return host:url_encode("abc-_.~")"#)
+            .eval()
+            .expect("eval");
+        assert_eq!(plain, "abc-_.~");
     }
 
     #[test]

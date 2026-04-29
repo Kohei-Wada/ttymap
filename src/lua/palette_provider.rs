@@ -42,14 +42,7 @@ pub struct LuaPaletteProvider {
 }
 
 impl LuaPaletteProvider {
-    /// Convenience for tests / standalone use. Production callers
-    /// thread the live [`LuaHostShared`] through `from_source_full`.
-    #[cfg(test)]
-    pub fn from_source(source: &'static str, chunk_name: &str) -> mlua::Result<Box<Self>> {
-        Self::from_source_full(source, chunk_name, super::host::LuaHostShared::empty())
-    }
-
-    pub fn from_source_full(
+    pub fn from_source(
         source: &'static str,
         chunk_name: &str,
         shared: Arc<LuaHostShared>,
@@ -257,27 +250,45 @@ mod tests {
 
     #[test]
     fn prompt_falls_back_to_colon_when_module_omits_it() {
-        let p = LuaPaletteProvider::from_source("return {}", "anon").expect("load");
+        let p = LuaPaletteProvider::from_source(
+            "return {}",
+            "anon",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert_eq!(p.prompt(), ":");
     }
 
     #[test]
     fn prompt_picks_up_module_value() {
-        let p =
-            LuaPaletteProvider::from_source(r#"return { prompt = "/" }"#, "named").expect("load");
+        let p = LuaPaletteProvider::from_source(
+            r#"return { prompt = "/" }"#,
+            "named",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert_eq!(p.prompt(), "/");
     }
 
     #[test]
     fn submit_mode_defaults_on_each_key() {
-        let p = LuaPaletteProvider::from_source("return {}", "anon").expect("load");
+        let p = LuaPaletteProvider::from_source(
+            "return {}",
+            "anon",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert!(matches!(p.submit_mode(), SubmitMode::OnEachKey));
     }
 
     #[test]
     fn submit_mode_string_debounced_uses_default_ms() {
-        let p = LuaPaletteProvider::from_source(r#"return { submit_mode = "debounced" }"#, "anon")
-            .expect("load");
+        let p = LuaPaletteProvider::from_source(
+            r#"return { submit_mode = "debounced" }"#,
+            "anon",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         match p.submit_mode() {
             SubmitMode::Debounced(d) => assert_eq!(d, Duration::from_millis(400)),
             _ => panic!("expected Debounced"),
@@ -289,6 +300,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { submit_mode = { kind = "debounced", ms = 250 } }"#,
             "anon",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         match p.submit_mode() {
@@ -314,6 +326,7 @@ mod tests {
             }
             "#,
             "round-trip",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         p.filter("hi");
@@ -334,6 +347,7 @@ mod tests {
             }
             "#,
             "exec-jump",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         match p.execute(0, &ctx()) {
@@ -350,6 +364,7 @@ mod tests {
         let mut p = LuaPaletteProvider::from_source(
             r#"return { execute = function(_) return { close = true } end }"#,
             "exec-close",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert!(matches!(p.execute(0, &ctx()), PaletteAction::Close));
@@ -357,7 +372,12 @@ mod tests {
 
     #[test]
     fn is_loading_defaults_false() {
-        let p = LuaPaletteProvider::from_source("return {}", "anon").expect("load");
+        let p = LuaPaletteProvider::from_source(
+            "return {}",
+            "anon",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
         assert!(!p.is_loading());
     }
 
@@ -366,6 +386,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { is_loading = function() return true end }"#,
             "loading",
+            super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
         assert!(p.is_loading());

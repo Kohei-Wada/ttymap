@@ -155,7 +155,6 @@ impl PaletteProvider for CommandProvider {
                 match &entry.kind {
                     PaletteKind::Spawn(spawn) => PaletteAction::Push(spawn(ctx)),
                     PaletteKind::Toggle(spawn) => PaletteAction::Toggle(spawn(ctx)),
-                    PaletteKind::Run(run) => PaletteAction::Run(run(ctx)),
                 }
             }
             Kind::OpenThemeProvider(current) => {
