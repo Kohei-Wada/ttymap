@@ -99,11 +99,12 @@
 # ── Lua scripted plugins ────────────────────────────────────────────
 # Drop `*.lua` files into ~/.config/ttymap/plugins/ — each becomes
 # a plugin named after its stem (`my_thing.lua` → `my_thing`),
-# loaded automatically at startup. Gated by `[<stem>] enabled = …`,
-# default on like every other plugin. No rebuild needed to add or
-# edit a plugin. See docs/lua-bridge-surface.md.
+# loaded automatically at startup. The script *is* the config:
+# put `enabled = false` in the returned module table to keep the
+# file in place but skip registration. There is no TOML side for
+# user plugins. See docs/lua-bridge-surface.md.
 
-# Bundled `hello` demo (in-binary). Off by default; flip on to
-# dogfood the bridge.
+# Bundled `hello` demo (in-binary, can't be edited like a user
+# plugin). Off by default; flip on to dogfood the bridge.
 # [lua]
 # enabled = true
