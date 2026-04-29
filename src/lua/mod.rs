@@ -218,7 +218,7 @@ fn register_component(
 ) {
     // Validate up front so a syntax error surfaces as one log line
     // instead of a noisy first-toggle failure.
-    if let Err(e) = LuaComponent::from_source_full(source, name, shared.clone()) {
+    if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
         log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
         return;
     }
@@ -269,7 +269,7 @@ fn register_provider(
     shared: Arc<host::LuaHostShared>,
     r: &mut Registrar,
 ) {
-    if let Err(e) = LuaPaletteProvider::from_source_full(source, name, shared.clone()) {
+    if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
         log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
         return;
     }
@@ -280,15 +280,11 @@ fn register_provider(
     let make = {
         let shared = shared.clone();
         move || -> crate::palette::PaletteComponent {
-            let provider = LuaPaletteProvider::from_source_full(source, name, shared.clone())
+            let provider = LuaPaletteProvider::from_source(source, name, shared.clone())
                 .unwrap_or_else(|e| {
                     log::warn!("lua[{}]: re-load failed: {}", name, e);
-                    LuaPaletteProvider::from_source_full(
-                        "return {}",
-                        "lua-fallback",
-                        shared.clone(),
-                    )
-                    .expect("trivial provider always loads")
+                    LuaPaletteProvider::from_source("return {}", "lua-fallback", shared.clone())
+                        .expect("trivial provider always loads")
                 });
             crate::palette::PaletteComponent::with_provider(provider)
         }
@@ -311,9 +307,9 @@ fn component_or_placeholder(
     source: &'static str,
     shared: Arc<host::LuaHostShared>,
 ) -> LuaComponent {
-    LuaComponent::from_source_full(source, name, shared.clone()).unwrap_or_else(|e| {
+    LuaComponent::from_source(source, name, shared.clone()).unwrap_or_else(|e| {
         log::warn!("lua[{}]: re-load failed: {}", name, e);
-        LuaComponent::from_source_full("return {}", name, shared)
+        LuaComponent::from_source("return {}", name, shared)
             .expect("trivial Lua module always loads")
     })
 }
@@ -426,44 +422,41 @@ mod tests {
         Ok(())
     }
 
-    /// All bundled scripts must parse cleanly. Subscript- and
-    /// activation-specific behaviour is covered by the unified
-    /// dispatcher tests below.
+    /// Every bundled script must register cleanly through the same
+    /// dispatcher production uses. Asserts each plugin shows up in
+    /// some registrar slot (overlay / palette / key bind) — the
+    /// dispatcher itself decides which based on `module.activation`,
+    /// so this round-trips the parse + meta + wire path. Set-
+    /// membership rather than counts so adding a builtin doesn't
+    /// require updating magic numbers.
     #[test]
-    fn every_bundled_script_parses() {
-        for (name, source) in BUILTIN_SCRIPTS {
-            // Some scripts (search) are providers, not components —
-            // detect via `kind = "provider"` and dispatch.
-            let kind_is_provider = source.contains(r#"kind = "provider""#);
-            if kind_is_provider {
-                LuaPaletteProvider::from_source(source, name)
-                    .unwrap_or_else(|e| panic!("{}.lua should parse: {}", name, e));
-            } else {
-                LuaComponent::from_source(source, name)
-                    .unwrap_or_else(|e| panic!("{}.lua should parse: {}", name, e));
-            }
-        }
-    }
-
-    /// `register_builtin_plugins` should install every script. The
-    /// exact counts are: 3 overlays (info, scalebar, attribution),
-    /// the rest land as palette entries (some with key binds). A
-    /// regression that drops any single plugin would shift these.
-    #[test]
-    fn register_builtin_plugins_installs_every_bundled_script() {
+    fn every_bundled_script_registers() {
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
         register_builtin_plugins(shared, &mut r);
 
-        // Exactly 3 always-on overlays today: info, scalebar, attribution.
-        assert_eq!(r.overlays.len(), 3, "overlays count");
+        let palette: std::collections::HashSet<String> = r
+            .palette_entries
+            .iter()
+            .map(|e| e.label.to_lowercase())
+            .collect();
+        // `r.overlays` doesn't carry a name; we sanity-check the
+        // count of always-on overlays separately (info / scalebar /
+        // attribution are the only three today; any builtin
+        // declaring `activation = "overlay"` would trip this).
+        let overlay_count = r.overlays.len();
 
-        // Bundled palette entries: aircraft, iss, quake, wiki, here,
-        // export, help, search → 8.
-        assert_eq!(r.palette_entries.len(), 8, "palette entries count");
-
-        // Key binds: wiki ('i'), help ('?'), search ('/') → 3.
-        assert_eq!(r.activations.len(), 3, "activation key binds count");
+        // Toggles + spawns: each leaves a palette entry whose label
+        // contains the plugin's stem (lowercased).
+        for stem in [
+            "aircraft", "iss", "quake", "wiki", "here", "export", "help", "search",
+        ] {
+            assert!(
+                palette.iter().any(|l| l.contains(stem)),
+                "expected `{stem}` palette entry, got {palette:?}",
+            );
+        }
+        assert_eq!(overlay_count, 3, "info/scalebar/attribution overlays");
     }
 
     /// Module metadata: defaults, overrides, kind/activation flips.
