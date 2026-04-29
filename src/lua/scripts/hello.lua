@@ -35,7 +35,12 @@
 -- Bridge surface today is text + keys + map markers; async fetch
 -- and richer widgets land in follow-ups (see docs/lua-bridge-surface.md).
 
-local state = { ticks = 0 }
+-- Throttled to one bump per wall-clock second: poll() runs at the
+-- main loop's tick rate (~250 Hz today), and mutating the render
+-- output every tick would force terminal redraws at that rate. Real
+-- plugins update only on meaningful events (fetch arrival, user
+-- input, etc.) — see `os.time()` resolution as a stand-in.
+local state = { ticks = 0, last_second = 0 }
 
 return {
     name = "hello",
@@ -54,7 +59,11 @@ return {
     end,
 
     poll = function()
-        state.ticks = state.ticks + 1
+        local now = os.time()
+        if now ~= state.last_second then
+            state.last_second = now
+            state.ticks = state.ticks + 1
+        end
     end,
 
     handle_event = function(key)
