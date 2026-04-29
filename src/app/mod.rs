@@ -72,7 +72,10 @@ impl App {
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`host:plugin_palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
-        let registrar = build_registrar(&config, attribution, &keymap);
+        let BuiltRegistrar {
+            registrar,
+            plugin_hints,
+        } = build_registrar(&config, attribution, &keymap);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -99,20 +102,6 @@ impl App {
         // activation dispatch) at index 0. Every subsequent modal is
         // pushed on top.
         let mut compositor = Compositor::new();
-        // Harvest non-empty palette hints into a `&'static str` pair
-        // list so the BaseLayer's footer can show plugin keybinds
-        // without hardcoding them. Leaking is bounded — at most one
-        // pair per registered plugin per program lifetime.
-        let plugin_hints: Vec<(&'static str, &'static str)> = registrar
-            .palette_entries
-            .iter()
-            .filter(|e| !e.hint.is_empty())
-            .map(|e| {
-                let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
-                let label: &'static str = Box::leak(plugin_hint_label(&e.label).into_boxed_str());
-                (key, label)
-            })
-            .collect();
         compositor.push(Box::new(BaseLayer::new(
             keymap,
             registrar.activations,
@@ -416,7 +405,20 @@ pub(crate) fn build_tile_cache(
 /// plugin-agnostic. Order matters: the palette is installed last so
 /// its default provider can harvest every other plugin's palette
 /// entries.
-fn build_registrar(config: &Config, attribution: Option<String>, keymap: &KeyMap) -> Registrar {
+/// Tuple-struct carrier so [`App::new`] can keep the plugin hints
+/// alive across the call to [`build_registrar`]. The hints would
+/// otherwise be unreachable, since [`crate::palette::install`]
+/// `mem::take`s `Registrar.palette_entries` before returning.
+struct BuiltRegistrar {
+    registrar: Registrar,
+    plugin_hints: Vec<(&'static str, &'static str)>,
+}
+
+fn build_registrar(
+    config: &Config,
+    attribution: Option<String>,
+    keymap: &KeyMap,
+) -> BuiltRegistrar {
     use std::sync::Arc;
 
     let mut r = Registrar::default();
@@ -456,7 +458,21 @@ fn build_registrar(config: &Config, attribution: Option<String>, keymap: &KeyMap
         .filter(|e| !e.hint.is_empty())
         .map(|e| (e.hint.clone(), e.label.clone()))
         .collect();
-    shared.set_palette_entries(palette_entries);
+    shared.set_palette_entries(palette_entries.clone());
+
+    // Harvest the BaseLayer's footer hints from the same snapshot.
+    // Has to happen *before* `palette::install` because that call
+    // `mem::take`s `r.palette_entries`. Leak each pair once so they
+    // satisfy `Component::footer_hints`'s `&'static str` contract —
+    // bounded by the plugin count.
+    let plugin_hints: Vec<(&'static str, &'static str)> = palette_entries
+        .into_iter()
+        .map(|(hint, label)| {
+            let key: &'static str = Box::leak(hint.into_boxed_str());
+            let label: &'static str = Box::leak(plugin_hint_label(&label).into_boxed_str());
+            (key, label)
+        })
+        .collect();
 
     // Palette is a built-in, not a plugin. `install` drains every
     // palette_entry contributed above and bakes them into the default
@@ -467,7 +483,10 @@ fn build_registrar(config: &Config, attribution: Option<String>, keymap: &KeyMap
     // / LuaPaletteProvider — dropping it here is fine.
     drop(shared);
 
-    r
+    BuiltRegistrar {
+        registrar: r,
+        plugin_hints,
+    }
 }
 
 /// Boil a palette label down to the short form shown in the footer.
