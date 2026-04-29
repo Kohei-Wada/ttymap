@@ -10,6 +10,20 @@ homepage = "https://github.com/Kohei-Wada/ttymap"
 readme = "README.md"
 keywords = ["map", "tui", "mapbox", "terminal", "braille"]
 categories = ["command-line-utilities", "visualization"]
+# `runtime/` ships bundled Lua plugin scripts that the binary
+# `include_str!`s at compile time. cargo's default packaging only
+# picks up `src/`, `Cargo.toml`, and `README.md`; without this list,
+# `cargo publish` would produce a binary that can't compile from the
+# crate.
+include = [
+    "src/**/*",
+    "runtime/**/*",
+    "build.rs",
+    "proto/**/*",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-*",
+]
 
 [dependencies]
 crossterm = "0.28"
