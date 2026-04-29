@@ -19,7 +19,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Help popup** — `?` shows all keybindings
 - **Frame export** — palette entry writes the current view as an ANSI-coloured text file under `~/.local/share/ttymap/exports/`
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Component API** — built-in plugins (search, wiki, here, export, palette, help) are `Component`s on a focus stack; external plugins will use the same trait
+- **Component API** — built-in plugins (wiki, here, export, palette, help) are `Component`s on a focus stack; one-shot pickers (search) register a `PaletteProvider` instead. External plugins use the same surfaces.
 
 ## Usage
 
@@ -84,9 +84,9 @@ ttymap snapshot --lat 40.71 --lon -74.01 --zoom 12 > nyc.ans
 
 | Key | Action |
 |-----|--------|
-| Type | Filter locations |
-| `Enter` | Execute search |
+| Type | Query Nominatim (debounced, fires after typing pauses) |
 | `↑` `↓` / `Ctrl-N` `Ctrl-P` | Navigate results |
+| `Enter` | Jump to selected result |
 | `Ctrl-U` | Clear query |
 | `Esc` | Cancel |
 
@@ -162,7 +162,7 @@ src/
 │   ├── iss/             live ISS position marker + info panel
 │   ├── quake/           recent earthquakes (USGS feed)
 │   ├── scalebar/        distance ruler (always-on overlay)
-│   ├── search/          forward-geocode popup (Nominatim)
+│   ├── search/          forward-geocode (Nominatim) — registers a palette provider, no Component
 │   └── wiki/            nearby Wikipedia panel
 │
 ├── plugin_api/          plugin-author surface — services + helpers + prelude
@@ -318,7 +318,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 ### Principles
 
 - **Core stays lean.** A map viewer, not a GIS platform. The core handles tiles, projection, rendering, navigation, and a small palette of general-purpose built-ins. Anything domain-specific is a plugin.
-- **Plugin-first.** Every built-in (search, wiki, here, help) uses the same trait external plugins will. Built-ins dogfood the API.
+- **Plugin-first.** Every built-in (search, wiki, here, help) uses the same plugin entry point; modal `Component`s and one-shot `PaletteProvider`s are both first-class plugin shapes. Built-ins dogfood the API.
 - **Boring where it matters.** Stable protocols (MVT, OSM, TOML), predictable resource use, `cargo install` ships a single binary.
 
 ### Short-term
@@ -360,7 +360,7 @@ The following are fun ideas, but belong **outside this repo** as separate plugin
 ttymap is small, the code is documented, and the roadmap is deliberately open. If you want to:
 
 - **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job via `Task`). `src/plugin/search/mod.rs` is a good starting point for a modal `Component` with its own keymap. Once the subprocess architecture lands, plugins can live in their own repos.
+- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job via `Task`). For a modal `Component` with its own keymap and a side panel, see `src/plugin/wiki/`. For a one-shot picker (type → debounced fetch → pick → run), see `src/plugin/search/mod.rs` — it implements `PaletteProvider` instead of `Component`. Once the subprocess architecture lands, plugins can live in their own repos.
 - **Fix a bug or clean something up** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt; follow its lead.
 
 Issues on GitHub carry the current opinion of what's easy, what's hard, and what's deferred. Skim them before designing.

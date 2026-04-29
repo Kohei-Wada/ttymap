@@ -19,7 +19,9 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
 
     let popup_width = (map_inner.width * 2 / 3).max(40).min(map_inner.width - 2);
     let max_rows = map_inner.height.saturating_sub(6).max(3);
-    let rows = (items.len() as u16).max(1).min(max_rows);
+    let loading = widget.is_loading();
+    let visible = items.len() as u16 + u16::from(loading && items.is_empty());
+    let rows = visible.max(1).min(max_rows);
     let popup_height = rows + 4;
 
     let x = map_inner.x + (map_inner.width - popup_width) / 2;
@@ -51,7 +53,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     };
     win.paragraph(input_text, chunks[0]);
 
-    let table_rows: Vec<Row> = items
+    let mut table_rows: Vec<Row> = items
         .iter()
         .map(|item| {
             let hint_cell = if item.hint.is_empty() {
@@ -65,6 +67,16 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
             ])
         })
         .collect();
+
+    // Surface the loading state as a non-selectable row when the
+    // provider hasn't returned anything yet, so the user can tell
+    // their input registered. Once results arrive the row drops out.
+    if loading && items.is_empty() {
+        table_rows.push(Row::new(vec![
+            Cell::new("…".to_string(), muted),
+            Cell::new(String::new(), muted),
+        ]));
+    }
 
     let sel = TableSel::new(if items.is_empty() {
         None
