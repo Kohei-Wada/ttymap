@@ -135,18 +135,6 @@ impl<'a> MapApi<'a> {
             .set_style(Style::default().fg(fg).bg(self.theme.bg));
     }
 
-    /// Plot a single-cell glyph with full [`Style`] control (fg, bg,
-    /// modifiers). Same projection / clipping rules as
-    /// [`point`](Self::point); use this when an accent colour or
-    /// custom modifier (bold / underline / reverse) matters.
-    #[allow(dead_code)] // plugin-author API; no in-tree consumer yet
-    pub fn point_styled(&mut self, ll: LonLat, glyph: char, style: Style) {
-        let Some((x, y)) = self.cell_for(ll) else {
-            return;
-        };
-        self.buf[(x, y)].set_char(glyph).set_style(style);
-    }
-
     /// Write `text` starting in the cell to the right of the
     /// projected point. Clips at the map area's right edge. No
     /// collision detection — overlapping labels overwrite each other
@@ -374,28 +362,6 @@ mod tests {
                 assert_eq!(buf[(x, y)].symbol(), " ");
             }
         }
-    }
-
-    #[test]
-    fn point_styled_uses_caller_style() {
-        let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
-        let style = Style::default()
-            .fg(Color::Indexed(42))
-            .bg(Color::Indexed(7));
-        api.point_styled(LonLat { lon: 0.0, lat: 0.0 }, '#', style);
-        let mut found = false;
-        for x in 0..area.width {
-            for y in 0..area.height {
-                let cell = &buf[(x, y)];
-                if cell.symbol() == "#" {
-                    assert_eq!(cell.fg, Color::Indexed(42));
-                    assert_eq!(cell.bg, Color::Indexed(7));
-                    found = true;
-                }
-            }
-        }
-        assert!(found, "point_styled should write the glyph");
     }
 
     #[test]
