@@ -4,6 +4,13 @@
 -- `render()` is called every frame; return a list of strings and the
 -- host wraps them in a framed Paragraph titled with `name`.
 --
+-- `poll()` is optional. The host calls it every tick (regardless of
+-- focus). Use it to advance counters, drain async fetches, etc.
+-- Persistent host services hang off the `host` global:
+--
+--   host:fetch_url(url) -> Job   -- spawns a background HTTP GET
+--   job:try_take()      -> string | nil  -- non-blocking
+--
 -- `handle_event(key)` is optional. The host calls it for every key
 -- press while this component owns focus. The `key` table looks like:
 --
@@ -28,6 +35,8 @@
 -- Bridge surface today is text + keys + map markers; async fetch
 -- and richer widgets land in follow-ups (see docs/lua-bridge-surface.md).
 
+local state = { ticks = 0 }
+
 return {
     name = "hello",
 
@@ -38,8 +47,14 @@ return {
             "This panel is rendered by",
             "src/lua/scripts/hello.lua",
             "",
+            "ticks: " .. tostring(state.ticks),
+            "",
             "Press Esc or q to close.",
         }
+    end,
+
+    poll = function()
+        state.ticks = state.ticks + 1
     end,
 
     handle_event = function(key)

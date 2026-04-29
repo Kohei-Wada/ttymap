@@ -14,6 +14,7 @@
 //!   `log::warn!` + recovery default.
 
 pub mod component;
+pub mod host;
 pub mod map_api;
 
 pub use component::LuaComponent;
