@@ -164,7 +164,16 @@ impl App {
                 )
             })?;
 
-            let mut poll_timeout = Duration::from_millis(4);
+            // Idle wake rate. crossterm's `event::poll` blocks
+            // until an input event arrives or this elapses, so the
+            // real cost is bounded latency for things that aren't
+            // event-driven: a freshly produced render frame (we
+            // drain those non-blockingly at the top of the loop)
+            // and any plugin whose `poll()` touches render output
+            // (e.g. a counter). 16 ms = 60 Hz, indistinguishable
+            // from instant for human perception, an order of
+            // magnitude less idle CPU than the previous 4 ms.
+            let mut poll_timeout = Duration::from_millis(16);
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
                 match event::read()? {
