@@ -12,14 +12,16 @@
 //!
 //! Bridge surface so far: `name`, `render` (text lines wrapped in a
 //! framed Paragraph), `handle_event` (Lua-side keymap → close /
-//! ignore / silent consume). `paint_on_map`, `poll`, and the wider
-//! widget / map vocabulary land in follow-ups.
+//! ignore / silent consume), `paint_on_map` (Lua draws map markers
+//! via [`MapApi`]). `poll` and the wider widget / map vocabulary
+//! land in follow-ups.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, RegistryKey, Table};
 
 use crate::compositor::Component;
 use crate::compositor::window::{RenderWindow, Window};
+use crate::plugin_api::MapApi;
 use crate::widget::{self, Line, Span, StyleKind};
 
 /// A Component implemented in Lua.
@@ -100,6 +102,30 @@ impl LuaComponent {
                 log::warn!("lua[{}]: handle_event() failed: {}", self.name, e);
                 KeyAction::Consume
             }
+        }
+    }
+
+    /// Run the Lua side of `paint_on_map`. Errors are logged and
+    /// recovered: a buggy painter must not corrupt the rest of the
+    /// frame.
+    ///
+    /// `MapApi` borrows the ratatui buffer for one frame, so the
+    /// Lua-facing handle is built inside `Lua::scope` (closures
+    /// over a `RefCell` of the ref) and torn down before this
+    /// method returns.
+    fn dispatch_paint(&self, p: &mut MapApi<'_>) {
+        let cell = std::cell::RefCell::new(p);
+        let result: mlua::Result<()> = self.lua.scope(|scope| {
+            let module: Table = self.lua.registry_value(&self.module)?;
+            let painter: Option<mlua::Function> = module.get("paint_on_map").ok();
+            let Some(painter) = painter else {
+                return Ok(());
+            };
+            let map_table = super::map_api::make_map_table(&self.lua, scope, &cell)?;
+            painter.call::<()>(map_table)
+        });
+        if let Err(e) = result {
+            log::warn!("lua[{}]: paint_on_map() failed: {}", self.name, e);
         }
     }
 
@@ -189,6 +215,10 @@ impl Component for LuaComponent {
             KeyAction::Ignore => win.ignore(),
             KeyAction::Consume => {}
         }
+    }
+
+    fn paint_on_map(&self, p: &mut MapApi<'_>) {
+        self.dispatch_paint(p);
     }
 
     fn render(&self, win: &mut RenderWindow) {
@@ -396,5 +426,77 @@ mod tests {
             c.dispatch_event(key(KeyCode::Char('z'))),
             KeyAction::Consume
         );
+    }
+
+    // ── paint_on_map ─────────────────────────────────────────────
+
+    use crate::map::render::frame::MapFrame;
+    use crate::theme::{DARK, UiTheme};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    fn map_fixture(w: u16, h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
+        let area = Rect::new(0, 0, w, h);
+        let buf = Buffer::empty(area);
+        let frame = MapFrame {
+            cells: Vec::new(),
+            cols: w,
+            rows: h,
+            center: crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+            zoom: 1.0,
+        };
+        let theme = UiTheme::from_palette(&DARK);
+        (buf, area, frame, theme)
+    }
+
+    #[test]
+    fn paint_on_map_missing_handler_is_no_op() {
+        let c = LuaComponent::from_source(r#"return { name = "blank" }"#, "blank").expect("load");
+        let (mut buf, area, frame, theme) = map_fixture(20, 5);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        // Should not panic; nothing is written.
+        c.dispatch_paint(&mut api);
+    }
+
+    #[test]
+    fn paint_on_map_runtime_error_is_recovered() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "boom",
+                paint_on_map = function(_) error("kaboom") end,
+            }"#,
+            "boom",
+        )
+        .expect("load");
+        let (mut buf, area, frame, theme) = map_fixture(20, 5);
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        // No panic; warning is logged.
+        c.dispatch_paint(&mut api);
+    }
+
+    #[test]
+    fn paint_on_map_point_writes_into_the_buffer() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "marker",
+                paint_on_map = function(map)
+                    map:point(0.0, 0.0, "*", "accent")
+                end,
+            }"#,
+            "marker",
+        )
+        .expect("load");
+        let (mut buf, area, frame, theme) = map_fixture(20, 5);
+        {
+            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+            c.dispatch_paint(&mut api);
+        }
+        // Confirm at least one cell got the marker glyph. Don't
+        // pin the exact projected coord — the Web-Mercator rounding
+        // for centre=(0,0), zoom=1 is implementation detail.
+        let written = (0..area.width)
+            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+            .any(|(x, y)| buf[(x, y)].symbol() == "*");
+        assert!(written, "expected at least one '*' in the buffer");
     }
 }
