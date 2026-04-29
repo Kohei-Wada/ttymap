@@ -16,7 +16,7 @@
 //! via [`MapApi`]), `poll` (Lua-side tick + `host:fetch_url(url)`).
 //! Wider widget / map vocabulary lands in follow-ups.
 
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, RegistryKey, Table};
@@ -101,6 +101,10 @@ pub struct LuaComponent {
     /// `Window`. Keeps the Lua call site decoupled from when a
     /// `Window` is actually available.
     jump_rx: mpsc::Receiver<LonLat>,
+    /// Map centre cell shared with the host so `host:center()` can
+    /// return the latest value. We refresh it at the start of every
+    /// dispatch path that carries a `Window` / `MapApi`.
+    center: Arc<Mutex<LonLat>>,
 }
 
 #[allow(dead_code)] // mirrors the LuaComponent struct attribute; same reason
@@ -117,7 +121,7 @@ impl LuaComponent {
         // a global so plugins can reach them from any callback. Set
         // *before* loading the source so a top-level `host:foo()`
         // call in the chunk would see it (none today, but cheap).
-        let (host, jump_rx) = super::host::LuaHost::new("lua-host");
+        let (host, jump_rx, center) = super::host::LuaHost::new("lua-host");
         let host_ud = lua.create_userdata(host)?;
         lua.globals().set("host", host_ud)?;
 
@@ -132,7 +136,19 @@ impl LuaComponent {
             name,
             layout,
             jump_rx,
+            center,
         })
+    }
+
+    /// Refresh the host-shared map centre. Called at the start of
+    /// every dispatch path that has access to a current centre
+    /// (poll / handle_event via `Window::ctx()`, paint_on_map via
+    /// `MapApi::center()`) so `host:center()` returns up-to-date
+    /// values without each callback having to take it as an arg.
+    fn update_center(&self, center: LonLat) {
+        if let Ok(mut cell) = self.center.lock() {
+            *cell = center;
+        }
     }
 
     /// Drain any `host:jump(...)` requests the Lua side queued
@@ -320,6 +336,7 @@ fn key_code_to_lua(code: KeyCode) -> (&'static str, Option<char>) {
 
 impl Component for LuaComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+        self.update_center(win.ctx().center);
         let action = self.dispatch_event(event);
         self.drain_jumps(win);
         match action {
@@ -330,10 +347,12 @@ impl Component for LuaComponent {
     }
 
     fn paint_on_map(&self, p: &mut MapApi<'_>) {
+        self.update_center(p.center());
         self.dispatch_paint(p);
     }
 
     fn poll(&mut self, win: &mut Window) {
+        self.update_center(win.ctx().center);
         self.dispatch_poll();
         self.drain_jumps(win);
     }
