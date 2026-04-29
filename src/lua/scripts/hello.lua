@@ -10,6 +10,7 @@
 --
 --   host:fetch_url(url) -> Job   -- spawns a background HTTP GET
 --   job:try_take()      -> string | nil  -- non-blocking
+--   host:jump(lon, lat)            -- recentre the map (fire-and-forget)
 --
 -- `handle_event(key)` is optional. The host calls it for every key
 -- press while this component owns focus. The `key` table looks like:
@@ -72,6 +73,11 @@ return {
         end
         if key.code == "Char" and key.char == "q" then
             return { close = true }
+        end
+        if key.code == "Enter" then
+            -- Enter jumps to Tokyo so the map demo shows the
+            -- request flowing back through the host.
+            host:jump(139.7595, 35.6828)
         end
         -- Default: consume so the panel feels modal.
         return nil
