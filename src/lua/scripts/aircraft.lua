@@ -103,7 +103,7 @@ return {
 
     -- Mirror the Rust plugin's default placement: left-side stripe,
     -- 40 cells wide, full available height.
-    layout = { anchor = "left", width = 40 },
+    layout = { anchor = "left", width = 56 },
 
     render = function()
         if #state.aircraft == 0 then
