@@ -19,9 +19,12 @@ pub mod map_api;
 
 pub use component::LuaComponent;
 
+use std::path::{Path, PathBuf};
+
 use mlua::Lua;
 
 use crate::compositor::Registrar;
+use crate::config::Config;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM.
@@ -48,6 +51,90 @@ pub fn register_hello(r: &mut Registrar) {
 /// `app::build_registrar` when `[lua_aircraft] enabled = true`.
 pub fn register_aircraft(r: &mut Registrar) {
     register_script("aircraft", AIRCRAFT_LUA, r);
+}
+
+/// Scan `~/.config/ttymap/plugins/*.lua` and register each as a
+/// plugin. The whole point: dropping a `.lua` file in that
+/// directory adds a plugin without touching Rust.
+///
+/// Each file is named after its plugin: `aircraft.lua` becomes the
+/// `aircraft` plugin and is gated by `[aircraft] enabled = …` in
+/// config (default true, same as Rust plugins). A read or parse
+/// failure on a single file logs a warning and skips that file —
+/// the rest of the directory still loads.
+///
+/// Files are loaded in alphabetical order so the palette entries
+/// surface in a predictable order across runs.
+pub fn register_user_plugins(r: &mut Registrar, config: &Config) {
+    let Some(dir) = user_plugins_dir() else {
+        // No XDG directory available (no $HOME, weird host) — the
+        // user just doesn't get directory-based plugins. Bundled
+        // scripts continue to work via their dedicated registrars.
+        return;
+    };
+    if !dir.is_dir() {
+        // Directory doesn't exist yet (default case for users who
+        // never wrote a plugin). Silent skip — nothing to log.
+        return;
+    }
+    register_user_plugins_from(&dir, r, |name| config.plugin_enabled(name));
+}
+
+/// Inner half of [`register_user_plugins`] split out so unit tests
+/// can hand a tempdir + a custom gate predicate without faking the
+/// XDG layout. Walks `dir`, loads every `*.lua` whose `enabled`
+/// gate returns true.
+fn register_user_plugins_from<F>(dir: &Path, r: &mut Registrar, mut enabled: F)
+where
+    F: FnMut(&str) -> bool,
+{
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            log::warn!("lua: read_dir {} failed: {}", dir.display(), e);
+            return;
+        }
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("lua"))
+        .collect();
+    files.sort();
+    for path in files {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !enabled(stem) {
+            log::debug!("lua: {} disabled by config, skipping", stem);
+            continue;
+        }
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("lua: read {} failed: {}", path.display(), e);
+                continue;
+            }
+        };
+        // `register_script` requires `&'static str` for the
+        // re-load closure that lives for the program lifetime, so
+        // the source + name are leaked here. Cost: a few KB per
+        // plugin per program lifetime — fine for the ~10 plugins
+        // we'll ever have.
+        let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
+        let source: &'static str = Box::leak(source.into_boxed_str());
+        register_script(name, source, r);
+    }
+}
+
+/// Resolve `~/.config/ttymap/plugins/` (or the platform-specific
+/// equivalent). `None` only when the host doesn't expose a config
+/// dir at all — a corner case worth surfacing as "no user plugins"
+/// rather than panicking.
+fn user_plugins_dir() -> Option<PathBuf> {
+    use directories::ProjectDirs;
+    let dirs = ProjectDirs::from("", "", "ttymap")?;
+    Some(dirs.config_dir().join("plugins"))
 }
 
 /// Validate + register one bundled script. Lua failures (parse
@@ -144,5 +231,111 @@ mod tests {
             "expected an 'aircraft' palette entry, got {:?}",
             labels,
         );
+    }
+
+    // ── directory-based discovery ───────────────────────────────
+
+    use std::path::PathBuf;
+
+    /// Build a private temp directory rooted at the OS's temp dir.
+    /// `unique` should differ per test so parallel runs don't
+    /// stomp on each other.
+    fn temp_plugins_dir(unique: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ttymap-lua-test-{}", unique));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    fn write_plugin(dir: &Path, file_name: &str, lua: &str) {
+        std::fs::write(dir.join(file_name), lua).expect("write plugin file");
+    }
+
+    fn labels(r: &Registrar) -> Vec<String> {
+        r.palette_entries.iter().map(|e| e.label.clone()).collect()
+    }
+
+    #[test]
+    fn dir_discovery_registers_each_lua_file_under_its_stem() {
+        let dir = temp_plugins_dir("registers");
+        write_plugin(
+            &dir,
+            "first.lua",
+            r#"return { name = "first", render = function() return {} end }"#,
+        );
+        write_plugin(
+            &dir,
+            "second.lua",
+            r#"return { name = "second", render = function() return {} end }"#,
+        );
+
+        let mut r = Registrar::default();
+        register_user_plugins_from(&dir, &mut r, |_| true);
+        let ls = labels(&r);
+        assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
+        assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
+    }
+
+    #[test]
+    fn dir_discovery_skips_non_lua_files() {
+        let dir = temp_plugins_dir("skip-non-lua");
+        write_plugin(&dir, "ok.lua", r#"return { name = "ok" }"#);
+        // README, backup files, etc. should be ignored.
+        std::fs::write(dir.join("README.md"), "ignore me").unwrap();
+        std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
+
+        let mut r = Registrar::default();
+        register_user_plugins_from(&dir, &mut r, |_| true);
+        let ls = labels(&r);
+        assert_eq!(ls.len(), 1, "got {:?}", ls);
+        assert!(ls[0].contains("ok"));
+    }
+
+    #[test]
+    fn dir_discovery_honours_disabled_gate() {
+        let dir = temp_plugins_dir("gate");
+        write_plugin(&dir, "alpha.lua", r#"return { name = "alpha" }"#);
+        write_plugin(&dir, "beta.lua", r#"return { name = "beta" }"#);
+
+        let mut r = Registrar::default();
+        // Pretend `[beta] enabled = false` was set in config.
+        register_user_plugins_from(&dir, &mut r, |name| name != "beta");
+        let ls = labels(&r);
+        assert!(ls.iter().any(|l| l.contains("alpha")));
+        assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
+    }
+
+    #[test]
+    fn dir_discovery_skips_broken_lua_but_keeps_going() {
+        let dir = temp_plugins_dir("broken");
+        write_plugin(&dir, "broken.lua", "this is not lua syntax !!!");
+        write_plugin(
+            &dir,
+            "ok.lua",
+            r#"return { name = "ok", render = function() return {} end }"#,
+        );
+
+        let mut r = Registrar::default();
+        register_user_plugins_from(&dir, &mut r, |_| true);
+        let ls = labels(&r);
+        // Broken plugin doesn't make it in; the good one still does.
+        assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
+        assert!(
+            !ls.iter().any(|l| l.contains("broken")),
+            "broken plugin should not register, got {:?}",
+            ls,
+        );
+    }
+
+    #[test]
+    fn dir_discovery_no_op_when_directory_is_missing() {
+        // A path that doesn't exist must not panic or error — the
+        // common case is "user has never created a plugins/ dir".
+        let dir = std::env::temp_dir().join("ttymap-lua-test-missing-xxx-yyy");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut r = Registrar::default();
+        register_user_plugins_from(&dir, &mut r, |_| true);
+        assert!(r.palette_entries.is_empty());
     }
 }

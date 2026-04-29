@@ -465,6 +465,12 @@ fn build_registrar(
     if opt_in("lua_aircraft") {
         crate::lua::register_aircraft(&mut r);
     }
+    // Discover user plugins from `~/.config/ttymap/plugins/*.lua`.
+    // Each file becomes a plugin named after its stem and is gated
+    // by `[<stem>] enabled = …` (default true) — same shape as the
+    // Rust plugins, so the user adds a Lua plugin by dropping a
+    // file, no rebuild and no Rust edit needed.
+    crate::lua::register_user_plugins(&mut r, config);
 
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette
