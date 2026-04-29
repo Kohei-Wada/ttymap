@@ -76,6 +76,13 @@ pub(crate) mod palette;
 /// File-based logging to XDG state directory.
 pub mod logging;
 
+/// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored).
+/// **Scaffold only** — owns the shared [`mlua::Lua`] state and the
+/// bridge surface to `Component` / `PaletteProvider` / `MapApi`. No
+/// production plugin uses this yet; expanded incrementally as the
+/// fetch+render plugins migrate from Rust to Lua.
+pub(crate) mod lua;
+
 // ── Internal modules (not part of the external surface) ──────────────────
 //
 // These are marked `pub` so integration tests and benchmarks under
