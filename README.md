@@ -57,59 +57,7 @@ ttymap snapshot --lat 40.71 --lon -74.01 --zoom 12 > nyc.ans
 
 ### Keybindings
 
-| Key | Action |
-|-----|--------|
-| `h` `j` `k` `l` / Arrow keys | Pan |
-| `w` `b` | Fast pan (left/right) |
-| `Ctrl-d` `Ctrl-u` | Fast pan (down/up) |
-| `a` `+` / `z` `-` | Zoom in / out |
-| `gg` | Zoom to world |
-| `0` | Reset to initial position |
-| `:` | Command palette |
-| `/` | Search location (autocomplete) |
-| `i` | Toggle Wikipedia panel |
-| `?` | Toggle help |
-| `Tab` / `Shift-Tab` | Cycle focus across visible plugins |
-| `q` / `Ctrl-C` | Quit |
-
-**Mouse:**
-
-| Action | Effect |
-|--------|--------|
-| Drag | Pan |
-| Scroll | Zoom towards cursor |
-| Move | Live cursor lat/lon in the info readout |
-
-**Search mode (`/`):**
-
-| Key | Action |
-|-----|--------|
-| Type | Query Nominatim (debounced, fires after typing pauses) |
-| `↑` `↓` / `Ctrl-N` `Ctrl-P` | Navigate results |
-| `Enter` | Jump to selected result |
-| `Ctrl-U` | Clear query |
-| `Esc` | Cancel |
-
-**Wikipedia panel (`i`):**
-
-| Key | Action |
-|-----|--------|
-| `Ctrl-N` `Ctrl-P` | Navigate articles |
-| `Enter` | Open article detail / jump to location |
-| `r` | Refresh from current map center |
-| `Esc` | Close detail / close panel |
-
-**Command palette (`:`):**
-
-| Key | Action |
-|-----|--------|
-| Type | Filter commands (substring match on label) |
-| `↑` `↓` / `Ctrl-N` `Ctrl-P` | Move selection |
-| `Enter` | Run the selected command |
-| `Ctrl-U` | Clear query |
-| `Esc` | Cancel |
-
-Keybindings are customizable via `~/.config/ttymap/config.toml`.
+Press `?` for the in-app cheatsheet — it reflects the live keymap and any plugin keys that are loaded. Keybindings can be overridden in `~/.config/ttymap/config.toml`.
 
 ## Architecture
 
