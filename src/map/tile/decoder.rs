@@ -205,28 +205,41 @@ mod tests {
     /// coalesce into at most one queued wake (the receiver only
     /// needs to know "tiles are available", not how many). Verifies
     /// the `try_send` semantics in `decoder_loop`.
+    ///
+    /// The order of operations matters here: each iteration of
+    /// `decoder_loop` does `decoded_tx.send` *first* and
+    /// `wake_tx.try_send` *second*. So draining the 5th decoded tile
+    /// does not guarantee the 5th wake try_send has happened yet —
+    /// any subsequent `wake_rx.recv` would race with the still-in-
+    /// flight try_send and see an extra wake on slower runners (CI).
+    /// Closing the input channel and joining the thread synchronises
+    /// us to "all 5 wake try_sends complete", removing the race.
     #[test]
     fn bursts_coalesce_into_a_single_wake() {
         let (bytes_tx, bytes_rx) = mpsc::channel();
-        let (decoded_rx, wake_rx, _handle) = spawn_decoder(bytes_rx);
+        let (decoded_rx, wake_rx, handle) = spawn_decoder(bytes_rx);
 
-        // Send 5 tiles. The render thread doesn't exist in this
-        // test, so wake pings beyond the first are dropped by the
-        // bounded(1) channel.
         for i in 0..5 {
             bytes_tx.send((TileKey::new(0, i, 0), Vec::new())).unwrap();
         }
-        // Drain decoded so the decoder thread completes its work.
+        // Closing the input causes the decoder loop to exit after
+        // processing the 5 in-flight tiles.
+        drop(bytes_tx);
+
         for _ in 0..5 {
             let _ = decoded_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         }
+        handle
+            .join()
+            .expect("decoder thread joins after input channel closes");
 
+        // Now we can read the wake channel deterministically: at
+        // least one ping must be present (the first try_send
+        // succeeded into the empty bounded(1) channel), and every
+        // subsequent try_send must have hit `Full` and been dropped.
         wake_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("first wake must be there");
-        // Allow any in-flight try_send to settle before asserting
-        // the channel is empty.
-        std::thread::sleep(Duration::from_millis(50));
         assert!(
             wake_rx.try_recv().is_err(),
             "extra wakes must be coalesced (bounded(1))"
