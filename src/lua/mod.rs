@@ -106,7 +106,7 @@ struct ModuleMeta {
     /// Plugin flavour. Components push onto the compositor stack;
     /// providers seed the universal palette picker.
     kind: Kind,
-    /// Palette label. Defaults to `"Toggle Lua: <name>"` for toggles,
+    /// Palette label. Defaults to `"Toggle <name>"` for toggles,
     /// `<name>` for spawns. Empty for overlays (no palette entry).
     label: String,
     /// Optional activation key — for `toggle`/`spawn`, also binds
@@ -145,7 +145,7 @@ impl ModuleMeta {
                 return Self {
                     activation: Activation::Toggle,
                     kind: Kind::Component,
-                    label: format!("Toggle Lua: {}", name),
+                    label: format!("Toggle {}", name),
                     key: None,
                     enabled: true,
                 };
@@ -171,7 +171,7 @@ impl ModuleMeta {
             Ok(mlua::Value::Boolean(false))
         );
         let default_label = match activation {
-            Activation::Toggle => format!("Toggle Lua: {}", name),
+            Activation::Toggle => format!("Toggle {}", name),
             Activation::Spawn => name.to_string(),
             Activation::Overlay => String::new(),
         };
@@ -472,7 +472,7 @@ mod tests {
         let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
         assert!(matches!(meta.activation, Activation::Toggle));
         assert!(matches!(meta.kind, Kind::Component));
-        assert_eq!(meta.label, "Toggle Lua: x");
+        assert_eq!(meta.label, "Toggle x");
         assert!(meta.key.is_none());
         assert!(meta.enabled);
     }
