@@ -153,7 +153,6 @@ src/
 │   └── provider/        default provider + theme sub-mode
 │
 ├── plugin/              built-in plugins — each exposes `pub fn register(…, &mut Registrar)`
-│   ├── aircraft/        live ADS-B markers + side panel (OpenSky)
 │   ├── attribution/     © OpenStreetMap (always-on overlay)
 │   ├── export/          headless — dump current frame to ~/.local/share/ttymap/exports/*.ans
 │   ├── help/            help popup
@@ -165,20 +164,23 @@ src/
 │   ├── search/          forward-geocode (Nominatim) — registers a palette provider, no Component
 │   └── wiki/            nearby Wikipedia panel
 │
-├── lua/                 Lua scripted plugins (mlua + Lua 5.4, opt-in via `[lua] enabled = true`)
-│   ├── mod.rs           shared VM + register() for bundled scripts
+├── lua/                 Lua scripted plugins (mlua + Lua 5.4)
+│   ├── mod.rs           shared VM + per-script register entry points
 │   ├── component.rs     LuaComponent — Component impl backed by a Lua module
-│   └── scripts/         bundled .lua sources (hello.lua, aircraft.lua)
+│   ├── host.rs          host:fetch_url / host:jump / host:parse_json
+│   ├── map_api.rs       Lua-side map:point bridge
+│   └── scripts/         bundled .lua sources
+│       ├── aircraft.lua live ADS-B (OpenSky) — runs under `[aircraft]`
+│       └── hello.lua    demo / template — opt-in via `[lua] enabled = true`
 │
 ├── plugin_api/          plugin-author surface — services + helpers + prelude
 │   ├── mod.rs           re-exports + `prelude` glob
 │   ├── map_api.rs       MapApi — world-space + screen-space draw primitives for paint_on_map
 │   ├── async_job.rs     fire-and-poll background job
 │   ├── throttle.rs      rate-limit helper
-│   ├── polled_feed.rs   periodic feed wrapper (used by aircraft, iss, quake)
+│   ├── polled_feed.rs   periodic feed wrapper (used by iss, quake, wiki)
 │   ├── initial_jump.rs  one-shot auto-recentre helper (used by iss, quake)
 │   ├── nominatim.rs     forward + reverse geocoding client
-│   ├── panel.rs         ListPanel — framed scrollable list panel
 │   └── layout.rs        LayoutConfig + PanelAnchor (per-plugin panel placement)
 │
 ├── map/                 domain — viewport state + rendering pipeline
@@ -211,7 +213,7 @@ src/
 - **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
-- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `InitialJump`, `ListPanel`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
+- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `InitialJump`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
 - **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
 
 ### Message flow

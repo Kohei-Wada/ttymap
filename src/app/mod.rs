@@ -436,7 +436,12 @@ fn build_registrar(
         crate::plugin::export::register(&mut r);
     }
     if config.plugin_enabled("aircraft") {
-        crate::plugin::aircraft::register(config, &mut r);
+        // Lua port lives in `src/lua/scripts/aircraft.lua` — the
+        // Rust impl was retired after the side-by-side validation
+        // in #144. Same `[aircraft]` config gate; user-visible
+        // behaviour stays the same modulo the small differences
+        // documented in the migration PR.
+        crate::lua::register_aircraft(&mut r);
     }
     if config.plugin_enabled("iss") {
         crate::plugin::iss::register(config, &mut r);
@@ -445,12 +450,10 @@ fn build_registrar(
         crate::plugin::quake::register(config, &mut r);
     }
 
-    // Lua scripted plugins. Each is opt-in via its own `[<name>]
-    // enabled = true` block — unlike the rest of the plugin set,
-    // default is *false* because these are still being validated
-    // against their Rust counterparts. The detection inlines the
-    // lookup so we don't perturb `Config::plugin_enabled`'s
-    // default-true semantics.
+    // Lua demo scripts. The `hello` plugin is dogfood / template,
+    // not a feature, so it's opt-in via `[lua] enabled = true`.
+    // Inlined lookup — `Config::plugin_enabled` defaults to true,
+    // which we don't want here.
     let opt_in = |name: &str| -> bool {
         config
             .extras
@@ -461,9 +464,6 @@ fn build_registrar(
     };
     if opt_in("lua") {
         crate::lua::register_hello(&mut r);
-    }
-    if opt_in("lua_aircraft") {
-        crate::lua::register_aircraft(&mut r);
     }
     // Discover user plugins from `~/.config/ttymap/plugins/*.lua`.
     // Each file becomes a plugin named after its stem and is gated

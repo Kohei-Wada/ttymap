@@ -75,11 +75,11 @@
 # height   = 25
 
 # ── Aircraft plugin (live ADS-B from OpenSky) ───────────────────────
+# Lua-backed since the Rust impl was retired. Layout / refresh
+# knobs live inside `src/lua/scripts/aircraft.lua` for now —
+# user-overrides will land when the bridge gains a config helper.
 # [aircraft]
-# interval_secs  = 12  # min seconds between OpenSky fetches
-# fetch_half_deg = 5.0 # half-side of the bbox (degrees) sent per fetch
-# anchor         = "left"
-# width          = 40
+# enabled = false      # default: on
 
 # ── ISS plugin (live position from open-notify) ─────────────────────
 # [iss]
@@ -93,30 +93,17 @@
 # interval_secs = 300
 
 # ── Disable plugins you don't use ───────────────────────────────────
-# [aircraft]
-# enabled = false
-
 # [info]
 # enabled = false      # turns off the top-right cursor / centre / zoom readout
 
 # ── Lua scripted plugins ────────────────────────────────────────────
 # Drop `*.lua` files into ~/.config/ttymap/plugins/ — each becomes
 # a plugin named after its stem (`my_thing.lua` → `my_thing`),
-# loaded automatically at startup. Gated by `[<stem>] enabled = …`
-# below, default on like every other plugin. No rebuild needed to
-# add or edit a plugin. See docs/lua-bridge-surface.md.
+# loaded automatically at startup. Gated by `[<stem>] enabled = …`,
+# default on like every other plugin. No rebuild needed to add or
+# edit a plugin. See docs/lua-bridge-surface.md.
 
-# Bundled demo scripts (still opt-in). These live inside the
-# binary and are wired through the older per-script entry points;
-# the directory-based discovery above will replace this once
-# they're moved out.
-
-# `hello` — demo / template for new Lua plugin authors.
+# Bundled `hello` demo (in-binary). Off by default; flip on to
+# dogfood the bridge.
 # [lua]
-# enabled = true
-
-# `aircraft` (bundled Lua port). Runs side by side with the Rust
-# `[aircraft]` plugin during the migration. Disable the Rust one
-# (`[aircraft] enabled = false`) when comparing.
-# [lua_aircraft]
 # enabled = true
