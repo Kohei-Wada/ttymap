@@ -3,6 +3,13 @@
 #
 # Every field is optional. Omitted sections and omitted fields
 # fall back to the defaults shown below.
+#
+# Per-plugin knobs (refresh interval, panel size, hardcoded URLs)
+# live inside each Lua script under src/lua/scripts/ for bundled
+# plugins, and inside ~/.config/ttymap/plugins/<name>.lua for user
+# plugins. There is no [<name>] enabled = false TOML gate — disable
+# a plugin by setting `enabled = false` in the script's returned
+# table (user plugins) or by removing the script (bundled).
 
 # ── Initial view ────────────────────────────────────────────────────
 # [map]
@@ -20,9 +27,10 @@
 # ── Tile cache ──────────────────────────────────────────────────────
 # [cache]
 # tiles = true         # write decoded tiles to ~/.cache/ttymap/
-# memory_tiles = 192   # LRU capacity for decoded tiles in memory
+# memory_tiles = 512   # LRU capacity for decoded tiles in memory
 
-# ── IP-based geolocation (shared by --here and the `here` plugin) ──
+# ── IP-based geolocation ────────────────────────────────────────────
+# Shared by the `--here` startup flag and the `here` Lua plugin.
 # [geoip]
 # on_startup = false
 # endpoint = "https://ipapi.co/json/"   # must return JSON with numeric "latitude" / "longitude"
@@ -46,65 +54,3 @@
 # zoom_to_world = ["gg"]
 # reset_position = ["0"]
 # quit = ["q"]
-
-# ════════════════════════════════════════════════════════════════════
-# Plugins
-# ════════════════════════════════════════════════════════════════════
-#
-# Each plugin gets its own [section]. Two kinds of fields:
-#
-# 1. Plugin-specific behaviour  (e.g. fetch interval, fetch radius)
-# 2. Generic overrides shared by every plugin:
-#
-#    enabled  = false                                    # disable the plugin entirely
-#    anchor   = "left" / "right" / "top-left" / "top-right"
-#               / "bottom-left" / "bottom-right" / "center"
-#    width    = 30                                       # cells, panel width
-#    height   = 20                                       # cells, panel height
-#
-# Anchor / width / height only matter for plugins that draw a panel
-# (wiki / aircraft / iss / search / help). Marker-only plugins
-# (scalebar / attribution / etc.) ignore them.
-
-# ── Wikipedia plugin ────────────────────────────────────────────────
-# [wiki]
-# language = "en"      # Wikipedia language (independent of [render].language)
-# limit    = 50        # max nearby articles loaded
-# anchor   = "right"   # default — moves the panel anywhere
-# width    = 30
-# height   = 25
-
-# ── Aircraft plugin (live ADS-B from OpenSky) ───────────────────────
-# Lua-backed since the Rust impl was retired. Layout / refresh
-# knobs live inside `src/lua/scripts/aircraft.lua` for now —
-# user-overrides will land when the bridge gains a config helper.
-# [aircraft]
-# enabled = false      # default: on
-
-# ── ISS plugin (live position from open-notify) ─────────────────────
-# Lua-backed since the Rust impl was retired. Layout / refresh
-# knobs live inside `src/lua/scripts/iss.lua` for now —
-# user-overrides will land when the bridge gains a config helper.
-# [iss]
-# enabled = false      # default: on
-
-# ── Earthquake plugin (USGS M2.5+ feed) ─────────────────────────────
-# [quake]
-# interval_secs = 300
-
-# ── Disable plugins you don't use ───────────────────────────────────
-# [info]
-# enabled = false      # turns off the top-right cursor / centre / zoom readout
-
-# ── Lua scripted plugins ────────────────────────────────────────────
-# Drop `*.lua` files into ~/.config/ttymap/plugins/ — each becomes
-# a plugin named after its stem (`my_thing.lua` → `my_thing`),
-# loaded automatically at startup. The script *is* the config:
-# put `enabled = false` in the returned module table to keep the
-# file in place but skip registration. There is no TOML side for
-# user plugins. See docs/lua-bridge-surface.md.
-
-# Bundled `hello` demo (in-binary, can't be edited like a user
-# plugin). Off by default; flip on to dogfood the bridge.
-# [lua]
-# enabled = true

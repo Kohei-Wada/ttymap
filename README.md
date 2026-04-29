@@ -19,7 +19,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Help popup** — `?` shows all keybindings
 - **Frame export** — palette entry writes the current view as an ANSI-coloured text file under `~/.local/share/ttymap/exports/`
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Component API** — built-in plugins (wiki, here, export, palette, help) are `Component`s on a focus stack; one-shot pickers (search) register a `PaletteProvider` instead. External plugins use the same surfaces.
+- **Lua plugin API** — every in-tree plugin is a Lua script under `src/lua/scripts/`; drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding. Bundled and user scripts share one dispatcher and the same `host:*` accessor surface.
 
 ## Usage
 
@@ -100,36 +100,20 @@ src/
 │   ├── panel.rs         popup layout
 │   └── provider/        default provider + theme sub-mode
 │
-├── plugin/              built-in plugins — each exposes `pub fn register(…, &mut Registrar)`
-│   ├── attribution/     © OpenStreetMap (always-on overlay)
-│   ├── export/          headless — dump current frame to ~/.local/share/ttymap/exports/*.ans
-│   ├── help/            help popup
-│   ├── here/            IP-geolocation "jump to here" (headless Task)
-│   ├── info/            top-right center / cursor / zoom / place readout (always-on overlay)
-│   ├── iss/             live ISS position marker + info panel
-│   ├── quake/           recent earthquakes (USGS feed)
-│   ├── scalebar/        distance ruler (always-on overlay)
-│   ├── search/          forward-geocode (Nominatim) — registers a palette provider, no Component
-│   └── wiki/            nearby Wikipedia panel
-│
-├── lua/                 Lua scripted plugins (mlua + Lua 5.4)
-│   ├── mod.rs           shared VM + per-script register entry points
+├── lua/                 Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here.
+│   ├── mod.rs           BUILTIN_SCRIPTS array + register_one dispatcher (reads module metadata)
 │   ├── component.rs     LuaComponent — Component impl backed by a Lua module
-│   ├── host.rs          host:fetch_url / host:jump / host:parse_json
-│   ├── map_api.rs       Lua-side map:point bridge
-│   └── scripts/         bundled .lua sources
-│       ├── aircraft.lua live ADS-B (OpenSky) — runs under `[aircraft]`
-│       └── hello.lua    demo / template — opt-in via `[lua] enabled = true`
+│   ├── palette_provider.rs  LuaPaletteProvider — PaletteProvider impl (search)
+│   ├── host.rs          LuaHostShared + host:* accessors (fetch_url / jump / close /
+│   │                    export_frame / center / parse_json / attribution / geoip_endpoint /
+│   │                    keymap_entries / plugin_palette_entries)
+│   ├── map_api.rs       Lua-side MapApi bridge (point / label / text_anchored / center / zoom / cursor / area_width)
+│   └── scripts/         aircraft, attribution, export, help, here, info, iss, quake, scalebar, search, wiki
 │
-├── plugin_api/          plugin-author surface — services + helpers + prelude
-│   ├── mod.rs           re-exports + `prelude` glob
-│   ├── map_api.rs       MapApi — world-space + screen-space draw primitives for paint_on_map
-│   ├── async_job.rs     fire-and-poll background job
-│   ├── throttle.rs      rate-limit helper
-│   ├── polled_feed.rs   periodic feed wrapper (used by iss, quake, wiki)
-│   ├── initial_jump.rs  one-shot auto-recentre helper (used by iss, quake)
-│   ├── nominatim.rs     forward + reverse geocoding client
-│   └── layout.rs        LayoutConfig + PanelAnchor (per-plugin panel placement)
+├── plugin_api/          crate-internal primitives the Lua bridge re-uses
+│   ├── mod.rs           re-exports
+│   ├── map_api.rs       MapApi — world-space + screen-space draw primitives
+│   └── layout.rs        PanelAnchor (anchor vocabulary for module.layout)
 │
 ├── map/                 domain — viewport state + rendering pipeline
 │   ├── state.rs, action.rs, mod.rs
@@ -160,8 +144,8 @@ src/
 - **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
 - **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
-- **`plugin/`** — built-in plugins. Each module exposes `pub fn register(…, &mut Registrar)`; the compositor never names a concrete plugin type. Plugins implement `Component` (visual surfaces) or `Task` (headless async jobs); they emit `AppMsg` via `win.emit(msg)`.
-- **`plugin_api/`** — plugin-author surface. Services (`MapApi`, `NominatimClient`) and reusable helpers (`AsyncJob`, `Throttle`, `PolledFeed`, `InitialJump`, `LayoutConfig`) plus a `prelude` glob so a plugin's prologue is one `use` line. The split with `shared/` is by consumer scope: plugin-only lives here, host + plugin lives in `shared/`.
+- **`lua/`** — every in-tree plugin. `BUILTIN_SCRIPTS` lists `(stem, include_str!(...))` pairs; one dispatcher (`register_one`) reads each script's module metadata (`kind` / `activation` / `key` / `label` / `enabled`) and wires it. User plugins under `~/.config/ttymap/plugins/` flow through the same dispatcher. Runtime data (attribution, geoip endpoint, live keymap, palette hints) is exposed via `host:*` accessors backed by `Arc<LuaHostShared>`. The compositor never names a concrete plugin type; Rust never knows a specific plugin's name.
+- **`plugin_api/`** — crate-internal primitives the Lua bridge re-uses (`MapApi`, `PanelAnchor`). The earlier plugin-author prelude (`PolledFeed` / `AsyncJob` / `Throttle` / `NominatimClient` / `InitialJump`) was retired together with the in-tree Rust plugins; equivalents live in Lua scripts.
 - **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
 
 ### Message flow
@@ -225,44 +209,57 @@ Focus is a `focused_idx` into the Compositor stack, **decoupled from stack posit
 
 Dedup is by `Any::type_id`: pressing an activation key while the plugin is already on the stack focuses the existing instance instead of stacking a duplicate. A plugin author cannot forget to opt in — the concrete type *is* the identity.
 
-### Plugin API (built-ins + future external plugins)
+### Plugin API
 
-```rust
-trait Component: Any {
-    /// Handle one key event. Communicate intent via win.*.
-    fn handle_event(&mut self, event: KeyEvent, win: &mut Window);
+A plugin is a Lua module — a table the script returns. Module metadata drives wiring; the dispatcher never special-cases a name.
 
-    /// Paint into win.area(). Theme + ratatui Frame reached through win.
-    fn render(&self, win: &mut RenderWindow);
+```lua
+return {
+    name = "wiki",                              -- required identifier
+    kind = "component",                         -- "component" (default) or "provider"
+    activation = "toggle",                      -- "toggle" (default) | "overlay" | "spawn"
+    key = "i",                                  -- optional activation key char
+    label = "Toggle wiki",                      -- palette entry label
+    enabled = true,                             -- default true; opt-out hook
+    layout = { anchor = "right", width = 32 },  -- panel placement (Component only)
+    footer_hints = { { "C-n/C-p", "select" } }, -- shown while focused
 
-    /// World-space primitives on the map (e.g. wiki markers). Default no-op.
-    fn paint_on_map(&self, _p: &mut MapApi<'_>) {}
-
-    /// Tick-driven async polling. Default no-op.
-    fn poll(&mut self, _win: &mut Window) {}
-
-    /// Footer hints shown while this component is on top.
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> { vec![] }
-}
-
-// Headless plugin — no UI, no focus. The `here` geoip lookup uses this.
-trait Task {
-    fn poll(&mut self) -> Vec<AppMsg>;
+    render       = function() ... end,                -- panel: list of strings or styled-span tables
+    paint_on_map = function(map) ... end,             -- world-space primitives (point / label / text_anchored)
+    handle_event = function(key) ... end,             -- return nil / { close = true } / { ignore = true }
+    poll         = function() ... end,                -- tick-driven async (host:fetch_url etc.)
 }
 ```
 
-Each plugin module exposes `pub fn register(…, &mut Registrar)` which contributes some mix of: an `Activation` (key → component factory), a `PaletteEntry` (label for `:`), and/or a `Task`.
+Per-frame `host` and `map` accessors (a partial list):
 
-Components never import ratatui or `UiTheme` directly — everything flows through `Window` (event side) and `RenderWindow` (render side). That containment lets the host own visual invariants (focused border colour, panel layout) and prevents a misbehaving plugin from painting outside its rect. `MapApi` similarly hides projection and buffer behind primitives like `point(ll, glyph, fg)`, `line(...)`, `label(...)`, `text_anchored(...)`, and `cursor_ll(...)`.
+| | |
+|---|---|
+| `host:fetch_url(url) -> Job` | background HTTP GET; poll `job:try_take()` |
+| `host:parse_json(s)` | JSON → nested Lua tables |
+| `host:jump(lon, lat)` | recentre the map |
+| `host:close()` | pop self off the compositor stack |
+| `host:export_frame()` | dump current frame as ANSI |
+| `host:center()` | live map centre |
+| `host:attribution()` / `host:geoip_endpoint()` | runtime config |
+| `host:keymap_entries()` / `host:plugin_palette_entries()` | what help reads to build the cheatsheet |
+| `map:point(lon, lat, glyph, color)` | draw a marker |
+| `map:label(lon, lat, text, color)` | draw text next to a point |
+| `map:text_anchored(anchor, row, text, color)` | corner-anchored text (info / scalebar / attribution) |
+| `map:center()` / `map:zoom()` / `map:cursor()` / `map:area_width()` | frame state |
+
+A plugin with `kind = "provider"` returns an entry-point for the universal palette picker (search uses this) — fields are `prompt` / `submit_mode` / `filter` / `items` / `execute` / `poll` / `is_loading`.
+
+Adding a bundled plugin = drop a `.lua` under `src/lua/scripts/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
 
 ### Concurrency
 
 | Thread | Responsibility |
 |--------|----------------|
-| main | event loop, compositor, UI state, terminal draw |
+| main | event loop, compositor, Lua dispatch, UI state, terminal draw |
 | render | MapFrame generation (tile fetch + draw) |
 | tile fetch | HTTP workers with priority queue |
-| async jobs | Nominatim / Wikipedia / geoip / ADS-B / ISS / USGS (fire-and-poll via `plugin_api::async_job`) |
+| Lua `host:fetch_url` | one short-lived OS thread per request (Nominatim / Wikipedia / geoip / ADS-B / ISS / USGS) — Lua side polls `job:try_take()` |
 
 mpsc channels connect the threads; the main thread never blocks on I/O.
 
@@ -272,8 +269,8 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Principles
 
-- **Core stays lean.** A map viewer, not a GIS platform. The core handles tiles, projection, rendering, navigation, and a small palette of general-purpose built-ins. Anything domain-specific is a plugin.
-- **Plugin-first.** Every built-in (search, wiki, here, help) uses the same plugin entry point; modal `Component`s and one-shot `PaletteProvider`s are both first-class plugin shapes. Built-ins dogfood the API.
+- **Core stays lean.** A map viewer, not a GIS platform. The core handles tiles, projection, rendering, navigation. Anything domain-specific is a Lua plugin.
+- **Plugin-first.** Every built-in (info / scalebar / attribution / aircraft / iss / quake / wiki / here / search / export / help) is a Lua script — the bridge dogfoods itself.
 - **Boring where it matters.** Stable protocols (MVT, OSM, TOML), predictable resource use, `cargo install` ships a single binary.
 
 ### Short-term
@@ -281,34 +278,17 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 - **Tile backends** ([#30](https://github.com/Kohei-Wada/ttymap/issues/30) MBTiles, [#31](https://github.com/Kohei-Wada/ttymap/issues/31) PMTiles) — offline and CDN-friendly serving. Today the only backend is `mapscii.me`.
 - **Error handling policy** ([#17](https://github.com/Kohei-Wada/ttymap/issues/17)) — normalize how soft errors (network, parse) surface.
 
-### Mid-term — external plugin architecture
+### Plugin candidates
 
-The current `Component` trait is in-process Rust. To let contributors ship plugins without touching this repo or matching an unstable ABI, the plan is:
+Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), live ISS, USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
 
-1. **Ingest markers from stdin / file** ([#39](https://github.com/Kohei-Wada/ttymap/issues/39)) — the minimum-viable external plugin entry point:
-   ```bash
-   my-decoder | ttymap --markers -
-   ```
-   Anything that can produce `{"lat":..,"lon":..,"label":..}` lines becomes a plugin.
-
-2. **Subprocess plugin architecture** ([#32](https://github.com/Kohei-Wada/ttymap/issues/32)) — ttymap spawns plugin processes declared in `config.toml`; line-delimited JSON over stdio for viewport events (ttymap → plugin) and marker / overlay updates (plugin → ttymap). Language-agnostic, sandboxed by the OS process boundary.
-
-3. **Declarative plugin config** — install-by-spec in `config.toml`; no dynamic code loading inside the core repo.
-
-**Rust dylib and WASM plugin paths are explicitly out of scope** until there's a compelling use case. `cdylib` would pin ttymap to a Rust ABI it can't promise; WASM is overkill for line-based data feeds.
-
-### Long-term — plugin candidates (not core features)
-
-The following are fun ideas, but belong **outside this repo** as separate plugin projects once the subprocess architecture lands:
-
-- **Live aircraft overlay** — ADS-B via `dump1090` / `readsb` / OpenSky ([#25](https://github.com/Kohei-Wada/ttymap/issues/25))
 - **Live vessel overlay** — AIS via `rtl-ais` / `aisstream.io` ([#26](https://github.com/Kohei-Wada/ttymap/issues/26))
 - **Weather** — radar, temperature, wind
-- **Seismic / disaster feeds** — USGS earthquake, lightning, tropical storms
 - **GeoJSON overlay** ([#33](https://github.com/Kohei-Wada/ttymap/issues/33)) — drop a GeoJSON file in, see it drawn
 - **Demo / tour mode** ([#34](https://github.com/Kohei-Wada/ttymap/issues/34)), **hover tooltip** ([#35](https://github.com/Kohei-Wada/ttymap/issues/35)), **multi-line labels** ([#36](https://github.com/Kohei-Wada/ttymap/issues/36))
 - **Layer toggle** ([#41](https://github.com/Kohei-Wada/ttymap/issues/41)) — toggle borders / labels / roads / …
 - **Terrain / hillshade** ([#45](https://github.com/Kohei-Wada/ttymap/issues/45))
+- **Markers from stdin / file** ([#39](https://github.com/Kohei-Wada/ttymap/issues/39))
 
 ### Contributing
 
@@ -333,10 +313,7 @@ zoom = 10.0
 [render]
 language = "ja"
 
-[wiki]
-limit = 10
-
-# IP-based geolocation (shared by --here flag and the `here` plugin)
+# IP-based geolocation (shared by `--here` flag and the `here` plugin)
 [geoip]
 on_startup = false
 endpoint = "https://ipapi.co/json/"
@@ -345,15 +322,9 @@ timeout_ms = 2000
 [keymap]
 zoom_in = ["i", "+"]
 quit = ["q", "C-q"]
-
-# Opt-in: load bundled Lua plugins (today: hello). Adds a "Toggle
-# Lua: hello" entry to the `:` palette. Disabled by default because
-# bundled scripts are demos, not features.
-[lua]
-enabled = true
 ```
 
-See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults.
+See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults. Per-plugin behaviour lives inside each `.lua` script — to tweak refresh cadence, panel size, or hardcoded API endpoints, edit `src/lua/scripts/<name>.lua` (bundled) or drop a copy under `~/.config/ttymap/plugins/` (user).
 
 ## Build
 
