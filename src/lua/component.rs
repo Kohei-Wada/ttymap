@@ -350,6 +350,15 @@ impl Component for LuaComponent {
             .unwrap_or_else(|| outer.height.saturating_sub(2));
         let area = self.layout.anchor.rect(outer, self.layout.width, height);
 
+        // Wipe the panel rect before drawing. The block underneath
+        // sets `style.bg` but leaves `fg` unset, which means cells
+        // keep the map's previously-rendered foreground colours and
+        // the panel ends up looking like a desaturated translucent
+        // overlay. Clear first, then the framed Paragraph fills bg
+        // and writes text fg from scratch — same trick the shared
+        // `ListPanel` chrome uses.
+        win.clear(area);
+
         let body = win.style(StyleKind::Body);
         let lines: Vec<Line> = self
             .render_lines()
