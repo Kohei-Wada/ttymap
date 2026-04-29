@@ -85,6 +85,11 @@ impl PanelAnchor {
 ///
 /// Every field is optional; absent fields fall back to the plugin's
 /// hardcoded defaults supplied to [`Self::resolve`].
+///
+/// No in-tree caller after the plugin migration (Lua scripts read
+/// their own `layout = {...}` field directly into [`super::super::lua::component::LuaLayout`]).
+/// Kept as an extension point for future Rust-side helpers.
+#[allow(dead_code)]
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct LayoutConfig {
@@ -93,6 +98,7 @@ pub struct LayoutConfig {
     pub height: Option<u16>,
 }
 
+#[allow(dead_code)]
 impl LayoutConfig {
     /// Resolve the panel rectangle by combining plugin defaults with
     /// any user-supplied overrides. Unknown anchor strings are

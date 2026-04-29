@@ -367,7 +367,7 @@ The following are fun ideas, but belong **outside this repo** as separate plugin
 ttymap is small, the code is documented, and the roadmap is deliberately open. If you want to:
 
 - **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — the simplest real example is `src/plugin/here/mod.rs` (no UI, one palette command, async background job via `Task`). For a modal `Component` with its own keymap and a side panel, see `src/plugin/wiki/`. For a one-shot picker (type → debounced fetch → pick → run), see `src/plugin/search/mod.rs` — it implements `PaletteProvider` instead of `Component`. Once the subprocess architecture lands, plugins can live in their own repos.
+- **Write a plugin** — every in-tree plugin is a Lua script under `src/lua/scripts/`. Drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding; the file *is* the config (set `enabled = false` on the returned table to disable). The simplest fetch+render example is `quake.lua`; for a full panel + selection + modal detail flow see `wiki.lua`; for a debounced palette picker see `search.lua`. The bridge surface is documented in the `src/lua/` module-level docs.
 - **Fix a bug or clean something up** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt; follow its lead.
 
 Issues on GitHub carry the current opinion of what's easy, what's hard, and what's deferred. Skim them before designing.

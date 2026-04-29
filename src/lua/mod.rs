@@ -16,10 +16,13 @@
 pub mod component;
 pub mod host;
 pub mod map_api;
+pub mod palette_provider;
 
 pub use component::LuaComponent;
+pub use palette_provider::LuaPaletteProvider;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
@@ -61,36 +64,258 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
     }
 }
 
-/// Bundled `hello` plugin source — a tiny demo that doubles as the
-/// reference template for future Lua plugin authors.
-const HELLO_LUA: &str = include_str!("scripts/hello.lua");
+// ── Builtin scripts ─────────────────────────────────────────────────
+//
+// Each entry is `(stem, include_str!(...))`. The dispatcher at
+// `register_one` reads the script's own metadata (`activation`,
+// `kind`, `key`, `label`, `enabled`) to decide how to wire it. Adding
+// a new builtin = drop a `.lua` under `scripts/` + 1 line here.
 
-/// Aircraft plugin (Lua port). Opt-in side-by-side with the Rust
-/// version during the migration; once validated the Rust plugin
-/// goes away and this becomes the only aircraft implementation.
-const AIRCRAFT_LUA: &str = include_str!("scripts/aircraft.lua");
+const BUILTIN_SCRIPTS: &[(&str, &str)] = &[
+    ("aircraft", include_str!("scripts/aircraft.lua")),
+    ("attribution", include_str!("scripts/attribution.lua")),
+    ("export", include_str!("scripts/export.lua")),
+    ("help", include_str!("scripts/help.lua")),
+    ("here", include_str!("scripts/here.lua")),
+    ("info", include_str!("scripts/info.lua")),
+    ("iss", include_str!("scripts/iss.lua")),
+    ("quake", include_str!("scripts/quake.lua")),
+    ("scalebar", include_str!("scripts/scalebar.lua")),
+    ("search", include_str!("scripts/search.lua")),
+    ("wiki", include_str!("scripts/wiki.lua")),
+];
 
-/// ISS plugin (Lua port). Same `[iss]` config gate as the Rust
-/// original; once this is validated the Rust plugin under
-/// `src/plugin/iss/` goes away.
-const ISS_LUA: &str = include_str!("scripts/iss.lua");
-
-/// Wire the `hello` demo plugin. Called from `app::build_registrar`
-/// when `[lua] enabled = true`.
-pub fn register_hello(r: &mut Registrar) {
-    register_script("hello", HELLO_LUA, r);
+/// Register every bundled Lua plugin with the registrar. Each
+/// script's own metadata (returned table fields) drives how it's
+/// wired — see [`register_one`] for the activation / kind dispatch.
+pub fn register_builtin_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar) {
+    for (name, source) in BUILTIN_SCRIPTS {
+        register_one(name, source, shared.clone(), r);
+    }
 }
 
-/// Wire the Lua port of the aircraft plugin. Called from
-/// `app::build_registrar` when `[lua_aircraft] enabled = true`.
-pub fn register_aircraft(r: &mut Registrar) {
-    register_script("aircraft", AIRCRAFT_LUA, r);
+/// Plugin shape parsed out of a script's returned table at register
+/// time. Drives the dispatcher in [`register_one`].
+struct ModuleMeta {
+    /// Activation pattern. `"toggle"` (default) installs an
+    /// add_toggle palette entry; `"overlay"` installs an always-on
+    /// overlay; `"spawn"` installs an add_spawn palette entry (one
+    /// new instance per click — used by here/export self-closing
+    /// components and by the search palette provider).
+    activation: Activation,
+    /// Plugin flavour. Components push onto the compositor stack;
+    /// providers seed the universal palette picker.
+    kind: Kind,
+    /// Palette label. Defaults to `"Toggle Lua: <name>"` for toggles,
+    /// `<name>` for spawns. Empty for overlays (no palette entry).
+    label: String,
+    /// Optional activation key — for `toggle`/`spawn`, also binds
+    /// the key directly so the keybind and palette entry share a
+    /// factory.
+    key: Option<char>,
+    /// Whether the script asked to be skipped (`module.enabled = false`).
+    enabled: bool,
 }
 
-/// Wire the Lua port of the iss plugin. Called from
-/// `app::build_registrar` when `[iss] enabled = true`.
-pub fn register_iss(r: &mut Registrar) {
-    register_script("iss", ISS_LUA, r);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Activation {
+    Toggle,
+    Spawn,
+    Overlay,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Component,
+    Provider,
+}
+
+impl ModuleMeta {
+    /// Read the plugin's metadata fields by parsing the source once.
+    /// Defaults are picked so a minimal `return { name = "x" }` script
+    /// works as a toggle Component named "x".
+    fn parse(source: &str, name: &str) -> Self {
+        let lua = new_lua();
+        let module: Table = match lua.load(source).set_name(name).eval() {
+            Ok(m) => m,
+            // Parse failure is reported by the real load attempt; here
+            // we return defaults so the dispatcher proceeds and surfaces
+            // the error in one place.
+            Err(_) => {
+                return Self {
+                    activation: Activation::Toggle,
+                    kind: Kind::Component,
+                    label: format!("Toggle Lua: {}", name),
+                    key: None,
+                    enabled: true,
+                };
+            }
+        };
+        let kind = match module.get::<String>("kind").as_deref() {
+            Ok("provider") => Kind::Provider,
+            _ => Kind::Component,
+        };
+        let activation_str: Option<String> = module.get("activation").ok();
+        let activation = match activation_str.as_deref() {
+            Some("overlay") => Activation::Overlay,
+            Some("spawn") => Activation::Spawn,
+            // Providers default to spawn (each open is a fresh provider).
+            None if kind == Kind::Provider => Activation::Spawn,
+            _ => Activation::Toggle,
+        };
+        let label: Option<String> = module.get("label").ok();
+        let key: Option<String> = module.get("key").ok();
+        let key = key.and_then(|s| s.chars().next());
+        let enabled = !matches!(
+            module.get::<mlua::Value>("enabled"),
+            Ok(mlua::Value::Boolean(false))
+        );
+        let default_label = match activation {
+            Activation::Toggle => format!("Toggle Lua: {}", name),
+            Activation::Spawn => name.to_string(),
+            Activation::Overlay => String::new(),
+        };
+        Self {
+            activation,
+            kind,
+            label: label.unwrap_or(default_label),
+            key,
+            enabled,
+        }
+    }
+}
+
+/// Register one Lua script with the registrar by reading its own
+/// metadata. The single dispatcher used by both bundled and user
+/// plugins — Rust never knows a specific plugin's name.
+fn register_one(
+    name: &'static str,
+    source: &'static str,
+    shared: Arc<host::LuaHostShared>,
+    r: &mut Registrar,
+) {
+    let meta = ModuleMeta::parse(source, name);
+    if !meta.enabled {
+        log::info!(
+            "lua[{}]: disabled via module.enabled = false, skipping",
+            name
+        );
+        return;
+    }
+
+    match meta.kind {
+        Kind::Component => register_component(name, source, &meta, shared, r),
+        Kind::Provider => register_provider(name, source, &meta, shared, r),
+    }
+}
+
+fn register_component(
+    name: &'static str,
+    source: &'static str,
+    meta: &ModuleMeta,
+    shared: Arc<host::LuaHostShared>,
+    r: &mut Registrar,
+) {
+    // Validate up front so a syntax error surfaces as one log line
+    // instead of a noisy first-toggle failure.
+    if let Err(e) = LuaComponent::from_source_full(source, name, shared.clone()) {
+        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+        return;
+    }
+
+    let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
+    let label = meta.label.clone();
+
+    match meta.activation {
+        Activation::Overlay => {
+            let shared_for_factory = shared.clone();
+            r.add_overlay(move |_| {
+                component_or_placeholder(name, source, shared_for_factory.clone())
+            });
+        }
+        Activation::Toggle => {
+            let shared_for_toggle = shared.clone();
+            r.add_toggle(label, key_hint, move |_| {
+                component_or_placeholder(name, source, shared_for_toggle.clone())
+            });
+            if let Some(key) = meta.key {
+                use crossterm::event::{KeyCode, KeyModifiers};
+                let shared_for_key = shared.clone();
+                r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
+                    component_or_placeholder(name, source, shared_for_key.clone())
+                });
+            }
+        }
+        Activation::Spawn => {
+            let shared_for_spawn = shared.clone();
+            r.add_spawn(label, key_hint, move |_| {
+                component_or_placeholder(name, source, shared_for_spawn.clone())
+            });
+            if let Some(key) = meta.key {
+                use crossterm::event::{KeyCode, KeyModifiers};
+                let shared_for_key = shared.clone();
+                r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
+                    component_or_placeholder(name, source, shared_for_key.clone())
+                });
+            }
+        }
+    }
+}
+
+fn register_provider(
+    name: &'static str,
+    source: &'static str,
+    meta: &ModuleMeta,
+    shared: Arc<host::LuaHostShared>,
+    r: &mut Registrar,
+) {
+    if let Err(e) = LuaPaletteProvider::from_source_full(source, name, shared.clone()) {
+        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+        return;
+    }
+
+    let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
+    let label = meta.label.clone();
+
+    let make = {
+        let shared = shared.clone();
+        move || -> crate::palette::PaletteComponent {
+            let provider = LuaPaletteProvider::from_source_full(source, name, shared.clone())
+                .unwrap_or_else(|e| {
+                    log::warn!("lua[{}]: re-load failed: {}", name, e);
+                    LuaPaletteProvider::from_source_full(
+                        "return {}",
+                        "lua-fallback",
+                        shared.clone(),
+                    )
+                    .expect("trivial provider always loads")
+                });
+            crate::palette::PaletteComponent::with_provider(provider)
+        }
+    };
+
+    r.add_spawn(label, key_hint, {
+        let make = make.clone();
+        move |_| make()
+    });
+    if let Some(key) = meta.key {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| make());
+    }
+}
+
+/// Try to build a `LuaComponent` from `source`; on failure log + fall
+/// back to a no-op module so the host stays alive.
+fn component_or_placeholder(
+    name: &'static str,
+    source: &'static str,
+    shared: Arc<host::LuaHostShared>,
+) -> LuaComponent {
+    LuaComponent::from_source_full(source, name, shared.clone()).unwrap_or_else(|e| {
+        log::warn!("lua[{}]: re-load failed: {}", name, e);
+        LuaComponent::from_source_full("return {}", name, shared)
+            .expect("trivial Lua module always loads")
+    })
 }
 
 /// Scan `~/.config/ttymap/plugins/*.lua` and register each as a
@@ -108,26 +333,21 @@ pub fn register_iss(r: &mut Registrar) {
 /// skips it — the rest of the directory still loads. Files are
 /// loaded in alphabetical order so palette entries surface in a
 /// predictable order across runs.
-pub fn register_user_plugins(r: &mut Registrar) {
+pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar) {
     let Some(dir) = user_plugins_dir() else {
-        // No XDG directory available (no $HOME, weird host) — the
-        // user just doesn't get directory-based plugins. Bundled
-        // scripts continue to work via their dedicated registrars.
         return;
     };
     if !dir.is_dir() {
-        // Directory doesn't exist yet (default case for users who
-        // never wrote a plugin). Silent skip — nothing to log.
         return;
     }
-    register_user_plugins_from(&dir, r);
+    register_user_plugins_from(&dir, shared, r);
 }
 
 /// Inner half of [`register_user_plugins`] split out so unit
 /// tests can hand a tempdir without faking the XDG layout. Walks
-/// `dir`, loads every `*.lua`, and respects each script's own
-/// `enabled` flag (default true).
-fn register_user_plugins_from(dir: &Path, r: &mut Registrar) {
+/// `dir`, loads every `*.lua`, and routes each through the same
+/// [`register_one`] dispatcher used for bundled plugins.
+fn register_user_plugins_from(dir: &Path, shared: Arc<host::LuaHostShared>, r: &mut Registrar) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -152,45 +372,13 @@ fn register_user_plugins_from(dir: &Path, r: &mut Registrar) {
                 continue;
             }
         };
-        if !script_enabled(&source, stem) {
-            log::info!(
-                "lua[{}]: disabled via module.enabled = false, skipping",
-                stem,
-            );
-            continue;
-        }
-        // `register_script` requires `&'static str` for the
-        // re-load closure that lives for the program lifetime, so
-        // the source + name are leaked here. Cost: a few KB per
-        // plugin per program lifetime — fine for the ~10 plugins
-        // we'll ever have.
+        // `register_one` requires `&'static str` for the re-load
+        // closure that lives for the program lifetime; leak both.
+        // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_script(name, source, r);
+        register_one(name, source, shared.clone(), r);
     }
-}
-
-/// Pre-flight a script just to read its `enabled` field. Anything
-/// other than an explicit `false` (parse error, missing module,
-/// non-bool value, missing field) is treated as "enabled" — it's
-/// safer for the user to see a warning at register time than to
-/// have a plugin silently disappear because of a typo.
-fn script_enabled(source: &str, name: &str) -> bool {
-    let lua = new_lua();
-    let module: Table = match lua.load(source).set_name(name).eval() {
-        Ok(m) => m,
-        Err(_) => return true, // let the real load surface the error
-    };
-    // mlua coerces nil to `false` for `get::<bool>`, so a missing
-    // `enabled` field would *look* like `enabled = false` and turn
-    // every plugin off. Read as `Value` and only treat the *explicit*
-    // boolean `false` as disabled — nil / missing / wrong type all
-    // leave the plugin active so the real load can surface any
-    // structural issues.
-    !matches!(
-        module.get::<mlua::Value>("enabled"),
-        Ok(mlua::Value::Boolean(false))
-    )
 }
 
 /// Resolve `~/.config/ttymap/plugins/` (or the platform-specific
@@ -203,32 +391,7 @@ fn user_plugins_dir() -> Option<PathBuf> {
     Some(dirs.config_dir().join("plugins"))
 }
 
-/// Validate + register one bundled script. Lua failures (parse
-/// error, missing fields) are logged and the plugin is silently
-/// skipped rather than aborting startup — the host always boots
-/// even with a broken Lua plugin.
-fn register_script(name: &'static str, source: &'static str, r: &mut Registrar) {
-    // Validate the script up front so a syntax error surfaces as one
-    // log line instead of a noisy first-toggle failure.
-    if let Err(e) = LuaComponent::from_source(source, name) {
-        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-        return;
-    }
-    let label = format!("Toggle Lua: {}", name);
-    r.add_toggle(label, "", move |_| {
-        // Re-load on every toggle so the plugin gets fresh state.
-        // If it parsed once at startup it should parse again, but
-        // recover gracefully if it doesn't.
-        LuaComponent::from_source(source, name).unwrap_or_else(|e| {
-            log::warn!("lua[{}]: re-load failed: {}", name, e);
-            // Synthesize a minimal placeholder so the toggle still
-            // produces a Component. Empty source still parses and
-            // exposes a no-op render.
-            LuaComponent::from_source("return {}", name).expect("trivial Lua module always loads")
-        })
-    });
-}
-
+/// Validate + register one bundled script as a palette toggle.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,57 +426,79 @@ mod tests {
         Ok(())
     }
 
+    /// All bundled scripts must parse cleanly. Subscript- and
+    /// activation-specific behaviour is covered by the unified
+    /// dispatcher tests below.
     #[test]
-    fn bundled_hello_script_parses() {
-        // The script is in-tree; if this ever fails, the include_str!
-        // is pointing at something broken.
-        LuaComponent::from_source(HELLO_LUA, "hello").expect("hello.lua should parse");
+    fn every_bundled_script_parses() {
+        for (name, source) in BUILTIN_SCRIPTS {
+            // Some scripts (search) are providers, not components —
+            // detect via `kind = "provider"` and dispatch.
+            let kind_is_provider = source.contains(r#"kind = "provider""#);
+            if kind_is_provider {
+                LuaPaletteProvider::from_source(source, name)
+                    .unwrap_or_else(|e| panic!("{}.lua should parse: {}", name, e));
+            } else {
+                LuaComponent::from_source(source, name)
+                    .unwrap_or_else(|e| panic!("{}.lua should parse: {}", name, e));
+            }
+        }
     }
 
+    /// `register_builtin_plugins` should install every script. The
+    /// exact counts are: 3 overlays (info, scalebar, attribution),
+    /// the rest land as palette entries (some with key binds). A
+    /// regression that drops any single plugin would shift these.
     #[test]
-    fn register_adds_a_palette_entry_for_hello() {
+    fn register_builtin_plugins_installs_every_bundled_script() {
+        let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_hello(&mut r);
-        let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
-        assert!(
-            labels.iter().any(|l| l.contains("hello")),
-            "expected a 'hello' palette entry, got {:?}",
-            labels,
+        register_builtin_plugins(shared, &mut r);
+
+        // Exactly 3 always-on overlays today: info, scalebar, attribution.
+        assert_eq!(r.overlays.len(), 3, "overlays count");
+
+        // Bundled palette entries: aircraft, iss, quake, wiki, here,
+        // export, help, search → 8.
+        assert_eq!(r.palette_entries.len(), 8, "palette entries count");
+
+        // Key binds: wiki ('i'), help ('?'), search ('/') → 3.
+        assert_eq!(r.activations.len(), 3, "activation key binds count");
+    }
+
+    /// Module metadata: defaults, overrides, kind/activation flips.
+    #[test]
+    fn module_meta_defaults_are_toggle_component() {
+        let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
+        assert!(matches!(meta.activation, Activation::Toggle));
+        assert!(matches!(meta.kind, Kind::Component));
+        assert_eq!(meta.label, "Toggle Lua: x");
+        assert!(meta.key.is_none());
+        assert!(meta.enabled);
+    }
+
+    #[test]
+    fn module_meta_picks_up_overlay_activation() {
+        let meta = ModuleMeta::parse(r#"return { name = "x", activation = "overlay" }"#, "x");
+        assert!(matches!(meta.activation, Activation::Overlay));
+    }
+
+    #[test]
+    fn module_meta_provider_default_activation_is_spawn() {
+        let meta = ModuleMeta::parse(r#"return { name = "x", kind = "provider" }"#, "x");
+        assert!(matches!(meta.kind, Kind::Provider));
+        assert!(matches!(meta.activation, Activation::Spawn));
+    }
+
+    #[test]
+    fn module_meta_reads_key_label_enabled() {
+        let meta = ModuleMeta::parse(
+            r#"return { name = "x", key = "i", label = "Toggle x", enabled = false }"#,
+            "x",
         );
-    }
-
-    #[test]
-    fn bundled_aircraft_script_parses() {
-        LuaComponent::from_source(AIRCRAFT_LUA, "aircraft").expect("aircraft.lua should parse");
-    }
-
-    #[test]
-    fn register_aircraft_adds_a_palette_entry() {
-        let mut r = Registrar::default();
-        register_aircraft(&mut r);
-        let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
-        assert!(
-            labels.iter().any(|l| l.contains("aircraft")),
-            "expected an 'aircraft' palette entry, got {:?}",
-            labels,
-        );
-    }
-
-    #[test]
-    fn bundled_iss_script_parses() {
-        LuaComponent::from_source(ISS_LUA, "iss").expect("iss.lua should parse");
-    }
-
-    #[test]
-    fn register_iss_adds_a_palette_entry() {
-        let mut r = Registrar::default();
-        register_iss(&mut r);
-        let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
-        assert!(
-            labels.iter().any(|l| l.contains("iss")),
-            "expected an 'iss' palette entry, got {:?}",
-            labels,
-        );
+        assert_eq!(meta.key, Some('i'));
+        assert_eq!(meta.label, "Toggle x");
+        assert!(!meta.enabled);
     }
 
     // ── directory-based discovery ───────────────────────────────
@@ -353,7 +538,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -368,7 +553,7 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -387,7 +572,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -406,7 +591,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         assert!(labels(&r).iter().any(|l| l.contains("explicit")));
     }
 
@@ -421,7 +606,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -475,7 +660,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_user_plugins_from(&dir, &mut r);
+        register_user_plugins_from(&dir, host::LuaHostShared::empty(), &mut r);
         assert!(r.palette_entries.is_empty());
     }
 }

@@ -38,8 +38,8 @@ every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
 CLI subcommand under `src/commands/` and the palette entries under
-`src/plugin/palette/`. The internal intent type is `AppMsg` so those
-three layers stay unambiguous.
+`src/palette/`. The internal intent type is `AppMsg` so those three
+layers stay unambiguous.
 
 ### When to emit an `AppMsg`
 

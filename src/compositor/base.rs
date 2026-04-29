@@ -39,6 +39,11 @@ pub struct BaseLayer {
     /// startup from the [`Registrar`](super::Registrar) that each
     /// plugin's `register` function contributes to.
     activations: Vec<Activation>,
+    /// Plugin-supplied footer hints harvested from palette entries
+    /// with a non-empty `hint` (key) at startup. Rendered in the
+    /// footer beside the core keymap shortcuts so the user discovers
+    /// dynamically-registered key binds without hardcoding them.
+    plugin_hints: Vec<(&'static str, &'static str)>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
     /// `KeyMap`) because multi-key sequencing is a base-layer
     /// concern; the keymap itself is a stateless lookup table.
@@ -46,10 +51,15 @@ pub struct BaseLayer {
 }
 
 impl BaseLayer {
-    pub fn new(keymap: KeyMap, activations: Vec<Activation>) -> Self {
+    pub fn new(
+        keymap: KeyMap,
+        activations: Vec<Activation>,
+        plugin_hints: Vec<(&'static str, &'static str)>,
+    ) -> Self {
         Self {
             keymap,
             activations,
+            plugin_hints,
             pending_g: false,
         }
     }
@@ -115,15 +125,16 @@ impl Component for BaseLayer {
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("hjkl", "pan"),
-            ("a/z", "zoom"),
-            (":", "cmd"),
-            ("/", "search"),
-            ("i", "wiki"),
-            ("?", "help"),
-            ("q", "quit"),
-        ]
+        // Core keymap shortcuts that always apply on the map. Plugin-
+        // specific bindings (search / wiki / help / …) are appended
+        // from the live registrar so the footer reflects what's
+        // actually loaded — disabling or rebinding a plugin updates
+        // the footer for free.
+        let mut hints: Vec<(&'static str, &'static str)> =
+            vec![("hjkl", "pan"), ("a/z", "zoom"), (":", "cmd")];
+        hints.extend(self.plugin_hints.iter().copied());
+        hints.push(("q", "quit"));
+        hints
     }
 
     fn name(&self) -> &'static str {
@@ -147,7 +158,7 @@ mod tests {
     };
 
     fn bg() -> BaseLayer {
-        BaseLayer::new(KeyMap::default(), Vec::new())
+        BaseLayer::new(KeyMap::default(), Vec::new(), Vec::new())
     }
 
     fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> WindowOps {

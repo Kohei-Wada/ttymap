@@ -32,7 +32,6 @@ use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
-use crate::plugin_api::nominatim::NominatimClient;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 use mouse::MouseAdapter;
@@ -67,11 +66,13 @@ impl App {
             cols, rows, width, height
         );
 
-        let nominatim = Arc::new(NominatimClient::new());
         let (tile_cache, attribution, wake_rx) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
-        let registrar = build_registrar(&config, nominatim, attribution, &keymap);
+        // `_lua_shared` is kept alive on the App so every Lua plugin's
+        // host accessor (`host:plugin_palette_entries()` etc.) keeps
+        // reading the live snapshot for the program lifetime.
+        let registrar = build_registrar(&config, attribution, &keymap);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -98,7 +99,25 @@ impl App {
         // activation dispatch) at index 0. Every subsequent modal is
         // pushed on top.
         let mut compositor = Compositor::new();
-        compositor.push(Box::new(BaseLayer::new(keymap, registrar.activations)));
+        // Harvest non-empty palette hints into a `&'static str` pair
+        // list so the BaseLayer's footer can show plugin keybinds
+        // without hardcoding them. Leaking is bounded — at most one
+        // pair per registered plugin per program lifetime.
+        let plugin_hints: Vec<(&'static str, &'static str)> = registrar
+            .palette_entries
+            .iter()
+            .filter(|e| !e.hint.is_empty())
+            .map(|e| {
+                let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
+                let label: &'static str = Box::leak(plugin_hint_label(&e.label).into_boxed_str());
+                (key, label)
+            })
+            .collect();
+        compositor.push(Box::new(BaseLayer::new(
+            keymap,
+            registrar.activations,
+            plugin_hints,
+        )));
         // Drain always-on overlay factories from the registrar and
         // install each overlay. The seed Context uses the same
         // values App::context produces; cursor starts as None.
@@ -397,106 +416,94 @@ pub(crate) fn build_tile_cache(
 /// plugin-agnostic. Order matters: the palette is installed last so
 /// its default provider can harvest every other plugin's palette
 /// entries.
-fn build_registrar(
-    config: &Config,
-    nominatim: Arc<NominatimClient>,
-    attribution: Option<String>,
-    keymap: &KeyMap,
-) -> Registrar {
-    use std::rc::Rc;
+fn build_registrar(config: &Config, attribution: Option<String>, keymap: &KeyMap) -> Registrar {
+    use std::sync::Arc;
 
     let mut r = Registrar::default();
 
-    // Each block: skip the register call when the user disabled the
-    // plugin via `[<name>] enabled = false`. plugin_enabled defaults
-    // to true so absent sections behave as before.
-    if config.plugin_enabled("info") {
-        crate::plugin::info::register(nominatim.clone(), &mut r);
-    }
-    if config.plugin_enabled("scalebar") {
-        crate::plugin::scalebar::register(&mut r);
-    }
-    if config.plugin_enabled("attribution") {
-        crate::plugin::attribution::register(attribution, &mut r);
-    }
-    if config.plugin_enabled("search") {
-        crate::plugin::search::register(nominatim, &mut r);
-    }
-    if config.plugin_enabled("wiki") {
-        crate::plugin::wiki::register(config, &mut r);
-    }
-    if config.plugin_enabled("here") {
-        crate::plugin::here::register(
-            config.geoip.endpoint.clone(),
-            config.geoip.timeout_ms,
-            &mut r,
-        );
-    }
-    if config.plugin_enabled("export") {
-        crate::plugin::export::register(&mut r);
-    }
-    if config.plugin_enabled("aircraft") {
-        // Lua port lives in `src/lua/scripts/aircraft.lua` — the
-        // Rust impl was retired after the side-by-side validation
-        // in #144. Same `[aircraft]` config gate; user-visible
-        // behaviour stays the same modulo the small differences
-        // documented in the migration PR.
-        crate::lua::register_aircraft(&mut r);
-    }
-    if config.plugin_enabled("iss") {
-        // Lua port lives in `src/lua/scripts/iss.lua`. Same `[iss]`
-        // config gate; the previous Rust impl under
-        // `src/plugin/iss/` was retired after the migration.
-        crate::lua::register_iss(&mut r);
-    }
-    if config.plugin_enabled("quake") {
-        crate::plugin::quake::register(config, &mut r);
-    }
+    // Build the shared runtime-data carrier once. Every Lua plugin
+    // (bundled and user) sees the same `host:*` accessor surface;
+    // there is no per-plugin Rust glue, no per-plugin upvalue
+    // injection. Adding a new bundled plugin is one entry in
+    // `lua::BUILTIN_SCRIPTS`; adding a user plugin is one file in
+    // `~/.config/ttymap/plugins/`.
+    let shared = Arc::new(crate::lua::host::LuaHostShared::new(
+        attribution,
+        config.geoip.endpoint.clone(),
+        keymap_entries(keymap),
+    ));
 
-    // Lua demo scripts. The `hello` plugin is dogfood / template,
-    // not a feature, so it's opt-in via `[lua] enabled = true`.
-    // Inlined lookup — `Config::plugin_enabled` defaults to true,
-    // which we don't want here.
-    let opt_in = |name: &str| -> bool {
-        config
-            .extras
-            .get(name)
-            .and_then(|v| v.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    };
-    if opt_in("lua") {
-        crate::lua::register_hello(&mut r);
-    }
-    // Discover user plugins from `~/.config/ttymap/plugins/*.lua`.
-    // Each file becomes a plugin named after its stem and is
-    // gated by its own `module.enabled` field — the script *is*
-    // the config, so the user adds, edits, or disables a plugin
-    // by dropping a file or flipping one line, no rebuild and no
-    // TOML touch.
-    crate::lua::register_user_plugins(&mut r);
+    // Bundled plugins (every `.lua` under `src/lua/scripts/`) always
+    // register — disabling one is a source edit. The dispatcher reads
+    // each script's own activation/kind/key/label metadata, so chrome
+    // overlays, palette toggles, key binds, and the search palette
+    // provider all flow through one path.
+    crate::lua::register_builtin_plugins(shared.clone(), &mut r);
 
-    // Help needs to know the other plugins' activation hints, so build
-    // its text after them (but before palette install, since palette
-    // harvests help's palette entry too).
-    let plugin_help_entries: Vec<(String, String)> = r
+    // User plugins from `~/.config/ttymap/plugins/*.lua`. Same
+    // dispatcher, same host accessors. Each script controls its own
+    // activation via `module.enabled` — drop a file in, flip a
+    // boolean, no rebuild and no TOML.
+    crate::lua::register_user_plugins(shared.clone(), &mut r);
+
+    // Snapshot every plugin's palette entries into the shared carrier.
+    // Help reads this lazily (at render time) via
+    // `host:plugin_palette_entries()`, so it sees every sibling
+    // regardless of registration order.
+    let palette_entries: Vec<(String, String)> = r
         .palette_entries
         .iter()
         .filter(|e| !e.hint.is_empty())
         .map(|e| (e.hint.clone(), e.label.clone()))
         .collect();
-    if config.plugin_enabled("help") {
-        let help_text = Rc::new(crate::plugin::help::HelpText::build(
-            keymap,
-            &plugin_help_entries,
-        ));
-        crate::plugin::help::register(help_text, &mut r);
-    }
+    shared.set_palette_entries(palette_entries);
 
     // Palette is a built-in, not a plugin. `install` drains every
     // palette_entry contributed above and bakes them into the default
-    // provider — so it must run after every plugin::*::register call.
+    // provider — so it must run after every plugin's register call.
     crate::palette::install(keymap, &mut r);
 
+    // `shared` is kept alive via Arc clones inside every LuaComponent
+    // / LuaPaletteProvider — dropping it here is fine.
+    drop(shared);
+
     r
+}
+
+/// Boil a palette label down to the short form shown in the footer.
+/// `"Toggle wiki"` → `"wiki"`; `"Search location"` → `"search"`. Plain
+/// labels without a leading verb pass through unchanged.
+fn plugin_hint_label(label: &str) -> String {
+    let trimmed = label.trim();
+    for verb in ["Toggle ", "Show ", "Open "] {
+        if let Some(rest) = trimmed.strip_prefix(verb) {
+            return rest.to_string();
+        }
+    }
+    // Multi-word labels (e.g. "Search location", "Jump to here
+    // (current location)") get squeezed to the first word so the
+    // footer doesn't get crowded.
+    trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or(trimmed)
+        .to_lowercase()
+}
+
+/// Build the `(key-binding, action-label)` pairs that the help plugin
+/// surfaces via `host:keymap_entries()`. Live data — runtime keymap
+/// overrides surface here.
+fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
+    use crate::map::Action;
+    Action::all_listed()
+        .iter()
+        .filter_map(|action| {
+            let keys = keymap.keys_for(&AppMsg::Map(action.clone()));
+            if keys.is_empty() {
+                None
+            } else {
+                Some((keys.join(", "), action.label().to_string()))
+            }
+        })
+        .collect()
 }

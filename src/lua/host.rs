@@ -32,35 +32,120 @@ use mlua::UserData;
 use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
 
+/// Shared, mostly-immutable runtime data that every Lua plugin can
+/// query via the `host` global. Built once in [`crate::app::App::new`]
+/// and Arc-cloned into each [`LuaHost`].
+///
+/// Why not upvalue prepend? With ~10 builtin plugins each needing
+/// different runtime data, prepending bespoke `local _X = [[...]]`
+/// per plugin meant per-plugin Rust glue. A shared accessor surface
+/// keeps the bridge uniform: bundled and user plugins both see the
+/// same `host:*` API, and adding a new builtin requires zero Rust.
+pub struct LuaHostShared {
+    /// Tile provider's attribution string. `None` when the active
+    /// `TileClient` has no attribution to display (custom backends
+    /// without OSM data, mostly).
+    pub attribution: Option<String>,
+    /// IP-geolocation endpoint URL (`[geoip].endpoint` in
+    /// `config.toml`). The here plugin GETs this to resolve the
+    /// user's coordinates.
+    pub geoip_endpoint: String,
+    /// Pre-baked `(key-binding, action-label)` pairs for built-in
+    /// map actions. Help renders this as the keymap section of its
+    /// cheatsheet. Built once at startup from the live `KeyMap` so
+    /// runtime overrides surface correctly.
+    pub keymap_entries: Vec<(String, String)>,
+    /// Snapshot of the registrar's palette entries, taken **after**
+    /// every plugin has registered. Held behind a `Mutex` so
+    /// `LuaHostShared` can be Arc'd into each plugin's `LuaHost` at
+    /// register time and populated later. Help reads this lazily
+    /// (at render time, not register time) so it sees every plugin
+    /// regardless of load order.
+    pub palette_entries: Mutex<Vec<(String, String)>>,
+}
+
+impl LuaHostShared {
+    pub fn new(
+        attribution: Option<String>,
+        geoip_endpoint: String,
+        keymap_entries: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            attribution,
+            geoip_endpoint,
+            keymap_entries,
+            palette_entries: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Replace the cached palette-entry snapshot. Called once from
+    /// [`crate::app::App::new`] after `build_registrar` returns.
+    pub fn set_palette_entries(&self, entries: Vec<(String, String)>) {
+        if let Ok(mut slot) = self.palette_entries.lock() {
+            *slot = entries;
+        }
+    }
+
+    /// All-empty default for tests / standalone Lua VMs that don't
+    /// need real runtime data.
+    #[cfg(test)]
+    pub fn empty() -> Arc<Self> {
+        Arc::new(Self::new(None, String::new(), Vec::new()))
+    }
+}
+
 /// Per-component host handle. Owns the `HttpClient` used by
-/// `fetch_url` and a sender for jump requests. The matching
-/// `Receiver` lives on the `LuaComponent` so it can drain pending
-/// jumps after a callback returns. The `center` is shared with
+/// `fetch_url` and senders for jump / close requests. The matching
+/// `Receiver`s live on the `LuaComponent` so it can drain pending
+/// requests after a callback returns. The `center` is shared with
 /// the component so `host:center()` can return the current map
 /// centre even though the userdata itself never sees a `Window`.
 pub struct LuaHost {
     http: HttpClient,
     jump_tx: mpsc::Sender<LonLat>,
+    close_tx: mpsc::Sender<()>,
+    export_tx: mpsc::Sender<()>,
     center: Arc<Mutex<LonLat>>,
+    /// Shared runtime data exposed via host accessors
+    /// ([`LuaHost`] is `'static`, so the Arc clone is the carrier).
+    shared: Arc<LuaHostShared>,
+}
+
+/// Channels + shared state the `LuaComponent` needs to drive a
+/// `LuaHost` from outside Lua. Built once per host and threaded into
+/// the component at construction.
+pub struct LuaHostHandles {
+    pub jump_rx: mpsc::Receiver<LonLat>,
+    pub close_rx: mpsc::Receiver<()>,
+    pub export_rx: mpsc::Receiver<()>,
+    pub center: Arc<Mutex<LonLat>>,
 }
 
 impl LuaHost {
-    /// Build a fresh host along with the channel ends the
-    /// [`LuaComponent`] needs to drive it: the jump-request
-    /// receiver and the shared centre cell. The component refreshes
-    /// the centre at the start of each dispatch path that carries
-    /// a `Window` / `MapApi`.
-    pub fn new(tag: &'static str) -> (Self, mpsc::Receiver<LonLat>, Arc<Mutex<LonLat>>) {
+    /// Build a fresh host along with the channels and shared cells
+    /// the [`LuaComponent`] needs to drive it. The component
+    /// refreshes the centre at the start of each dispatch path that
+    /// carries a `Window` / `MapApi`.
+    pub fn new(tag: &'static str, shared: Arc<LuaHostShared>) -> (Self, LuaHostHandles) {
         let (jump_tx, jump_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let (export_tx, export_rx) = mpsc::channel();
         let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
         (
             Self {
                 http: HttpClient::new(tag),
                 jump_tx,
+                close_tx,
+                export_tx,
                 center: center.clone(),
+                shared,
             },
-            jump_rx,
-            center,
+            LuaHostHandles {
+                jump_rx,
+                close_rx,
+                export_rx,
+                center,
+            },
         )
     }
 }
@@ -111,6 +196,78 @@ impl UserData for LuaHost {
         methods.add_method("center", |_, this, _: ()| {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
+        });
+
+        // `host:close()` — fire-and-forget request to pop the
+        // component off the compositor stack. The Lua side calls
+        // this when its work is done (e.g. one-shot here-jump);
+        // [`LuaComponent`] drains the channel after the current
+        // callback returns and invokes `Window::close()` while it
+        // still holds the borrow.
+        methods.add_method("close", |_, this, _: ()| {
+            let _ = this.close_tx.send(());
+            Ok(())
+        });
+
+        // `host:export_frame()` — fire-and-forget request to emit
+        // `AppMsg::ExportFrame`, which `App::dispatch` translates
+        // into "snapshot the current `MapFrame` to disk as ANSI".
+        // Drained in lockstep with jump/close after each Lua
+        // callback while a `Window` is still in scope.
+        methods.add_method("export_frame", |_, this, _: ()| {
+            let _ = this.export_tx.send(());
+            Ok(())
+        });
+
+        // `host:attribution() -> string | nil` — active TileClient's
+        // attribution string (typically "© OpenStreetMap …"). The
+        // attribution overlay paints this; other plugins may use it
+        // for their own attribution rows.
+        methods.add_method("attribution", |_, this, _: ()| {
+            Ok(this.shared.attribution.clone())
+        });
+
+        // `host:geoip_endpoint() -> string` — configured geoip URL
+        // (`[geoip].endpoint` in config.toml). The here plugin GETs
+        // this to resolve the user's location.
+        methods.add_method("geoip_endpoint", |_, this, _: ()| {
+            Ok(this.shared.geoip_endpoint.clone())
+        });
+
+        // `host:keymap_entries() -> [{key, label}, …]` — keybindings
+        // for built-in map actions, formatted for help-style display.
+        // Always returns the same data (immutable after startup).
+        methods.add_method("keymap_entries", |lua, this, _: ()| {
+            let table = lua.create_table()?;
+            for (i, (key, label)) in this.shared.keymap_entries.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("key", key.as_str())?;
+                row.set("label", label.as_str())?;
+                table.set(i + 1, row)?;
+            }
+            Ok(table)
+        });
+
+        // `host:plugin_palette_entries() -> [{key, label}, …]` —
+        // snapshot of every plugin's palette hint (`hint`/`label`)
+        // taken after `build_registrar` finished. Read lazily so
+        // help can be loaded mid-registration and still see every
+        // sibling at render time. Returns an empty list when the
+        // snapshot hasn't been populated yet.
+        methods.add_method("plugin_palette_entries", |lua, this, _: ()| {
+            let table = lua.create_table()?;
+            let entries = this.shared.palette_entries.lock();
+            let entries = match &entries {
+                Ok(g) => g.as_slice(),
+                Err(_) => &[],
+            };
+            for (i, (key, label)) in entries.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("key", key.as_str())?;
+                row.set("label", label.as_str())?;
+                table.set(i + 1, row)?;
+            }
+            Ok(table)
         });
     }
 }
@@ -201,7 +358,7 @@ mod tests {
     #[test]
     fn host_userdata_can_be_constructed() {
         let lua = mlua::Lua::new();
-        let (host, _jump_rx, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         let ud = lua.create_userdata(host).expect("create_userdata");
         // Just confirm we can set it as a global and round-trip the
         // userdata reference back out — fetch_url itself hits the
@@ -213,7 +370,8 @@ mod tests {
     #[test]
     fn host_jump_pushes_to_channel() {
         let lua = mlua::Lua::new();
-        let (host, jump_rx, _) = LuaHost::new("lua-test");
+        let (host, handles) = LuaHost::new("lua-test", LuaHostShared::empty());
+        let jump_rx = handles.jump_rx;
         let ud = lua.create_userdata(host).expect("create_userdata");
         lua.globals().set("host", ud).expect("set global");
 
@@ -230,7 +388,7 @@ mod tests {
     #[test]
     fn parse_json_round_trips_primitives() {
         let lua = mlua::Lua::new();
-        let (host, _, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -254,7 +412,7 @@ mod tests {
     #[test]
     fn parse_json_object_becomes_string_keyed_table() {
         let lua = mlua::Lua::new();
-        let (host, _, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -274,7 +432,7 @@ mod tests {
     #[test]
     fn parse_json_array_is_one_indexed_in_lua() {
         let lua = mlua::Lua::new();
-        let (host, _, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -296,7 +454,7 @@ mod tests {
     #[test]
     fn parse_json_invalid_returns_nil() {
         let lua = mlua::Lua::new();
-        let (host, _, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();
@@ -310,7 +468,7 @@ mod tests {
     #[test]
     fn parse_json_null_is_nil() {
         let lua = mlua::Lua::new();
-        let (host, _, _) = LuaHost::new("lua-test");
+        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
         lua.globals()
             .set("host", lua.create_userdata(host).unwrap())
             .unwrap();

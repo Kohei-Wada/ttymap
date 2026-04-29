@@ -52,18 +52,16 @@ pub(crate) mod widget;
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
 
-/// Plugin modules. Each plugin exposes a `pub fn register(...,
-/// &mut Registrar)` that plugs it into the compositor / painters /
-/// tasks / palette. `App` is plugin-agnostic — only
-/// `build_registrar` in `app/mod.rs` names plugins by module path.
-pub(crate) mod plugin;
-
 /// Plugin API — opt-in toolbox for plugin authors. Counterpart to the
 /// plugin *trait* (`compositor::Component`): the trait is the contract
 /// the framework calls into, while this module holds the cross-cutting
 /// helpers plugins call out to (`PolledFeed`, future label / marker
 /// helpers). Subsystem-specific surfaces like `MapApi` live with
 /// their owning subsystem instead.
+///
+/// All in-tree plugins are now Lua (see `src/lua/scripts/`). This
+/// module remains because the Lua bridge re-uses some of its
+/// primitives — notably `MapApi` and `PanelAnchor`.
 pub(crate) mod plugin_api;
 
 /// Command palette — `:`-triggered universal picker. Lives as a peer
