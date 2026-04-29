@@ -26,9 +26,39 @@ use mlua::{Lua, Table};
 use crate::compositor::Registrar;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
-/// would happen here; for now we hand back the unmodified VM.
+/// would happen here; for now we hand back the unmodified VM with
+/// `package.path` extended so a plugin can `require` its siblings:
+///
+/// ```lua
+/// -- ~/.config/ttymap/plugins/main.lua
+/// local utils = require "utils"   -- ~/.config/ttymap/plugins/utils.lua
+/// ```
 pub fn new_lua() -> Lua {
-    Lua::new()
+    let lua = Lua::new();
+    if let Some(dir) = user_plugins_dir() {
+        prepend_package_path(&lua, &dir);
+    }
+    lua
+}
+
+/// Prepend `<dir>/?.lua` and `<dir>/?/init.lua` to Lua's
+/// `package.path` so `require "name"` finds files siblings of the
+/// caller in `dir`. Failure is silent — a Lua state without the
+/// extra path falls back to the system default, which is fine for
+/// plugins that don't `require` anything.
+fn prepend_package_path(lua: &Lua, dir: &Path) {
+    let Some(dir_str) = dir.to_str() else {
+        return;
+    };
+    let extra = format!("{0}/?.lua;{0}/?/init.lua", dir_str);
+    let result: mlua::Result<()> = (|| {
+        let package: Table = lua.globals().get("package")?;
+        let existing: String = package.get("path")?;
+        package.set("path", format!("{};{}", extra, existing))
+    })();
+    if let Err(e) = result {
+        log::warn!("lua: failed to extend package.path with {}: {}", dir_str, e);
+    }
 }
 
 /// Bundled `hello` plugin source — a tiny demo that doubles as the
@@ -372,6 +402,41 @@ mod tests {
             "broken plugin should not register, got {:?}",
             ls,
         );
+    }
+
+    #[test]
+    fn package_path_extension_lets_require_find_siblings() {
+        // Drop a `helper.lua` into a tempdir, point Lua's
+        // `package.path` at it, then `require "helper"` from a
+        // plain Lua chunk. The require must resolve to the file
+        // we wrote — proves the extension is wired.
+        let dir = temp_plugins_dir("require");
+        std::fs::write(
+            dir.join("helper.lua"),
+            "return { greet = function(name) return 'hi ' .. name end }",
+        )
+        .unwrap();
+
+        let lua = Lua::new();
+        prepend_package_path(&lua, &dir);
+        let greeting: String = lua
+            .load(r#"return require("helper").greet("world")"#)
+            .eval()
+            .expect("require should find helper.lua via prepended package.path");
+        assert_eq!(greeting, "hi world");
+    }
+
+    #[test]
+    fn package_path_unchanged_for_unrelated_modules() {
+        // The extension only adds a *prefix*; existing entries
+        // (system Lua paths, mlua's defaults) stay reachable, so
+        // a `require "doesnotexist"` still produces the standard
+        // "module not found" error rather than something exotic.
+        let dir = temp_plugins_dir("require-passthrough");
+        let lua = Lua::new();
+        prepend_package_path(&lua, &dir);
+        let res: mlua::Result<i64> = lua.load(r#"return require("doesnotexist")"#).eval();
+        assert!(res.is_err(), "non-existent require should still error");
     }
 
     #[test]
