@@ -34,7 +34,19 @@ where
 {
     let table = lua.create_table()?;
     table.set("point", scope.create_function(|_, args| point(cell, args))?)?;
+    table.set("label", scope.create_function(|_, args| label(cell, args))?)?;
     Ok(table)
+}
+
+/// Resolve a Lua-side colour keyword. Unknown keywords fall back to
+/// `accent_color` — a typo-y plugin still renders, just in the
+/// "wrong" colour, instead of crashing the script.
+fn resolve_color(p: &MapApi<'_>, name: Option<&mlua::String>) -> ratatui::style::Color {
+    match name.and_then(|s| s.to_str().ok()) {
+        Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
+        Some(s) if &*s == "muted" => p.muted_color(),
+        _ => p.accent_color(),
+    }
 }
 
 // First param is the receiver from Lua's `map:point(...)` colon
@@ -54,14 +66,27 @@ fn point(
     let glyph_str = glyph.to_str()?;
     let glyph_char = glyph_str.chars().next().unwrap_or(' ');
     let mut p = cell.borrow_mut();
-    let color = match color_name.as_ref().and_then(|s| s.to_str().ok()) {
-        Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
-        // Unknown keyword: fall back to the primary accent rather
-        // than erroring. A typo-y plugin still renders; the bad
-        // colour name surfaces visually as "wrong colour" instead
-        // of a stack trace.
-        _ => p.accent_color(),
-    };
+    let color = resolve_color(&p, color_name.as_ref());
     p.point(LonLat { lon, lat }, glyph_char, color);
+    Ok(())
+}
+
+// `map:label(lon, lat, text, color?)` — paints `text` starting one
+// cell to the right of the projected point. Multi-cell text picks up
+// the same colour fallback as `point`.
+fn label(
+    cell: &RefCell<&mut MapApi<'_>>,
+    (_self, lon, lat, text, color_name): (
+        mlua::Table,
+        f64,
+        f64,
+        mlua::String,
+        Option<mlua::String>,
+    ),
+) -> mlua::Result<()> {
+    let text_str = text.to_str()?;
+    let mut p = cell.borrow_mut();
+    let color = resolve_color(&p, color_name.as_ref());
+    p.label(LonLat { lon, lat }, &text_str, color);
     Ok(())
 }
