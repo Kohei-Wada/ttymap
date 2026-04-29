@@ -436,6 +436,21 @@ fn build_registrar(
         crate::plugin::quake::register(config, &mut r);
     }
 
+    // Lua scripted plugins. Opt-in via `[lua] enabled = true` —
+    // unlike the rest of the plugins, default is *false* because
+    // these are demo / dogfood, not user-facing features. The
+    // detection inlines the lookup so we don't perturb
+    // `Config::plugin_enabled`'s default-true semantics.
+    let lua_enabled = config
+        .extras
+        .get("lua")
+        .and_then(|v| v.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if lua_enabled {
+        crate::lua::register(&mut r);
+    }
+
     // Help needs to know the other plugins' activation hints, so build
     // its text after them (but before palette install, since palette
     // harvests help's palette entry too).

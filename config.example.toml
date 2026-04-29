@@ -98,3 +98,11 @@
 
 # [info]
 # enabled = false      # turns off the top-right cursor / centre / zoom readout
+
+# ── Lua scripted plugins (opt-in) ───────────────────────────────────
+# Loads bundled scripts under src/lua/scripts/. Today: a `hello`
+# demo. Off by default because the bundled scripts are demos /
+# templates, not user-facing features. See docs/lua-bridge-surface.md
+# for the bridge surface.
+# [lua]
+# enabled = true

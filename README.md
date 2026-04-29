@@ -165,6 +165,11 @@ src/
 │   ├── search/          forward-geocode (Nominatim) — registers a palette provider, no Component
 │   └── wiki/            nearby Wikipedia panel
 │
+├── lua/                 Lua scripted plugins (mlua + Lua 5.4, opt-in via `[lua] enabled = true`)
+│   ├── mod.rs           shared VM + register() for bundled scripts
+│   ├── component.rs     LuaComponent — Component impl backed by a Lua module
+│   └── scripts/         bundled .lua sources (hello.lua: demo / template)
+│
 ├── plugin_api/          plugin-author surface — services + helpers + prelude
 │   ├── mod.rs           re-exports + `prelude` glob
 │   ├── map_api.rs       MapApi — world-space + screen-space draw primitives for paint_on_map
@@ -390,6 +395,12 @@ timeout_ms = 2000
 [keymap]
 zoom_in = ["i", "+"]
 quit = ["q", "C-q"]
+
+# Opt-in: load bundled Lua plugins (today: hello). Adds a "Toggle
+# Lua: hello" entry to the `:` palette. Disabled by default because
+# bundled scripts are demos, not features.
+[lua]
+enabled = true
 ```
 
 See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults.
