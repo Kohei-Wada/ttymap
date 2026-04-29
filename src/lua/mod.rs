@@ -72,17 +72,20 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 // a new builtin = drop a `.lua` under `scripts/` + 1 line here.
 
 const BUILTIN_SCRIPTS: &[(&str, &str)] = &[
-    ("aircraft", include_str!("scripts/aircraft.lua")),
-    ("attribution", include_str!("scripts/attribution.lua")),
-    ("export", include_str!("scripts/export.lua")),
-    ("help", include_str!("scripts/help.lua")),
-    ("here", include_str!("scripts/here.lua")),
-    ("info", include_str!("scripts/info.lua")),
-    ("iss", include_str!("scripts/iss.lua")),
-    ("quake", include_str!("scripts/quake.lua")),
-    ("scalebar", include_str!("scripts/scalebar.lua")),
-    ("search", include_str!("scripts/search.lua")),
-    ("wiki", include_str!("scripts/wiki.lua")),
+    ("aircraft", include_str!("../../runtime/lua/aircraft.lua")),
+    (
+        "attribution",
+        include_str!("../../runtime/lua/attribution.lua"),
+    ),
+    ("export", include_str!("../../runtime/lua/export.lua")),
+    ("help", include_str!("../../runtime/lua/help.lua")),
+    ("here", include_str!("../../runtime/lua/here.lua")),
+    ("info", include_str!("../../runtime/lua/info.lua")),
+    ("iss", include_str!("../../runtime/lua/iss.lua")),
+    ("quake", include_str!("../../runtime/lua/quake.lua")),
+    ("scalebar", include_str!("../../runtime/lua/scalebar.lua")),
+    ("search", include_str!("../../runtime/lua/search.lua")),
+    ("wiki", include_str!("../../runtime/lua/wiki.lua")),
 ];
 
 /// Register every bundled Lua plugin with the registrar. Each

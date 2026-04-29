@@ -19,7 +19,7 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Help popup** — `?` shows all keybindings
 - **Frame export** — palette entry writes the current view as an ANSI-coloured text file under `~/.local/share/ttymap/exports/`
 - **Configurable** — keybindings, initial position, language via TOML config
-- **Lua plugin API** — every in-tree plugin is a Lua script under `src/lua/scripts/`; drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding. Bundled and user scripts share one dispatcher and the same `host:*` accessor surface.
+- **Lua plugin API** — every in-tree plugin is a Lua script under `runtime/lua/`; drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding. Bundled and user scripts share one dispatcher and the same `host:*` accessor surface.
 
 ## Usage
 
@@ -100,16 +100,16 @@ src/
 │   ├── panel.rs         popup layout
 │   └── provider/        default provider + theme sub-mode
 │
-├── lua/                 Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here.
+├── lua/                 Lua bridge (mlua + Lua 5.4 vendored).
 │   ├── mod.rs           BUILTIN_SCRIPTS array + register_one dispatcher (reads module metadata)
 │   ├── component.rs     LuaComponent — Component impl backed by a Lua module
 │   ├── palette_provider.rs  LuaPaletteProvider — PaletteProvider impl (search)
 │   ├── host.rs          LuaHostShared + host:* accessors (fetch_url / jump / close /
-│   │                    export_frame / center / parse_json / attribution / geoip_endpoint /
-│   │                    keymap_entries / plugin_palette_entries)
-│   ├── map_api.rs       Lua-side MapApi bridge (point / label / text_anchored / center / zoom / cursor / area_width)
-│   └── scripts/         aircraft, attribution, export, help, here, info, iss, quake, scalebar, search, wiki
+│   │                    export_frame / center / parse_json / url_encode / attribution /
+│   │                    geoip_endpoint / keymap_entries / plugin_palette_entries)
+│   └── map_api.rs       Lua-side MapApi bridge (point / label / text_anchored / center / zoom / cursor / area_width)
 │
+
 ├── plugin_api/          crate-internal primitives the Lua bridge re-uses
 │   ├── mod.rs           re-exports
 │   ├── map_api.rs       MapApi — world-space + screen-space draw primitives
@@ -134,6 +134,12 @@ src/
 │   └── http/            user-agent-tagged reqwest wrapper
 │
 └── ui.rs                non-modal UI shell — draw() forwards to the Compositor
+
+runtime/
+└── lua/                 bundled Lua plugin scripts (aircraft, attribution, export,
+                         help, here, info, iss, quake, scalebar, search, wiki).
+                         `include_str!`'d at compile time by `BUILTIN_SCRIPTS`; the
+                         binary ships them as data, not Rust source.
 ```
 
 ### Layering
@@ -249,7 +255,7 @@ Per-frame `host` and `map` accessors (a partial list):
 
 To register as a palette provider (search uses this), expose a `palette = { prompt, submit_mode, filter, items, execute, poll, is_loading }` sub-table on the returned module. The dispatcher reads palette-provider semantics from the *shape* of the returned table — there is no separate `kind` field.
 
-Adding a bundled plugin = drop a `.lua` under `src/lua/scripts/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
+Adding a bundled plugin = drop a `.lua` under `runtime/lua/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
 
 ### Concurrency
 
@@ -294,7 +300,7 @@ Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), live
 ttymap is small, the code is documented, and the roadmap is deliberately open. If you want to:
 
 - **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — every in-tree plugin is a Lua script under `src/lua/scripts/`. Drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding; the file *is* the config (set `enabled = false` on the returned table to disable). The simplest fetch+render example is `quake.lua`; for a full panel + selection + modal detail flow see `wiki.lua`; for a debounced palette picker see `search.lua`. The bridge surface is documented in the `src/lua/` module-level docs.
+- **Write a plugin** — every in-tree plugin is a Lua script under `runtime/lua/`. Drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding; the file *is* the config (set `enabled = false` on the returned table to disable). The simplest fetch+render example is `quake.lua`; for a full panel + selection + modal detail flow see `wiki.lua`; for a debounced palette picker see `search.lua`. The bridge surface is documented in the `src/lua/` module-level docs.
 - **Fix a bug or clean something up** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt; follow its lead.
 
 Issues on GitHub carry the current opinion of what's easy, what's hard, and what's deferred. Skim them before designing.
@@ -323,7 +329,7 @@ zoom_in = ["i", "+"]
 quit = ["q", "C-q"]
 ```
 
-See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults. Per-plugin behaviour lives inside each `.lua` script — to tweak refresh cadence, panel size, or hardcoded API endpoints, edit `src/lua/scripts/<name>.lua` (bundled) or drop a copy under `~/.config/ttymap/plugins/` (user).
+See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults. Per-plugin behaviour lives inside each `.lua` script — to tweak refresh cadence, panel size, or hardcoded API endpoints, edit `runtime/lua/<name>.lua` (bundled) or drop a copy under `~/.config/ttymap/plugins/` (user).
 
 ## Build
 
