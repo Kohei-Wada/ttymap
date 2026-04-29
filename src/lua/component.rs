@@ -831,4 +831,32 @@ mod tests {
             .any(|(x, y)| buf[(x, y)].symbol() == "*");
         assert!(written, "expected at least one '*' in the buffer");
     }
+
+    #[test]
+    fn paint_on_map_label_writes_text_into_the_buffer() {
+        // `map:label(lon, lat, "ISS", "accent")` should render at
+        // least one cell whose symbol is one of the literal label
+        // characters. Same shape as the point test — coordinates
+        // round to *somewhere* in the buffer at centre=(0,0)/zoom=1.
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "marker",
+                paint_on_map = function(map)
+                    map:label(0.0, 0.0, "ISS", "accent")
+                end,
+            }"#,
+            "marker",
+        )
+        .expect("load");
+        let (mut buf, area, frame, theme) = map_fixture(20, 5);
+        {
+            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+            c.dispatch_paint(&mut api);
+        }
+        let chars: Vec<&str> = vec!["I", "S"];
+        let written = (0..area.width)
+            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
+            .any(|(x, y)| chars.contains(&buf[(x, y)].symbol()));
+        assert!(written, "expected at least one label glyph in the buffer");
+    }
 }

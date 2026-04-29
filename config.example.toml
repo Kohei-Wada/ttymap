@@ -82,11 +82,11 @@
 # enabled = false      # default: on
 
 # ── ISS plugin (live position from open-notify) ─────────────────────
+# Lua-backed since the Rust impl was retired. Layout / refresh
+# knobs live inside `src/lua/scripts/iss.lua` for now —
+# user-overrides will land when the bridge gains a config helper.
 # [iss]
-# interval_secs = 5
-# anchor        = "top-left"
-# width         = 30
-# height        = 4
+# enabled = false      # default: on
 
 # ── Earthquake plugin (USGS M2.5+ feed) ─────────────────────────────
 # [quake]

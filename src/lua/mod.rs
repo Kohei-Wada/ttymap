@@ -70,6 +70,11 @@ const HELLO_LUA: &str = include_str!("scripts/hello.lua");
 /// goes away and this becomes the only aircraft implementation.
 const AIRCRAFT_LUA: &str = include_str!("scripts/aircraft.lua");
 
+/// ISS plugin (Lua port). Same `[iss]` config gate as the Rust
+/// original; once this is validated the Rust plugin under
+/// `src/plugin/iss/` goes away.
+const ISS_LUA: &str = include_str!("scripts/iss.lua");
+
 /// Wire the `hello` demo plugin. Called from `app::build_registrar`
 /// when `[lua] enabled = true`.
 pub fn register_hello(r: &mut Registrar) {
@@ -80,6 +85,12 @@ pub fn register_hello(r: &mut Registrar) {
 /// `app::build_registrar` when `[lua_aircraft] enabled = true`.
 pub fn register_aircraft(r: &mut Registrar) {
     register_script("aircraft", AIRCRAFT_LUA, r);
+}
+
+/// Wire the Lua port of the iss plugin. Called from
+/// `app::build_registrar` when `[iss] enabled = true`.
+pub fn register_iss(r: &mut Registrar) {
+    register_script("iss", ISS_LUA, r);
 }
 
 /// Scan `~/.config/ttymap/plugins/*.lua` and register each as a
@@ -284,6 +295,23 @@ mod tests {
         assert!(
             labels.iter().any(|l| l.contains("aircraft")),
             "expected an 'aircraft' palette entry, got {:?}",
+            labels,
+        );
+    }
+
+    #[test]
+    fn bundled_iss_script_parses() {
+        LuaComponent::from_source(ISS_LUA, "iss").expect("iss.lua should parse");
+    }
+
+    #[test]
+    fn register_iss_adds_a_palette_entry() {
+        let mut r = Registrar::default();
+        register_iss(&mut r);
+        let labels: Vec<&str> = r.palette_entries.iter().map(|e| e.label.as_str()).collect();
+        assert!(
+            labels.iter().any(|l| l.contains("iss")),
+            "expected an 'iss' palette entry, got {:?}",
             labels,
         );
     }

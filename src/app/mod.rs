@@ -444,7 +444,10 @@ fn build_registrar(
         crate::lua::register_aircraft(&mut r);
     }
     if config.plugin_enabled("iss") {
-        crate::plugin::iss::register(config, &mut r);
+        // Lua port lives in `src/lua/scripts/iss.lua`. Same `[iss]`
+        // config gate; the previous Rust impl under
+        // `src/plugin/iss/` was retired after the migration.
+        crate::lua::register_iss(&mut r);
     }
     if config.plugin_enabled("quake") {
         crate::plugin::quake::register(config, &mut r);
