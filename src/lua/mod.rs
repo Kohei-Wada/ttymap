@@ -13,11 +13,16 @@
 //!   crash the host. Helpers in this module wrap mlua results with
 //!   `log::warn!` + recovery default.
 
+pub mod component;
+
+#[allow(unused_imports)] // re-export becomes load-bearing once a plugin registers
+pub use component::LuaComponent;
+
 use mlua::Lua;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM.
-#[allow(dead_code)] // wired up by the LuaComponent bridge in a follow-up
+#[allow(dead_code)] // exercised by component.rs tests; first non-test caller lands when LuaComponent is registered.
 pub fn new_lua() -> Lua {
     Lua::new()
 }
