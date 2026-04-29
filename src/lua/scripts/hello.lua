@@ -4,6 +4,11 @@
 -- `render()` is called every frame; return a list of strings and the
 -- host wraps them in a framed Paragraph titled with `name`.
 --
+-- Optional `layout = { anchor, width, height }` controls where the
+-- panel sits inside the map area. Without it the panel falls back
+-- to a small top-left box; with it you get the same anchor / size
+-- vocabulary as the Rust plugins.
+--
 -- `poll()` is optional. The host calls it every tick (regardless of
 -- focus). Use it to advance counters, drain async fetches, etc.
 -- Persistent host services hang off the `host` global:
@@ -46,6 +51,12 @@ local state = { ticks = 0, last_second = 0 }
 
 return {
     name = "hello",
+
+    -- Where the framed panel sits inside the map area.
+    -- anchor: left | right | top-left | top-right | bottom-left
+    --         | bottom-right | center
+    -- width / height in terminal cells (omit height to fill).
+    layout = { anchor = "center", width = 40, height = 12 },
 
     render = function()
         return {

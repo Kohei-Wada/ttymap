@@ -26,7 +26,59 @@ use crate::compositor::Component;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::geo::LonLat;
 use crate::plugin_api::MapApi;
+use crate::plugin_api::layout::PanelAnchor;
 use crate::widget::{self, Line, Span, StyleKind};
+
+/// Per-plugin layout knobs read from `module.layout`. Without this,
+/// `LuaComponent::render` would paint the framed Paragraph over the
+/// full map area and obscure the rendered tiles — visible to the
+/// user as a black-and-white map while the panel is open.
+struct LuaLayout {
+    anchor: PanelAnchor,
+    width: u16,
+    height: Option<u16>,
+}
+
+impl LuaLayout {
+    /// Sane default when a plugin omits the `layout` field —
+    /// top-left, modest fixed size. Big enough for a few lines of
+    /// text, small enough not to swallow the map.
+    fn fallback() -> Self {
+        Self {
+            anchor: PanelAnchor::TopLeft,
+            width: 32,
+            height: Some(10),
+        }
+    }
+
+    /// Read `module.layout = { anchor, width, height }`. Anything
+    /// missing falls back to the corresponding [`Self::fallback`]
+    /// field; an unknown anchor string falls back too rather than
+    /// erroring (matches the rest of the bridge's recovery rule).
+    fn from_module(module: &Table) -> Self {
+        let mut out = Self::fallback();
+        let Ok(layout): mlua::Result<Table> = module.get("layout") else {
+            return out;
+        };
+        if let Ok(s) = layout.get::<String>("anchor")
+            && let Some(a) = PanelAnchor::from_str(&s)
+        {
+            out.anchor = a;
+        }
+        if let Ok(w) = layout.get::<u16>("width") {
+            out.width = w;
+        }
+        // `height` is optional: when absent, the panel uses the
+        // full available height of `outer`. Lua nil reads as
+        // missing; explicit numeric overrides that.
+        if let Ok(h) = layout.get::<u16>("height") {
+            out.height = Some(h);
+        } else {
+            out.height = None;
+        }
+        out
+    }
+}
 
 /// A Component implemented in Lua.
 #[allow(dead_code)] // first registrar caller lands when the hello.lua plugin is wired into build_registrar
@@ -39,6 +91,10 @@ pub struct LuaComponent {
     /// `&'static str`. Leaked once per component; total cost is a
     /// few dozen bytes for the lifetime of the program.
     name: &'static str,
+    /// Panel placement read from `module.layout` at construction.
+    /// Stored on the component so `render` can compute the sub-rect
+    /// without touching Lua every frame.
+    layout: LuaLayout,
     /// Receiver for `host:jump(lon, lat)` requests. The Lua side
     /// pushes a `LonLat`; we drain after each `poll` /
     /// `handle_event` and emit `AppMsg::Jump` through the host
@@ -68,11 +124,13 @@ impl LuaComponent {
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
         let name: &'static str = Box::leak(raw_name.into_boxed_str());
+        let layout = LuaLayout::from_module(&module);
         let module = lua.create_registry_value(module)?;
         Ok(Self {
             lua,
             module,
             name,
+            layout,
             jump_rx,
         })
     }
@@ -281,7 +339,26 @@ impl Component for LuaComponent {
     }
 
     fn render(&self, win: &mut RenderWindow) {
-        let area = win.area();
+        let outer = win.area();
+        // Anchor the panel inside the map area so the framed
+        // Paragraph doesn't paint over the rendered tiles. Height
+        // defaults to the available space minus a 1-cell margin
+        // when the plugin doesn't pin a specific value.
+        let height = self
+            .layout
+            .height
+            .unwrap_or_else(|| outer.height.saturating_sub(2));
+        let area = self.layout.anchor.rect(outer, self.layout.width, height);
+
+        // Wipe the panel rect before drawing. The block underneath
+        // sets `style.bg` but leaves `fg` unset, which means cells
+        // keep the map's previously-rendered foreground colours and
+        // the panel ends up looking like a desaturated translucent
+        // overlay. Clear first, then the framed Paragraph fills bg
+        // and writes text fg from scratch — same trick the shared
+        // `ListPanel` chrome uses.
+        win.clear(area);
+
         let body = win.style(StyleKind::Body);
         let lines: Vec<Line> = self
             .render_lines()
@@ -584,6 +661,52 @@ mod tests {
         .expect("load");
         // Should not panic.
         c.dispatch_poll();
+    }
+
+    // ── layout ──────────────────────────────────────────────────
+
+    #[test]
+    fn layout_falls_back_when_module_omits_it() {
+        let c = LuaComponent::from_source(r#"return { name = "noop" }"#, "noop").expect("load");
+        // Default fallback: TopLeft, 32x10. Asserting on the
+        // resolved sub-rect inside a 100x40 outer is the cleanest
+        // proxy for "didn't paint over the map".
+        let outer = widget::Rect::new(0, 0, 100, 40);
+        let height = c.layout.height.unwrap_or(outer.height.saturating_sub(2));
+        let r = c.layout.anchor.rect(outer, c.layout.width, height);
+        assert!(r.width <= 32, "fallback width should be at most 32");
+        assert!(r.height <= 10, "fallback height should be at most 10");
+        assert!(r.x < outer.width, "fallback x is in bounds");
+        assert!(r.y < outer.height, "fallback y is in bounds");
+    }
+
+    #[test]
+    fn layout_reads_anchor_width_height_from_module() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "configured",
+                layout = { anchor = "right", width = 24, height = 8 },
+            }"#,
+            "configured",
+        )
+        .expect("load");
+        assert_eq!(c.layout.anchor, PanelAnchor::Right);
+        assert_eq!(c.layout.width, 24);
+        assert_eq!(c.layout.height, Some(8));
+    }
+
+    #[test]
+    fn layout_unknown_anchor_falls_back_silently() {
+        let c = LuaComponent::from_source(
+            r#"return {
+                name = "typo",
+                layout = { anchor = "norkeast" },
+            }"#,
+            "typo",
+        )
+        .expect("load");
+        // Default fallback anchor is TopLeft (see LuaLayout::fallback).
+        assert_eq!(c.layout.anchor, PanelAnchor::TopLeft);
     }
 
     #[test]
