@@ -30,6 +30,7 @@ toml = "1.1.2"
 indexmap = "2.14.0"
 lru = "0.16"
 crossbeam-channel = "0.5"
+mlua = { version = "0.11", features = ["lua54", "vendored"] }
 
 [dev-dependencies]
 criterion = "0.5"
