@@ -61,10 +61,12 @@ function M.make(specs)
     end
     table.insert(hints, { "Enter", "centre on first visible" })
 
-    -- Panel sized to: title row + N sat rows + 1 row of breathing
-    -- room. Width chosen to fit "● Hubble  XX.X°N, YYY.Y°E  ZZZkm"
-    -- without truncation.
-    local panel_height = math.max(#sats + 2, 4)
+    -- Block::Borders::ALL eats one row top + one row bottom, so the
+    -- visible content area is `height - 2`. Size for exactly N sat
+    -- rows (no in-panel header — the block's `satellite` title bar
+    -- already labels the panel). Width fits
+    -- "○ [h] Hubble  XX.X°N, YYY.Y°E  ZZZkm".
+    local panel_height = #sats + 2
 
     local initial_jump_done = false
 
@@ -75,7 +77,7 @@ function M.make(specs)
         footer_hints = hints,
 
         render = function()
-            local lines = { "Satellites" }
+            local lines = {}
             for _, sat in ipairs(sats) do
                 local marker = sat.visible and "●" or "○"
                 local body
