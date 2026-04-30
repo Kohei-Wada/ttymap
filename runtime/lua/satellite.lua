@@ -8,6 +8,8 @@
 -- a free key char.
 
 return require("ttymap.satellites").make({
-    { display = "ISS",    norad_id = 25544, color = "accent_alt", key = "i" },
-    { display = "Hubble", norad_id = 20580, color = "accent",     key = "H" },
+    { display = "ISS",      norad_id = 25544, color = "accent_alt", key = "i" },
+    { display = "Hubble",   norad_id = 20580, color = "accent",     key = "H" },
+    { display = "Tiangong", norad_id = 48274, color = "highlight",  key = "T" },
+    { display = "Landsat",  norad_id = 49260, color = "link",       key = "L" },
 })
