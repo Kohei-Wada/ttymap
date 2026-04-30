@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use mlua::Table;
 
+use super::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::app::AppMsg;
 use crate::compositor::Context;
 use crate::geo::LonLat;
-use crate::lua::handle::{CallOutcome, LuaHandle, fresh_load};
-use crate::lua::host::LuaHostShared;
+use crate::lua::ttymap::LuaHostShared;
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
@@ -214,7 +214,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             "return { palette = {} }",
             "anon",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(p.prompt(), ":");
@@ -225,7 +225,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { palette = { prompt = "/" } }"#,
             "named",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(p.prompt(), "/");
@@ -233,11 +233,8 @@ mod tests {
 
     #[test]
     fn from_source_rejects_module_without_palette_subtable() {
-        let err = LuaPaletteProvider::from_source(
-            "return {}",
-            "missing-palette",
-            super::super::host::LuaHostShared::empty(),
-        );
+        let err =
+            LuaPaletteProvider::from_source("return {}", "missing-palette", LuaHostShared::empty());
         assert!(err.is_err(), "no palette sub-table should fail to load");
     }
 
@@ -246,7 +243,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             "return { palette = {} }",
             "anon",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert!(matches!(p.submit_mode(), SubmitMode::OnEachKey));
@@ -257,7 +254,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { palette = { submit_mode = "debounced" } }"#,
             "anon",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         match p.submit_mode() {
@@ -271,7 +268,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { palette = { submit_mode = { kind = "debounced", ms = 250 } } }"#,
             "anon",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         match p.submit_mode() {
@@ -299,7 +296,7 @@ mod tests {
             }
             "#,
             "round-trip",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         p.filter("hi");
@@ -322,7 +319,7 @@ mod tests {
             }
             "#,
             "exec-jump",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         match p.execute(0, &ctx()) {
@@ -339,7 +336,7 @@ mod tests {
         let mut p = LuaPaletteProvider::from_source(
             r#"return { palette = { execute = function(_) return { close = true } end } }"#,
             "exec-close",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert!(matches!(p.execute(0, &ctx()), PaletteAction::Close));
@@ -350,7 +347,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             "return { palette = {} }",
             "anon",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert!(!p.is_loading());
@@ -361,7 +358,7 @@ mod tests {
         let p = LuaPaletteProvider::from_source(
             r#"return { palette = { is_loading = function() return true end } }"#,
             "loading",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert!(p.is_loading());

@@ -23,13 +23,13 @@ use mlua::Table;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::app::AppMsg;
 use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{OverlayWindow, RenderWindow, Window};
 use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
-use crate::lua::handle::{CallOutcome, LuaHandle, fresh_load};
-use crate::lua::host::LuaHostShared;
+use crate::lua::ttymap::{LuaHostHandles, LuaHostShared};
 use crate::theme::StyleKind;
 
 /// Per-plugin layout knobs read from `module.layout`. Without this,
@@ -181,7 +181,7 @@ impl LuaComponent {
         );
         let footer_hints = parse_footer_hints(&module);
 
-        let super::host::LuaHostHandles {
+        let LuaHostHandles {
             jump_rx,
             close_rx,
             export_rx,
@@ -338,7 +338,7 @@ impl LuaComponent {
             let Some(painter) = painter else {
                 return Ok(());
             };
-            let map_table = super::map_api::make_map_table(lua, scope, &cell)?;
+            let map_table = crate::lua::ttymap::map_api::make_map_table(lua, scope, &cell)?;
             painter.call::<()>(map_table)
         });
         if let Err(e) = result {
@@ -375,7 +375,7 @@ impl LuaComponent {
 /// identical between the leak version stored on the component and the
 /// owned version stored in the metadata snapshot.
 fn parse_footer_hints(module: &Table) -> Vec<(&'static str, &'static str)> {
-    super::parse_footer_hints(module)
+    crate::lua::parse_footer_hints(module)
         .into_iter()
         .map(|(k, v)| {
             let k: &'static str = Box::leak(k.into_boxed_str());
@@ -606,7 +606,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "International Space Station", render = function() return {} end }"#,
             "iss",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.name(), "International Space Station");
@@ -617,12 +617,8 @@ mod tests {
     fn display_falls_back_to_id_when_module_omits_name() {
         // Minimal `return {}` — display defaults to id. dedup_tag
         // is still the id.
-        let c = LuaComponent::from_source(
-            "return {}",
-            "anon",
-            super::super::host::LuaHostShared::empty(),
-        )
-        .expect("load");
+        let c =
+            LuaComponent::from_source("return {}", "anon", LuaHostShared::empty()).expect("load");
         assert_eq!(c.name(), "anon");
         assert_eq!(c.dedup_tag(), Some("anon"));
     }
@@ -635,7 +631,7 @@ mod tests {
                 render = function() return { "alpha", "beta", "gamma" } end,
             }"#,
             "demo",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let lines = c.render_lines();
@@ -653,7 +649,7 @@ mod tests {
                 render = function() error("kaboom") end,
             }"#,
             "broken",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic — error is logged, we get an empty result.
@@ -665,7 +661,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "noop" }"#,
             "noop",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // No `render` key → graceful fallback.
@@ -688,7 +684,7 @@ mod tests {
                 end,
             }"#,
             "styled",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let lines = c.render_lines();
@@ -704,11 +700,8 @@ mod tests {
 
     #[test]
     fn loading_invalid_lua_returns_error() {
-        let err = LuaComponent::from_source(
-            "this is not lua syntax !",
-            "bad",
-            super::super::host::LuaHostShared::empty(),
-        );
+        let err =
+            LuaComponent::from_source("this is not lua syntax !", "bad", LuaHostShared::empty());
         assert!(err.is_err());
     }
 
@@ -721,7 +714,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "noop" }"#,
             "noop",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Ignore);
@@ -735,7 +728,7 @@ mod tests {
                 handle_event = function(_) return nil end,
             }"#,
             "modal",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(
@@ -755,7 +748,7 @@ mod tests {
                 end,
             }"#,
             "esc",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Close);
@@ -773,7 +766,7 @@ mod tests {
                 handle_event = function(_) return { ignore = true } end,
             }"#,
             "passthrough",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.dispatch_event(key(KeyCode::Char('q'))), KeyAction::Ignore);
@@ -796,7 +789,7 @@ mod tests {
                 end,
             }"#,
             "echo",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Use the recovery branch as a poor man's assertion: a
@@ -818,7 +811,7 @@ mod tests {
                 handle_event = function(_) error("kaboom") end,
             }"#,
             "broken",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic, should not leak as Ignore (we don't want
@@ -838,7 +831,7 @@ mod tests {
                 handle_event = function(_) return "yolo" end,
             }"#,
             "weird",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(
@@ -873,7 +866,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "blank" }"#,
             "blank",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
@@ -890,7 +883,7 @@ mod tests {
                 paint_on_map = function(_) error("kaboom") end,
             }"#,
             "boom",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
@@ -906,7 +899,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "static" }"#,
             "static",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic, no warning meaningful enough to assert.
@@ -930,7 +923,7 @@ mod tests {
                 end,
             }"#,
             "ticker",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         c.dispatch_poll();
@@ -953,7 +946,7 @@ mod tests {
                 poll = function() error("kaboom") end,
             }"#,
             "broken",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Should not panic.
@@ -967,7 +960,7 @@ mod tests {
         let c = LuaComponent::from_source(
             r#"return { name = "noop" }"#,
             "noop",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Default fallback: TopLeft, 32x10. Asserting on the
@@ -990,7 +983,7 @@ mod tests {
                 layout = { anchor = "right", width = 24, height = 8 },
             }"#,
             "configured",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         assert_eq!(c.layout.anchor, PanelAnchor::Right);
@@ -1006,7 +999,7 @@ mod tests {
                 layout = { anchor = "norkeast" },
             }"#,
             "typo",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // Default fallback anchor is TopLeft (see LuaLayout::fallback).
@@ -1027,7 +1020,7 @@ mod tests {
                 end,
             }"#,
             "jumper",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
 
@@ -1070,7 +1063,7 @@ mod tests {
                 end,
             }"#,
             "jumper",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
 
@@ -1112,7 +1105,7 @@ mod tests {
                 end,
             }"#,
             "bad_overlay",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
 
@@ -1154,7 +1147,7 @@ mod tests {
                 end,
             }"#,
             "checker",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         // If the assertions fail, dispatch_poll would log a warning;
@@ -1189,7 +1182,7 @@ mod tests {
                 end,
             }"#,
             "marker",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);
@@ -1220,7 +1213,7 @@ mod tests {
                 end,
             }"#,
             "marker",
-            super::super::host::LuaHostShared::empty(),
+            LuaHostShared::empty(),
         )
         .expect("load");
         let (mut buf, area, frame, theme) = map_fixture(20, 5);

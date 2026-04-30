@@ -13,19 +13,16 @@
 //!   crash the host. Helpers in this module wrap mlua results with
 //!   `log::warn!` + recovery default.
 
-pub mod component;
-pub mod handle;
-pub mod host;
+pub mod bridge;
 pub mod init_lua;
-pub mod map_api;
-pub mod palette_provider;
 pub mod runtimepath;
-pub mod sgp4;
+pub mod ttymap;
 
-pub use component::LuaComponent;
+pub use bridge::component::LuaComponent;
+pub use bridge::palette_provider::LuaPaletteProvider;
 pub use init_lua::run_init_lua;
-pub use palette_provider::LuaPaletteProvider;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
+pub use ttymap::LuaHostShared;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -161,7 +158,7 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 /// not from this walk.
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
     if runtime_path.is_empty() {
@@ -294,7 +291,7 @@ impl ModuleMeta {
 
 /// Read `module.footer_hints` as owned `(key, label)` pairs.
 /// Mirrors the leak-and-static version in [`component::parse_footer_hints`]
-/// but returns owned strings so the snapshot in [`host::PluginEntry`]
+/// but returns owned strings so the snapshot in [`ttymap::PluginEntry`]
 /// can be rebuilt on each app run without leaking. Two accepted shapes
 /// per pair:
 /// - `{ "Enter", "open" }` — positional 1-based array.
@@ -330,7 +327,7 @@ fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
 fn register_one(
     name: &'static str,
     source: &'static str,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
     let meta = ModuleMeta::parse(source, name);
@@ -357,7 +354,7 @@ fn register_component(
     name: &'static str,
     source: &'static str,
     meta: &ModuleMeta,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
     // Validate up front so a syntax error surfaces as one log line
@@ -418,13 +415,13 @@ fn register_component(
 /// help relied on previously. Overlays don't show up in the palette
 /// and aren't help-relevant, so they're never pushed.
 fn push_plugin_entry(
-    shared: &Arc<host::LuaHostShared>,
+    shared: &Arc<ttymap::LuaHostShared>,
     name: &str,
     key: &str,
     label: &str,
     footer_hints: &[(String, String)],
 ) {
-    shared.push_palette_entry(host::PluginEntry {
+    shared.push_palette_entry(ttymap::PluginEntry {
         name: name.to_string(),
         key: key.to_string(),
         label: label.to_string(),
@@ -436,7 +433,7 @@ fn register_provider(
     name: &'static str,
     source: &'static str,
     meta: &ModuleMeta,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
     if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
@@ -478,7 +475,7 @@ fn register_provider(
 fn component_or_placeholder(
     name: &'static str,
     source: &'static str,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
 ) -> LuaComponent {
     LuaComponent::from_source(source, name, shared.clone()).unwrap_or_else(|e| {
         log::warn!("lua[{}]: re-load failed: {}", name, e);
@@ -503,7 +500,7 @@ fn component_or_placeholder(
 /// skips it — the rest of the directory still loads. Files are
 /// loaded in alphabetical order so palette entries surface in a
 /// predictable order across runs.
-pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar) {
+pub fn register_user_plugins(shared: Arc<ttymap::LuaHostShared>, r: &mut Registrar) {
     let Some(dir) = user_plugins_dir() else {
         return;
     };
@@ -540,7 +537,7 @@ pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar
 fn register_plugins_in(
     dir: &Path,
     mut seen: Option<&mut std::collections::HashSet<String>>,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -655,7 +652,7 @@ mod tests {
     #[test]
     fn every_bundled_script_registers() {
         runtimepath::ensure_runtime_path_for_tests();
-        let shared = host::LuaHostShared::empty();
+        let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
         register_builtin_plugins(&rtp, shared, &mut r);
@@ -702,7 +699,7 @@ mod tests {
     #[test]
     fn two_lua_components_coexist_on_compositor_stack() {
         use crate::compositor::Component;
-        let shared = host::LuaHostShared::empty();
+        let shared = ttymap::LuaHostShared::empty();
         let iss = LuaComponent::from_source(
             r#"return { name = "iss", render = function() return {} end }"#,
             "iss",
@@ -808,7 +805,7 @@ mod tests {
             "#,
         );
 
-        let shared = host::LuaHostShared::empty();
+        let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
         register_plugins_in(&dir, None, shared.clone(), &mut r);
 
@@ -861,7 +858,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -876,7 +873,7 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -895,7 +892,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -917,7 +914,7 @@ mod tests {
         .expect("write init.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -941,7 +938,7 @@ mod tests {
         .expect("write fmt.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         assert!(
             !labels(&r).iter().any(|l| l.contains("libonly")),
             "lib-only subdir must not register as a plugin"
@@ -961,7 +958,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         assert!(labels(&r).iter().any(|l| l.contains("explicit")));
     }
 
@@ -976,7 +973,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -1057,7 +1054,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
         assert!(r.palette_entries.is_empty());
     }
 }

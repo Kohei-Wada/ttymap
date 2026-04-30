@@ -1,5 +1,5 @@
-//! Lua-side host services: persistent state a Lua plugin can reach
-//! at any time via the `ttymap` global.
+//! Builder for the runtime `ttymap` Lua global — the API surface every
+//! plugin script reaches into.
 //!
 //! `ttymap` is a Lua **table** (not a single userdata) whose fields
 //! are domain-namespaced userdatas. Each namespace owns the slice of
@@ -7,6 +7,11 @@
 //! a kitchen-sink struct. Adding a new domain (orbit propagation,
 //! logging, scheduling, …) is one new namespace, no churn on existing
 //! ones.
+//!
+//! Submodules:
+//! - [`sgp4`] — `ttymap.sgp4` userdata (TLE parsing + SGP4 propagation)
+//! - [`map_api`] — per-frame `map` table built inside `Lua::scope`
+//!   (drawing primitives that borrow the live ratatui buffer)
 //!
 //! Surface today:
 //!
@@ -44,6 +49,9 @@
 //! (see `init_lua.rs`), so the namespaces don't collide at runtime.
 //! The split is by *scope*, not by name: `opt` / `keymap` live in
 //! init; `http` / `map` / `window` / etc. live in plugin runtime.
+
+pub mod map_api;
+pub mod sgp4;
 
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -184,7 +192,7 @@ pub fn install(
         })?,
     )?;
     ttymap.set("json", lua.create_userdata(HostJson)?)?;
-    ttymap.set("sgp4", lua.create_userdata(crate::lua::sgp4::HostSgp4)?)?;
+    ttymap.set("sgp4", lua.create_userdata(sgp4::HostSgp4)?)?;
     ttymap.set(
         "tile",
         lua.create_userdata(HostTile {

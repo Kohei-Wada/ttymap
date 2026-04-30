@@ -25,7 +25,7 @@ use crate::geo::LonLat;
 /// call. The closures borrow `cell` for `'scope`; once the host's
 /// `Lua::scope` returns the closures are dropped and the borrow is
 /// released, so it's safe to take the ratatui buffer back out.
-pub(super) fn make_map_table<'scope, 'lua_scope>(
+pub(crate) fn make_map_table<'scope, 'lua_scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'lua_scope>,
     cell: &'scope RefCell<&mut MapApi<'_>>,

@@ -406,7 +406,7 @@ fn build_registrar(
     // injection. Adding a new bundled plugin is one file under
     // `runtime/lua/`; adding a user plugin is one file in
     // `~/.config/ttymap/plugins/`.
-    let shared = Arc::new(crate::lua::host::LuaHostShared::new(
+    let shared = Arc::new(crate::lua::LuaHostShared::new(
         attribution,
         config.geoip.endpoint.clone(),
         keymap_entries(keymap),
