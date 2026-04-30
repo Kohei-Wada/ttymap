@@ -1,19 +1,13 @@
--- satellite — TLE-driven trackers. One palette entry per satellite.
+-- Satellite tracker — single panel showing N satellites at once.
 --
--- Each entry uses the shared `ttymap.satellites` factory: TLE fetch
--- (CelesTrak), SGP4 propagation via `ttymap.sgp4`, marker / label /
--- panel. Add another satellite by appending to `entries` (or by
--- dropping a similar file under `~/.config/ttymap/plugins/`).
---
--- Per-entry `name` drives compositor dedup, so distinct satellites
--- coexist on the stack — toggle ISS and Hubble both ON simultaneously.
+-- The shared `ttymap.satellites` factory builds one Component that
+-- aggregates every configured sat. In-panel key chars (`i`, `h` …)
+-- toggle individual visibility; `Enter` recentres on the first
+-- visible one. To track an extra satellite, copy this file to
+-- `~/.config/ttymap/lua/satellite.lua` and append its NORAD ID +
+-- a free key char.
 
-local make = require("ttymap.satellites").make
-
-return {
-    name = "satellite",
-    entries = {
-        make({ display = "ISS",    norad_id = 25544, color = "accent_alt" }),
-        make({ display = "Hubble", norad_id = 20580, color = "accent" }),
-    },
-}
+return require("ttymap.satellites").make({
+    { display = "ISS",    norad_id = 25544, color = "accent_alt", key = "i" },
+    { display = "Hubble", norad_id = 20580, color = "accent",     key = "h" },
+})

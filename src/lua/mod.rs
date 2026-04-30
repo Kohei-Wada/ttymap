@@ -766,9 +766,18 @@ mod tests {
         let overlay_count = r.overlays.len();
 
         // Toggles + spawns: each leaves a palette entry whose label
-        // contains the plugin's stem (lowercased).
+        // contains the plugin's stem (lowercased). `satellite` is the
+        // single multi-sat tracker — ISS / Hubble live as in-panel
+        // entries inside it, not as separate palette toggles.
         for stem in [
-            "aircraft", "iss", "hubble", "quake", "wiki", "here", "export", "help", "search",
+            "aircraft",
+            "satellite",
+            "quake",
+            "wiki",
+            "here",
+            "export",
+            "help",
+            "search",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),

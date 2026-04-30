@@ -282,7 +282,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Plugin candidates
 
-Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), TLE-driven satellite trackers in a single multi-entry pack (`satellite.lua` ships ISS + Hubble; append any NORAD ID), USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
+Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), TLE-driven satellite tracker (`satellite.lua` shows ISS + Hubble in one panel with per-sat key toggles; append any NORAD ID), USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
 
 - **Live vessel overlay** — AIS via `rtl-ais` / `aisstream.io` ([#26](https://github.com/Kohei-Wada/ttymap/issues/26))
 - **Weather** — radar, temperature, wind
