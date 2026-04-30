@@ -70,7 +70,7 @@ return {
         if state.job then
             local body = state.job:try_take()
             if body then
-                local payload = host:parse_json(body)
+                local payload = ttymap.json:parse(body)
                 state.quakes = parse_features(payload)
                 -- Auto-recentre on the first non-empty result so
                 -- the user lands somewhere meaningful right after
@@ -79,7 +79,7 @@ return {
                     local top = highest_magnitude(state.quakes)
                     if top then
                         state.initial_jump_done = true
-                        host:jump(top.lon, top.lat)
+                        ttymap.map:jump(top.lon, top.lat)
                     end
                 end
                 state.job = nil
@@ -88,7 +88,7 @@ return {
         local now = os.time()
         if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
             state.last_fetch_sec = now
-            state.job = host:fetch_url(URL)
+            state.job = ttymap.http:fetch(URL)
         end
     end,
 }

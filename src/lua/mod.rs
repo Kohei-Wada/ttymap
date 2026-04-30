@@ -197,6 +197,11 @@ struct ModuleMeta {
     key: Option<char>,
     /// Whether the script asked to be skipped (`module.enabled = false`).
     enabled: bool,
+    /// Plugin-local key bindings declared as `module.footer_hints`.
+    /// Surfaced to help via `ttymap.help:palette_entries()` so the
+    /// cheatsheet shows every plugin's local keys, not just its
+    /// activation key. Empty when the script omits the field.
+    footer_hints: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -238,6 +243,7 @@ impl ModuleMeta {
                     label: format!("Toggle {}", name),
                     key: None,
                     enabled: true,
+                    footer_hints: Vec::new(),
                 };
             }
         };
@@ -272,14 +278,48 @@ impl ModuleMeta {
             Activation::Spawn => name.to_string(),
             Activation::Overlay => String::new(),
         };
+        let footer_hints = parse_footer_hints(&module);
         Self {
             activation,
             kind,
             label: label.unwrap_or(default_label),
             key,
             enabled,
+            footer_hints,
         }
     }
+}
+
+/// Read `module.footer_hints` as owned `(key, label)` pairs.
+/// Mirrors the leak-and-static version in [`component::parse_footer_hints`]
+/// but returns owned strings so the snapshot in [`host::PluginEntry`]
+/// can be rebuilt on each app run without leaking. Two accepted shapes
+/// per pair:
+/// - `{ "Enter", "open" }` — positional 1-based array.
+/// - `{ key = "Enter", label = "open" }` — named.
+fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
+    let Ok(list): mlua::Result<Table> = module.get("footer_hints") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in list.sequence_values::<mlua::Value>().flatten() {
+        let mlua::Value::Table(pair) = entry else {
+            continue;
+        };
+        let key: String = pair
+            .get::<String>("key")
+            .or_else(|_| pair.get::<String>(1))
+            .unwrap_or_default();
+        let label: String = pair
+            .get::<String>("label")
+            .or_else(|_| pair.get::<String>(2))
+            .unwrap_or_default();
+        if key.is_empty() && label.is_empty() {
+            continue;
+        }
+        out.push((key, label));
+    }
+    out
 }
 
 /// Register one Lua script with the registrar by reading its own
@@ -332,7 +372,7 @@ fn register_component(
         }
         Activation::Toggle => {
             let shared_for_toggle = shared.clone();
-            r.add_toggle(label, key_hint, name, move |_| {
+            r.add_toggle(label.clone(), key_hint.clone(), name, move |_| {
                 component_or_placeholder(name, source, shared_for_toggle.clone())
             });
             if let Some(key) = meta.key {
@@ -342,10 +382,13 @@ fn register_component(
                     component_or_placeholder(name, source, shared_for_key.clone())
                 });
             }
+            if !key_hint.is_empty() {
+                push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
+            }
         }
         Activation::Spawn => {
             let shared_for_spawn = shared.clone();
-            r.add_spawn(label, key_hint, name, move |_| {
+            r.add_spawn(label.clone(), key_hint.clone(), name, move |_| {
                 component_or_placeholder(name, source, shared_for_spawn.clone())
             });
             if let Some(key) = meta.key {
@@ -355,8 +398,31 @@ fn register_component(
                     component_or_placeholder(name, source, shared_for_key.clone())
                 });
             }
+            if !key_hint.is_empty() {
+                push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
+            }
         }
     }
+}
+
+/// Surface a plugin's metadata to help via the shared snapshot.
+/// Callers gate on a non-empty `key` so the snapshot only carries
+/// entries with a top-level keybinding — matching the harvest filter
+/// help relied on previously. Overlays don't show up in the palette
+/// and aren't help-relevant, so they're never pushed.
+fn push_plugin_entry(
+    shared: &Arc<host::LuaHostShared>,
+    name: &str,
+    key: &str,
+    label: &str,
+    footer_hints: &[(String, String)],
+) {
+    shared.push_palette_entry(host::PluginEntry {
+        name: name.to_string(),
+        key: key.to_string(),
+        label: label.to_string(),
+        footer_hints: footer_hints.to_vec(),
+    });
 }
 
 fn register_provider(
@@ -387,13 +453,16 @@ fn register_provider(
         }
     };
 
-    r.add_spawn(label, key_hint, name, {
+    r.add_spawn(label.clone(), key_hint.clone(), name, {
         let make = make.clone();
         move |_| make()
     });
     if let Some(key) = meta.key {
         use crossterm::event::{KeyCode, KeyModifiers};
         r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| make());
+    }
+    if !key_hint.is_empty() {
+        push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
     }
 }
 
@@ -625,6 +694,62 @@ mod tests {
         assert_eq!(meta.key, Some('i'));
         assert_eq!(meta.label, "Toggle x");
         assert!(!meta.enabled);
+    }
+
+    #[test]
+    fn module_meta_reads_footer_hints_in_both_shapes() {
+        let meta = ModuleMeta::parse(
+            r#"return {
+                name = "x",
+                footer_hints = {
+                    { "Enter", "open" },
+                    { key = "Esc", label = "back" },
+                },
+            }"#,
+            "x",
+        );
+        assert_eq!(meta.footer_hints.len(), 2);
+        assert_eq!(meta.footer_hints[0], ("Enter".into(), "open".into()));
+        assert_eq!(meta.footer_hints[1], ("Esc".into(), "back".into()));
+    }
+
+    #[test]
+    fn registering_a_plugin_publishes_metadata_with_footer_hints() {
+        // Round-trip the registration path: a Lua source declaring
+        // `key`, `label`, and `footer_hints` should land in the
+        // shared snapshot help reads via `ttymap.help:palette_entries()`.
+        let dir = temp_plugins_dir("publish-meta");
+        write_plugin(
+            &dir,
+            "demo.lua",
+            r#"
+            return {
+                name = "demo",
+                key = "d",
+                label = "Toggle demo",
+                render = function() return {} end,
+                footer_hints = {
+                    { "Enter", "open" },
+                    { "Esc",   "close" },
+                },
+            }
+            "#,
+        );
+
+        let shared = host::LuaHostShared::empty();
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, shared.clone(), &mut r);
+
+        let entries = shared.palette_entries.lock().expect("lock palette_entries");
+        let demo = entries
+            .iter()
+            .find(|e| e.name == "demo")
+            .expect("demo plugin should be in snapshot");
+        assert_eq!(demo.key, "d");
+        assert_eq!(demo.label, "Toggle demo");
+        assert_eq!(demo.footer_hints.len(), 2);
+        assert_eq!(demo.footer_hints[0], ("Enter".into(), "open".into()));
+        assert_eq!(demo.footer_hints[1], ("Esc".into(), "close".into()));
     }
 
     // ── directory-based discovery ───────────────────────────────

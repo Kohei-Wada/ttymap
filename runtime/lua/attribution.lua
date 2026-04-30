@@ -11,7 +11,7 @@ return {
     activation = "overlay",
 
     paint_on_map = function(map)
-        local text = host:attribution()
+        local text = ttymap.tile:attribution()
         if text and #text > 0 then
             map:text_anchored("bottom-left", 0, text, "muted")
         end

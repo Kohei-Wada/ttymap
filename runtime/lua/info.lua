@@ -49,7 +49,7 @@ local function refresh(lat, lon)
     if (now - state.last_fetch_sec) < INTERVAL_SEC then return end
     state.last_fetch_sec = now
     state.last_query = string.format("%.4f,%.4f", lat, lon)
-    state.job = host:fetch_url(reverse_url(lat, lon))
+    state.job = ttymap.http:fetch(reverse_url(lat, lon))
 end
 
 return {
@@ -84,12 +84,12 @@ return {
         if state.job then
             local body = state.job:try_take()
             if body then
-                local payload = host:parse_json(body)
+                local payload = ttymap.json:parse(body)
                 state.place_name = format_place(payload)
                 state.job = nil
             end
         end
-        local lon, lat = host:center()
+        local lon, lat = ttymap.map:center()
         refresh(lat, lon)
     end,
 }

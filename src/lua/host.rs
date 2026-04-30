@@ -1,47 +1,62 @@
 //! Lua-side host services: persistent state a Lua plugin can reach
-//! at any time via the `host` global.
+//! at any time via the `ttymap` global.
 //!
-//! Today:
-//! - `host:fetch_url(url) -> Job` — kicks off a background HTTP GET
-//!   (UTF-8 text). The plugin polls the [`LuaJob`] each frame.
-//! - `host:jump(lon, lat)` — fire-and-forget request to recentre
-//!   the map on the given coordinate. The Lua side just enqueues a
-//!   `LonLat`; [`LuaComponent`] drains the channel after each
-//!   `poll` / `handle_event` dispatch and emits
-//!   `AppMsg::Map(Action::Jump)` through the host `Window`. This
-//!   keeps the Lua call site independent of when a `Window` is
-//!   actually available.
-//! - `host:parse_json(s) -> value | nil` — turn a JSON string into
-//!   nested Lua tables. Objects become string-keyed tables, arrays
-//!   become 1-indexed tables, `null` is `nil`. Parse errors return
-//!   `nil` and log a warning, so a flaky upstream doesn't crash a
-//!   plugin.
-//! - `host:center() -> lon, lat` — current map centre. The host
-//!   refreshes the value at the start of every dispatch path that
-//!   carries a `Window` / `MapApi`, so callbacks see the latest
-//!   centre without threading anything through their signatures.
+//! `ttymap` is a Lua **table** (not a single userdata) whose fields
+//! are domain-namespaced userdatas. Each namespace owns the slice of
+//! state its methods need; nothing forces every plugin's call to walk
+//! a kitchen-sink struct. Adding a new domain (orbit propagation,
+//! logging, scheduling, …) is one new namespace, no churn on existing
+//! ones.
 //!
-//! Both [`LuaHost`] and [`LuaJob`] are `'static`, so they go through
-//! mlua's regular `UserData` mechanism (no `Lua::scope` gymnastics
-//! like `MapApi`).
+//! Surface today:
+//!
+//! ```text
+//! ttymap.http   :fetch(url) -> Job          background HTTP GET (UTF-8 body)
+//! ttymap.http   :url_encode(s) -> string    RFC 3986 query encoding
+//! ttymap.map    :jump(lon, lat)             recentre the map (fire-and-forget)
+//! ttymap.map    :center() -> lon, lat       latest centre, refreshed per dispatch
+//! ttymap.window :close()                    pop this component off the stack
+//! ttymap.window :export_frame()             snapshot the current frame to disk
+//! ttymap.json   :parse(s) -> value|nil      JSON → Lua tables (errors → nil)
+//! ttymap.tile   :attribution() -> string?   active tile provider's attribution
+//! ttymap.config :geoip_endpoint() -> string `[geoip].endpoint` value
+//! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
+//! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
+//! ```
+//!
+//! `ttymap.map:jump(...)` and `ttymap.window:close()` are
+//! fire-and-forget from the Lua side; the matching `Receiver`s on
+//! [`LuaComponent`] drain after each callback while the `Window` is
+//! still in scope. `ttymap.map:center()` reads a `Mutex<LonLat>` the
+//! component refreshes at the start of every dispatch path that
+//! carries a `Window` / `MapApi`, so callers see the latest centre
+//! without threading anything through their signatures.
+//!
+//! Note: the same `ttymap` name is used by `init.lua` as a config DSL
+//! (`ttymap.opt`, `ttymap.keymap`) — that's a different Lua state
+//! (see `init_lua.rs`), so the namespaces don't collide at runtime.
+//! The split is by *scope*, not by name: `opt` / `keymap` live in
+//! init; `http` / `map` / `window` / etc. live in plugin runtime.
 
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use mlua::UserData;
+use mlua::{Lua, UserData};
 
 use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
 
+// ── Shared snapshot ─────────────────────────────────────────────────
+
 /// Shared, mostly-immutable runtime data that every Lua plugin can
-/// query via the `host` global. Built once in [`crate::app::App::new`]
-/// and Arc-cloned into each [`LuaHost`].
+/// query via the `ttymap` global. Built once in [`crate::app::App::new`]
+/// and Arc-cloned into each namespace userdata that reads from it.
 ///
 /// Why not upvalue prepend? With ~10 builtin plugins each needing
 /// different runtime data, prepending bespoke `local _X = [[...]]`
 /// per plugin meant per-plugin Rust glue. A shared accessor surface
 /// keeps the bridge uniform: bundled and user plugins both see the
-/// same `host:*` API, and adding a new builtin requires zero Rust.
+/// same `ttymap.*` API, and adding a new builtin requires zero Rust.
 pub struct LuaHostShared {
     /// Tile provider's attribution string. `None` when the active
     /// `TileClient` has no attribution to display (custom backends
@@ -56,13 +71,28 @@ pub struct LuaHostShared {
     /// cheatsheet. Built once at startup from the live `KeyMap` so
     /// runtime overrides surface correctly.
     pub keymap_entries: Vec<(String, String)>,
-    /// Snapshot of the registrar's palette entries, taken **after**
-    /// every plugin has registered. Held behind a `Mutex` so
-    /// `LuaHostShared` can be Arc'd into each plugin's `LuaHost` at
-    /// register time and populated later. Help reads this lazily
-    /// (at render time, not register time) so it sees every plugin
-    /// regardless of load order.
-    pub palette_entries: Mutex<Vec<(String, String)>>,
+    /// Per-plugin metadata snapshot, appended during plugin
+    /// registration. Held behind a `Mutex` so `LuaHostShared` can be
+    /// Arc'd into each plugin's host namespaces at register time and
+    /// populated later. Help reads this lazily (at render time, not
+    /// register time) so it sees every plugin regardless of load
+    /// order.
+    pub palette_entries: Mutex<Vec<PluginEntry>>,
+}
+
+/// One plugin's help-relevant metadata. Surfaced to Lua via
+/// `ttymap.help:palette_entries()` so help.lua can render it without
+/// caring about how the data was harvested. Only plugins with a
+/// top-level keybinding land here; keyless plugins are filtered at
+/// push time (matching the prior harvest's `!hint.is_empty()` rule).
+#[derive(Clone)]
+pub struct PluginEntry {
+    pub name: String,
+    pub key: String,
+    pub label: String,
+    /// Plugin-local keybindings parsed from `module.footer_hints`.
+    /// Empty when the script omits the field.
+    pub footer_hints: Vec<(String, String)>,
 }
 
 impl LuaHostShared {
@@ -79,11 +109,12 @@ impl LuaHostShared {
         }
     }
 
-    /// Replace the cached palette-entry snapshot. Called once from
-    /// [`crate::app::App::new`] after `build_registrar` returns.
-    pub fn set_palette_entries(&self, entries: Vec<(String, String)>) {
+    /// Append one plugin's metadata to the snapshot. Called once per
+    /// plugin during registration. A poisoned mutex is silently
+    /// skipped — losing a help row is preferable to crashing the host.
+    pub fn push_palette_entry(&self, entry: PluginEntry) {
         if let Ok(mut slot) = self.palette_entries.lock() {
-            *slot = entries;
+            slot.push(entry);
         }
     }
 
@@ -95,26 +126,11 @@ impl LuaHostShared {
     }
 }
 
-/// Per-component host handle. Owns the `HttpClient` used by
-/// `fetch_url` and senders for jump / close requests. The matching
-/// `Receiver`s live on the `LuaComponent` so it can drain pending
-/// requests after a callback returns. The `center` is shared with
-/// the component so `host:center()` can return the current map
-/// centre even though the userdata itself never sees a `Window`.
-pub struct LuaHost {
-    http: HttpClient,
-    jump_tx: mpsc::Sender<LonLat>,
-    close_tx: mpsc::Sender<()>,
-    export_tx: mpsc::Sender<()>,
-    center: Arc<Mutex<LonLat>>,
-    /// Shared runtime data exposed via host accessors
-    /// ([`LuaHost`] is `'static`, so the Arc clone is the carrier).
-    shared: Arc<LuaHostShared>,
-}
+// ── Per-component handles ───────────────────────────────────────────
 
-/// Channels + shared state the `LuaComponent` needs to drive a
-/// `LuaHost` from outside Lua. Built once per host and threaded into
-/// the component at construction.
+/// Channels + shared state the `LuaComponent` needs to drive the host
+/// namespaces from outside Lua. Built once per host install and
+/// threaded into the component at construction.
 pub struct LuaHostHandles {
     pub jump_rx: mpsc::Receiver<LonLat>,
     pub close_rx: mpsc::Receiver<()>,
@@ -122,49 +138,103 @@ pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
 }
 
-impl LuaHost {
-    /// Build a fresh host along with the channels and shared cells
-    /// the [`LuaComponent`] needs to drive it. The component
-    /// refreshes the centre at the start of each dispatch path that
-    /// carries a `Window` / `MapApi`.
-    pub fn new(tag: &'static str, shared: Arc<LuaHostShared>) -> (Self, LuaHostHandles) {
-        let (jump_tx, jump_rx) = mpsc::channel();
-        let (close_tx, close_rx) = mpsc::channel();
-        let (export_tx, export_rx) = mpsc::channel();
-        let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
-        (
-            Self {
-                http: HttpClient::new(tag),
-                jump_tx,
-                close_tx,
-                export_tx,
-                center: center.clone(),
-                shared,
-            },
-            LuaHostHandles {
-                jump_rx,
-                close_rx,
-                export_rx,
-                center,
-            },
-        )
-    }
+// ── Install entry point ─────────────────────────────────────────────
+
+/// Build the `ttymap` table and install it as a Lua global. Returns
+/// the channels the calling component drains after each callback. One
+/// install per Lua state — same surface for components and palette
+/// providers, so the bridge stays uniform.
+pub fn install(
+    lua: &Lua,
+    tag: &'static str,
+    shared: Arc<LuaHostShared>,
+) -> mlua::Result<LuaHostHandles> {
+    let (jump_tx, jump_rx) = mpsc::channel();
+    let (close_tx, close_rx) = mpsc::channel();
+    let (export_tx, export_rx) = mpsc::channel();
+    let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
+
+    let ttymap = lua.create_table()?;
+    ttymap.set(
+        "http",
+        lua.create_userdata(HostHttp {
+            http: HttpClient::new(tag),
+        })?,
+    )?;
+    ttymap.set(
+        "map",
+        lua.create_userdata(HostMap {
+            jump_tx,
+            center: center.clone(),
+        })?,
+    )?;
+    ttymap.set(
+        "window",
+        lua.create_userdata(HostWindow {
+            close_tx,
+            export_tx,
+        })?,
+    )?;
+    ttymap.set("json", lua.create_userdata(HostJson)?)?;
+    ttymap.set(
+        "tile",
+        lua.create_userdata(HostTile {
+            shared: shared.clone(),
+        })?,
+    )?;
+    ttymap.set(
+        "config",
+        lua.create_userdata(HostConfig {
+            shared: shared.clone(),
+        })?,
+    )?;
+    ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
+    lua.globals().set("ttymap", ttymap)?;
+
+    Ok(LuaHostHandles {
+        jump_rx,
+        close_rx,
+        export_rx,
+        center,
+    })
 }
 
-impl UserData for LuaHost {
+// ── ttymap.http ───────────────────────────────────────────────────────
+
+struct HostHttp {
+    http: HttpClient,
+}
+
+impl UserData for HostHttp {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `host:fetch_url(url)` — spawn a background GET and return a
+        // `ttymap.http:fetch(url)` — spawn a background GET and return a
         // Job. Body is decoded as UTF-8; non-text or fetch errors
-        // surface as the Job never producing a result (try_take
-        // keeps returning nil).
-        // `add_method` auto-extracts `self` from Lua's colon
-        // syntax, so the closure args are just the actual user
-        // params — `(url)` here.
-        methods.add_method("fetch_url", |_, this, url: String| {
+        // surface as the Job never producing a result (try_take keeps
+        // returning nil).
+        methods.add_method("fetch", |_, this, url: String| {
             Ok(LuaJob::spawn(&this.http, url))
         });
 
-        // `host:jump(lon, lat)` — request the map recentre on the
+        // `ttymap.http:url_encode(s)` — percent-encode a query string per
+        // RFC 3986: unreserved (A-Za-z0-9-_.~) pass through, space
+        // becomes `+`, everything else `%HH`. Lives here because most
+        // callers urlencode arguments before handing them to `fetch`.
+        methods.add_method("url_encode", |_, _this, s: String| {
+            Ok(crate::shared::http::url::urlencoded(&s))
+        });
+    }
+}
+
+// ── ttymap.map ────────────────────────────────────────────────────────
+
+struct HostMap {
+    jump_tx: mpsc::Sender<LonLat>,
+    center: Arc<Mutex<LonLat>>,
+}
+
+impl UserData for HostMap {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.map:jump(lon, lat)` — request the map recentre on the
         // given coordinate. The actual `AppMsg::Map(Action::Jump)`
         // emit happens when the matching `LuaComponent` drains the
         // channel after its current callback returns, so this is
@@ -176,22 +246,7 @@ impl UserData for LuaHost {
             Ok(())
         });
 
-        // `host:parse_json(s) -> value | nil` — JSON → Lua. Errors
-        // (invalid input, non-finite numbers, etc.) become `nil`
-        // with a warning log; the caller can fall back to a default
-        // without a stack trace.
-        methods.add_method(
-            "parse_json",
-            |lua, _this, source: String| match serde_json::from_str::<serde_json::Value>(&source) {
-                Ok(v) => json_to_lua(lua, &v).map(Some),
-                Err(e) => {
-                    log::warn!("lua-host: parse_json failed: {}", e);
-                    Ok(None)
-                }
-            },
-        );
-
-        // `host:center() -> lon, lat` — current map centre, kept
+        // `ttymap.map:center()` -> lon, lat — current map centre, kept
         // fresh by the LuaComponent before each dispatch. Plugins
         // use this to scope upstream queries (e.g. an OpenSky
         // bounding box around the user's view).
@@ -199,8 +254,19 @@ impl UserData for LuaHost {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
         });
+    }
+}
 
-        // `host:close()` — fire-and-forget request to pop the
+// ── ttymap.window ─────────────────────────────────────────────────────
+
+struct HostWindow {
+    close_tx: mpsc::Sender<()>,
+    export_tx: mpsc::Sender<()>,
+}
+
+impl UserData for HostWindow {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.window:close()` — fire-and-forget request to pop the
         // component off the compositor stack. The Lua side calls
         // this when its work is done (e.g. one-shot here-jump);
         // [`LuaComponent`] drains the channel after the current
@@ -211,76 +277,39 @@ impl UserData for LuaHost {
             Ok(())
         });
 
-        // `host:export_frame()` — fire-and-forget request to emit
-        // `AppMsg::ExportFrame`, which `App::dispatch` translates
+        // `ttymap.window:export_frame()` — fire-and-forget request to
+        // emit `AppMsg::ExportFrame`, which `App::dispatch` translates
         // into "snapshot the current `MapFrame` to disk as ANSI".
-        // Drained in lockstep with jump/close after each Lua
-        // callback while a `Window` is still in scope.
+        // Drained in lockstep with jump/close after each Lua callback
+        // while a `Window` is still in scope.
         methods.add_method("export_frame", |_, this, _: ()| {
             let _ = this.export_tx.send(());
             Ok(())
         });
+    }
+}
 
-        // `host:url_encode(s) -> string` — percent-encode a query
-        // string per RFC 3986: unreserved (A-Za-z0-9-_.~) pass
-        // through, space becomes `+`, everything else `%HH`. Wired
-        // here so plugins constructing URLs (search query, wiki
-        // titles) don't need to reinvent it — the Lua versions that
-        // did mishandled `?` / `#` / non-ASCII titles.
-        methods.add_method("url_encode", |_, _this, s: String| {
-            Ok(crate::shared::http::url::urlencoded(&s))
-        });
+// ── ttymap.json ───────────────────────────────────────────────────────
 
-        // `host:attribution() -> string | nil` — active TileClient's
-        // attribution string (typically "© OpenStreetMap …"). The
-        // attribution overlay paints this; other plugins may use it
-        // for their own attribution rows.
-        methods.add_method("attribution", |_, this, _: ()| {
-            Ok(this.shared.attribution.clone())
-        });
+struct HostJson;
 
-        // `host:geoip_endpoint() -> string` — configured geoip URL
-        // (`[geoip].endpoint` in config.toml). The here plugin GETs
-        // this to resolve the user's location.
-        methods.add_method("geoip_endpoint", |_, this, _: ()| {
-            Ok(this.shared.geoip_endpoint.clone())
-        });
-
-        // `host:keymap_entries() -> [{key, label}, …]` — keybindings
-        // for built-in map actions, formatted for help-style display.
-        // Always returns the same data (immutable after startup).
-        methods.add_method("keymap_entries", |lua, this, _: ()| {
-            let table = lua.create_table()?;
-            for (i, (key, label)) in this.shared.keymap_entries.iter().enumerate() {
-                let row = lua.create_table()?;
-                row.set("key", key.as_str())?;
-                row.set("label", label.as_str())?;
-                table.set(i + 1, row)?;
-            }
-            Ok(table)
-        });
-
-        // `host:plugin_palette_entries() -> [{key, label}, …]` —
-        // snapshot of every plugin's palette hint (`hint`/`label`)
-        // taken after `build_registrar` finished. Read lazily so
-        // help can be loaded mid-registration and still see every
-        // sibling at render time. Returns an empty list when the
-        // snapshot hasn't been populated yet.
-        methods.add_method("plugin_palette_entries", |lua, this, _: ()| {
-            let table = lua.create_table()?;
-            let entries = this.shared.palette_entries.lock();
-            let entries = match &entries {
-                Ok(g) => g.as_slice(),
-                Err(_) => &[],
-            };
-            for (i, (key, label)) in entries.iter().enumerate() {
-                let row = lua.create_table()?;
-                row.set("key", key.as_str())?;
-                row.set("label", label.as_str())?;
-                table.set(i + 1, row)?;
-            }
-            Ok(table)
-        });
+impl UserData for HostJson {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.json:parse(s) -> value | nil` — turn a JSON string
+        // into nested Lua tables. Objects become string-keyed tables,
+        // arrays become 1-indexed tables, `null` is `nil`. Parse
+        // errors return `nil` and log a warning, so a flaky upstream
+        // doesn't crash a plugin.
+        methods.add_method(
+            "parse",
+            |lua, _this, source: String| match serde_json::from_str::<serde_json::Value>(&source) {
+                Ok(v) => json_to_lua(lua, &v).map(Some),
+                Err(e) => {
+                    log::warn!("lua-host: json:parse failed: {}", e);
+                    Ok(None)
+                }
+            },
+        );
     }
 }
 
@@ -323,6 +352,98 @@ fn json_to_lua(lua: &mlua::Lua, value: &serde_json::Value) -> mlua::Result<mlua:
     }
 }
 
+// ── ttymap.tile / ttymap.config / ttymap.help ─────────────────────────────
+
+struct HostTile {
+    shared: Arc<LuaHostShared>,
+}
+
+impl UserData for HostTile {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.tile:attribution() -> string | nil` — active
+        // TileClient's attribution string (typically "© OpenStreetMap
+        // …"). The attribution overlay paints this; other plugins may
+        // use it for their own attribution rows.
+        methods.add_method("attribution", |_, this, _: ()| {
+            Ok(this.shared.attribution.clone())
+        });
+    }
+}
+
+struct HostConfig {
+    shared: Arc<LuaHostShared>,
+}
+
+impl UserData for HostConfig {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.config:geoip_endpoint() -> string` — configured geoip
+        // URL (`[geoip].endpoint` in config.toml). The here plugin
+        // GETs this to resolve the user's location.
+        methods.add_method("geoip_endpoint", |_, this, _: ()| {
+            Ok(this.shared.geoip_endpoint.clone())
+        });
+    }
+}
+
+struct HostHelp {
+    shared: Arc<LuaHostShared>,
+}
+
+impl UserData for HostHelp {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.help:keymap_entries() -> [{key, label}, …]` —
+        // keybindings for built-in map actions, formatted for
+        // help-style display. Always returns the same data
+        // (immutable after startup).
+        methods.add_method("keymap_entries", |lua, this, _: ()| {
+            let table = lua.create_table()?;
+            for (i, (key, label)) in this.shared.keymap_entries.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("key", key.as_str())?;
+                row.set("label", label.as_str())?;
+                table.set(i + 1, row)?;
+            }
+            Ok(table)
+        });
+
+        // `ttymap.help:palette_entries() -> [{name, key, label,
+        // footer_hints}, …]` — snapshot of every plugin's metadata,
+        // appended during registration. Read lazily so help can be
+        // loaded mid-registration and still see every sibling at
+        // render time. `footer_hints` is a 1-indexed list of
+        // `{key, label}` rows mirroring the plugin's
+        // `module.footer_hints` declaration; empty when the script
+        // omits the field. Returns an empty list when the snapshot
+        // hasn't been populated yet.
+        methods.add_method("palette_entries", |lua, this, _: ()| {
+            let table = lua.create_table()?;
+            let entries = this.shared.palette_entries.lock();
+            let entries = match &entries {
+                Ok(g) => g.as_slice(),
+                Err(_) => &[],
+            };
+            for (i, entry) in entries.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("name", entry.name.as_str())?;
+                row.set("key", entry.key.as_str())?;
+                row.set("label", entry.label.as_str())?;
+                let hints = lua.create_table()?;
+                for (j, (k, v)) in entry.footer_hints.iter().enumerate() {
+                    let hint = lua.create_table()?;
+                    hint.set("key", k.as_str())?;
+                    hint.set("label", v.as_str())?;
+                    hints.set(j + 1, hint)?;
+                }
+                row.set("footer_hints", hints)?;
+                table.set(i + 1, row)?;
+            }
+            Ok(table)
+        });
+    }
+}
+
+// ── Job ─────────────────────────────────────────────────────────────
+
 /// One-shot fetch handle. Stays alive in the Lua state until the
 /// plugin drops its reference (or until the Lua state itself is
 /// dropped, which happens when the LuaComponent is rebuilt).
@@ -343,9 +464,9 @@ impl LuaJob {
                     Ok(body) => {
                         let _ = tx.send(body);
                     }
-                    Err(e) => log::warn!("lua-host: fetch_url {}: not utf-8: {}", url, e),
+                    Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
                 },
-                Err(e) => log::warn!("lua-host: fetch_url {}: {}", url, e),
+                Err(e) => log::warn!("lua-host: http:fetch {}: {}", url, e),
             }
         });
         Self { rx }
@@ -363,56 +484,79 @@ impl UserData for LuaJob {
     }
 }
 
+// ── tests ───────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn host_userdata_can_be_constructed() {
+    /// Helper for tests: install the `ttymap` table into a fresh Lua
+    /// and hand back the receivers. Mirrors the production install
+    /// path.
+    fn install_for_test() -> (mlua::Lua, LuaHostHandles) {
         let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        let ud = lua.create_userdata(host).expect("create_userdata");
-        // Just confirm we can set it as a global and round-trip the
-        // userdata reference back out — fetch_url itself hits the
-        // network and isn't safe to call in a unit test.
-        lua.globals().set("host", ud).expect("set global");
-        let _: mlua::AnyUserData = lua.globals().get("host").expect("get global");
+        let handles =
+            install(&lua, "lua-test", LuaHostShared::empty()).expect("install ttymap table");
+        (lua, handles)
     }
 
     #[test]
-    fn host_jump_pushes_to_channel() {
-        let lua = mlua::Lua::new();
-        let (host, handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        let jump_rx = handles.jump_rx;
-        let ud = lua.create_userdata(host).expect("create_userdata");
-        lua.globals().set("host", ud).expect("set global");
+    fn ttymap_table_is_installed_with_namespaces() {
+        let (lua, _handles) = install_for_test();
+        // Each namespace lookup must return a userdata; the shape
+        // confirms the install wired all namespaces in.
+        for ns in ["http", "map", "window", "json", "tile", "config", "help"] {
+            let ud: mlua::AnyUserData = lua
+                .load(format!("return ttymap.{ns}"))
+                .eval()
+                .unwrap_or_else(|e| panic!("ttymap.{ns} should be a userdata: {e}"));
+            // Just confirm round-trip works.
+            let _ = ud;
+        }
+    }
+
+    #[test]
+    fn host_map_jump_pushes_to_channel() {
+        let (lua, handles) = install_for_test();
 
         // Lua-side call: longitude first, then latitude.
-        lua.load("host:jump(139.7595, 35.6828)")
+        lua.load("ttymap.map:jump(139.7595, 35.6828)")
             .exec()
             .expect("exec");
 
-        let ll = jump_rx.try_recv().expect("jump must be queued");
+        let ll = handles.jump_rx.try_recv().expect("jump must be queued");
         assert!((ll.lon - 139.7595).abs() < 1e-9);
         assert!((ll.lat - 35.6828).abs() < 1e-9);
     }
 
     #[test]
+    fn host_window_close_pushes_to_channel() {
+        let (lua, handles) = install_for_test();
+        lua.load("ttymap.window:close()").exec().expect("exec");
+        assert!(handles.close_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn host_window_export_frame_pushes_to_channel() {
+        let (lua, handles) = install_for_test();
+        lua.load("ttymap.window:export_frame()")
+            .exec()
+            .expect("exec");
+        assert!(handles.export_rx.try_recv().is_ok());
+    }
+
+    #[test]
     fn url_encode_round_trips_query_chars() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         // Spaces become `+`, reserved chars become `%HH`, unicode is
         // percent-encoded byte by byte.
         let encoded: String = lua
-            .load(r#"return host:url_encode("São Paulo?")"#)
+            .load(r#"return ttymap.http:url_encode("São Paulo?")"#)
             .eval()
             .expect("eval");
         assert_eq!(encoded, "S%C3%A3o+Paulo%3F");
         let plain: String = lua
-            .load(r#"return host:url_encode("abc-_.~")"#)
+            .load(r#"return ttymap.http:url_encode("abc-_.~")"#)
             .eval()
             .expect("eval");
         assert_eq!(plain, "abc-_.~");
@@ -420,23 +564,19 @@ mod tests {
 
     #[test]
     fn parse_json_round_trips_primitives() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         let n: i64 = lua
-            .load(r#"return host:parse_json("42")"#)
+            .load(r#"return ttymap.json:parse("42")"#)
             .eval()
             .expect("eval");
         assert_eq!(n, 42);
         let s: String = lua
-            .load(r#"return host:parse_json('"hi"')"#)
+            .load(r#"return ttymap.json:parse('"hi"')"#)
             .eval()
             .expect("eval");
         assert_eq!(s, "hi");
         let b: bool = lua
-            .load(r#"return host:parse_json("true")"#)
+            .load(r#"return ttymap.json:parse("true")"#)
             .eval()
             .expect("eval");
         assert!(b);
@@ -444,15 +584,11 @@ mod tests {
 
     #[test]
     fn parse_json_object_becomes_string_keyed_table() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         let (name, age): (String, i64) = lua
             .load(
                 r#"
-                local t = host:parse_json('{"name": "alice", "age": 30}')
+                local t = ttymap.json:parse('{"name": "alice", "age": 30}')
                 return t.name, t.age
                 "#,
             )
@@ -464,16 +600,12 @@ mod tests {
 
     #[test]
     fn parse_json_array_is_one_indexed_in_lua() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         // Lua arrays are 1-indexed; t[1] is the first element.
         let (first, third, len): (i64, i64, i64) = lua
             .load(
                 r#"
-                local t = host:parse_json("[10, 20, 30]")
+                local t = ttymap.json:parse("[10, 20, 30]")
                 return t[1], t[3], #t
                 "#,
             )
@@ -486,13 +618,9 @@ mod tests {
 
     #[test]
     fn parse_json_invalid_returns_nil() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         let v: mlua::Value = lua
-            .load(r#"return host:parse_json("not json !")"#)
+            .load(r#"return ttymap.json:parse("not json !")"#)
             .eval()
             .expect("eval");
         assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
@@ -500,13 +628,9 @@ mod tests {
 
     #[test]
     fn parse_json_null_is_nil() {
-        let lua = mlua::Lua::new();
-        let (host, _handles) = LuaHost::new("lua-test", LuaHostShared::empty());
-        lua.globals()
-            .set("host", lua.create_userdata(host).unwrap())
-            .unwrap();
+        let (lua, _handles) = install_for_test();
         let v: mlua::Value = lua
-            .load(r#"return host:parse_json("null")"#)
+            .load(r#"return ttymap.json:parse("null")"#)
             .eval()
             .expect("eval");
         assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);

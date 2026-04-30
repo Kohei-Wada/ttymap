@@ -83,7 +83,7 @@ return {
         -- layer mid-load.
         if key.code == "Enter" then
             if state.position then
-                host:jump(state.position.lon, state.position.lat)
+                ttymap.map:jump(state.position.lon, state.position.lat)
             end
             return nil
         end
@@ -95,7 +95,7 @@ return {
         if state.job then
             local body = state.job:try_take()
             if body then
-                local pos = parse_position(host:parse_json(body))
+                local pos = parse_position(ttymap.json:parse(body))
                 if pos then
                     state.position = pos
                     state.last_update_sec = os.time()
@@ -104,7 +104,7 @@ return {
                     -- immediately visible after toggling on.
                     if not state.initial_jump_done then
                         state.initial_jump_done = true
-                        host:jump(pos.lon, pos.lat)
+                        ttymap.map:jump(pos.lon, pos.lat)
                     end
                 end
                 state.job = nil
@@ -113,7 +113,7 @@ return {
         local now = os.time()
         if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
             state.last_fetch_sec = now
-            state.job = host:fetch_url(URL)
+            state.job = ttymap.http:fetch(URL)
         end
     end,
 }
