@@ -21,19 +21,6 @@ pub enum PanelAnchor {
 }
 
 impl PanelAnchor {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "left" => Some(Self::Left),
-            "right" => Some(Self::Right),
-            "top-left" | "topleft" | "tl" => Some(Self::TopLeft),
-            "top-right" | "topright" | "tr" => Some(Self::TopRight),
-            "bottom-left" | "bottomleft" | "bl" => Some(Self::BottomLeft),
-            "bottom-right" | "bottomright" | "br" => Some(Self::BottomRight),
-            "center" | "centre" => Some(Self::Center),
-            _ => None,
-        }
-    }
-
     /// Place a `width × height` panel inside `outer` according to
     /// this anchor. Both dimensions are clamped to fit; a 1-cell
     /// margin is left around the edges so the panel doesn't kiss

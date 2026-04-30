@@ -28,9 +28,12 @@
 //! the one place that imports each plugin.
 
 pub mod base;
+pub mod layout;
+pub mod map_api;
 pub mod window;
 
 pub use base::BaseLayer;
+pub use map_api::MapApi;
 
 use std::any::Any;
 
@@ -40,7 +43,6 @@ use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
 use crate::geo::LonLat;
-use crate::plugin_api::MapApi;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -77,7 +79,7 @@ pub struct Context {
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Project to a `LonLat` via
-    /// [`MapApi::cursor_ll`](crate::plugin_api::MapApi::cursor_ll)
+    /// [`MapApi::cursor_ll`](crate::compositor::MapApi::cursor_ll)
     /// at paint time.
     #[allow(dead_code)] // plugin-author API; the in-tree reader (info plugin) lands later
     pub cursor: Option<(u16, u16)>,

@@ -17,9 +17,9 @@ use std::cell::RefCell;
 
 use mlua::{Lua, Scope, Table};
 
+use crate::compositor::MapApi;
+use crate::compositor::map_api::Anchor;
 use crate::geo::LonLat;
-use crate::plugin_api::MapApi;
-use crate::plugin_api::map_api::Anchor;
 
 /// Build the Lua-facing `map` table for a single `paint_on_map`
 /// call. The closures borrow `cell` for `'scope`; once the host's

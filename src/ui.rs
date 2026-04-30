@@ -12,9 +12,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::compositor::{Compositor, Context};
+use crate::compositor::{Compositor, Context, MapApi};
 use crate::map::render::frame::MapFrame;
-use crate::plugin_api::MapApi;
 use crate::theme::UiTheme;
 
 /// Draw the full screen. Caller passes the latest map snapshot
