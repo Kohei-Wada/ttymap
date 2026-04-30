@@ -12,8 +12,9 @@
 //! [`Window::open`](crate::compositor::window::Window) / `toggle`
 //! queue, applied atomically after the `BaseLayer` hook returns.)
 
+use std::collections::HashMap;
+
 use crossterm::event::{KeyCode, KeyModifiers};
-use serde::Deserialize;
 
 use crate::app::AppMsg;
 use crate::map::Action;
@@ -104,31 +105,17 @@ impl KeyMap {
     }
 
     /// Default bindings with user `[keymap]` overrides applied on top.
+    /// Each entry's key is the `Action::config_name` (e.g. `"pan_left"`);
+    /// unknown names are logged and skipped so a stale config can't
+    /// crash startup.
     pub fn with_overrides(overrides: &KeybindingOverrides) -> Self {
         let mut km = Self::default();
-
-        macro_rules! rebind {
-            ($field:ident, $action:expr) => {
-                if let Some(keys) = &overrides.$field {
-                    km.set_bindings(AppMsg::Map($action), keys);
-                }
-            };
+        for (name, keys) in overrides {
+            match Action::from_config_name(name) {
+                Some(action) => km.set_bindings(AppMsg::Map(action), keys),
+                None => log::warn!("unknown [keymap] entry: {:?}", name),
+            }
         }
-
-        rebind!(pan_left, Action::PanLeft);
-        rebind!(pan_right, Action::PanRight);
-        rebind!(pan_up, Action::PanUp);
-        rebind!(pan_down, Action::PanDown);
-        rebind!(pan_left_fast, Action::PanLeftFast);
-        rebind!(pan_right_fast, Action::PanRightFast);
-        rebind!(pan_up_half, Action::PanUpHalf);
-        rebind!(pan_down_half, Action::PanDownHalf);
-        rebind!(zoom_in, Action::ZoomIn);
-        rebind!(zoom_out, Action::ZoomOut);
-        rebind!(zoom_to_world, Action::ZoomToWorld);
-        rebind!(reset_position, Action::ResetPosition);
-        rebind!(quit, Action::Quit);
-
         km
     }
 }
@@ -165,25 +152,13 @@ impl Default for KeyMap {
 }
 
 /// Raw keybinding overrides from the `[keymap]` section of
-/// `config.toml`. Each field names a map `Action`; the listed key
-/// strings replace the default bindings for that action (wrapped as
-/// `AppMsg::Map` internally). Applied via `KeyMap::with_overrides`.
-#[derive(Deserialize, Default, Clone)]
-pub struct KeybindingOverrides {
-    pub pan_left: Option<Vec<String>>,
-    pub pan_right: Option<Vec<String>>,
-    pub pan_up: Option<Vec<String>>,
-    pub pan_down: Option<Vec<String>>,
-    pub pan_left_fast: Option<Vec<String>>,
-    pub pan_right_fast: Option<Vec<String>>,
-    pub pan_up_half: Option<Vec<String>>,
-    pub pan_down_half: Option<Vec<String>>,
-    pub zoom_in: Option<Vec<String>>,
-    pub zoom_out: Option<Vec<String>>,
-    pub zoom_to_world: Option<Vec<String>>,
-    pub reset_position: Option<Vec<String>>,
-    pub quit: Option<Vec<String>>,
-}
+/// `config.toml`. Keys are `Action::config_name` strings (e.g.
+/// `"pan_left"`); values replace the default bindings for that
+/// action (wrapped as `AppMsg::Map` internally). Applied via
+/// `KeyMap::with_overrides`. Adding a new bindable `Action` only
+/// requires extending `Action::all_listed` + `Action::config_name`
+/// — the data shape here is unchanged.
+pub type KeybindingOverrides = HashMap<String, Vec<String>>;
 
 // ── Key binding parser ────────────────────────────────────────────────────────
 
@@ -282,9 +257,9 @@ mod tests {
 
     #[test]
     fn with_overrides_applies_rebinds() {
-        let mut overrides = KeybindingOverrides::default();
-        overrides.zoom_in = Some(vec!["i".to_string()]);
-        overrides.quit = Some(vec!["Q".to_string(), "C-q".to_string()]);
+        let mut overrides = KeybindingOverrides::new();
+        overrides.insert("zoom_in".to_string(), vec!["i".to_string()]);
+        overrides.insert("quit".to_string(), vec!["Q".to_string(), "C-q".to_string()]);
 
         let km = KeyMap::with_overrides(&overrides);
 
@@ -304,7 +279,20 @@ mod tests {
 
     #[test]
     fn with_overrides_keeps_unoverridden_defaults() {
-        let km = KeyMap::with_overrides(&KeybindingOverrides::default());
+        let km = KeyMap::with_overrides(&KeybindingOverrides::new());
+        assert_eq!(
+            km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
+            Some(&map(Action::PanLeft))
+        );
+    }
+
+    #[test]
+    fn with_overrides_skips_unknown_entries() {
+        let mut overrides = KeybindingOverrides::new();
+        overrides.insert("not_an_action".to_string(), vec!["x".to_string()]);
+        // Defaults survive an unknown entry — it must not poison the
+        // rest of the table.
+        let km = KeyMap::with_overrides(&overrides);
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
             Some(&map(Action::PanLeft))
