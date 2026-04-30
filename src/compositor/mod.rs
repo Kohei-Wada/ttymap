@@ -536,7 +536,7 @@ impl Registrar {
         self.add_activation(Activation {
             code,
             modifiers,
-            spawn: Box::new(move |ctx| Box::new(factory(ctx)) as Box<dyn Component>),
+            spawn: box_component_factory(factory),
         });
     }
 
@@ -557,9 +557,7 @@ impl Registrar {
             label: label.into(),
             hint: hint.into(),
             name,
-            kind: PaletteKind::Toggle(Box::new(move |ctx| {
-                Box::new(factory(ctx)) as Box<dyn Component>
-            })),
+            kind: PaletteKind::Toggle(box_component_factory(factory)),
         });
     }
 
@@ -580,9 +578,7 @@ impl Registrar {
             label: label.into(),
             hint: hint.into(),
             name,
-            kind: PaletteKind::Spawn(Box::new(move |ctx| {
-                Box::new(factory(ctx)) as Box<dyn Component>
-            })),
+            kind: PaletteKind::Spawn(box_component_factory(factory)),
         });
     }
 
@@ -596,10 +592,21 @@ impl Registrar {
         F: Fn(&Context) -> C + 'static,
         C: Component + 'static,
     {
-        self.overlays.push(Box::new(move |ctx| {
-            Box::new(factory(ctx)) as Box<dyn Component>
-        }));
+        self.overlays.push(box_component_factory(factory));
     }
+}
+
+/// Wrap an `impl Component`-returning closure in the double-Box that
+/// the registrar's collections store. Lifts the `Box::new(move |ctx|
+/// Box::new(factory(ctx)) as Box<dyn Component>)` boilerplate out of
+/// every `add_*` method so the next builder doesn't have to remember
+/// the exact dance.
+fn box_component_factory<F, C>(factory: F) -> SpawnComponent
+where
+    F: Fn(&Context) -> C + 'static,
+    C: Component + 'static,
+{
+    Box::new(move |ctx| Box::new(factory(ctx)) as Box<dyn Component>)
 }
 
 #[cfg(test)]
