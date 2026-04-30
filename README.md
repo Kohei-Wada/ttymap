@@ -130,7 +130,7 @@ src/
 
 runtime/
 └── lua/                 bundled Lua plugin scripts (aircraft, attribution, export,
-    │                    help, here, info, iss, quake, scalebar, search, wiki).
+    │                    help, here, hubble, info, iss, quake, scalebar, search, wiki).
     │                    `include_str!`'d at compile time by `BUILTIN_SCRIPTS`; the
     │                    binary ships them as data, not Rust source.
     └── ttymap/          shared lib scripts (fmt, …). Resolved via `require "ttymap.X"`
@@ -196,7 +196,7 @@ main thread (ratatui draw):
     1. latest MapFrame is rendered into the map area
     2. MapApi set up; compositor.paint_on_map(map_api)
        — every Component on the stack paints world-space primitives
-         (wiki / aircraft / iss / quake markers, info chrome, scale bar, …)
+         (wiki / aircraft / iss / hubble / quake markers, info chrome, scale bar, …)
     3. compositor.render(f, area, theme, ctx)
        — every Component on the stack drawn bottom-up; focused last
          so its panel sits on top
@@ -259,7 +259,7 @@ Adding a bundled plugin = drop a `.lua` under `runtime/lua/` + 1 line in `BUILTI
 | main | event loop, compositor, Lua dispatch, UI state, terminal draw |
 | render | MapFrame generation (tile fetch + draw) |
 | tile fetch | HTTP workers with priority queue |
-| Lua `host:fetch_url` | one short-lived OS thread per request (Nominatim / Wikipedia / geoip / ADS-B / ISS / USGS) — Lua side polls `job:try_take()` |
+| Lua `host:fetch_url` | one short-lived OS thread per request (Nominatim / Wikipedia / geoip / ADS-B / TLE / USGS) — Lua side polls `job:try_take()` |
 
 mpsc channels connect the threads; the main thread never blocks on I/O.
 
@@ -270,7 +270,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 ### Principles
 
 - **Core stays lean.** A map viewer, not a GIS platform. The core handles tiles, projection, rendering, navigation. Anything domain-specific is a Lua plugin.
-- **Plugin-first.** Every built-in (info / scalebar / attribution / aircraft / iss / quake / wiki / here / search / export / help) is a Lua script — the bridge dogfoods itself.
+- **Plugin-first.** Every built-in (info / scalebar / attribution / aircraft / iss / hubble / quake / wiki / here / search / export / help) is a Lua script — the bridge dogfoods itself.
 - **Boring where it matters.** Stable protocols (MVT, OSM, TOML), predictable resource use, `cargo install` ships a single binary.
 
 ### Short-term
@@ -280,7 +280,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Plugin candidates
 
-Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), live ISS, USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
+Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), TLE-driven satellite trackers (ISS, Hubble — drop a one-line `*.lua` to add any other NORAD ID), USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
 
 - **Live vessel overlay** — AIS via `rtl-ais` / `aisstream.io` ([#26](https://github.com/Kohei-Wada/ttymap/issues/26))
 - **Weather** — radar, temperature, wind

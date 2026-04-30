@@ -19,6 +19,7 @@ pub mod init_lua;
 pub mod map_api;
 pub mod palette_provider;
 pub mod runtimepath;
+pub mod sgp4;
 
 pub use component::LuaComponent;
 pub use init_lua::run_init_lua;
@@ -644,7 +645,7 @@ mod tests {
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased).
         for stem in [
-            "aircraft", "iss", "quake", "wiki", "here", "export", "help", "search",
+            "aircraft", "iss", "hubble", "quake", "wiki", "here", "export", "help", "search",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),
@@ -652,6 +653,35 @@ mod tests {
             );
         }
         assert_eq!(overlay_count, 3, "info/scalebar/attribution overlays");
+    }
+
+    /// Probe: two `LuaComponent` instances built from different
+    /// scripts share `Any::type_id`. Confirms that toggle-activation
+    /// dedup (which keys off TypeId) cannot tell two Lua plugins
+    /// apart on the compositor stack — relevant before adding
+    /// multi-entry support, where one file would register multiple
+    /// Lua-driven toggles that need to coexist.
+    #[test]
+    fn two_lua_components_collide_on_typeid() {
+        use std::any::Any;
+        let shared = host::LuaHostShared::empty();
+        let a = LuaComponent::from_source(
+            r#"return { name = "a", render = function() return {} end }"#,
+            "a",
+            shared.clone(),
+        )
+        .expect("build a");
+        let b = LuaComponent::from_source(
+            r#"return { name = "b", render = function() return {} end }"#,
+            "b",
+            shared,
+        )
+        .expect("build b");
+        assert_eq!(
+            Any::type_id(&a),
+            Any::type_id(&b),
+            "all LuaComponent instances share TypeId by construction",
+        );
     }
 
     /// Module metadata: defaults, overrides, kind/activation flips.

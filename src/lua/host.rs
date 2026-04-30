@@ -18,6 +18,10 @@
 //! ttymap.window :close()                    pop this component off the stack
 //! ttymap.window :export_frame()             snapshot the current frame to disk
 //! ttymap.json   :parse(s) -> value|nil      JSON → Lua tables (errors → nil)
+//! ttymap.sgp4   :parse_tle(text) -> handle  parse a TLE for SGP4 propagation
+//! ttymap.sgp4   :parse_tles(text) -> array  parse a multi-TLE block (groups)
+//! ttymap.sgp4   :propagate(h[, t]) -> table propagate a handle to unix time t
+//! ttymap.sgp4   :propagate_batch(hs[, t])   batch propagate (Starlink-scale)
 //! ttymap.tile   :attribution() -> string?   active tile provider's attribution
 //! ttymap.config :geoip_endpoint() -> string `[geoip].endpoint` value
 //! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
@@ -176,6 +180,7 @@ pub fn install(
         })?,
     )?;
     ttymap.set("json", lua.create_userdata(HostJson)?)?;
+    ttymap.set("sgp4", lua.create_userdata(crate::lua::sgp4::HostSgp4)?)?;
     ttymap.set(
         "tile",
         lua.create_userdata(HostTile {
@@ -505,7 +510,9 @@ mod tests {
         let (lua, _handles) = install_for_test();
         // Each namespace lookup must return a userdata; the shape
         // confirms the install wired all namespaces in.
-        for ns in ["http", "map", "window", "json", "tile", "config", "help"] {
+        for ns in [
+            "http", "map", "window", "json", "sgp4", "tile", "config", "help",
+        ] {
             let ud: mlua::AnyUserData = lua
                 .load(format!("return ttymap.{ns}"))
                 .eval()
@@ -634,6 +641,39 @@ mod tests {
             .eval()
             .expect("eval");
         assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
+    }
+
+    #[test]
+    fn sgp4_namespace_propagates_iss_through_lua() {
+        // End-to-end: a Lua script calls parse_tle + propagate and
+        // gets a position table back. Catches bridge wiring bugs
+        // (userdata borrow, namespace install, table return shape)
+        // that the standalone sgp4 module tests miss.
+        let (lua, _handles) = install_for_test();
+        let pos: mlua::Table = lua
+            .load(
+                r#"
+                local tle = ttymap.sgp4:parse_tle(
+                    "ISS (ZARYA)\n" ..
+                    "1 25544U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927\n" ..
+                    "2 25544  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537"
+                )
+                return ttymap.sgp4:propagate(tle, 1220568000)
+                "#,
+            )
+            .eval()
+            .expect("propagate from Lua");
+        let lon: f64 = pos.get("lon").expect("lon");
+        let lat: f64 = pos.get("lat").expect("lat");
+        let alt: f64 = pos.get("alt_km").expect("alt_km");
+        let vel: f64 = pos.get("vel_kms").expect("vel_kms");
+        assert!((-180.0..=180.0).contains(&lon));
+        assert!((-90.0..=90.0).contains(&lat));
+        assert!(
+            (300.0..500.0).contains(&alt),
+            "altitude {alt} km not LEO-ish",
+        );
+        assert!((7.0..8.0).contains(&vel), "velocity {vel} not ISS-ish");
     }
 
     #[test]
