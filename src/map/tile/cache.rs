@@ -88,7 +88,7 @@ impl TileCache {
         // so the antimeridian wrap is correct for same-z keys. Cross-z
         // scoring is approximate but `zoom_diff` already dominates the
         // composite priority.
-        let grid_size = 1i32.checked_shl(cz).unwrap_or(i32::MAX);
+        let grid_size = crate::geo::tile_grid_size(cz);
 
         self.client.update_view(&|key: &TileKey| TilePriority {
             zoom_diff: key.z.abs_diff(cz),
@@ -151,7 +151,7 @@ impl TileCache {
             return self.memory_cache.get(&key);
         }
 
-        let grid_size = 1i32.checked_shl(self.current_z).unwrap_or(i32::MAX);
+        let grid_size = crate::geo::tile_grid_size(self.current_z);
         let priority = TilePriority {
             zoom_diff: key.z.abs_diff(self.current_z),
             distance_sq: tile_distance_sq(&key, self.center_x, self.center_y, grid_size),
@@ -164,7 +164,7 @@ impl TileCache {
     pub fn prefetch(&mut self, center_lon: f64, center_lat: f64, zoom: f64) {
         let z = crate::geo::base_zoom(zoom);
         let center = crate::geo::ll2tile(center_lon, center_lat, z);
-        let grid_size = (1u64 << z) as i32;
+        let grid_size = crate::geo::tile_grid_size(z);
         let cx = center.x.floor() as i32;
         let cy = center.y.floor() as i32;
 
@@ -190,7 +190,7 @@ impl TileCache {
         // already-warm tiles regardless of which quadrant the view
         // fractionally sits on.
         if z < 14 {
-            let g = (1u64 << (z + 1)) as i32;
+            let g = crate::geo::tile_grid_size(z + 1);
             let base_x = cx * 2;
             let base_y = cy * 2;
             for dy in 0..2 {
@@ -208,7 +208,7 @@ impl TileCache {
         // z-1 center
         if z > 0 {
             let c = crate::geo::ll2tile(center_lon, center_lat, z - 1);
-            let g = (1u64 << (z - 1)) as i32;
+            let g = crate::geo::tile_grid_size(z - 1);
             let tx = (c.x.floor() as i32).rem_euclid(g);
             let ty = c.y.floor() as i32;
             if ty >= 0 && ty < g {

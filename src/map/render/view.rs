@@ -25,7 +25,7 @@ pub fn visible_tiles(
     let z = geo::base_zoom(zoom);
     let center = geo::ll2tile(center_lon, center_lat, z);
     let tile_size = geo::tile_size_at_zoom(zoom);
-    let grid_size = (1u64 << z) as i32;
+    let grid_size = geo::tile_grid_size(z);
 
     let mut tiles = Vec::new();
 
@@ -107,7 +107,7 @@ mod tests {
         // Near north pole — some y tiles should be skipped
         let tiles = visible_tiles(0.0, 85.0, 2.0, 400, 400);
         for t in &tiles {
-            let grid = (1u64 << t.z) as i32;
+            let grid = geo::tile_grid_size(t.z);
             assert!(
                 t.y >= 0 && t.y < grid,
                 "tile y={} out of grid {}",

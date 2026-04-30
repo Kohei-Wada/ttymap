@@ -84,7 +84,7 @@ impl RenderPipeline {
         // z+1: every visible tile's four children.
         if z < 14 {
             let child_z = z + 1;
-            let child_grid = (1u64 << child_z) as i32;
+            let child_grid = crate::geo::tile_grid_size(child_z);
             for vt in &visible {
                 let bx = vt.x * 2;
                 let by = vt.y * 2;
@@ -105,7 +105,7 @@ impl RenderPipeline {
         // parents, so dedupe).
         if z > 0 {
             let parent_z = z - 1;
-            let parent_grid = (1u64 << parent_z) as i32;
+            let parent_grid = crate::geo::tile_grid_size(parent_z);
             let mut seen: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
             for vt in &visible {
                 let py = vt.y / 2;

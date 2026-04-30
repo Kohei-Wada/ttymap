@@ -133,6 +133,15 @@ pub fn base_zoom(zoom: f64) -> u32 {
     zoom.floor().clamp(0.0, 14.0) as u32
 }
 
+/// Tile-grid size at zoom `z`: the number of tiles along one axis
+/// (i.e. `2^z`), saturating at `i32::MAX` for `z >= 31`. Used as the
+/// modulus for x-axis wraparound (slippy maps wrap longitude but not
+/// latitude). Centralised so every call site has the same overflow
+/// story.
+pub fn tile_grid_size(z: u32) -> i32 {
+    1i32.checked_shl(z).unwrap_or(i32::MAX)
+}
+
 /// Return the effective tile size (in screen pixels / units) at a fractional
 /// zoom level.  A tile is 256 units at every integer zoom; sub-tile zooming
 /// scales it up.
