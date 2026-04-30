@@ -131,15 +131,31 @@ function M.make(specs)
         end,
 
         paint_on_map = function(map)
+            -- Spatial dedup for group entries: at low zoom Starlink-
+            -- class constellations pack hundreds of sats into a few
+            -- pixels and the map turns into solid colour. Bucket
+            -- positions into a degree-grid that scales with zoom so
+            -- only one sat per visible cell renders. 5° at zoom 0
+            -- (~world view) → 0.005° at zoom 10. Same icon (`◉`) as
+            -- single sats — by the time dedup runs, count is low
+            -- enough that a real marker reads fine.
+            local zoom = map:zoom()
+            local cell_deg = 5 / (2 ^ zoom)
+
             for _, sat in ipairs(sats) do
                 if not sat.visible then goto continue end
                 if sat.kind == "group" then
-                    -- Dot per sat, no labels — labelling thousands of
-                    -- Starlink-class objects would obliterate the map.
                     if sat.positions then
+                        local seen = {}
                         for _, p in ipairs(sat.positions) do
                             if p then
-                                map:point(p.lon, p.lat, "·", sat.color)
+                                local kx = math.floor(p.lon / cell_deg)
+                                local ky = math.floor(p.lat / cell_deg)
+                                local k = kx .. ":" .. ky
+                                if not seen[k] then
+                                    seen[k] = true
+                                    map:point(p.lon, p.lat, "◉", sat.color)
+                                end
                             end
                         end
                     end
