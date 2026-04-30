@@ -10,13 +10,16 @@
 //!   `BRIGHT` consts). No ratatui dependency; the styler and the map
 //!   renderer consume it.
 //! - [`ui`] — ratatui adapter ([`UiTheme`]). Plugins never see this
-//!   directly; they get `widget::StyleKind` via `RenderWindow::style()`
-//!   which resolves through `UiTheme`.
+//!   directly; they ask for a [`StyleKind`] semantic tag via
+//!   `RenderWindow::style()` which resolves through `UiTheme`.
+//! - [`style`] — [`StyleKind`] semantic tags + resolver.
 
 pub mod palette;
+pub mod style;
 pub mod ui;
 
 pub use palette::{BRIGHT, ColorPalette, DARK};
+pub use style::StyleKind;
 pub use ui::UiTheme;
 
 /// Identifies which theme the app is running with. Derives the concrete

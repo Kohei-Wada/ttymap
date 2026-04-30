@@ -33,13 +33,13 @@
 //! (focus, dedup, clamp) remain framework-enforced.
 
 use ratatui::Frame;
-use ratatui::layout::Rect as RRect;
-use ratatui::widgets::Clear;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::{Clear, Paragraph, Table, TableState};
 
 use crate::app::AppMsg;
 use crate::compositor::{Component, Context};
-use crate::theme::UiTheme;
-use crate::widget;
+use crate::theme::{StyleKind, UiTheme};
 
 /// Queue of actions a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns.
@@ -152,19 +152,14 @@ impl<'a> Window<'a> {
 /// exposed — the active [`UiTheme`].
 ///
 /// **Components never see `UiTheme`.** They ask for semantic styles
-/// (body / muted / accent / highlight / selected / link), and
-/// [`RenderWindow`] maps them to the current theme's concrete
-/// `Style`. Adding a new theme-driven field requires one accessor
-/// here, not a signature change in every plugin.
-///
-/// `frame()` remains as an escape hatch for widgets not yet wrapped
-/// by this module (lists, tables, scrollable paragraphs). A
-/// follow-up refactor will fold those into Window primitives and
-/// retire the escape hatch — at which point plugins won't need
-/// `use ratatui::*` at all.
+/// via [`StyleKind`] (`Body` / `Muted` / `Accent` / `Highlight` /
+/// `Selected` / `Link` / `MutedFg`), and [`RenderWindow::style`]
+/// resolves them against the current theme. Adding a new
+/// theme-driven field requires one variant + resolver branch, not a
+/// signature change in every component.
 pub struct RenderWindow<'a, 'b> {
     frame: &'a mut Frame<'b>,
-    area: RRect,
+    area: Rect,
     theme: &'a UiTheme,
     #[allow(dead_code)] // read via ctx(); kept even if unused
     ctx: &'a Context,
@@ -173,7 +168,7 @@ pub struct RenderWindow<'a, 'b> {
 impl<'a, 'b> RenderWindow<'a, 'b> {
     pub(crate) fn new(
         frame: &'a mut Frame<'b>,
-        area: RRect,
+        area: Rect,
         theme: &'a UiTheme,
         ctx: &'a Context,
     ) -> Self {
@@ -187,8 +182,8 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 
     /// The area this component is allowed to draw into (usually
     /// the map viewport minus the border).
-    pub fn area(&self) -> widget::Rect {
-        self.area.into()
+    pub fn area(&self) -> Rect {
+        self.area
     }
 
     /// App-level snapshot (center, theme id). Kept for parity with
@@ -199,61 +194,35 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.ctx
     }
 
-    /// Clear the cells in `rect` (rect-clamped). Useful before
-    /// drawing a popup so whatever was underneath doesn't bleed
-    /// through.
-    pub fn clear(&mut self, rect: impl Into<widget::Rect>) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        self.frame.render_widget(Clear, clamped);
-    }
-
     /// Clear `rect` and draw a theme-styled bordered panel with
     /// `title` inside it. Returns the inner rect (content region
     /// inside the borders) for further widgets.
-    pub fn panel(&mut self, rect: impl Into<widget::Rect>, title: &str) -> widget::Rect {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
+    pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
+        let clamped = clamp(rect, self.area);
         self.frame.render_widget(Clear, clamped);
         let block = self.theme.panel(title);
         let inner = block.inner(clamped);
         self.frame.render_widget(block, clamped);
-        inner.into()
+        inner
     }
 
-    // ── Widget-descriptor API ────────────────────────────────────────
-    //
-    // Plugins construct `widget::*` descriptors (owned data) and
-    // pass them here; conversion to ratatui is host-side only.
-
-    /// Draw a [`widget::Paragraph`] descriptor into `rect`. The
-    /// paragraph's optional `framed_title` is expanded into a
-    /// theme-styled bordered block at render time.
-    pub fn paragraph(&mut self, p: widget::Paragraph, rect: impl Into<widget::Rect>) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        let r = p.into_ratatui(self.theme);
-        self.frame.render_widget(r, clamped);
+    /// Draw a `ratatui::widgets::Paragraph` into `rect` (clamped to
+    /// the component's area).
+    pub fn paragraph(&mut self, p: Paragraph<'static>, rect: Rect) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_widget(p, clamped);
     }
 
-    /// Draw a [`widget::Table`] descriptor into `rect`, using `sel`
+    /// Draw a `ratatui::widgets::Table` into `rect`, using `state`
     /// as the selection state.
-    pub fn table(
-        &mut self,
-        t: widget::Table,
-        rect: impl Into<widget::Rect>,
-        sel: &widget::TableSel,
-    ) {
-        let w_rect: widget::Rect = rect.into();
-        let clamped = clamp(w_rect.into(), self.area);
-        let r: ratatui::widgets::Table = t.into();
-        let mut state: ratatui::widgets::TableState = (*sel).into();
-        self.frame.render_stateful_widget(r, clamped, &mut state);
+    pub fn table(&mut self, t: Table<'static>, rect: Rect, state: &mut TableState) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_stateful_widget(t, clamped, state);
     }
 
-    /// Resolve a semantic [`widget::StyleKind`] to a concrete
-    /// [`widget::TextStyle`] under the active theme.
-    pub fn style(&self, kind: widget::StyleKind) -> widget::TextStyle {
+    /// Resolve a semantic [`StyleKind`] to a concrete `ratatui::Style`
+    /// under the active theme.
+    pub fn style(&self, kind: StyleKind) -> Style {
         kind.resolve(self.theme)
     }
 }
@@ -267,7 +236,7 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
 /// u16::MAX, u16::MAX, u16::MAX, u16::MAX)`) cannot overflow u16
 /// in the right/bottom computation and wrap into a tiny valid
 /// rect that would escape the bounds.
-fn clamp(rect: RRect, bounds: RRect) -> RRect {
+fn clamp(rect: Rect, bounds: Rect) -> Rect {
     let x = rect.x.max(bounds.x);
     let y = rect.y.max(bounds.y);
     let right = rect
@@ -278,7 +247,7 @@ fn clamp(rect: RRect, bounds: RRect) -> RRect {
         .y
         .saturating_add(rect.height)
         .min(bounds.y.saturating_add(bounds.height));
-    RRect {
+    Rect {
         x,
         y,
         width: right.saturating_sub(x),
@@ -290,8 +259,8 @@ fn clamp(rect: RRect, bounds: RRect) -> RRect {
 mod clamp_tests {
     use super::*;
 
-    fn r(x: u16, y: u16, w: u16, h: u16) -> RRect {
-        RRect::new(x, y, w, h)
+    fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
+        Rect::new(x, y, w, h)
     }
 
     #[test]

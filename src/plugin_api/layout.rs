@@ -4,7 +4,7 @@
 //! `module.layout.anchor` strings into. Each variant places a
 //! `width × height` panel inside an outer `Rect` via [`PanelAnchor::rect`].
 
-use crate::widget::Rect;
+use ratatui::layout::Rect;
 
 /// Anchor for a panel inside the map area. Side anchors place
 /// full-height stripes; corner anchors place a fixed-size box;

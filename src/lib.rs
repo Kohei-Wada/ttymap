@@ -43,12 +43,6 @@ pub mod map;
 #[doc(hidden)]
 pub mod theme;
 
-/// Widget vocabulary — neutral mirror/descriptor types that plugin
-/// code uses instead of importing `ratatui::*`. The host
-/// (`compositor::RenderWindow`) converts these to ratatui widgets
-/// at render time. See module docs for the design rationale.
-pub(crate) mod widget;
-
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
 
