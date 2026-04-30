@@ -221,7 +221,7 @@ impl UserData for HostHttp {
         // surface as the Job never producing a result (try_take keeps
         // returning nil).
         methods.add_method("fetch", |_, this, url: String| {
-            Ok(LuaJob::spawn(&this.http, url))
+            Ok(LuaJob::spawn(&this.http, url, None))
         });
 
         // `ttymap.http:fetch_cached(url, ttl_secs)` — disk-cached GET.
@@ -235,7 +235,7 @@ impl UserData for HostHttp {
         // Cache lives under `<XDG_CACHE_HOME>/ttymap/lua-http/` keyed
         // by FNV-1a of the URL.
         methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
-            Ok(LuaJob::spawn_cached(&this.http, url, ttl_secs))
+            Ok(LuaJob::spawn(&this.http, url, Some(ttl_secs)))
         });
 
         // `ttymap.http:url_encode(s)` — percent-encode a query string per
@@ -475,42 +475,23 @@ pub struct LuaJob {
 }
 
 impl LuaJob {
-    fn spawn(http: &HttpClient, url: String) -> Self {
+    /// Background HTTP GET. With `cache_ttl == None` it's a plain
+    /// fetch; with `Some(ttl_secs)` it's read-through against a
+    /// disk cache (write-through on success, stale-fallback on HTTP
+    /// error so a rate-limiting upstream doesn't strand callers on
+    /// "no body, no error"). Cache miss / stale rolls into the
+    /// network path automatically.
+    fn spawn(http: &HttpClient, url: String, cache_ttl: Option<u64>) -> Self {
         let (tx, rx) = mpsc::channel();
         let http = http.clone();
+        let path = cache_ttl.and_then(|_| http_cache_path(&url));
         thread::spawn(move || {
-            // Errors are silent for now: a Lua plugin that needs
-            // error visibility can poll a deadline of its own. We
-            // log so offline debugging has a hook.
-            match http.get_bytes(&url) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(body) => {
-                        let _ = tx.send(body);
-                    }
-                    Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
-                },
-                Err(e) => log::warn!("lua-host: http:fetch {}: {}", url, e),
-            }
-        });
-        Self { rx }
-    }
-
-    /// Disk-cached fetch. Read-through with `ttl_secs` freshness
-    /// window; write-through on success; fall back to a stale cache
-    /// entry on HTTP error so a flaky / rate-limiting upstream
-    /// doesn't strand the plugin on "no body, no error".
-    fn spawn_cached(http: &HttpClient, url: String, ttl_secs: u64) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let http = http.clone();
-        thread::spawn(move || {
-            let path = http_cache_path(&url);
-
             // Fresh cache hit → return immediately, skip the network.
-            if let Some(p) = path.as_ref()
+            if let (Some(ttl), Some(p)) = (cache_ttl, path.as_ref())
                 && let Ok(meta) = std::fs::metadata(p)
                 && let Ok(modified) = meta.modified()
                 && let Ok(age) = SystemTime::now().duration_since(modified)
-                && age.as_secs() < ttl_secs
+                && age.as_secs() < ttl
                 && let Ok(body) = std::fs::read_to_string(p)
             {
                 let _ = tx.send(body);
@@ -529,17 +510,16 @@ impl LuaJob {
                         }
                         let _ = tx.send(body);
                     }
-                    Err(e) => log::warn!("lua-host: http:fetch_cached {}: not utf-8: {}", url, e),
+                    Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
                 },
                 Err(e) => {
-                    log::warn!(
-                        "lua-host: http:fetch_cached {}: {} — falling back to cache",
-                        url,
-                        e
-                    );
+                    log::warn!("lua-host: http:fetch {}: {}", url, e);
+                    // Cached caller? Try to serve a stale copy so a
+                    // flaky upstream doesn't strand them.
                     if let Some(p) = path.as_ref()
                         && let Ok(body) = std::fs::read_to_string(p)
                     {
+                        log::info!("lua-host: http:fetch {}: using stale cache", url);
                         let _ = tx.send(body);
                     }
                 }
