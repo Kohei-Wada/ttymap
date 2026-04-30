@@ -10,17 +10,17 @@ homepage = "https://github.com/Kohei-Wada/ttymap"
 readme = "README.md"
 keywords = ["map", "tui", "mapbox", "terminal", "braille"]
 categories = ["command-line-utilities", "visualization"]
-# `runtime/` ships bundled Lua plugin scripts that the binary
-# `include_str!`s at compile time. cargo's default packaging only
-# picks up `src/`, `Cargo.toml`, and `README.md`; without this list,
-# `cargo publish` would produce a binary that can't compile from the
-# crate.
+# `runtime/` is no longer embedded in the binary (#183), but we still
+# include it in the source distribution so `cargo install --path .`
+# users (combined with `make install-runtime`) can `cp -r` from a
+# crate-extracted source tree.
 include = [
     "src/**/*",
     "runtime/**/*",
     "build.rs",
     "proto/**/*",
     "Cargo.toml",
+    "Makefile",
     "README.md",
     "LICENSE-*",
 ]
@@ -34,13 +34,12 @@ flate2 = "1"
 prost = "0.14"
 rstar = "0.12"
 earcut = "0.4"
-serde = { version = "1", features = ["derive"] }
+serde = "1"
 serde_json = "1"
 directories = "6"
 unicode-width = "0.2"
 log = { version = "0.4", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-toml = "1.1.2"
 indexmap = "2.14.0"
 lru = "0.16"
 crossbeam-channel = "0.5"

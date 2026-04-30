@@ -25,7 +25,7 @@ pub mod commands;
 /// (keymap fallback + activation dispatch).
 pub(crate) mod compositor;
 
-/// Settings loaded from `~/.config/ttymap/config.toml` + CLI overrides.
+/// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
 
 /// Map subsystem — viewport state, action dispatch, and the full map
@@ -61,7 +61,7 @@ pub mod logging;
 /// bridge surface to `Component` / `PaletteProvider` / `MapApi`. No
 /// production plugin uses this yet; expanded incrementally as the
 /// fetch+render plugins migrate from Rust to Lua.
-pub(crate) mod lua;
+pub mod lua;
 
 // ── Internal modules (not part of the external surface) ──────────────────
 //

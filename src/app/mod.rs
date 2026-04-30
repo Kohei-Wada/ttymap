@@ -24,7 +24,7 @@ use log::{debug, info};
 
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
-use crate::keymap::KeyMap;
+use crate::keymap::{KeyMap, KeybindingOverrides};
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
@@ -54,7 +54,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, keymap_overrides: KeybindingOverrides) -> Self {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::map::render::canvas_size(cols, rows);
 
@@ -64,7 +64,7 @@ impl App {
         );
 
         let (tile_cache, wake_rx) = build_tile_cache(&config);
-        let keymap = KeyMap::with_overrides(&config.keymap);
+        let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`host:plugin_palette_entries()` etc.) keeps
@@ -412,25 +412,19 @@ fn build_registrar(
         keymap_entries(keymap),
     ));
 
-    // Resolve and cache the runtime dir. `new_lua` reads the cached
-    // value for its disk-based `require` searcher, so this needs to
-    // run before any LuaComponent / LuaPaletteProvider is built.
-    let runtime_dir = match crate::lua::resolve_runtime_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("ttymap: {}", e);
-            std::process::exit(1);
-        }
-    };
-    crate::lua::set_runtime_dir(runtime_dir.clone());
-
-    // Bundled plugins (every `*.lua` under `<runtime>/lua/`) always
-    // register — disabling one is an edit to the script itself
-    // (`module.enabled = false`). The dispatcher reads each script's
-    // own activation/kind/key/label metadata, so chrome overlays,
-    // palette toggles, key binds, and the search palette provider
-    // all flow through one path.
-    crate::lua::register_builtin_plugins(&runtime_dir, shared.clone(), &mut r);
+    // Bundled plugins (every `*.lua` under each runtime layer's
+    // `lua/`) always register — disabling one is an edit to the
+    // script itself (`module.enabled = false`). Higher-priority
+    // layers shadow lower ones by stem, so a user's
+    // `~/.config/ttymap/lua/wiki.lua` replaces the bundled `wiki`.
+    // The dispatcher reads each script's own activation/kind/key/label
+    // metadata, so chrome overlays, palette toggles, key binds, and
+    // the search palette provider all flow through one path.
+    //
+    // `runtime_path()` was set once at startup by `main.rs` (or the
+    // test harness via `ensure_runtime_path_for_tests`).
+    let runtime_path = crate::lua::runtime_path();
+    crate::lua::register_builtin_plugins(runtime_path, shared.clone(), &mut r);
 
     // User plugins from `~/.config/ttymap/plugins/*.lua`. Same
     // dispatcher, same host accessors. Each script controls its own

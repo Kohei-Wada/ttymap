@@ -18,8 +18,8 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 - **Scale bar + attribution** — always on screen
 - **Help popup** — `?` shows all keybindings
 - **Frame export** — palette entry writes the current view as an ANSI-coloured text file under `~/.local/share/ttymap/exports/`
-- **Configurable** — keybindings, initial position, language via TOML config
-- **Lua plugin API** — every in-tree plugin is a Lua script under `runtime/lua/`; drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding. Bundled and user scripts share one dispatcher and the same `host:*` accessor surface.
+- **Configurable** — keybindings, initial position, language via Lua `init.lua` (Neovim-style)
+- **Lua plugin API** — every in-tree plugin is a Lua script under `runtime/lua/`; drop a `*.lua` file into `~/.config/ttymap/plugins/` to add one without rebuilding, or `~/.config/ttymap/lua/<name>.lua` to *shadow* a bundled plugin by stem. Bundled and user scripts share one dispatcher and the same `host:*` accessor surface.
 
 ## Usage
 
@@ -57,7 +57,7 @@ ttymap snapshot --lat 40.71 --lon -74.01 --zoom 12 > nyc.ans
 
 ### Keybindings
 
-Press `?` for the in-app cheatsheet — it reflects the live keymap and any plugin keys that are loaded. Keybindings can be overridden in `~/.config/ttymap/config.toml`.
+Press `?` for the in-app cheatsheet — it reflects the live keymap and any plugin keys that are loaded. Keybindings can be overridden in `~/.config/ttymap/init.lua` via `ttymap.keymap.set(action, keys)`.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ src/
 ├── main.rs              CLI entry + interactive-mode composition
 ├── lib.rs               crate root
 ├── logging.rs           XDG state log
-├── config.rs            TOML config (sectioned) + CLI overrides
+├── config.rs            Config struct + Default impls (loaded from init.lua)
 ├── keymap.rs            KeyBinding → AppMsg table + user overrides
 ├── geo.rs               Web Mercator, projection, distance
 │
@@ -302,29 +302,42 @@ Issues on GitHub carry the current opinion of what's easy, what's hard, and what
 
 ## Configuration
 
-Config file: `~/.config/ttymap/config.toml`
+Config file: `~/.config/ttymap/init.lua` (Neovim-style)
 
-```toml
-[map]
-lat = 35.6828
-lon = 139.7595
-zoom = 10.0
+```lua
+ttymap.opt.map.lat            = 35.6828
+ttymap.opt.map.lon            = 139.7595
+ttymap.opt.map.zoom           = 10
+ttymap.opt.render.language    = "ja"
 
-[render]
-language = "ja"
+-- IP-based geolocation (shared by `--here` flag and the `here` plugin)
+ttymap.opt.geoip.on_startup   = false
+ttymap.opt.geoip.endpoint     = "https://ipapi.co/json/"
+ttymap.opt.geoip.timeout_ms   = 2000
 
-# IP-based geolocation (shared by `--here` flag and the `here` plugin)
-[geoip]
-on_startup = false
-endpoint = "https://ipapi.co/json/"
-timeout_ms = 2000
+ttymap.keymap.set("zoom_in", { "i", "+" })
+ttymap.keymap.set("quit",    { "q", "C-q" })
 
-[keymap]
-zoom_in = ["i", "+"]
-quit = ["q", "C-q"]
+-- Conditional / computed config (the killer feature over TOML):
+local heavy = os.getenv("TTYMAP_HEAVY") ~= nil
+ttymap.opt.cache.memory_tiles = heavy and 2048 or 512
 ```
 
-See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults. Per-plugin behaviour lives inside each `.lua` script — to tweak refresh cadence, panel size, or hardcoded API endpoints, edit `runtime/lua/<name>.lua` (bundled) or drop a copy under `~/.config/ttymap/plugins/` (user).
+Every option is optional; omitted values stay at their built-in defaults.
+Errors in `init.lua` (syntax, type mismatch, runtime exception) are
+logged and recovered — the app keeps booting with defaults. Per-plugin
+behaviour still lives inside each `.lua` script — drop a copy under
+`~/.config/ttymap/lua/<name>.lua` to shadow a bundled plugin by stem.
+
+### Migrating from `config.toml`
+
+| Old TOML | New init.lua |
+|---|---|
+| `[map] lat = 35.68` | `ttymap.opt.map.lat = 35.68` |
+| `[render] style = "bright"` | `ttymap.opt.render.style = "bright"` |
+| `[cache] memory_tiles = 1024` | `ttymap.opt.cache.memory_tiles = 1024` |
+| `[geoip] on_startup = true` | `ttymap.opt.geoip.on_startup = true` |
+| `[keymap] zoom_in = ["i", "+"]` | `ttymap.keymap.set("zoom_in", { "i", "+" })` |
 
 ## Install
 
@@ -354,11 +367,17 @@ been placed. Run `make install-runtime` (or `make install`) to fix.
 
 ### Runtime path resolution
 
-The binary searches for `runtime/` in this order (first hit wins):
+The binary builds an ordered list of runtime layers (Neovim-style
+runtimepath). Higher layers shadow lower ones — drop a
+`~/.config/ttymap/lua/wiki.lua` to replace bundled `wiki`.
 
 1. `$TTYMAP_RUNTIME` — env override (optional escape hatch)
-2. `$XDG_DATA_HOME/ttymap` (default `~/.local/share/ttymap`) — `make install` target
-3. `$CARGO_MANIFEST_DIR/runtime` — `cargo run` from a git checkout
+2. `$CARGO_MANIFEST_DIR/runtime` — `cargo run` from a git checkout (dev wins over stale install)
+3. `$XDG_CONFIG_HOME/ttymap` (default `~/.config/ttymap`) — user overrides
+4. `$XDG_DATA_HOME/ttymap` (default `~/.local/share/ttymap`) — `make install` target
+
+A layer counts only when it has a `lua/` subdirectory. The user-tier
+is empty by default; you opt in by creating `~/.config/ttymap/lua/`.
 
 ## Build
 
@@ -372,8 +391,9 @@ cargo clippy
 
 | Path | Content |
 |------|---------|
-| `~/.config/ttymap/config.toml` | Configuration |
+| `~/.config/ttymap/init.lua` | Configuration (Neovim-style Lua) |
 | `~/.config/ttymap/plugins/` | User Lua plugins (drop `*.lua` here) |
+| `~/.config/ttymap/lua/` | User overrides for bundled plugins / libs (shadow by stem) |
 | `~/.local/share/ttymap/lua/` | Bundled Lua plugins + libs (placed by `make install`) |
 | `~/.cache/ttymap/` | Disk tile cache |
 | `~/.local/state/ttymap/ttymap.log` | Log file (auto-rotated at 1MB) |
