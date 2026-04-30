@@ -198,28 +198,7 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
     let ttymap: Table = lua.globals().get("ttymap")?;
     let opt: Table = ttymap.get("opt")?;
 
-    let mut cfg = Config {
-        map: crate::config::MapConfig {
-            lat: defaults.map.lat,
-            lon: defaults.map.lon,
-            zoom: defaults.map.zoom,
-            max_zoom: defaults.map.max_zoom,
-            zoom_step: defaults.map.zoom_step,
-        },
-        render: crate::config::RenderConfig {
-            style: defaults.render.style.clone(),
-            language: defaults.render.language.clone(),
-        },
-        cache: crate::config::CacheConfig {
-            tiles: defaults.cache.tiles,
-            memory_tiles: defaults.cache.memory_tiles,
-        },
-        geoip: crate::config::GeoipConfig {
-            on_startup: defaults.geoip.on_startup,
-            endpoint: defaults.geoip.endpoint.clone(),
-            timeout_ms: defaults.geoip.timeout_ms,
-        },
-    };
+    let mut cfg = defaults.clone();
 
     if let Ok(t) = opt.get::<Table>("map") {
         if let Ok(v) = t.get::<f64>("lat") {
