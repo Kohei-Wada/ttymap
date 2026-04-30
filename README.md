@@ -87,6 +87,8 @@ src/
 ├── compositor/          helix-inspired focus / modal stack
 │   ├── mod.rs           Component, Compositor, Registrar, Activation, PaletteEntry, Task, Context
 │   ├── base.rs          BaseLayer — keymap + activation dispatch + gg sequence
+│   ├── layout.rs        PanelAnchor (anchor vocabulary for module.layout)
+│   ├── map_api.rs       MapApi — world-space + screen-space draw primitives for paint_on_map
 │   └── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
 │
 ├── palette/             `:`-triggered universal picker (itself a Component)
@@ -104,11 +106,6 @@ src/
 │   └── map_api.rs       Lua-side MapApi bridge (point / label / text_anchored / center / zoom / cursor / area_width)
 │
 
-├── plugin_api/          crate-internal primitives the Lua bridge re-uses
-│   ├── mod.rs           re-exports
-│   ├── map_api.rs       MapApi — world-space + screen-space draw primitives
-│   └── layout.rs        PanelAnchor (anchor vocabulary for module.layout)
-│
 ├── map/                 domain — viewport state + rendering pipeline
 │   ├── state.rs, action.rs, mod.rs
 │   ├── render/          tiles → MapFrame on a dedicated thread
@@ -123,7 +120,7 @@ src/
 │       ├── decode/          Protobuf → DecodedTile (geometry / tags / decompress sub-modules)
 │       └── fetch/           TileFetcher trait + FetchLane (queue/workers/dedup) + http + disk decorator
 │
-├── shared/              host-and-plugin utilities (plugin-only utilities live in plugin_api/)
+├── shared/              host-and-Lua-bridge utilities
 │   ├── geoip.rs         IP-based lat/lon lookup (also used by snap CLI)
 │   └── http/            user-agent-tagged reqwest wrapper
 │
@@ -144,8 +141,7 @@ runtime/
 - **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
 - **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
-- **`lua/`** — every in-tree plugin. `BUILTIN_SCRIPTS` lists `(stem, include_str!(...))` pairs; one dispatcher (`register_one`) reads each script's module metadata (`kind` / `activation` / `key` / `label` / `enabled`) and wires it. User plugins under `~/.config/ttymap/plugins/` flow through the same dispatcher. Runtime data (attribution, geoip endpoint, live keymap, palette hints) is exposed via `host:*` accessors backed by `Arc<LuaHostShared>`. The compositor never names a concrete plugin type; Rust never knows a specific plugin's name.
-- **`plugin_api/`** — crate-internal primitives the Lua bridge re-uses (`MapApi`, `PanelAnchor`). The earlier plugin-author prelude (`PolledFeed` / `AsyncJob` / `Throttle` / `NominatimClient` / `InitialJump`) was retired together with the in-tree Rust plugins; equivalents live in Lua scripts.
+- **`lua/`** — every in-tree plugin. `BUILTIN_SCRIPTS` lists `(stem, include_str!(...))` pairs; one dispatcher (`register_one`) reads each script's module metadata (`kind` / `activation` / `key` / `label` / `enabled`) and wires it. User plugins under `~/.config/ttymap/plugins/` flow through the same dispatcher. Runtime data (attribution, geoip endpoint, live keymap, palette hints) is exposed via `host:*` accessors backed by `Arc<LuaHostShared>`. The compositor never names a concrete plugin type; Rust never knows a specific plugin's name. Drawing primitives (`MapApi`) and layout vocabulary (`PanelAnchor`) live under `compositor/` — the Lua bridge thin-wraps them on each `paint_on_map` call.
 - **`theme/`** — palette data + `UiTheme` ratatui adapter + `StyleKind` semantic tags. Lua scripts ask for a tag string ("accent" / "muted" / …) and the bridge resolves it through the active `UiTheme` to a concrete `ratatui::Style`. Lua plugins never see `UiTheme` directly.
 
 ### Message flow

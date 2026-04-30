@@ -24,12 +24,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::AppMsg;
-use crate::compositor::Component;
+use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{RenderWindow, Window};
+use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
 use crate::lua::host::LuaHostShared;
-use crate::plugin_api::MapApi;
-use crate::plugin_api::layout::PanelAnchor;
 use crate::theme::StyleKind;
 
 /// Per-plugin layout knobs read from `module.layout`. Without this,
@@ -40,6 +39,22 @@ struct LuaLayout {
     anchor: PanelAnchor,
     width: u16,
     height: Option<u16>,
+}
+
+/// Parse a `module.layout.anchor` string into [`PanelAnchor`]. The
+/// only consumer is [`LuaLayout::from_module`]; unknown strings fall
+/// back to the layout default rather than erroring.
+fn parse_panel_anchor(s: &str) -> Option<PanelAnchor> {
+    match s.to_ascii_lowercase().as_str() {
+        "left" => Some(PanelAnchor::Left),
+        "right" => Some(PanelAnchor::Right),
+        "top-left" | "topleft" | "tl" => Some(PanelAnchor::TopLeft),
+        "top-right" | "topright" | "tr" => Some(PanelAnchor::TopRight),
+        "bottom-left" | "bottomleft" | "bl" => Some(PanelAnchor::BottomLeft),
+        "bottom-right" | "bottomright" | "br" => Some(PanelAnchor::BottomRight),
+        "center" | "centre" => Some(PanelAnchor::Center),
+        _ => None,
+    }
 }
 
 impl LuaLayout {
@@ -64,7 +79,7 @@ impl LuaLayout {
             return out;
         };
         if let Ok(s) = layout.get::<String>("anchor")
-            && let Some(a) = PanelAnchor::from_str(&s)
+            && let Some(a) = parse_panel_anchor(&s)
         {
             out.anchor = a;
         }
