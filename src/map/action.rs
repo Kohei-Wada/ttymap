@@ -6,6 +6,8 @@
 //! and are invoked directly by the keyboard handler, so `Action`
 //! never carries UI-widget names.
 
+use crate::geo::LonLat;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     None,
@@ -35,6 +37,10 @@ pub enum Action {
         anchor_dy: f64,
         zoom_in: bool,
     },
+    /// Re-centre the map on a specific location. Produced by search,
+    /// the here-plugin, and `host:jump` from any Lua plugin — anything
+    /// that yields a `LonLat` and wants to move the view there.
+    Jump(LonLat),
 }
 
 impl Action {
@@ -60,7 +66,7 @@ impl Action {
             Action::ZoomToWorld => "Zoom to world",
             Action::ResetPosition => "Reset position",
             Action::Redraw => "Redraw",
-            Action::PanCells(..) | Action::ZoomAt { .. } => "",
+            Action::PanCells(..) | Action::ZoomAt { .. } | Action::Jump(_) => "",
         }
     }
 

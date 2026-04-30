@@ -147,6 +147,10 @@ impl MapState {
                 self.zoom_towards(*anchor_dx, *anchor_dy, delta);
                 self.zoom != old_zoom || self.center != old_center
             }
+            Action::Jump(loc) => {
+                self.jump_to(*loc);
+                true
+            }
         }
     }
 

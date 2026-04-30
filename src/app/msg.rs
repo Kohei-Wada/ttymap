@@ -8,7 +8,7 @@
 //!
 //! In GoF Command-pattern terms this is the **Command** role expressed
 //! as a closed algebraic type: each variant is an imperative intent
-//! (`Map`, `Jump`, `CycleFocus`) that the Receiver ([`super::App`])
+//! (`Map`, `CycleFocus`, `SetTheme`) that the Receiver ([`super::App`])
 //! executes in [`App::dispatch`](super::App::dispatch). Invokers
 //! (keymap, palette, plugins) **return `Vec<AppMsg>`** and never
 //! execute anything themselves — the dispatcher is the sole
@@ -26,7 +26,6 @@
 //! off `AppMsg` means the focus state machine isn't coupled to the
 //! dispatch table.
 
-use crate::geo::LonLat;
 use crate::map::Action;
 use crate::theme::ThemeId;
 
@@ -43,11 +42,8 @@ use crate::theme::ThemeId;
 /// delegate to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMsg {
-    /// Dispatch a map-state action (pan, zoom, reset, quit, ...).
+    /// Dispatch a map-state action (pan, zoom, reset, quit, jump, ...).
     Map(Action),
-    /// Jump the map to a specific location — produced by search /
-    /// here-plugin / any future picker that yields a `LonLat`.
-    Jump(LonLat),
     /// Switch the running theme. Cross-cutting: rebuilds the styler
     /// (on the render thread) and the UI colour cache.
     SetTheme(ThemeId),

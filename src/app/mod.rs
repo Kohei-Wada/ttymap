@@ -233,10 +233,6 @@ impl App {
                     self.request_map_redraw();
                 }
             }
-            AppMsg::Jump(loc) => {
-                self.map.jump_to(loc);
-                self.request_map_redraw();
-            }
             AppMsg::SetTheme(new_id) => self.apply_theme(new_id),
             AppMsg::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
