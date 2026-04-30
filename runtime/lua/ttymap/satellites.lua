@@ -13,7 +13,9 @@
 --     N propagations cross the Lua/Rust boundary in one call.
 --
 -- One palette entry, one window, regardless of how many entries the
--- consumer configures.
+-- consumer configures. C-n / C-p (or Up / Down) move the focus
+-- among visible entries and auto-jump the map there, mirroring
+-- the wiki widget's selection model.
 
 local M = {}
 
@@ -34,6 +36,25 @@ local function format_position(pos)
     return string.format("%.1f°N, %.1f°E  %dkm",
         pos.lat, pos.lon,
         math.floor(pos.alt_km + 0.5))
+end
+
+--- First lon/lat that actually represents a position for `sat`, or
+--- nil if there's nothing to jump to yet (no propagation, group
+--- still fetching, all-`false` batch result, …).
+local function focus_point(sat)
+    if not sat or not sat.visible then return nil end
+    if sat.kind == "single" then
+        if sat.positions then
+            return sat.positions.lon, sat.positions.lat
+        end
+    else
+        if sat.positions then
+            for _, p in ipairs(sat.positions) do
+                if p then return p.lon, p.lat end
+            end
+        end
+    end
+    return nil
 end
 
 --- Build a multi-satellite tracker plugin module.
@@ -76,16 +97,17 @@ function M.make(specs)
             table.insert(hints, { sat.key, "toggle " .. sat.display })
         end
     end
-    table.insert(hints, { "Enter", "centre on first visible" })
+    table.insert(hints, { "C-n/C-p", "focus" })
+    table.insert(hints, { "Enter", "re-centre" })
 
     -- Block::Borders::ALL eats one row top + one row bottom, so the
-    -- visible content area is `height - 2`. Size for exactly N rows
-    -- (no in-panel header — the block's `satellite` title bar
-    -- already labels the panel). Width fits both
-    -- "○ [h] Hubble  XX.X°N, YYY.Y°E  ZZZkm" and
-    -- "○ [s] Starlink  6234 sats".
+    -- visible content area is `height - 2`. Width fits a highlighted
+    -- "● [H] Hubble  XX.X°N, YYY.Y°E  ZZZkm" row plus a little
+    -- padding so the focused style doesn't crowd the right border.
     local panel_height = #sats + 2
+    local panel_width = 44
 
+    local selected = 1
     local initial_jump_done = false
 
     -- Helpers shared by render / paint_on_map / poll. Inlined as
@@ -105,15 +127,40 @@ function M.make(specs)
         return string.format("%d sats", count)
     end
 
+    -- Move focus to the next visible sat in `direction` (+1 / -1).
+    -- Wraps. Skips invisible entries; no-op when nothing's visible.
+    -- On a successful move, jumps the map to that sat's position
+    -- (if known yet) — auto-jump is the whole point of the binding.
+    local function move_selection(direction)
+        local n = #sats
+        if n == 0 then return end
+        local idx = selected
+        for _ = 1, n do
+            idx = idx + direction
+            if idx < 1 then
+                idx = n
+            elseif idx > n then
+                idx = 1
+            end
+            if sats[idx].visible then
+                selected = idx
+                local lon, lat = focus_point(sats[idx])
+                if lon then ttymap.map:jump(lon, lat) end
+                return
+            end
+        end
+        -- All invisible: leave `selected` as-is.
+    end
+
     return {
         name = "satellite",
         label = "Toggle satellite",
-        layout = { anchor = "top-left", width = 38, height = panel_height },
+        layout = { anchor = "top-left", width = panel_width, height = panel_height },
         footer_hints = hints,
 
         render = function()
             local lines = {}
-            for _, sat in ipairs(sats) do
+            for i, sat in ipairs(sats) do
                 local marker = sat.visible and "●" or "○"
                 local body
                 if not sat.visible then
@@ -124,8 +171,15 @@ function M.make(specs)
                     body = single_body(sat)
                 end
                 local key_hint = sat.key and ("[" .. sat.key .. "] ") or "    "
-                table.insert(lines, string.format("%s %s%-8s %s",
-                    marker, key_hint, sat.display, body))
+                local row = string.format("%s %s%-8s %s",
+                    marker, key_hint, sat.display, body)
+                if i == selected and sat.visible then
+                    -- Highlight the focused row the same way wiki
+                    -- highlights its selected article.
+                    table.insert(lines, { { text = row, style = "highlight" } })
+                else
+                    table.insert(lines, row)
+                end
             end
             return lines
         end,
@@ -142,8 +196,9 @@ function M.make(specs)
             local zoom = map:zoom()
             local cell_deg = 5 / (2 ^ zoom)
 
-            for _, sat in ipairs(sats) do
+            for i, sat in ipairs(sats) do
                 if not sat.visible then goto continue end
+                local color = (i == selected) and "accent_alt" or sat.color
                 if sat.kind == "group" then
                     if sat.positions then
                         local seen = {}
@@ -154,15 +209,15 @@ function M.make(specs)
                                 local k = kx .. ":" .. ky
                                 if not seen[k] then
                                     seen[k] = true
-                                    map:point(p.lon, p.lat, "◉", sat.color)
+                                    map:point(p.lon, p.lat, "◉", color)
                                 end
                             end
                         end
                     end
                 else
                     if sat.positions then
-                        map:point(sat.positions.lon, sat.positions.lat, "◉", sat.color)
-                        map:label(sat.positions.lon, sat.positions.lat, " " .. sat.display, sat.color)
+                        map:point(sat.positions.lon, sat.positions.lat, "◉", color)
+                        map:label(sat.positions.lon, sat.positions.lat, " " .. sat.display, color)
                     end
                 end
                 ::continue::
@@ -170,35 +225,38 @@ function M.make(specs)
         end,
 
         handle_event = function(key)
-            -- In-panel per-entry toggle. Char keys come through the
-            -- bridge as `code = "Char"` + `char = <c>` — match on
-            -- `key.char`, not `key.code`. `return nil` consumes the
-            -- event so it doesn't leak to the base layer (which uses
-            -- `h` for pan-left, etc.).
-            if key.code == "Char" and key.char and key_to_idx[key.char] then
-                local idx = key_to_idx[key.char]
+            local code = key.code
+            local ch = key.char
+            local ctrl = key.ctrl
+
+            -- In-panel per-entry visibility toggle. Char keys come
+            -- through as `code = "Char"` + `char = <c>`; match on
+            -- `key.char`. `return nil` consumes so the event doesn't
+            -- leak to the base layer (which uses `h` for pan-left
+            -- etc.). Skip when ctrl is held so C-n / C-p reach the
+            -- focus-navigation branch even if a sat is bound to `n`
+            -- or `p`.
+            if code == "Char" and ch and not ctrl and key_to_idx[ch] then
+                local idx = key_to_idx[ch]
                 sats[idx].visible = not sats[idx].visible
                 return nil
             end
-            if key.code == "Enter" then
-                for _, sat in ipairs(sats) do
-                    if sat.visible then
-                        if sat.kind == "single" and sat.positions then
-                            ttymap.map:jump(sat.positions.lon, sat.positions.lat)
-                            break
-                        elseif sat.kind == "group" and sat.positions then
-                            for _, p in ipairs(sat.positions) do
-                                if p then
-                                    ttymap.map:jump(p.lon, p.lat)
-                                    break
-                                end
-                            end
-                            break
-                        end
-                    end
-                end
+
+            local up = (ctrl and code == "Char" and ch == "p") or code == "Up"
+            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
+            if up or down then
+                move_selection(up and -1 or 1)
                 return nil
             end
+
+            if code == "Enter" then
+                -- Re-centre on the focused sat — handy after the
+                -- user pans away to look at something else.
+                local lon, lat = focus_point(sats[selected])
+                if lon then ttymap.map:jump(lon, lat) end
+                return nil
+            end
+
             return { ignore = true }
         end,
 
@@ -250,25 +308,15 @@ function M.make(specs)
 
             -- Auto-recentre on the first usable position after the
             -- panel opens, so the marker is immediately visible
-            -- without forcing the user to press Enter.
+            -- without forcing the user to navigate.
             if not initial_jump_done then
                 for _, sat in ipairs(sats) do
-                    if not sat.visible then goto skip end
-                    if sat.kind == "single" and sat.positions then
+                    local lon, lat = focus_point(sat)
+                    if lon then
                         initial_jump_done = true
-                        ttymap.map:jump(sat.positions.lon, sat.positions.lat)
+                        ttymap.map:jump(lon, lat)
                         break
-                    elseif sat.kind == "group" and sat.positions then
-                        for _, p in ipairs(sat.positions) do
-                            if p then
-                                initial_jump_done = true
-                                ttymap.map:jump(p.lon, p.lat)
-                                break
-                            end
-                        end
-                        if initial_jump_done then break end
                     end
-                    ::skip::
                 end
             end
         end,
