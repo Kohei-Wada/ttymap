@@ -153,6 +153,7 @@ function M.make(specs)
     end
 
     return {
+        name = "satellite",
         label = "Toggle satellite",
         layout = { anchor = "top-left", width = panel_width, height = panel_height },
         footer_hints = hints,

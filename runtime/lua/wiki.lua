@@ -164,6 +164,7 @@ local function move_selection(direction)
 end
 
 return {
+    name = "wiki",
     label = "Toggle wiki",
     key = "i",
     layout = { anchor = "right", width = 56 },

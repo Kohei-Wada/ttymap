@@ -107,11 +107,18 @@ pub struct LuaComponent {
     module: RegistryKey,
     /// Stable identity assigned by the registration pipeline (file
     /// stem for bundled plugins, leaked-once-at-startup for user
-    /// plugins). Backs both [`Component::name`] (footer chip text)
-    /// and [`Component::dedup_tag`] (stack identity). The script
-    /// itself doesn't get a say — identity comes from where the
-    /// file lives, not what it claims to be.
-    name: &'static str,
+    /// plugins). Backs [`Component::dedup_tag`] (stack identity).
+    /// Scripts don't declare this; identity comes from where the
+    /// file lives.
+    id: &'static str,
+    /// User-facing display label, read from `module.name`. Backs
+    /// [`Component::name`] (focused-footer chip). Falls back to
+    /// `id` when the script omits the field, so a minimal
+    /// `return {}` script still gets a sensible chip. Leaked once
+    /// at construction to satisfy the trait's `&'static str`
+    /// signature; bounded cost since LuaComponent is rebuilt at
+    /// most a few times per program lifetime.
+    display: &'static str,
     /// Panel placement read from `module.layout` at construction.
     /// Stored on the component so `render` can compute the sub-rect
     /// without touching Lua every frame.
@@ -149,28 +156,28 @@ pub struct LuaComponent {
 
 #[allow(dead_code)] // mirrors the LuaComponent struct attribute; same reason
 impl LuaComponent {
-    /// `name` is both the chunk name (Lua error reporting) and the
-    /// component's stable identity — used for the focused-footer
-    /// chip and as the [`Component::dedup_tag`] override. The
-    /// caller (typically `register_one`) supplies a `&'static str`
-    /// owned by the registration pipeline (file stem for bundled
-    /// plugins, leaked-once-at-startup for user plugins), so the
-    /// component never has to mint or leak its own.
+    /// `id` is the stable identity assigned by the registration
+    /// pipeline — file stem for bundled plugins, leaked-once-at-
+    /// startup for user plugins. Used as both the Lua chunk name
+    /// (for error reporting) and as [`Component::dedup_tag`].
+    /// Distinct from `module.name`, which the script may declare
+    /// for footer-display purposes.
     pub fn from_source(
         source: &str,
-        name: &'static str,
+        id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
         let lua = super::new_lua();
         let handles = super::host::install(&lua, "lua-host", shared)?;
-        let module: Table = lua.load(source).set_name(name).eval()?;
-        Self::build(lua, module, name, handles)
+        let module: Table = lua.load(source).set_name(id).eval()?;
+        Self::build(lua, module, id, handles)
     }
 
     /// Shared post-eval construction: read the script's metadata
-    /// (layout / render-presence / footer-hint declarations) off the
-    /// resolved module table, then stash the table in the Lua
-    /// registry so dispatch hooks can re-fetch it cheaply.
+    /// (layout / render-presence / footer-hint / display-name
+    /// declarations) off the resolved module table, then stash the
+    /// table in the Lua registry so dispatch hooks can re-fetch it
+    /// cheaply.
     ///
     /// Persistent host services (HTTP fetch etc.) live in the
     /// global `ttymap` table whose fields are domain-namespaced
@@ -180,7 +187,7 @@ impl LuaComponent {
     fn build(
         lua: Lua,
         module: Table,
-        name: &'static str,
+        id: &'static str,
         handles: super::host::LuaHostHandles,
     ) -> mlua::Result<Self> {
         let super::host::LuaHostHandles {
@@ -190,6 +197,16 @@ impl LuaComponent {
             center,
         } = handles;
 
+        // Display name: script's `module.name` if set, else fall
+        // back to id. Leak once so `Component::name` can return
+        // `&'static str`; cost is bounded by the number of
+        // LuaComponent constructions over the program lifetime.
+        let display: &'static str = module
+            .get::<String>("name")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+            .unwrap_or(id);
         let layout = LuaLayout::from_module(&module);
         let has_render = matches!(
             module.get::<mlua::Value>("render"),
@@ -200,7 +217,8 @@ impl LuaComponent {
         Ok(Self {
             lua,
             module,
-            name,
+            id,
+            display,
             layout,
             has_render,
             footer_hints,
@@ -259,7 +277,7 @@ impl LuaComponent {
             while self.close_rx.try_recv().is_ok() {}
             log::warn!(
                 "lua[{}]: ttymap.window:close() ignored — overlay components don't live on the focusable stack",
-                self.name
+                self.id
             );
         }
     }
@@ -286,7 +304,7 @@ impl LuaComponent {
         match result {
             Ok(lines) => lines,
             Err(e) => {
-                log::warn!("lua[{}]: render() failed: {}", self.name, e);
+                log::warn!("lua[{}]: render() failed: {}", self.id, e);
                 Vec::new()
             }
         }
@@ -321,7 +339,7 @@ impl LuaComponent {
         match result {
             Ok(action) => action,
             Err(e) => {
-                log::warn!("lua[{}]: handle_event() failed: {}", self.name, e);
+                log::warn!("lua[{}]: handle_event() failed: {}", self.id, e);
                 KeyAction::Consume
             }
         }
@@ -341,7 +359,7 @@ impl LuaComponent {
             poll.call(())
         })();
         if let Err(e) = result {
-            log::warn!("lua[{}]: poll() failed: {}", self.name, e);
+            log::warn!("lua[{}]: poll() failed: {}", self.id, e);
         }
     }
 
@@ -365,7 +383,7 @@ impl LuaComponent {
             painter.call::<()>(map_table)
         });
         if let Err(e) = result {
-            log::warn!("lua[{}]: paint_on_map() failed: {}", self.name, e);
+            log::warn!("lua[{}]: paint_on_map() failed: {}", self.id, e);
         }
     }
 
@@ -574,7 +592,7 @@ impl Component for LuaComponent {
         // matters because the block sets `style.bg` but leaves `fg`
         // unset, so without the clear cells would keep the map's
         // foreground colours and the panel would look translucent.
-        let inner = win.panel(area, self.name);
+        let inner = win.panel(area, self.display);
 
         let body = win.style(StyleKind::Body);
         let lines: Vec<Line<'static>> = self
@@ -593,21 +611,22 @@ impl Component for LuaComponent {
     }
 
     fn name(&self) -> &'static str {
-        self.name
+        // User-facing display label (footer chip). Comes from
+        // `module.name` if set, else the registration-supplied id.
+        self.display
     }
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.footer_hints.clone()
     }
 
-    /// All `LuaComponent` instances share `Any::type_id`, so the
-    /// compositor's TypeId fallback would collapse every Lua plugin
-    /// to "the same kind". Surface the script's per-instance name
-    /// (file stem for bundled scripts, the `name` field for entries)
-    /// so different Lua plugins coexist on the stack and re-toggling
-    /// the same plugin still closes it. See `compositor::same_identity`.
+    /// Stack identity. All `LuaComponent` instances share
+    /// `Any::type_id`, so the compositor's TypeId fallback would
+    /// collapse every Lua plugin to "the same kind". Return the
+    /// per-plugin id (file stem) instead, assigned by the
+    /// registration pipeline. See `compositor::same_identity`.
     fn dedup_tag(&self) -> Option<&str> {
-        Some(self.name)
+        Some(self.id)
     }
 }
 
@@ -616,26 +635,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn name_uses_caller_supplied_id_not_module_field() {
-        // Identity comes from the registration pipeline — the
-        // `name` arg to `from_source`, not from `module.name`.
-        // Removes the "self-declared id" footgun where two scripts
-        // with the same `module.name` would dedup-collide while
-        // sitting at different file paths.
+    fn display_picks_up_module_name_dedup_tag_stays_id() {
+        // The script can declare `module.name = "..."` purely as
+        // the user-facing footer label. Identity (`dedup_tag`) is
+        // still the registration-supplied id, so two scripts with
+        // the same `module.name` at different file paths coexist.
         let c = LuaComponent::from_source(
-            r#"return { name = "ignored", render = function() return {} end }"#,
+            r#"return { name = "International Space Station", render = function() return {} end }"#,
             "iss",
             super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
-        assert_eq!(c.name(), "iss");
+        assert_eq!(c.name(), "International Space Station");
         assert_eq!(c.dedup_tag(), Some("iss"));
     }
 
     #[test]
-    fn name_works_when_module_omits_it() {
-        // The module no longer has to declare anything — id is
-        // entirely caller-supplied.
+    fn display_falls_back_to_id_when_module_omits_name() {
+        // Minimal `return {}` — display defaults to id. dedup_tag
+        // is still the id.
         let c = LuaComponent::from_source(
             "return {}",
             "anon",
@@ -643,6 +661,7 @@ mod tests {
         )
         .expect("load");
         assert_eq!(c.name(), "anon");
+        assert_eq!(c.dedup_tag(), Some("anon"));
     }
 
     #[test]

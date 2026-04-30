@@ -48,6 +48,7 @@ local function parse_results(payload)
 end
 
 return {
+    name = "search",
     key = "/",
     label = "Search location",
 

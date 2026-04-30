@@ -10,6 +10,7 @@
 local state = { fired = false }
 
 return {
+    name = "export",
     label = "Export frame as ANSI",
 
     handle_event = function(_)

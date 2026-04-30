@@ -53,6 +53,7 @@ local function refresh(lat, lon)
 end
 
 return {
+    name = "info",
     activation = "overlay",
 
     paint_on_map = function(map)
