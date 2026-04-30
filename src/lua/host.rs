@@ -12,6 +12,9 @@
 //!
 //! ```text
 //! ttymap.http   :fetch(url) -> Job          background HTTP GET (UTF-8 body)
+//! ttymap.http   :fetch_cached(url, ttl) -> Job  disk-cached GET; on HTTP
+//!                                            error falls back to the
+//!                                            stale on-disk copy if any
 //! ttymap.http   :url_encode(s) -> string    RFC 3986 query encoding
 //! ttymap.map    :jump(lon, lat)             recentre the map (fire-and-forget)
 //! ttymap.map    :center() -> lon, lat       latest centre, refreshed per dispatch
@@ -44,6 +47,7 @@
 
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::SystemTime;
 
 use mlua::{Lua, UserData};
 
@@ -218,6 +222,20 @@ impl UserData for HostHttp {
         // returning nil).
         methods.add_method("fetch", |_, this, url: String| {
             Ok(LuaJob::spawn(&this.http, url))
+        });
+
+        // `ttymap.http:fetch_cached(url, ttl_secs)` — disk-cached GET.
+        // Read-through: on a fresh-enough cache hit (`age < ttl_secs`)
+        // emits the cached body without touching the network. On miss,
+        // does a real fetch and write-throughs the response. On HTTP
+        // error, falls back to the stale on-disk copy if one exists —
+        // critical for upstreams like CelesTrak's `gp.php`, which 403s
+        // a same-IP repeat fetch within its own 2h refresh window and
+        // would otherwise strand the plugin on "awaiting" forever.
+        // Cache lives under `<XDG_CACHE_HOME>/ttymap/lua-http/` keyed
+        // by FNV-1a of the URL.
+        methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
+            Ok(LuaJob::spawn_cached(&this.http, url, ttl_secs))
         });
 
         // `ttymap.http:url_encode(s)` — percent-encode a query string per
@@ -476,6 +494,77 @@ impl LuaJob {
         });
         Self { rx }
     }
+
+    /// Disk-cached fetch. Read-through with `ttl_secs` freshness
+    /// window; write-through on success; fall back to a stale cache
+    /// entry on HTTP error so a flaky / rate-limiting upstream
+    /// doesn't strand the plugin on "no body, no error".
+    fn spawn_cached(http: &HttpClient, url: String, ttl_secs: u64) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let http = http.clone();
+        thread::spawn(move || {
+            let path = http_cache_path(&url);
+
+            // Fresh cache hit → return immediately, skip the network.
+            if let Some(p) = path.as_ref()
+                && let Ok(meta) = std::fs::metadata(p)
+                && let Ok(modified) = meta.modified()
+                && let Ok(age) = SystemTime::now().duration_since(modified)
+                && age.as_secs() < ttl_secs
+                && let Ok(body) = std::fs::read_to_string(p)
+            {
+                let _ = tx.send(body);
+                return;
+            }
+
+            // Cache miss / stale → real fetch.
+            match http.get_bytes(&url) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(body) => {
+                        if let Some(p) = path.as_ref() {
+                            if let Some(parent) = p.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(p, &body);
+                        }
+                        let _ = tx.send(body);
+                    }
+                    Err(e) => log::warn!("lua-host: http:fetch_cached {}: not utf-8: {}", url, e),
+                },
+                Err(e) => {
+                    log::warn!(
+                        "lua-host: http:fetch_cached {}: {} — falling back to cache",
+                        url,
+                        e
+                    );
+                    if let Some(p) = path.as_ref()
+                        && let Ok(body) = std::fs::read_to_string(p)
+                    {
+                        let _ = tx.send(body);
+                    }
+                }
+            }
+        });
+        Self { rx }
+    }
+}
+
+/// Where we stash an HTTP response for `fetch_cached`. FNV-1a 64-bit
+/// keeps the cache key deterministic across runs (Rust's default
+/// hasher is not), and small enough to fit on every filesystem.
+/// `None` means we couldn't resolve a per-user cache dir — the
+/// caller treats it as a permanent miss + no write.
+fn http_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in url.as_bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let key = format!("{:016x}", hash);
+    let dir = directories::ProjectDirs::from("", "", "ttymap")?
+        .cache_dir()
+        .join("lua-http");
+    Some(dir.join(format!("{}.txt", key)))
 }
 
 impl UserData for LuaJob {

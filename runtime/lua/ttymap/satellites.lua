@@ -211,7 +211,15 @@ function M.make(specs)
                     local url = sat.kind == "group"
                         and group_url(sat.group)
                         or single_url(sat.norad_id)
-                    sat.fetch_job = ttymap.http:fetch(url)
+                    -- Disk-cached fetch with a 1h freshness window.
+                    -- CelesTrak's gp.php refreshes every ~2h and 403s
+                    -- a same-IP repeat fetch within that window — so
+                    -- a normal `fetch` would strand us on "awaiting"
+                    -- on every restart inside a single CelesTrak
+                    -- bucket. `fetch_cached` reads the prior body
+                    -- from disk first, falls back to it on HTTP
+                    -- error, and only round-trips when stale.
+                    sat.fetch_job = ttymap.http:fetch_cached(url, 3600)
                 end
                 if sat.fetch_job then
                     local body = sat.fetch_job:try_take()
