@@ -29,19 +29,62 @@ use mlua::{Lua, Table};
 use crate::compositor::Registrar;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
-/// would happen here; for now we hand back the unmodified VM with
-/// `package.path` extended so a plugin can `require` its siblings:
+/// would happen here; for now we hand back the unmodified VM with two
+/// extras wired in:
+///
+/// 1. A custom `package.searchers` entry that resolves `require` against
+///    the binary-embedded [`BUILTIN_LIB_SCRIPTS`] map, so bundled and
+///    user plugins can share helpers via `require "ttymap.fmt"` and
+///    similar without a runtime install of `runtime/lua/` on disk.
+/// 2. `package.path` extended with the user plugin directory so a
+///    user plugin can `require` its filesystem siblings:
 ///
 /// ```lua
 /// -- ~/.config/ttymap/plugins/main.lua
 /// local utils = require "utils"   -- ~/.config/ttymap/plugins/utils.lua
 /// ```
+///
+/// Search order follows Lua's own `package.searchers` precedence: the
+/// bundled-libs searcher is appended *after* the standard ones, so a
+/// user plugin file with the same name as a bundled lib still wins
+/// from the filesystem. Conflicts are unlikely in practice (the
+/// bundled namespace is `ttymap.*`).
 pub fn new_lua() -> Lua {
     let lua = Lua::new();
+    if let Err(e) = install_builtin_searcher(&lua) {
+        log::warn!("lua: failed to install builtin searcher: {}", e);
+    }
     if let Some(dir) = user_plugins_dir() {
         prepend_package_path(&lua, &dir);
     }
     lua
+}
+
+/// Append a `package.searchers` entry that resolves `require name`
+/// against [`BUILTIN_LIB_SCRIPTS`] — the lib scripts shipped inside
+/// the binary. Mirrors Neovim's runtime-path searcher: the host owns
+/// a name → source map and exposes it to Lua via a custom searcher
+/// rather than requiring a runtime filesystem layout.
+///
+/// The searcher returns:
+/// - `function` (the loaded chunk) on hit, signalling Lua to use it
+/// - `string` (error message) on miss, which Lua appends to the
+///   `module 'X' not found:` accumulator before trying the next
+///   searcher
+fn install_builtin_searcher(lua: &Lua) -> mlua::Result<()> {
+    let searcher = lua.create_function(|lua, name: String| -> mlua::Result<mlua::Value> {
+        if let Some((_, source)) = BUILTIN_LIB_SCRIPTS.iter().find(|(n, _)| *n == name) {
+            let chunk = lua.load(*source).set_name(&name).into_function()?;
+            return Ok(mlua::Value::Function(chunk));
+        }
+        let msg = format!("\n\tno builtin lib '{}'", name);
+        Ok(mlua::Value::String(lua.create_string(&msg)?))
+    })?;
+    let package: Table = lua.globals().get("package")?;
+    let searchers: Table = package.get("searchers")?;
+    let len = searchers.len()?;
+    searchers.set(len + 1, searcher)?;
+    Ok(())
 }
 
 /// Prepend `<dir>/?.lua` and `<dir>/?/init.lua` to Lua's
@@ -87,6 +130,20 @@ const BUILTIN_SCRIPTS: &[(&str, &str)] = &[
     ("search", include_str!("../../runtime/lua/search.lua")),
     ("wiki", include_str!("../../runtime/lua/wiki.lua")),
 ];
+
+// ── Builtin lib scripts ─────────────────────────────────────────────
+//
+// Resolved lazily by the custom `package.searchers` entry installed
+// in [`install_builtin_searcher`]. Plugin entry points (above) are
+// loaded eagerly at registration; lib scripts are loaded the first
+// time `require` asks for them and cached in `package.loaded` per Lua
+// state. The naming convention is `ttymap.*` so user plugins can spot
+// builtin helpers at a glance.
+
+const BUILTIN_LIB_SCRIPTS: &[(&str, &str)] = &[(
+    "ttymap.fmt",
+    include_str!("../../runtime/lua/ttymap/fmt.lua"),
+)];
 
 /// Register every bundled Lua plugin with the registrar. Each
 /// script's own metadata (returned table fields) drives how it's
@@ -647,6 +704,31 @@ mod tests {
             .eval()
             .expect("require should find helper.lua via prepended package.path");
         assert_eq!(greeting, "hi world");
+    }
+
+    #[test]
+    fn builtin_searcher_resolves_ttymap_fmt() {
+        // Bundled lib script `ttymap.fmt` must be reachable via
+        // `require` once the searcher is installed — proves the
+        // BUILTIN_LIB_SCRIPTS map is wired into package.searchers.
+        let lua = Lua::new();
+        install_builtin_searcher(&lua).expect("install searcher");
+        let out: String = lua
+            .load(r#"return require("ttymap.fmt").distance(1500)"#)
+            .eval()
+            .expect("require ttymap.fmt should succeed");
+        assert_eq!(out, "1.5km");
+    }
+
+    #[test]
+    fn builtin_searcher_misses_fall_through_to_standard_searchers() {
+        // The custom searcher must signal "no match" with a string
+        // (Lua's searcher protocol) rather than throwing, so unknown
+        // requires still hit the standard "module not found" path.
+        let lua = Lua::new();
+        install_builtin_searcher(&lua).expect("install searcher");
+        let res: mlua::Result<i64> = lua.load(r#"return require("nope.nope")"#).eval();
+        assert!(res.is_err(), "unknown require should error normally");
     }
 
     #[test]

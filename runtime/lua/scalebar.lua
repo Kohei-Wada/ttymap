@@ -5,6 +5,8 @@
 -- distance whose pixel-width is closest to ~1/5 of the screen, then
 -- render a Unicode bar of that many cells with a metric label.
 
+local fmt = require "ttymap.fmt"
+
 local EARTH_RADIUS_M = 6378137.0  -- WGS-84 equatorial radius
 local NICE_DISTANCES = {
     50, 100, 200, 500,
@@ -37,13 +39,6 @@ local function pick_distance(target_meters)
     return best
 end
 
-local function format_distance(meters)
-    if meters < 1000 then
-        return string.format("%dm", math.floor(meters + 0.5))
-    end
-    return string.format("%.1fkm", meters / 1000)
-end
-
 local function clamp(v, lo, hi)
     if v < lo then return lo end
     if v > hi then return hi end
@@ -68,7 +63,7 @@ return {
         cells = clamp(cells, 2, math.floor(width / 3))
         if cells < 2 then return end
 
-        local bar = "├" .. string.rep("─", cells - 2) .. "┤ " .. format_distance(distance) .. " "
+        local bar = "├" .. string.rep("─", cells - 2) .. "┤ " .. fmt.distance(distance) .. " "
         map:text_anchored("bottom-right", 0, bar, "accent")
     end,
 }

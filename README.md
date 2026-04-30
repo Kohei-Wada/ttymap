@@ -97,7 +97,9 @@ src/
 │   └── provider/        default provider + theme sub-mode
 │
 ├── lua/                 Lua bridge (mlua + Lua 5.4 vendored).
-│   ├── mod.rs           BUILTIN_SCRIPTS array + register_one dispatcher (reads module metadata)
+│   ├── mod.rs           BUILTIN_SCRIPTS + BUILTIN_LIB_SCRIPTS arrays, register_one dispatcher,
+│   │                    custom package.searchers entry resolving `require "ttymap.*"` against
+│   │                    binary-embedded lib scripts (Neovim-style, no runtime install needed)
 │   ├── component.rs     LuaComponent — Component impl backed by a Lua module
 │   ├── palette_provider.rs  LuaPaletteProvider — PaletteProvider impl (search)
 │   ├── host.rs          LuaHostShared + host:* accessors (fetch_url / jump / close /
@@ -128,9 +130,12 @@ src/
 
 runtime/
 └── lua/                 bundled Lua plugin scripts (aircraft, attribution, export,
-                         help, here, info, iss, quake, scalebar, search, wiki).
-                         `include_str!`'d at compile time by `BUILTIN_SCRIPTS`; the
-                         binary ships them as data, not Rust source.
+    │                    help, here, info, iss, quake, scalebar, search, wiki).
+    │                    `include_str!`'d at compile time by `BUILTIN_SCRIPTS`; the
+    │                    binary ships them as data, not Rust source.
+    └── ttymap/          shared lib scripts (fmt, …). Resolved via `require "ttymap.X"`
+                         through a custom `package.searchers` entry — bundled into the
+                         binary alongside the plugins, no runtime install needed.
 ```
 
 ### Layering
