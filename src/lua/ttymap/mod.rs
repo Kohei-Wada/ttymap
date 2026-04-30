@@ -53,11 +53,13 @@
 pub mod map_api;
 pub mod sgp4;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::SystemTime;
 
-use mlua::{Lua, UserData};
+use mlua::{Lua, Table, UserData};
 
 use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
@@ -134,9 +136,10 @@ impl LuaHostShared {
         }
     }
 
-    /// All-empty default for tests / standalone Lua VMs that don't
-    /// need real runtime data.
-    #[cfg(test)]
+    /// All-empty default for tests and metadata-parse passes that
+    /// don't need real runtime data. Used by `ModuleMeta::parse` so
+    /// the `ttymap.*` host surface still installs in a Lua state used
+    /// only to capture the script's `register_*` call.
     pub fn empty() -> Arc<Self> {
         Arc::new(Self::new(None, String::new(), Vec::new()))
     }
@@ -154,16 +157,50 @@ pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
 }
 
+// ── Self-registration capture ────────────────────────────────────────
+
+/// What a plugin script declared by calling `ttymap.register_plugin`
+/// or `ttymap.register_palette`. The Lua subsystem doesn't know which
+/// kind a given file is until the script tells it. nvim-style: the
+/// runtime just executes the script; the script self-declares.
+pub enum CapturedRegistration {
+    /// Component plugin (rendered panel, map overlay, etc.). Carries
+    /// the spec table the script handed to `register_plugin`.
+    Plugin(Table),
+    /// Palette provider plugin (`/`-style picker). Carries the spec
+    /// table the script handed to `register_palette`.
+    Palette(Table),
+}
+
+/// Slot used by a fresh Lua state to capture exactly one registration
+/// call. `Rc<RefCell<...>>` is fine — the Lua state is single-threaded
+/// and the capture lifetime is bounded by `lua.load(source).exec()`.
+pub type CaptureSlot = Rc<RefCell<Option<CapturedRegistration>>>;
+
+/// Build an empty capture slot. The caller (typically `fresh_load`)
+/// passes one to [`install`] and reads it back after running the
+/// script.
+pub fn new_capture_slot() -> CaptureSlot {
+    Rc::new(RefCell::new(None))
+}
+
 // ── Install entry point ─────────────────────────────────────────────
 
 /// Build the `ttymap` table and install it as a Lua global. Returns
 /// the channels the calling component drains after each callback. One
 /// install per Lua state — same surface for components and palette
 /// providers, so the bridge stays uniform.
+///
+/// `slot` receives the spec from a `ttymap.register_plugin(...)` /
+/// `ttymap.register_palette(...)` call inside the script. The Lua
+/// subsystem walks plugin files and runs each script; the script
+/// itself decides whether (and how) to register. Rust never inspects
+/// the script's return value or table layout.
 pub fn install(
     lua: &Lua,
     tag: &'static str,
     shared: Arc<LuaHostShared>,
+    slot: CaptureSlot,
 ) -> mlua::Result<LuaHostHandles> {
     let (jump_tx, jump_rx) = mpsc::channel();
     let (close_tx, close_rx) = mpsc::channel();
@@ -206,6 +243,40 @@ pub fn install(
         })?,
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
+
+    // Self-registration entry points. The script calls one of these
+    // (at most once per script) to declare itself. The Lua subsystem
+    // doesn't know what's a plugin or what kind it is until this
+    // call lands. A double-call (or a mix of plugin + palette in
+    // the same file) is a Lua-side error — surfaced via mlua so the
+    // walker logs + skips the script.
+    let cap = slot.clone();
+    ttymap.set(
+        "register_plugin",
+        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
+            if cap.borrow().is_some() {
+                return Err(mlua::Error::external(
+                    "ttymap.register_plugin: already registered in this script",
+                ));
+            }
+            *cap.borrow_mut() = Some(CapturedRegistration::Plugin(spec));
+            Ok(())
+        })?,
+    )?;
+    let cap = slot;
+    ttymap.set(
+        "register_palette",
+        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
+            if cap.borrow().is_some() {
+                return Err(mlua::Error::external(
+                    "ttymap.register_palette: already registered in this script",
+                ));
+            }
+            *cap.borrow_mut() = Some(CapturedRegistration::Palette(spec));
+            Ok(())
+        })?,
+    )?;
+
     lua.globals().set("ttymap", ttymap)?;
 
     Ok(LuaHostHandles {
@@ -574,11 +645,13 @@ mod tests {
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the receivers. Mirrors the production install
-    /// path.
+    /// path. The capture slot is dropped — these tests don't drive
+    /// any registration, they only exercise the host-side APIs.
     fn install_for_test() -> (mlua::Lua, LuaHostHandles) {
         let lua = mlua::Lua::new();
+        let slot = new_capture_slot();
         let handles =
-            install(&lua, "lua-test", LuaHostShared::empty()).expect("install ttymap table");
+            install(&lua, "lua-test", LuaHostShared::empty(), slot).expect("install ttymap table");
         (lua, handles)
     }
 

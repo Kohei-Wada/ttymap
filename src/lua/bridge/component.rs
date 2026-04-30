@@ -29,7 +29,7 @@ use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{OverlayWindow, RenderWindow, Window};
 use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
-use crate::lua::ttymap::{LuaHostHandles, LuaHostShared};
+use crate::lua::ttymap::{CapturedRegistration, LuaHostHandles, LuaHostShared};
 use crate::theme::StyleKind;
 
 /// Per-plugin layout knobs read from `module.layout`. Without this,
@@ -162,7 +162,15 @@ impl LuaComponent {
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
-        let (lua, module, handles) = fresh_load(source, id, "lua-host", shared)?;
+        let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared)?;
+        let module = match captured {
+            CapturedRegistration::Plugin(t) => t,
+            CapturedRegistration::Palette(_) => {
+                return Err(mlua::Error::external(
+                    "expected ttymap.register_plugin, got ttymap.register_palette",
+                ));
+            }
+        };
 
         // Display name: script's `module.name` if set, else fall
         // back to id. Leak once so `Component::name` can return
@@ -604,7 +612,7 @@ mod tests {
         // still the registration-supplied id, so two scripts with
         // the same `module.name` at different file paths coexist.
         let c = LuaComponent::from_source(
-            r#"return { name = "International Space Station", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "International Space Station", render = function() return {} end })"#,
             "iss",
             LuaHostShared::empty(),
         )
@@ -618,7 +626,8 @@ mod tests {
         // Minimal `return {}` — display defaults to id. dedup_tag
         // is still the id.
         let c =
-            LuaComponent::from_source("return {}", "anon", LuaHostShared::empty()).expect("load");
+            LuaComponent::from_source("ttymap.register_plugin({})", "anon", LuaHostShared::empty())
+                .expect("load");
         assert_eq!(c.name(), "anon");
         assert_eq!(c.dedup_tag(), Some("anon"));
     }
@@ -626,10 +635,10 @@ mod tests {
     #[test]
     fn render_lines_round_trip_through_lua() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "demo",
                 render = function() return { "alpha", "beta", "gamma" } end,
-            }"#,
+            })"#,
             "demo",
             LuaHostShared::empty(),
         )
@@ -644,10 +653,10 @@ mod tests {
     #[test]
     fn render_lines_recovers_when_lua_throws() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "broken",
                 render = function() error("kaboom") end,
-            }"#,
+            })"#,
             "broken",
             LuaHostShared::empty(),
         )
@@ -659,7 +668,7 @@ mod tests {
     #[test]
     fn render_lines_recovers_when_field_is_missing() {
         let c = LuaComponent::from_source(
-            r#"return { name = "noop" }"#,
+            r#"ttymap.register_plugin({ name = "noop" })"#,
             "noop",
             LuaHostShared::empty(),
         )
@@ -671,7 +680,7 @@ mod tests {
     #[test]
     fn render_lines_parses_styled_span_tables() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "styled",
                 render = function()
                     return {
@@ -682,7 +691,7 @@ mod tests {
                         "plain body line",
                     }
                 end,
-            }"#,
+            })"#,
             "styled",
             LuaHostShared::empty(),
         )
@@ -712,7 +721,7 @@ mod tests {
     #[test]
     fn missing_handler_dispatches_to_ignore() {
         let c = LuaComponent::from_source(
-            r#"return { name = "noop" }"#,
+            r#"ttymap.register_plugin({ name = "noop" })"#,
             "noop",
             LuaHostShared::empty(),
         )
@@ -723,10 +732,10 @@ mod tests {
     #[test]
     fn handler_returning_nil_consumes() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "modal",
                 handle_event = function(_) return nil end,
-            }"#,
+            })"#,
             "modal",
             LuaHostShared::empty(),
         )
@@ -740,13 +749,13 @@ mod tests {
     #[test]
     fn handler_returning_close_table_closes() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "esc",
                 handle_event = function(k)
                     if k.code == "Esc" then return { close = true } end
                     return nil
                 end,
-            }"#,
+            })"#,
             "esc",
             LuaHostShared::empty(),
         )
@@ -761,10 +770,10 @@ mod tests {
     #[test]
     fn handler_returning_ignore_table_ignores() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "passthrough",
                 handle_event = function(_) return { ignore = true } end,
-            }"#,
+            })"#,
             "passthrough",
             LuaHostShared::empty(),
         )
@@ -777,7 +786,7 @@ mod tests {
         // The handler echoes the parsed key back as a comma-separated
         // string so we can assert the table shape from Rust.
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "echo",
                 handle_event = function(k)
                     local ch = k.char or ""
@@ -787,7 +796,7 @@ mod tests {
                     if k.alt   then flags = flags .. "A" end
                     error(k.code .. ":" .. ch .. ":" .. flags)
                 end,
-            }"#,
+            })"#,
             "echo",
             LuaHostShared::empty(),
         )
@@ -806,10 +815,10 @@ mod tests {
     #[test]
     fn handler_runtime_error_falls_back_to_consume() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "broken",
                 handle_event = function(_) error("kaboom") end,
-            }"#,
+            })"#,
             "broken",
             LuaHostShared::empty(),
         )
@@ -826,10 +835,10 @@ mod tests {
     #[test]
     fn handler_returning_unknown_value_consumes() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "weird",
                 handle_event = function(_) return "yolo" end,
-            }"#,
+            })"#,
             "weird",
             LuaHostShared::empty(),
         )
@@ -864,7 +873,7 @@ mod tests {
     #[test]
     fn paint_on_map_missing_handler_is_no_op() {
         let c = LuaComponent::from_source(
-            r#"return { name = "blank" }"#,
+            r#"ttymap.register_plugin({ name = "blank" })"#,
             "blank",
             LuaHostShared::empty(),
         )
@@ -878,10 +887,10 @@ mod tests {
     #[test]
     fn paint_on_map_runtime_error_is_recovered() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "boom",
                 paint_on_map = function(_) error("kaboom") end,
-            }"#,
+            })"#,
             "boom",
             LuaHostShared::empty(),
         )
@@ -897,7 +906,7 @@ mod tests {
     #[test]
     fn poll_missing_handler_is_no_op() {
         let c = LuaComponent::from_source(
-            r#"return { name = "static" }"#,
+            r#"ttymap.register_plugin({ name = "static" })"#,
             "static",
             LuaHostShared::empty(),
         )
@@ -912,7 +921,7 @@ mod tests {
         // module field rather than a global so we can read it back
         // through the registry-held module table.
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "ticker",
                 ticks = 0,
                 poll = function()
@@ -921,7 +930,7 @@ mod tests {
                     -- global counter we can inspect from Rust.
                     _G.lua_test_ticks = (_G.lua_test_ticks or 0) + 1
                 end,
-            }"#,
+            })"#,
             "ticker",
             LuaHostShared::empty(),
         )
@@ -941,10 +950,10 @@ mod tests {
     #[test]
     fn poll_runtime_error_is_recovered() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "broken",
                 poll = function() error("kaboom") end,
-            }"#,
+            })"#,
             "broken",
             LuaHostShared::empty(),
         )
@@ -958,7 +967,7 @@ mod tests {
     #[test]
     fn layout_falls_back_when_module_omits_it() {
         let c = LuaComponent::from_source(
-            r#"return { name = "noop" }"#,
+            r#"ttymap.register_plugin({ name = "noop" })"#,
             "noop",
             LuaHostShared::empty(),
         )
@@ -978,10 +987,10 @@ mod tests {
     #[test]
     fn layout_reads_anchor_width_height_from_module() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "configured",
                 layout = { anchor = "right", width = 24, height = 8 },
-            }"#,
+            })"#,
             "configured",
             LuaHostShared::empty(),
         )
@@ -994,10 +1003,10 @@ mod tests {
     #[test]
     fn layout_unknown_anchor_falls_back_silently() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "typo",
                 layout = { anchor = "norkeast" },
-            }"#,
+            })"#,
             "typo",
             LuaHostShared::empty(),
         )
@@ -1012,13 +1021,13 @@ mod tests {
         // host action — the jump should still surface as an
         // AppMsg::Map(Action::Jump) on the next drain.
         let mut c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "jumper",
                 handle_event = function(key)
                     ttymap.map:jump(139.7595, 35.6828)
                     return nil
                 end,
-            }"#,
+            })"#,
             "jumper",
             LuaHostShared::empty(),
         )
@@ -1056,12 +1065,12 @@ mod tests {
         // that works for stack components) even though the
         // OverlayWindow surface is narrower.
         let mut c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "jumper",
                 poll = function()
                     ttymap.map:jump(139.7595, 35.6828)
                 end,
-            }"#,
+            })"#,
             "jumper",
             LuaHostShared::empty(),
         )
@@ -1098,12 +1107,12 @@ mod tests {
         // the OverlayWindow — overlays don't live on the focusable
         // stack.
         let mut c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "bad_overlay",
                 poll = function()
                     ttymap.window:close()
                 end,
-            }"#,
+            })"#,
             "bad_overlay",
             LuaHostShared::empty(),
         )
@@ -1138,14 +1147,14 @@ mod tests {
         // A poll handler that errors out only if `ttymap` is missing —
         // proves the global is wired and reachable from Lua.
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "checker",
                 poll = function()
                     assert(ttymap ~= nil, "ttymap must be set")
                     assert(type(ttymap.http) == "userdata",
                         "ttymap.http namespace must exist")
                 end,
-            }"#,
+            })"#,
             "checker",
             LuaHostShared::empty(),
         )
@@ -1175,12 +1184,12 @@ mod tests {
     #[test]
     fn paint_on_map_point_writes_into_the_buffer() {
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "marker",
                 paint_on_map = function(map)
                     map:point(0.0, 0.0, "*", "accent")
                 end,
-            }"#,
+            })"#,
             "marker",
             LuaHostShared::empty(),
         )
@@ -1206,12 +1215,12 @@ mod tests {
         // characters. Same shape as the point test — coordinates
         // round to *somewhere* in the buffer at centre=(0,0)/zoom=1.
         let c = LuaComponent::from_source(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "marker",
                 paint_on_map = function(map)
                     map:label(0.0, 0.0, "ISS", "accent")
                 end,
-            }"#,
+            })"#,
             "marker",
             LuaHostShared::empty(),
         )

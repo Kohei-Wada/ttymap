@@ -67,7 +67,7 @@ local function build_lines()
     return lines
 end
 
-return {
+ttymap.register_plugin({
     name = "help",
     label = "Toggle help",
     key = "?",
@@ -84,4 +84,4 @@ return {
     handle_event = function(_)
         return { close = true }
     end,
-}
+})

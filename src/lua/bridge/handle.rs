@@ -114,9 +114,15 @@ pub enum CallOutcome<R> {
     Errored,
 }
 
-/// Build a fresh Lua state, install host services, evaluate
-/// `source`, and hand back the loaded module table for the caller
-/// to inspect before constructing a [`LuaHandle`].
+/// Build a fresh Lua state, install host services, run `source`, and
+/// hand back the captured registration spec for the caller to inspect
+/// before constructing a [`LuaHandle`].
+///
+/// The script self-registers by calling `ttymap.register_plugin(...)`
+/// or `ttymap.register_palette(...)`. The Lua subsystem doesn't know
+/// kind from path or content — it just runs the script and reads
+/// what the script declared. A script that doesn't register anything
+/// surfaces as an `mlua::Error` here.
 ///
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
@@ -130,9 +136,15 @@ pub fn fresh_load(
     chunk_name: &str,
     host_tag: &'static str,
     shared: Arc<host::LuaHostShared>,
-) -> mlua::Result<(Lua, Table, host::LuaHostHandles)> {
+) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
     let lua = new_lua();
-    let handles = host::install(&lua, host_tag, shared)?;
-    let module: Table = lua.load(source).set_name(chunk_name).eval()?;
-    Ok((lua, module, handles))
+    let slot = host::new_capture_slot();
+    let handles = host::install(&lua, host_tag, shared, slot.clone())?;
+    lua.load(source).set_name(chunk_name).exec()?;
+    let captured = slot.borrow_mut().take().ok_or_else(|| {
+        mlua::Error::external(
+            "script did not call ttymap.register_plugin or ttymap.register_palette",
+        )
+    })?;
+    Ok((lua, captured, handles))
 }

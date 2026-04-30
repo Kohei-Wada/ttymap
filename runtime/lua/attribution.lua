@@ -6,7 +6,7 @@
 -- provider returns nil/empty (custom backends without OSM data),
 -- nothing is painted.
 
-return {
+ttymap.register_plugin({
     name = "attribution",
     activation = "overlay",
 
@@ -16,4 +16,4 @@ return {
             map:text_anchored("bottom-left", 0, text, "muted")
         end
     end,
-}
+})

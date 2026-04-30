@@ -47,64 +47,60 @@ local function parse_results(payload)
     return out
 end
 
-return {
+ttymap.register_palette({
     name = "search",
     key = "/",
     label = "Search location",
 
-    -- Presence of `palette` makes this script a palette provider.
-    -- The dispatcher reads `kind` from the shape, not a field.
-    palette = {
-        prompt = "/",
-        submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
+    prompt = "/",
+    submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
 
-        filter = function(query)
-            local trimmed = query:match("^%s*(.-)%s*$") or ""
-            if trimmed == "" then
-                state.candidates = {}
-                state.pending = false
-                state.last_query = ""
-                return
-            end
-            if trimmed == state.last_query and (state.pending or #state.candidates > 0) then
-                return
-            end
-            state.last_query = trimmed
+    filter = function(query)
+        local trimmed = query:match("^%s*(.-)%s*$") or ""
+        if trimmed == "" then
             state.candidates = {}
-            state.job = ttymap.http:fetch(search_url(trimmed))
-            state.pending = true
-        end,
+            state.pending = false
+            state.last_query = ""
+            return
+        end
+        if trimmed == state.last_query and (state.pending or #state.candidates > 0) then
+            return
+        end
+        state.last_query = trimmed
+        state.candidates = {}
+        state.job = ttymap.http:fetch(search_url(trimmed))
+        state.pending = true
+    end,
 
-        items = function()
-            local out = {}
-            for _, c in ipairs(state.candidates) do
-                table.insert(out, { label = c.name, hint = "" })
+    items = function()
+        local out = {}
+        for _, c in ipairs(state.candidates) do
+            table.insert(out, { label = c.name, hint = "" })
+        end
+        return out
+    end,
+
+    execute = function(idx)
+        local c = state.candidates[idx]
+        if c then
+            ttymap.map:jump(c.lon, c.lat)
+            return nil
+        end
+        return { close = true }
+    end,
+
+    poll = function()
+        if state.job then
+            local body = state.job:try_take()
+            if body then
+                state.candidates = parse_results(ttymap.json:parse(body))
+                state.pending = false
+                state.job = nil
             end
-            return out
-        end,
+        end
+    end,
 
-        execute = function(idx)
-            local c = state.candidates[idx]
-            if c then
-                ttymap.map:jump(c.lon, c.lat)
-                return nil
-            end
-            return { close = true }
-        end,
-
-        poll = function()
-            if state.job then
-                local body = state.job:try_take()
-                if body then
-                    state.candidates = parse_results(ttymap.json:parse(body))
-                    state.pending = false
-                    state.job = nil
-                end
-            end
-        end,
-
-        is_loading = function()
-            return state.pending
-        end,
-    },
-}
+    is_loading = function()
+        return state.pending
+    end,
+})

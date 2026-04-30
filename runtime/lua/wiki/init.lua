@@ -163,7 +163,7 @@ local function move_selection(direction)
     if a then ttymap.map:jump(a.lon, a.lat) end
 end
 
-return {
+ttymap.register_plugin({
     name = "wiki",
     label = "Toggle wiki",
     key = "i",
@@ -287,4 +287,4 @@ return {
             start_refresh()
         end
     end,
-}
+})

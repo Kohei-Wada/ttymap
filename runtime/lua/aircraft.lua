@@ -98,7 +98,7 @@ local function marker_for(a)
     return "◆"
 end
 
-return {
+ttymap.register_plugin({
     name = "aircraft",
 
     -- Mirror the Rust plugin's default placement: left-side stripe,
@@ -165,4 +165,4 @@ return {
             state.job = ttymap.http:fetch(bbox_url(lon, lat))
         end
     end,
-}
+})

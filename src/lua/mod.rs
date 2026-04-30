@@ -217,45 +217,42 @@ enum Kind {
 }
 
 impl ModuleMeta {
-    /// Read the plugin's metadata fields by parsing the source once.
-    /// Defaults are picked so a minimal `return { name = "x" }` script
-    /// works as a toggle Component named "x".
+    /// Defaults returned when the script can't be loaded or doesn't
+    /// register anything. The real load attempt later surfaces the
+    /// underlying error in one place; here we just hand back enough
+    /// to keep the dispatcher walking.
+    fn defaults(name: &str) -> Self {
+        Self {
+            activation: Activation::Toggle,
+            kind: Kind::Component,
+            label: format!("Toggle {}", name),
+            key: None,
+            enabled: true,
+            footer_hints: Vec::new(),
+        }
+    }
+
+    /// Read the plugin's metadata fields by running the source once
+    /// in a throwaway Lua state and inspecting whatever it registered
+    /// via `ttymap.register_plugin` / `ttymap.register_palette`. The
+    /// kind is determined by *which* register function the script
+    /// called — the Lua subsystem doesn't pre-classify scripts by
+    /// path or table layout.
     ///
-    /// Uses [`new_lua`] (full searcher + package.path setup) rather
-    /// than a bare `Lua::new()` because module load can trigger
-    /// top-level `require` — `scalebar.lua` does `local fmt = require
-    /// "ttymap.fmt"` at the file head, which needs the runtime-path
-    /// searcher installed. Without it, the metadata read fails and
-    /// the dispatcher falls back to default Toggle/Component, silently
-    /// dropping `activation = "overlay"` declarations.
+    /// Defaults are picked so a script that fails to load (or omits
+    /// the register call) surfaces as a toggle Component named after
+    /// the file stem; the activation-time load attempt logs the real
+    /// error.
     fn parse(source: &str, name: &str) -> Self {
-        let lua = new_lua();
-        let module: Table = match lua.load(source).set_name(name).eval() {
-            Ok(m) => m,
-            // Parse failure is reported by the real load attempt; here
-            // we return defaults so the dispatcher proceeds and surfaces
-            // the error in one place.
-            Err(_) => {
-                return Self {
-                    activation: Activation::Toggle,
-                    kind: Kind::Component,
-                    label: format!("Toggle {}", name),
-                    key: None,
-                    enabled: true,
-                    footer_hints: Vec::new(),
-                };
-            }
-        };
-        // Presence of a `palette` sub-table is the only signal that
-        // the script wants palette-provider semantics. There is no
-        // separate `kind` field — the shape *is* the declaration.
-        let kind = if matches!(
-            module.get::<mlua::Value>("palette"),
-            Ok(mlua::Value::Table(_))
-        ) {
-            Kind::Provider
-        } else {
-            Kind::Component
+        let shared = ttymap::LuaHostShared::empty();
+        let (lua, captured, _handles) =
+            match bridge::handle::fresh_load(source, name, "lua-meta", shared) {
+                Ok(t) => t,
+                Err(_) => return Self::defaults(name),
+            };
+        let (module, kind) = match captured {
+            ttymap::CapturedRegistration::Plugin(t) => (t, Kind::Component),
+            ttymap::CapturedRegistration::Palette(t) => (t, Kind::Provider),
         };
         let activation_str: Option<String> = module.get("activation").ok();
         let activation = match activation_str.as_deref() {
@@ -278,14 +275,16 @@ impl ModuleMeta {
             Activation::Overlay => String::new(),
         };
         let footer_hints = parse_footer_hints(&module);
-        Self {
+        let out = Self {
             activation,
             kind,
             label: label.unwrap_or(default_label),
             key,
             enabled,
             footer_hints,
-        }
+        };
+        drop(lua); // captured Table held a reference; drop after reads
+        out
     }
 }
 
@@ -450,8 +449,12 @@ fn register_provider(
             let provider = LuaPaletteProvider::from_source(source, name, shared.clone())
                 .unwrap_or_else(|e| {
                     log::warn!("lua[{}]: re-load failed: {}", name, e);
-                    LuaPaletteProvider::from_source("return {}", "lua-fallback", shared.clone())
-                        .expect("trivial provider always loads")
+                    LuaPaletteProvider::from_source(
+                        "ttymap.register_plugin({})",
+                        "lua-fallback",
+                        shared.clone(),
+                    )
+                    .expect("trivial provider always loads")
                 });
             crate::palette::PaletteComponent::with_provider(provider)
         }
@@ -479,7 +482,7 @@ fn component_or_placeholder(
 ) -> LuaComponent {
     LuaComponent::from_source(source, name, shared.clone()).unwrap_or_else(|e| {
         log::warn!("lua[{}]: re-load failed: {}", name, e);
-        LuaComponent::from_source("return {}", name, shared)
+        LuaComponent::from_source("ttymap.register_plugin({})", name, shared)
             .expect("trivial Lua module always loads")
     })
 }
@@ -701,13 +704,13 @@ mod tests {
         use crate::compositor::Component;
         let shared = ttymap::LuaHostShared::empty();
         let iss = LuaComponent::from_source(
-            r#"return { name = "iss", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "iss", render = function() return {} end })"#,
             "iss",
             shared.clone(),
         )
         .expect("build iss");
         let hubble = LuaComponent::from_source(
-            r#"return { name = "hubble", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "hubble", render = function() return {} end })"#,
             "hubble",
             shared,
         )
@@ -726,7 +729,7 @@ mod tests {
     /// Module metadata: defaults, overrides, kind/activation flips.
     #[test]
     fn module_meta_defaults_are_toggle_component() {
-        let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
+        let meta = ModuleMeta::parse(r#"ttymap.register_plugin({ name = "x" })"#, "x");
         assert!(matches!(meta.activation, Activation::Toggle));
         assert!(matches!(meta.kind, Kind::Component));
         assert_eq!(meta.label, "Toggle x");
@@ -736,28 +739,33 @@ mod tests {
 
     #[test]
     fn module_meta_picks_up_overlay_activation() {
-        let meta = ModuleMeta::parse(r#"return { name = "x", activation = "overlay" }"#, "x");
+        let meta = ModuleMeta::parse(
+            r#"ttymap.register_plugin({ name = "x", activation = "overlay" })"#,
+            "x",
+        );
         assert!(matches!(meta.activation, Activation::Overlay));
     }
 
     #[test]
-    fn palette_subtable_marks_module_as_provider() {
-        let meta = ModuleMeta::parse(r#"return { name = "x", palette = {} }"#, "x");
+    fn register_palette_marks_module_as_provider() {
+        // Kind is decided by which API the script called, not by
+        // any sub-table presence. `register_palette` → Provider.
+        let meta = ModuleMeta::parse(r#"ttymap.register_palette({ name = "x" })"#, "x");
         assert!(matches!(meta.kind, Kind::Provider));
         // Providers default to spawn (each open is a fresh provider).
         assert!(matches!(meta.activation, Activation::Spawn));
     }
 
     #[test]
-    fn no_palette_subtable_means_component() {
-        let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
+    fn register_plugin_marks_module_as_component() {
+        let meta = ModuleMeta::parse(r#"ttymap.register_plugin({ name = "x" })"#, "x");
         assert!(matches!(meta.kind, Kind::Component));
     }
 
     #[test]
     fn module_meta_reads_key_label_enabled() {
         let meta = ModuleMeta::parse(
-            r#"return { name = "x", key = "i", label = "Toggle x", enabled = false }"#,
+            r#"ttymap.register_plugin({ name = "x", key = "i", label = "Toggle x", enabled = false })"#,
             "x",
         );
         assert_eq!(meta.key, Some('i'));
@@ -768,13 +776,13 @@ mod tests {
     #[test]
     fn module_meta_reads_footer_hints_in_both_shapes() {
         let meta = ModuleMeta::parse(
-            r#"return {
+            r#"ttymap.register_plugin({
                 name = "x",
                 footer_hints = {
                     { "Enter", "open" },
                     { key = "Esc", label = "back" },
                 },
-            }"#,
+            })"#,
             "x",
         );
         assert_eq!(meta.footer_hints.len(), 2);
@@ -792,7 +800,7 @@ mod tests {
             &dir,
             "demo.lua",
             r#"
-            return {
+            ttymap.register_plugin({
                 name = "demo",
                 key = "d",
                 label = "Toggle demo",
@@ -801,7 +809,7 @@ mod tests {
                     { "Enter", "open" },
                     { "Esc",   "close" },
                 },
-            }
+            })
             "#,
         );
 
@@ -849,12 +857,12 @@ mod tests {
         write_plugin(
             &dir,
             "first.lua",
-            r#"return { name = "first", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "first", render = function() return {} end })"#,
         );
         write_plugin(
             &dir,
             "second.lua",
-            r#"return { name = "second", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "second", render = function() return {} end })"#,
         );
 
         let mut r = Registrar::default();
@@ -867,7 +875,7 @@ mod tests {
     #[test]
     fn dir_discovery_skips_non_lua_files() {
         let dir = temp_plugins_dir("skip-non-lua");
-        write_plugin(&dir, "ok.lua", r#"return { name = "ok" }"#);
+        write_plugin(&dir, "ok.lua", r#"ttymap.register_plugin({ name = "ok" })"#);
         // README, backup files, etc. should be ignored.
         std::fs::write(dir.join("README.md"), "ignore me").unwrap();
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
@@ -882,13 +890,17 @@ mod tests {
     #[test]
     fn dir_discovery_honours_module_enabled_false() {
         let dir = temp_plugins_dir("self-disable");
-        write_plugin(&dir, "alpha.lua", r#"return { name = "alpha" }"#);
+        write_plugin(
+            &dir,
+            "alpha.lua",
+            r#"ttymap.register_plugin({ name = "alpha" })"#,
+        );
         // beta opts itself out — the file stays, but the plugin
         // doesn't register.
         write_plugin(
             &dir,
             "beta.lua",
-            r#"return { name = "beta", enabled = false }"#,
+            r#"ttymap.register_plugin({ name = "beta", enabled = false })"#,
         );
 
         let mut r = Registrar::default();
@@ -909,7 +921,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("biggie")).expect("mkdir");
         std::fs::write(
             dir.join("biggie").join("init.lua"),
-            r#"return { name = "biggie", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "biggie", render = function() return {} end })"#,
         )
         .expect("write init.lua");
 
@@ -933,7 +945,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("libonly")).expect("mkdir");
         std::fs::write(
             dir.join("libonly").join("fmt.lua"),
-            r#"return { format = function(s) return s end }"#,
+            r#"ttymap.register_plugin({ format = function(s) return s end })"#,
         )
         .expect("write fmt.lua");
 
@@ -954,7 +966,7 @@ mod tests {
         write_plugin(
             &dir,
             "explicit.lua",
-            r#"return { name = "explicit", enabled = true }"#,
+            r#"ttymap.register_plugin({ name = "explicit", enabled = true })"#,
         );
 
         let mut r = Registrar::default();
@@ -969,7 +981,7 @@ mod tests {
         write_plugin(
             &dir,
             "ok.lua",
-            r#"return { name = "ok", render = function() return {} end }"#,
+            r#"ttymap.register_plugin({ name = "ok", render = function() return {} end })"#,
         );
 
         let mut r = Registrar::default();

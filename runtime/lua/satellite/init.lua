@@ -7,7 +7,7 @@
 -- `~/.config/ttymap/lua/satellite.lua` and append its NORAD ID +
 -- a free key char.
 
-return require("satellite.satellites").make({
+ttymap.register_plugin(require("satellite.satellites").make({
     -- Manned LEO stations.
     { display = "ISS",      norad_id = 25544, color = "accent_alt", key = "i" },
     { display = "Tiangong", norad_id = 48274, color = "highlight",  key = "T" },
@@ -31,4 +31,4 @@ return require("satellite.satellites").make({
     -- MEO (~20,000 km, 12 h period). Slow drift across the map,
     -- a different rhythm to the LEO sats.
     { display = "GPS",      norad_id = 26360, color = "highlight",  key = "G" },
-})
+}))

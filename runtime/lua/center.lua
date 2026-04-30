@@ -3,7 +3,7 @@
 -- Displays a fixed crosshair at the map's current center point.
 -- Useful as a reference when navigating or for precise positioning.
 
-return {
+ttymap.register_plugin({
     name = "center",
     label = "Toggle center marker",
     key = "c",
@@ -21,4 +21,4 @@ return {
         -- of the stack (focused).
         return { ignore = true }
     end,
-}
+})

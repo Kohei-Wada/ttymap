@@ -17,7 +17,7 @@ local state = {
     done = false,
 }
 
-return {
+ttymap.register_plugin({
     name = "here",
     label = "Jump to here (current location)",
 
@@ -51,4 +51,4 @@ return {
             end
         end
     end,
-}
+})

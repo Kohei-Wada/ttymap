@@ -9,7 +9,7 @@
 
 local state = { fired = false }
 
-return {
+ttymap.register_plugin({
     name = "export",
     label = "Export frame as ANSI",
 
@@ -23,4 +23,4 @@ return {
         ttymap.window:export_frame()
         ttymap.window:close()
     end,
-}
+})

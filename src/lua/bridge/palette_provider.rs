@@ -18,7 +18,7 @@ use super::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::app::AppMsg;
 use crate::compositor::Context;
 use crate::geo::LonLat;
-use crate::lua::ttymap::LuaHostShared;
+use crate::lua::ttymap::{CapturedRegistration, LuaHostShared};
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
@@ -51,19 +51,18 @@ impl LuaPaletteProvider {
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Box<Self>> {
-        let (lua, module, handles) = fresh_load(source, id, "lua-palette", shared)?;
-
-        // The script declares palette-provider semantics by exposing
-        // a `palette = {...}` sub-table — the dispatcher already
-        // checked this. Pull it out and use it as the registry-held
-        // table; everything else (filter / items / execute / poll /
-        // is_loading / prompt / submit_mode) reads from this scope.
-        let palette: Table = module.get("palette").map_err(|e| {
-            mlua::Error::RuntimeError(format!(
-                "lua-palette: module.palette missing or not a table: {}",
-                e
-            ))
-        })?;
+        let (lua, captured, handles) = fresh_load(source, id, "lua-palette", shared)?;
+        // The script self-declares as a palette provider via
+        // `ttymap.register_palette(...)`. A `register_plugin` call
+        // here is a kind mismatch reported up to the walker.
+        let palette = match captured {
+            CapturedRegistration::Palette(t) => t,
+            CapturedRegistration::Plugin(_) => {
+                return Err(mlua::Error::external(
+                    "expected ttymap.register_palette, got ttymap.register_plugin",
+                ));
+            }
+        };
 
         let prompt: String = palette.get("prompt").unwrap_or_else(|_| ":".to_string());
         let submit_mode = parse_submit_mode(&palette);
@@ -212,7 +211,7 @@ mod tests {
     #[test]
     fn prompt_falls_back_to_colon_when_palette_omits_it() {
         let p = LuaPaletteProvider::from_source(
-            "return { palette = {} }",
+            "ttymap.register_palette({})",
             "anon",
             LuaHostShared::empty(),
         )
@@ -223,7 +222,7 @@ mod tests {
     #[test]
     fn prompt_picks_up_palette_value() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { palette = { prompt = "/" } }"#,
+            r#"ttymap.register_palette({ prompt = "/" })"#,
             "named",
             LuaHostShared::empty(),
         )
@@ -232,16 +231,25 @@ mod tests {
     }
 
     #[test]
-    fn from_source_rejects_module_without_palette_subtable() {
-        let err =
-            LuaPaletteProvider::from_source("return {}", "missing-palette", LuaHostShared::empty());
-        assert!(err.is_err(), "no palette sub-table should fail to load");
+    fn from_source_rejects_when_script_calls_register_plugin_instead() {
+        // The script self-declares as a Component, but the palette
+        // adapter expects a palette declaration — kind mismatch
+        // surfaces as an error rather than a silent miscoercion.
+        let err = LuaPaletteProvider::from_source(
+            "ttymap.register_plugin({})",
+            "wrong-kind",
+            LuaHostShared::empty(),
+        );
+        assert!(
+            err.is_err(),
+            "register_plugin should fail to load as a palette provider"
+        );
     }
 
     #[test]
     fn submit_mode_defaults_on_each_key() {
         let p = LuaPaletteProvider::from_source(
-            "return { palette = {} }",
+            "ttymap.register_palette({})",
             "anon",
             LuaHostShared::empty(),
         )
@@ -252,7 +260,7 @@ mod tests {
     #[test]
     fn submit_mode_string_debounced_uses_default_ms() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { palette = { submit_mode = "debounced" } }"#,
+            r#"ttymap.register_palette({ submit_mode = "debounced" })"#,
             "anon",
             LuaHostShared::empty(),
         )
@@ -266,7 +274,7 @@ mod tests {
     #[test]
     fn submit_mode_table_lets_plugin_pick_ms() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { palette = { submit_mode = { kind = "debounced", ms = 250 } } }"#,
+            r#"ttymap.register_palette({ submit_mode = { kind = "debounced", ms = 250 } })"#,
             "anon",
             LuaHostShared::empty(),
         )
@@ -282,18 +290,16 @@ mod tests {
         let mut p = LuaPaletteProvider::from_source(
             r#"
             local items_list = {}
-            return {
-                palette = {
-                    filter = function(q)
-                        items_list = {}
-                        if q ~= "" then
-                            table.insert(items_list, { label = q .. " a", hint = "ha" })
-                            table.insert(items_list, { label = q .. " b", hint = "hb" })
-                        end
-                    end,
-                    items = function() return items_list end,
-                },
-            }
+            ttymap.register_palette({
+                filter = function(q)
+                    items_list = {}
+                    if q ~= "" then
+                        table.insert(items_list, { label = q .. " a", hint = "ha" })
+                        table.insert(items_list, { label = q .. " b", hint = "hb" })
+                    end
+                end,
+                items = function() return items_list end,
+            })
             "#,
             "round-trip",
             LuaHostShared::empty(),
@@ -309,14 +315,12 @@ mod tests {
     fn execute_jump_returns_run_with_jump() {
         let mut p = LuaPaletteProvider::from_source(
             r#"
-            return {
-                palette = {
-                    execute = function(idx)
-                        ttymap.map:jump(139.7, 35.7)
-                        return nil
-                    end,
-                },
-            }
+            ttymap.register_palette({
+                execute = function(idx)
+                    ttymap.map:jump(139.7, 35.7)
+                    return nil
+                end,
+            })
             "#,
             "exec-jump",
             LuaHostShared::empty(),
@@ -334,7 +338,7 @@ mod tests {
     #[test]
     fn execute_close_table_returns_close() {
         let mut p = LuaPaletteProvider::from_source(
-            r#"return { palette = { execute = function(_) return { close = true } end } }"#,
+            r#"ttymap.register_palette({ execute = function(_) return { close = true } end })"#,
             "exec-close",
             LuaHostShared::empty(),
         )
@@ -345,7 +349,7 @@ mod tests {
     #[test]
     fn is_loading_defaults_false() {
         let p = LuaPaletteProvider::from_source(
-            "return { palette = {} }",
+            "ttymap.register_palette({})",
             "anon",
             LuaHostShared::empty(),
         )
@@ -356,7 +360,7 @@ mod tests {
     #[test]
     fn is_loading_reads_palette_function() {
         let p = LuaPaletteProvider::from_source(
-            r#"return { palette = { is_loading = function() return true end } }"#,
+            r#"ttymap.register_palette({ is_loading = function() return true end })"#,
             "loading",
             LuaHostShared::empty(),
         )

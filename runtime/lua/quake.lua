@@ -53,7 +53,7 @@ local function highest_magnitude(qs)
     return best
 end
 
-return {
+ttymap.register_plugin({
     name = "quakes",
 
     paint_on_map = function(map)
@@ -91,4 +91,4 @@ return {
             state.job = ttymap.http:fetch(URL)
         end
     end,
-}
+})

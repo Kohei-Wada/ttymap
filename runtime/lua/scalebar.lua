@@ -45,7 +45,7 @@ local function clamp(v, lo, hi)
     return v
 end
 
-return {
+ttymap.register_plugin({
     name = "scalebar",
     activation = "overlay",
 
@@ -66,4 +66,4 @@ return {
         local bar = "├" .. string.rep("─", cells - 2) .. "┤ " .. fmt.distance(distance) .. " "
         map:text_anchored("bottom-right", 0, bar, "accent")
     end,
-}
+})
