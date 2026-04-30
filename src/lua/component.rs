@@ -578,6 +578,16 @@ impl Component for LuaComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.footer_hints.clone()
     }
+
+    /// All `LuaComponent` instances share `Any::type_id`, so the
+    /// compositor's TypeId fallback would collapse every Lua plugin
+    /// to "the same kind". Surface the script's per-instance name
+    /// (file stem for bundled scripts, the `name` field for entries)
+    /// so different Lua plugins coexist on the stack and re-toggling
+    /// the same plugin still closes it. See `compositor::same_identity`.
+    fn dedup_tag(&self) -> Option<&str> {
+        Some(self.name)
+    }
 }
 
 #[cfg(test)]

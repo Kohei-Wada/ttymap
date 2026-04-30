@@ -208,7 +208,7 @@ main thread (ratatui draw):
 
 Focus is a `focused_idx` into the Compositor stack, **decoupled from stack position**. Pushing a modal puts focus on it; `Tab` moves focus back to the base layer without popping the modal (the old `Focus::Background` behaviour). Stack order never changes through cycling — only which component receives keys first.
 
-Dedup is by `Any::type_id`: pressing an activation key while the plugin is already on the stack focuses the existing instance instead of stacking a duplicate. A plugin author cannot forget to opt in — the concrete type *is* the identity.
+Dedup is by `Any::type_id` for Rust components — pressing an activation key while the plugin is already on the stack focuses the existing instance instead of stacking a duplicate; the concrete type *is* the identity, no per-plugin declaration needed. Adapters that share a single Rust type across many plugin instances (notably `LuaComponent`, where every Lua-driven plugin is wrapped in the same struct) override `Component::dedup_tag` to return a per-instance string, so different Lua plugins coexist on the stack while re-toggling the same one still closes it.
 
 ### Plugin API
 

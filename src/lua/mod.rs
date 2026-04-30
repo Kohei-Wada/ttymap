@@ -655,32 +655,36 @@ mod tests {
         assert_eq!(overlay_count, 3, "info/scalebar/attribution overlays");
     }
 
-    /// Probe: two `LuaComponent` instances built from different
-    /// scripts share `Any::type_id`. Confirms that toggle-activation
-    /// dedup (which keys off TypeId) cannot tell two Lua plugins
-    /// apart on the compositor stack — relevant before adding
-    /// multi-entry support, where one file would register multiple
-    /// Lua-driven toggles that need to coexist.
+    /// Two `LuaComponent` instances with distinct `name`s coexist
+    /// on the compositor stack when toggled in sequence — the
+    /// production scenario behind #188. Without `dedup_tag`'s
+    /// override this would collapse via TypeId fallback (every
+    /// Lua plugin shares `Any::type_id`), the first toggle would
+    /// be evicted, and the second would never push.
     #[test]
-    fn two_lua_components_collide_on_typeid() {
-        use std::any::Any;
+    fn two_lua_components_coexist_on_compositor_stack() {
+        use crate::compositor::Component;
         let shared = host::LuaHostShared::empty();
-        let a = LuaComponent::from_source(
-            r#"return { name = "a", render = function() return {} end }"#,
-            "a",
+        let iss = LuaComponent::from_source(
+            r#"return { name = "iss", render = function() return {} end }"#,
+            "iss",
             shared.clone(),
         )
-        .expect("build a");
-        let b = LuaComponent::from_source(
-            r#"return { name = "b", render = function() return {} end }"#,
-            "b",
+        .expect("build iss");
+        let hubble = LuaComponent::from_source(
+            r#"return { name = "hubble", render = function() return {} end }"#,
+            "hubble",
             shared,
         )
-        .expect("build b");
-        assert_eq!(
-            Any::type_id(&a),
-            Any::type_id(&b),
-            "all LuaComponent instances share TypeId by construction",
+        .expect("build hubble");
+        // Per-instance dedup identity is the script's `name`, not
+        // TypeId — the override returns `Some(name)`.
+        assert_eq!(iss.dedup_tag(), Some("iss"));
+        assert_eq!(hubble.dedup_tag(), Some("hubble"));
+        assert_ne!(
+            iss.dedup_tag(),
+            hubble.dedup_tag(),
+            "distinct scripts must declare distinct dedup tags",
         );
     }
 
