@@ -232,22 +232,22 @@ impl ModuleMeta {
     /// dropping `activation = "overlay"` declarations.
     fn parse(source: &str, name: &str) -> Self {
         let lua = new_lua();
-        let module: Table = match lua.load(source).set_name(name).eval() {
-            Ok(m) => m,
+        match lua.load(source).set_name(name).eval::<Table>() {
+            Ok(module) => Self::from_table(&module, name),
             // Parse failure is reported by the real load attempt; here
             // we return defaults so the dispatcher proceeds and surfaces
             // the error in one place.
-            Err(_) => {
-                return Self {
-                    activation: Activation::Toggle,
-                    kind: Kind::Component,
-                    label: format!("Toggle {}", name),
-                    key: None,
-                    enabled: true,
-                    footer_hints: Vec::new(),
-                };
-            }
-        };
+            Err(_) => Self::defaults(name),
+        }
+    }
+
+    /// Read the metadata fields off a pre-evaluated module table.
+    /// Used both by [`parse`](Self::parse) (top-level scripts) and
+    /// by `parse_entries` (per-entry sub-tables in multi-entry
+    /// plugins). `default_name` seeds the fallback label when the
+    /// script omits `module.label` — for top-level scripts that's
+    /// the file stem; for entries it's the entry's `name` field.
+    fn from_table(module: &Table, default_name: &str) -> Self {
         // Presence of a `palette` sub-table is the only signal that
         // the script wants palette-provider semantics. There is no
         // separate `kind` field — the shape *is* the declaration.
@@ -275,11 +275,11 @@ impl ModuleMeta {
             Ok(mlua::Value::Boolean(false))
         );
         let default_label = match activation {
-            Activation::Toggle => format!("Toggle {}", name),
-            Activation::Spawn => name.to_string(),
+            Activation::Toggle => format!("Toggle {}", default_name),
+            Activation::Spawn => default_name.to_string(),
             Activation::Overlay => String::new(),
         };
-        let footer_hints = parse_footer_hints(&module);
+        let footer_hints = parse_footer_hints(module);
         Self {
             activation,
             kind,
@@ -287,6 +287,17 @@ impl ModuleMeta {
             key,
             enabled,
             footer_hints,
+        }
+    }
+
+    fn defaults(name: &str) -> Self {
+        Self {
+            activation: Activation::Toggle,
+            kind: Kind::Component,
+            label: format!("Toggle {}", name),
+            key: None,
+            enabled: true,
+            footer_hints: Vec::new(),
         }
     }
 }
@@ -326,6 +337,18 @@ fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
 /// Register one Lua script with the registrar by reading its own
 /// metadata. The single dispatcher used by both bundled and user
 /// plugins — Rust never knows a specific plugin's name.
+///
+/// Two shapes are accepted:
+/// - **Single module**: the file returns one plugin table — registers
+///   one palette entry / overlay / provider exactly as before.
+/// - **Multi-entry pack**: the file returns a table with an
+///   `entries = { plugin_a, plugin_b, … }` field — each entry is
+///   itself a plugin table and registers as its own palette entry,
+///   driven by [`LuaComponent::from_source_entry`]. Lets one file
+///   ship a related family of toggles (e.g. `satellite.lua` for
+///   ISS + Hubble) without forcing a separate file per palette
+///   entry. File-level `enabled = false` skips the whole pack;
+///   per-entry `enabled = false` skips just that entry.
 fn register_one(
     name: &'static str,
     source: &'static str,
@@ -341,22 +364,115 @@ fn register_one(
         return;
     }
 
+    if let Some(entries) = parse_entries(source, name) {
+        if entries.is_empty() {
+            log::warn!(
+                "lua[{}]: module.entries is present but empty, nothing to register",
+                name
+            );
+            return;
+        }
+        for entry in entries {
+            if !entry.meta.enabled {
+                log::info!(
+                    "lua[{}/{}]: disabled via entry.enabled = false, skipping",
+                    name,
+                    entry.name
+                );
+                continue;
+            }
+            register_component(
+                entry.name,
+                source,
+                Some(entry.index),
+                &entry.meta,
+                shared.clone(),
+                r,
+            );
+        }
+        return;
+    }
+
     match meta.kind {
-        Kind::Component => register_component(name, source, &meta, shared, r),
+        Kind::Component => register_component(name, source, None, &meta, shared, r),
         Kind::Provider => register_provider(name, source, &meta, shared, r),
     }
 }
 
+/// One entry's parsed metadata in a multi-entry plugin file. The
+/// `name` is leaked once at parse time so the rest of the
+/// registration pipeline can pass it as `&'static str` (PaletteEntry
+/// / help-snapshot / chunk_name all want that lifetime).
+struct EntryMeta {
+    name: &'static str,
+    /// 0-based position in `outer.entries`. The runtime adds 1 when
+    /// indexing, since Lua arrays are 1-indexed.
+    index: usize,
+    meta: ModuleMeta,
+}
+
+/// Detect a multi-entry plugin file and parse each entry's metadata.
+/// Returns `None` for single-module files (no `entries` field) so
+/// the caller falls through to the single-module path. An `entries`
+/// field present but malformed (not a sequence of tables, or each
+/// table fails to expose a `name`) yields a fallback name per entry
+/// rather than dropping it — the per-entry register call surfaces
+/// any actual load error in one place.
+fn parse_entries(source: &str, file_stem: &str) -> Option<Vec<EntryMeta>> {
+    let lua = new_lua();
+    let outer: Table = lua.load(source).set_name(file_stem).eval().ok()?;
+    let entries: Table = outer.get("entries").ok()?;
+
+    let mut out = Vec::new();
+    for (i, value) in entries
+        .sequence_values::<mlua::Value>()
+        .flatten()
+        .enumerate()
+    {
+        let mlua::Value::Table(entry) = value else {
+            log::warn!(
+                "lua[{}]: entries[{}] is not a table, skipping",
+                file_stem,
+                i + 1
+            );
+            continue;
+        };
+        let raw_name: String = entry
+            .get::<String>("name")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{}#{}", file_stem, i + 1));
+        let name: &'static str = Box::leak(raw_name.into_boxed_str());
+        let meta = ModuleMeta::from_table(&entry, name);
+        out.push(EntryMeta {
+            name,
+            index: i,
+            meta,
+        });
+    }
+    Some(out)
+}
+
+/// Wire one Component-shaped Lua module — single-module file or
+/// one entry within a multi-entry pack. `entry_idx` is `Some(i)`
+/// for the entries path, `None` otherwise; it threads through to
+/// the factory closure that re-builds the `LuaComponent` on each
+/// activation.
 fn register_component(
     name: &'static str,
     source: &'static str,
+    entry_idx: Option<usize>,
     meta: &ModuleMeta,
     shared: Arc<host::LuaHostShared>,
     r: &mut Registrar,
 ) {
     // Validate up front so a syntax error surfaces as one log line
     // instead of a noisy first-toggle failure.
-    if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
+    let validation = match entry_idx {
+        Some(i) => LuaComponent::from_source_entry(source, name, i, shared.clone()),
+        None => LuaComponent::from_source(source, name, shared.clone()),
+    };
+    if let Err(e) = validation {
         log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
         return;
     }
@@ -368,19 +484,19 @@ fn register_component(
         Activation::Overlay => {
             let shared_for_factory = shared.clone();
             r.add_overlay(move |_| {
-                component_or_placeholder(name, source, shared_for_factory.clone())
+                component_or_placeholder(name, source, entry_idx, shared_for_factory.clone())
             });
         }
         Activation::Toggle => {
             let shared_for_toggle = shared.clone();
             r.add_toggle(label.clone(), key_hint.clone(), name, move |_| {
-                component_or_placeholder(name, source, shared_for_toggle.clone())
+                component_or_placeholder(name, source, entry_idx, shared_for_toggle.clone())
             });
             if let Some(key) = meta.key {
                 use crossterm::event::{KeyCode, KeyModifiers};
                 let shared_for_key = shared.clone();
                 r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
-                    component_or_placeholder(name, source, shared_for_key.clone())
+                    component_or_placeholder(name, source, entry_idx, shared_for_key.clone())
                 });
             }
             if !key_hint.is_empty() {
@@ -390,13 +506,13 @@ fn register_component(
         Activation::Spawn => {
             let shared_for_spawn = shared.clone();
             r.add_spawn(label.clone(), key_hint.clone(), name, move |_| {
-                component_or_placeholder(name, source, shared_for_spawn.clone())
+                component_or_placeholder(name, source, entry_idx, shared_for_spawn.clone())
             });
             if let Some(key) = meta.key {
                 use crossterm::event::{KeyCode, KeyModifiers};
                 let shared_for_key = shared.clone();
                 r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
-                    component_or_placeholder(name, source, shared_for_key.clone())
+                    component_or_placeholder(name, source, entry_idx, shared_for_key.clone())
                 });
             }
             if !key_hint.is_empty() {
@@ -468,13 +584,20 @@ fn register_provider(
 }
 
 /// Try to build a `LuaComponent` from `source`; on failure log + fall
-/// back to a no-op module so the host stays alive.
+/// back to a no-op module so the host stays alive. `entry_idx` picks
+/// out a sub-module from `outer.entries` when the file is a
+/// multi-entry pack; pass `None` for single-module files.
 fn component_or_placeholder(
     name: &'static str,
     source: &'static str,
+    entry_idx: Option<usize>,
     shared: Arc<host::LuaHostShared>,
 ) -> LuaComponent {
-    LuaComponent::from_source(source, name, shared.clone()).unwrap_or_else(|e| {
+    let attempt = match entry_idx {
+        Some(i) => LuaComponent::from_source_entry(source, name, i, shared.clone()),
+        None => LuaComponent::from_source(source, name, shared.clone()),
+    };
+    attempt.unwrap_or_else(|e| {
         log::warn!("lua[{}]: re-load failed: {}", name, e);
         LuaComponent::from_source("return {}", name, shared)
             .expect("trivial Lua module always loads")
@@ -962,6 +1085,86 @@ mod tests {
         prepend_package_path(&lua, &dir);
         let res: mlua::Result<i64> = lua.load(r#"return require("doesnotexist")"#).eval();
         assert!(res.is_err(), "non-existent require should still error");
+    }
+
+    #[test]
+    fn multi_entry_pack_registers_one_palette_entry_per_entry() {
+        // A file that returns `{ entries = { … } }` registers each
+        // sub-table as its own palette entry. Per-entry `name`
+        // drives the dedup_tag so they coexist on the stack.
+        let dir = temp_plugins_dir("multi-entry");
+        write_plugin(
+            &dir,
+            "pack.lua",
+            r#"
+            return {
+                name = "pack",
+                entries = {
+                    { name = "alpha", render = function() return {} end },
+                    { name = "beta",  render = function() return {} end },
+                },
+            }
+            "#,
+        );
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        let ls = labels(&r);
+        assert!(ls.iter().any(|l| l.contains("alpha")), "got {:?}", ls);
+        assert!(ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
+        assert_eq!(
+            ls.len(),
+            2,
+            "pack registers exactly 2 entries, got {:?}",
+            ls
+        );
+    }
+
+    #[test]
+    fn multi_entry_per_entry_enabled_false_skips_just_that_entry() {
+        let dir = temp_plugins_dir("entry-self-disable");
+        write_plugin(
+            &dir,
+            "pack.lua",
+            r#"
+            return {
+                name = "pack",
+                entries = {
+                    { name = "alpha", render = function() return {} end },
+                    { name = "beta",  enabled = false, render = function() return {} end },
+                },
+            }
+            "#,
+        );
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        let ls = labels(&r);
+        assert!(ls.iter().any(|l| l.contains("alpha")));
+        assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
+    }
+
+    #[test]
+    fn multi_entry_file_level_enabled_false_skips_whole_pack() {
+        let dir = temp_plugins_dir("file-level-disable");
+        write_plugin(
+            &dir,
+            "pack.lua",
+            r#"
+            return {
+                name = "pack",
+                enabled = false,
+                entries = {
+                    { name = "alpha", render = function() return {} end },
+                    { name = "beta",  render = function() return {} end },
+                },
+            }
+            "#,
+        );
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        assert!(
+            labels(&r).is_empty(),
+            "file-level disable must skip every entry"
+        );
     }
 
     #[test]

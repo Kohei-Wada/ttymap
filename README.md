@@ -130,7 +130,7 @@ src/
 
 runtime/
 └── lua/                 bundled Lua plugin scripts (aircraft, attribution, export,
-    │                    help, here, hubble, info, iss, quake, scalebar, search, wiki).
+    │                    help, here, info, quake, satellite, scalebar, search, wiki).
     │                    `include_str!`'d at compile time by `BUILTIN_SCRIPTS`; the
     │                    binary ships them as data, not Rust source.
     └── ttymap/          shared lib scripts (fmt, …). Resolved via `require "ttymap.X"`
@@ -196,7 +196,7 @@ main thread (ratatui draw):
     1. latest MapFrame is rendered into the map area
     2. MapApi set up; compositor.paint_on_map(map_api)
        — every Component on the stack paints world-space primitives
-         (wiki / aircraft / iss / hubble / quake markers, info chrome, scale bar, …)
+         (wiki / aircraft / satellite / quake markers, info chrome, scale bar, …)
     3. compositor.render(f, area, theme, ctx)
        — every Component on the stack drawn bottom-up; focused last
          so its panel sits on top
@@ -250,6 +250,8 @@ Per-frame `host` and `map` accessors (a partial list):
 
 To register as a palette provider (search uses this), expose a `palette = { prompt, submit_mode, filter, items, execute, poll, is_loading }` sub-table on the returned module. The dispatcher reads palette-provider semantics from the *shape* of the returned table — there is no separate `kind` field.
 
+For a related family of toggles in one file, return `{ entries = { module_a, module_b, … } }` instead of a single module. Each entry is itself a plugin module (same shape as above) and registers as its own palette entry, with per-entry `name` driving the compositor's stack-dedup so distinct entries coexist. File-level `enabled = false` skips the whole pack; per-entry `enabled = false` skips just that entry. The bundled `satellite.lua` uses this to ship ISS + Hubble from one file via the shared `ttymap.satellites` factory.
+
 Adding a bundled plugin = drop a `.lua` under `runtime/lua/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
 
 ### Concurrency
@@ -270,7 +272,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 ### Principles
 
 - **Core stays lean.** A map viewer, not a GIS platform. The core handles tiles, projection, rendering, navigation. Anything domain-specific is a Lua plugin.
-- **Plugin-first.** Every built-in (info / scalebar / attribution / aircraft / iss / hubble / quake / wiki / here / search / export / help) is a Lua script — the bridge dogfoods itself.
+- **Plugin-first.** Every built-in (info / scalebar / attribution / aircraft / satellite / quake / wiki / here / search / export / help) is a Lua script — the bridge dogfoods itself.
 - **Boring where it matters.** Stable protocols (MVT, OSM, TOML), predictable resource use, `cargo install` ships a single binary.
 
 ### Short-term
@@ -280,7 +282,7 @@ ttymap aims to be a **modern Rust replacement for mapscii** — still a terminal
 
 ### Plugin candidates
 
-Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), TLE-driven satellite trackers (ISS, Hubble — drop a one-line `*.lua` to add any other NORAD ID), USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
+Already bundled (each is one `.lua` file): live aircraft overlay (OpenSky), TLE-driven satellite trackers in a single multi-entry pack (`satellite.lua` ships ISS + Hubble; append any NORAD ID), USGS earthquakes, Wikipedia geosearch, Nominatim search, IP-geolocate, frame export. The following are open ideas — each can ship as a script under `~/.config/ttymap/plugins/` without touching the core:
 
 - **Live vessel overlay** — AIS via `rtl-ais` / `aisstream.io` ([#26](https://github.com/Kohei-Wada/ttymap/issues/26))
 - **Weather** — radar, temperature, wind
