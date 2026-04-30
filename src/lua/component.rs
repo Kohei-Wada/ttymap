@@ -25,7 +25,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::AppMsg;
 use crate::compositor::layout::PanelAnchor;
-use crate::compositor::window::{RenderWindow, Window};
+use crate::compositor::window::{OverlayWindow, RenderWindow, Window};
 use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
 use crate::lua::host::LuaHostShared;
@@ -202,13 +202,17 @@ impl LuaComponent {
         }
     }
 
-    /// Drain any `host:jump(...)` requests the Lua side queued
-    /// during the most recent callback and emit them as
-    /// `AppMsg::Map(Action::Jump)`. Called after `dispatch_event` /
-    /// `dispatch_poll` while we still hold a `Window`.
-    fn drain_jumps(&self, win: &mut Window) {
+    /// Drain any `host:jump(...)` and `host:export_frame()` requests
+    /// the Lua side queued during the most recent callback. Calls
+    /// `emit` once per queued request; the caller wires this to the
+    /// active window's `emit` (works for both [`Window`] and
+    /// [`OverlayWindow`]).
+    fn drain_emits(&self, mut emit: impl FnMut(AppMsg)) {
         while let Ok(ll) = self.jump_rx.try_recv() {
-            win.emit(AppMsg::Map(crate::map::Action::Jump(ll)));
+            emit(AppMsg::Map(crate::map::Action::Jump(ll)));
+        }
+        while self.export_rx.try_recv().is_ok() {
+            emit(AppMsg::ExportFrame);
         }
     }
 
@@ -225,12 +229,18 @@ impl LuaComponent {
         }
     }
 
-    /// Drain any `host:export_frame()` requests and emit one
-    /// `AppMsg::ExportFrame` per request. Multiple requests in
-    /// the same dispatch each emit (App::dispatch handles each).
-    fn drain_export(&self, win: &mut Window) {
-        while self.export_rx.try_recv().is_ok() {
-            win.emit(AppMsg::ExportFrame);
+    /// Overlay counterpart to [`drain_close`]. Overlays don't live on
+    /// the focusable stack, so a `host:close()` from one has nothing
+    /// to pop. Drain the channel anyway (it's unbounded; left
+    /// undrained it would grow forever) and warn so a misuse is
+    /// visible.
+    fn drain_close_overlay(&self) {
+        if self.close_rx.try_recv().is_ok() {
+            while self.close_rx.try_recv().is_ok() {}
+            log::warn!(
+                "lua[{}]: host:close() ignored — overlay components don't live on the focusable stack",
+                self.name
+            );
         }
     }
 
@@ -510,8 +520,7 @@ impl Component for LuaComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         self.update_center(win.ctx().center);
         let action = self.dispatch_event(event);
-        self.drain_jumps(win);
-        self.drain_export(win);
+        self.drain_emits(|m| win.emit(m));
         self.drain_close(win);
         match action {
             KeyAction::Close => win.close(),
@@ -528,9 +537,15 @@ impl Component for LuaComponent {
     fn poll(&mut self, win: &mut Window) {
         self.update_center(win.ctx().center);
         self.dispatch_poll();
-        self.drain_jumps(win);
-        self.drain_export(win);
+        self.drain_emits(|m| win.emit(m));
         self.drain_close(win);
+    }
+
+    fn poll_overlay(&mut self, win: &mut OverlayWindow) {
+        self.update_center(win.ctx().center);
+        self.dispatch_poll();
+        self.drain_emits(|m| win.emit(m));
+        self.drain_close_overlay();
     }
 
     fn render(&self, win: &mut RenderWindow) {
@@ -1036,6 +1051,89 @@ mod tests {
         assert_eq!(jumps.len(), 1);
         assert!((jumps[0].lon - 139.7595).abs() < 1e-9);
         assert!((jumps[0].lat - 35.6828).abs() < 1e-9);
+    }
+
+    #[test]
+    fn poll_overlay_drains_host_jump_into_emit() {
+        // An overlay that fires `host:jump` from poll. Verifies the
+        // overlay path keeps emit semantics (the same drain logic that
+        // works for stack components) even though the OverlayWindow
+        // surface is narrower.
+        let mut c = LuaComponent::from_source(
+            r#"return {
+                name = "jumper",
+                poll = function()
+                    host:jump(139.7595, 35.6828)
+                end,
+            }"#,
+            "jumper",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
+
+        use crate::compositor::Context;
+        const CTX: Context = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: crate::theme::ThemeId::Dark,
+            cursor: None,
+        };
+        let mut msgs: Vec<AppMsg> = Vec::new();
+        {
+            let mut win = OverlayWindow::new(&mut msgs, &CTX);
+            c.poll_overlay(&mut win);
+        }
+        let jumps: Vec<&LonLat> = msgs
+            .iter()
+            .filter_map(|m| match m {
+                AppMsg::Map(crate::map::Action::Jump(ll)) => Some(ll),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jumps.len(), 1);
+        assert!((jumps[0].lon - 139.7595).abs() < 1e-9);
+        assert!((jumps[0].lat - 35.6828).abs() < 1e-9);
+    }
+
+    #[test]
+    fn poll_overlay_drains_host_close_without_emitting() {
+        // An overlay that incorrectly calls `host:close()` from poll.
+        // The overlay path must drain `close_rx` (else the unbounded
+        // channel would grow forever) but emit nothing on the
+        // OverlayWindow — overlays don't live on the focusable stack.
+        let mut c = LuaComponent::from_source(
+            r#"return {
+                name = "bad_overlay",
+                poll = function()
+                    host:close()
+                end,
+            }"#,
+            "bad_overlay",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
+
+        use crate::compositor::Context;
+        const CTX: Context = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: crate::theme::ThemeId::Dark,
+            cursor: None,
+        };
+        let mut msgs: Vec<AppMsg> = Vec::new();
+        {
+            let mut win = OverlayWindow::new(&mut msgs, &CTX);
+            c.poll_overlay(&mut win);
+            // Second tick — the channel must have been drained on
+            // the first call. A missing drain would log a second
+            // warning here; correctness is unaffected because the
+            // OverlayWindow has no close path either way.
+            c.poll_overlay(&mut win);
+        }
+        // No close-path msgs exist on OverlayWindow; just assert
+        // no jumps / exports leaked into the queue.
+        assert!(
+            msgs.is_empty(),
+            "overlay poll must not emit anything for a host:close()"
+        );
     }
 
     #[test]
