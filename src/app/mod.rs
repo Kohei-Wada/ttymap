@@ -63,7 +63,7 @@ impl App {
             cols, rows, width, height
         );
 
-        let (tile_cache, attribution, wake_rx) = build_tile_cache(&config);
+        let (tile_cache, wake_rx) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&config.keymap);
         let theme_id = ThemeId::from_name(&config.render.style);
         // `_lua_shared` is kept alive on the App so every Lua plugin's
@@ -72,7 +72,7 @@ impl App {
         let BuiltRegistrar {
             registrar,
             plugin_hints,
-        } = build_registrar(&config, attribution, &keymap);
+        } = build_registrar(&config, tile_cache.attribution(), &keymap);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -319,19 +319,13 @@ impl App {
 /// the cache are backend-agnostic.
 pub(crate) fn build_tile_cache(
     config: &Config,
-) -> (
-    crate::map::tile::TileCache,
-    Option<String>,
-    crossbeam_channel::Receiver<()>,
-) {
+) -> (crate::map::tile::TileCache, crossbeam_channel::Receiver<()>) {
     use directories::ProjectDirs;
     use std::fs;
 
     use crate::map::tile::cache::DiskFastPath;
     use crate::map::tile::decoder;
-    use crate::map::tile::fetch::{
-        DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane, TileFetcher,
-    };
+    use crate::map::tile::fetch::{DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane};
 
     /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
     /// small pool covers the typical visible-tile + prefetch fan-out
@@ -350,10 +344,6 @@ pub(crate) fn build_tile_cache(
 
     let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
     let http = HttpFetcher::new();
-    let attribution = {
-        let s = http.attribution();
-        (!s.is_empty()).then(|| s.to_string())
-    };
 
     // The lane wraps an HTTP fetcher; if disk cache is enabled, layer
     // a `DiskCachedFetcher` decorator on top so worker-side hits
@@ -383,7 +373,6 @@ pub(crate) fn build_tile_cache(
             config.cache.memory_tiles,
             disk_fast_path,
         ),
-        attribution,
         wake_rx,
     )
 }

@@ -103,6 +103,16 @@ impl TileCache {
         self.client.is_idle()
     }
 
+    /// Active tile backend's attribution string (typically
+    /// "© OpenStreetMap …"). `None` when the backend has nothing to
+    /// display. Single source of truth so `App` and the Lua bridge
+    /// don't fork the lookup against the inner fetcher's value
+    /// directly.
+    pub fn attribution(&self) -> Option<String> {
+        let s = self.client.attribution();
+        (!s.is_empty()).then(|| s.to_string())
+    }
+
     /// Drain decoded-tile arrivals into the memory LRU. Returns true
     /// if any current-zoom tile arrived (i.e. the render thread
     /// should redraw).
