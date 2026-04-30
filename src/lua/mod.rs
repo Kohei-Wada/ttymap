@@ -216,6 +216,14 @@ impl ModuleMeta {
     /// Read the plugin's metadata fields by parsing the source once.
     /// Defaults are picked so a minimal `return { name = "x" }` script
     /// works as a toggle Component named "x".
+    ///
+    /// Uses [`new_lua`] (full searcher + package.path setup) rather
+    /// than a bare `Lua::new()` because module load can trigger
+    /// top-level `require` — `scalebar.lua` does `local fmt = require
+    /// "ttymap.fmt"` at the file head, which needs the runtime-path
+    /// searcher installed. Without it, the metadata read fails and
+    /// the dispatcher falls back to default Toggle/Component, silently
+    /// dropping `activation = "overlay"` declarations.
     fn parse(source: &str, name: &str) -> Self {
         let lua = new_lua();
         let module: Table = match lua.load(source).set_name(name).eval() {
