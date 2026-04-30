@@ -92,4 +92,39 @@ impl Action {
             Action::Quit,
         ]
     }
+
+    /// Stable, snake_case name used as the TOML key in `[keymap]`
+    /// (e.g. `pan_left = ["h", "Left"]`). Mouse-only variants and
+    /// `None` / `Jump` return `""` since they cannot be rebound from
+    /// config. Exhaustive so adding a variant is a compile error.
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Action::None => "",
+            Action::Quit => "quit",
+            Action::PanUp => "pan_up",
+            Action::PanDown => "pan_down",
+            Action::PanLeft => "pan_left",
+            Action::PanRight => "pan_right",
+            Action::PanLeftFast => "pan_left_fast",
+            Action::PanRightFast => "pan_right_fast",
+            Action::PanUpHalf => "pan_up_half",
+            Action::PanDownHalf => "pan_down_half",
+            Action::ZoomIn => "zoom_in",
+            Action::ZoomOut => "zoom_out",
+            Action::ZoomToWorld => "zoom_to_world",
+            Action::ResetPosition => "reset_position",
+            Action::Redraw => "redraw",
+            Action::PanCells(..) | Action::ZoomAt { .. } | Action::Jump(_) => "",
+        }
+    }
+
+    /// Reverse of [`config_name`]: resolve a TOML key back to its
+    /// `Action`. Only listed (rebindable) variants match; unknown
+    /// names yield `None`.
+    pub fn from_config_name(name: &str) -> Option<Action> {
+        Self::all_listed()
+            .iter()
+            .find(|a| a.config_name() == name)
+            .cloned()
+    }
 }

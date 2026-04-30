@@ -207,9 +207,12 @@ quit = ["Q", "C-q"]
         assert!(cfg.cache.tiles);
 
         // Keymap overrides are stored raw; resolution to KeyMap is in app.rs.
-        assert_eq!(cfg.keymap.zoom_in.as_deref(), Some(&["i".to_string()][..]));
         assert_eq!(
-            cfg.keymap.quit.as_deref(),
+            cfg.keymap.get("zoom_in").map(|v| v.as_slice()),
+            Some(&["i".to_string()][..])
+        );
+        assert_eq!(
+            cfg.keymap.get("quit").map(|v| v.as_slice()),
             Some(&["Q".to_string(), "C-q".to_string()][..])
         );
     }
