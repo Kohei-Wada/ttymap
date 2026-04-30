@@ -7,9 +7,10 @@
 //! - `host:jump(lon, lat)` — fire-and-forget request to recentre
 //!   the map on the given coordinate. The Lua side just enqueues a
 //!   `LonLat`; [`LuaComponent`] drains the channel after each
-//!   `poll` / `handle_event` dispatch and emits `AppMsg::Jump`
-//!   through the host `Window`. This keeps the Lua call site
-//!   independent of when a `Window` is actually available.
+//!   `poll` / `handle_event` dispatch and emits
+//!   `AppMsg::Map(Action::Jump)` through the host `Window`. This
+//!   keeps the Lua call site independent of when a `Window` is
+//!   actually available.
 //! - `host:parse_json(s) -> value | nil` — turn a JSON string into
 //!   nested Lua tables. Objects become string-keyed tables, arrays
 //!   become 1-indexed tables, `null` is `nil`. Parse errors return
@@ -164,11 +165,12 @@ impl UserData for LuaHost {
         });
 
         // `host:jump(lon, lat)` — request the map recentre on the
-        // given coordinate. The actual `AppMsg::Jump` emit happens
-        // when the matching `LuaComponent` drains the channel after
-        // its current callback returns, so this is fire-and-forget
-        // from the Lua side. Send errors (channel disconnected)
-        // mean the component is being torn down — silently ignore.
+        // given coordinate. The actual `AppMsg::Map(Action::Jump)`
+        // emit happens when the matching `LuaComponent` drains the
+        // channel after its current callback returns, so this is
+        // fire-and-forget from the Lua side. Send errors (channel
+        // disconnected) mean the component is being torn down —
+        // silently ignore.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             let _ = this.jump_tx.send(LonLat { lon, lat });
             Ok(())

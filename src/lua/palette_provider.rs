@@ -226,14 +226,14 @@ impl LuaPaletteProvider {
     /// Three accepted forms:
     /// - `nil` → Close
     /// - `{ close = true }` → Close
-    /// - host:jump(lon, lat) inside execute → Run([Jump(ll)])
+    /// - host:jump(lon, lat) inside execute → Run([Map(Action::Jump(ll))])
     fn action_from_lua(&self, value: mlua::Value) -> PaletteAction {
         // First check the in-execute jump channel — host:jump pushes
         // a LonLat that takes priority over any returned table since
         // the script's intent ("jump to this") is unambiguous.
         let mut jumps = Vec::new();
         while let Ok(ll) = self.jump_rx.try_recv() {
-            jumps.push(AppMsg::Jump(ll));
+            jumps.push(AppMsg::Map(crate::map::Action::Jump(ll)));
         }
         if !jumps.is_empty() {
             return PaletteAction::Run(jumps);
@@ -378,7 +378,7 @@ mod tests {
         match p.execute(0, &ctx()) {
             PaletteAction::Run(msgs) => {
                 assert_eq!(msgs.len(), 1);
-                assert!(matches!(msgs[0], AppMsg::Jump(_)));
+                assert!(matches!(msgs[0], AppMsg::Map(crate::map::Action::Jump(_))));
             }
             _ => panic!("expected Run([Jump])"),
         }

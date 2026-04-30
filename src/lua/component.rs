@@ -109,9 +109,9 @@ pub struct LuaComponent {
     footer_hints: Vec<(&'static str, &'static str)>,
     /// Receiver for `host:jump(lon, lat)` requests. The Lua side
     /// pushes a `LonLat`; we drain after each `poll` /
-    /// `handle_event` and emit `AppMsg::Jump` through the host
-    /// `Window`. Keeps the Lua call site decoupled from when a
-    /// `Window` is actually available.
+    /// `handle_event` and emit `AppMsg::Map(Action::Jump)` through
+    /// the host `Window`. Keeps the Lua call site decoupled from
+    /// when a `Window` is actually available.
     jump_rx: mpsc::Receiver<LonLat>,
     /// Receiver for `host:close()` requests. Same pattern as
     /// `jump_rx`: the Lua side fires-and-forgets; we drain after
@@ -189,11 +189,11 @@ impl LuaComponent {
 
     /// Drain any `host:jump(...)` requests the Lua side queued
     /// during the most recent callback and emit them as
-    /// `AppMsg::Jump`. Called after `dispatch_event` /
+    /// `AppMsg::Map(Action::Jump)`. Called after `dispatch_event` /
     /// `dispatch_poll` while we still hold a `Window`.
     fn drain_jumps(&self, win: &mut Window) {
         while let Ok(ll) = self.jump_rx.try_recv() {
-            win.emit(AppMsg::Jump(ll));
+            win.emit(AppMsg::Map(crate::map::Action::Jump(ll)));
         }
     }
 
@@ -984,7 +984,7 @@ mod tests {
     fn host_jump_drains_into_window_emit() {
         // A handler that requests a jump but doesn't return any
         // host action — the jump should still surface as an
-        // AppMsg::Jump on the next drain.
+        // AppMsg::Map(Action::Jump) on the next drain.
         let mut c = LuaComponent::from_source(
             r#"return {
                 name = "jumper",
@@ -1014,7 +1014,7 @@ mod tests {
             .msgs
             .iter()
             .filter_map(|m| match m {
-                AppMsg::Jump(ll) => Some(ll),
+                AppMsg::Map(crate::map::Action::Jump(ll)) => Some(ll),
                 _ => None,
             })
             .collect();
