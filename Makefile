@@ -39,6 +39,12 @@ install-bin:
 	cargo install --path .
 
 install-runtime:
+	# Wipe and re-create so files removed from runtime/lua/ (e.g. a
+	# bundled plugin merged into a multi-entry pack) don't linger and
+	# get re-registered as duplicate palette entries on the next run.
+	# Safe — DATA_DIR/lua is exclusively for bundled scripts; user
+	# overrides live under XDG_CONFIG_HOME/ttymap.
+	rm -rf $(DATA_DIR)/lua
 	mkdir -p $(DATA_DIR)/lua
 	cp -r runtime/lua/. $(DATA_DIR)/lua/
 
