@@ -193,6 +193,16 @@ fn same_identity(a: &dyn Component, b: &dyn Component) -> bool {
     }
 }
 
+/// What to do when [`Compositor::push_or`] hits an existing
+/// component with the same dedup identity. `Focus` is the activation-
+/// key path (idempotent re-press refocuses); `Close` is the toggle-
+/// palette path (re-toggle closes).
+#[derive(Clone, Copy)]
+enum OnCollision {
+    Focus,
+    Close,
+}
+
 // ── Compositor stack ───────────────────────────────────────────────
 
 /// Stack of components + a separate **focused index** decoupled from
@@ -288,58 +298,48 @@ impl Compositor {
     }
 
     /// Drain a [`WindowOps`] queue in the documented order:
-    /// `close` → `opens` (TypeId dedup → refocus) → `toggles`
-    /// (TypeId dedup → close) → return `msgs` for the caller to
-    /// dispatch. See [`window`] module docs.
+    /// `close` → `opens` (dedup → refocus) → `toggles` (dedup →
+    /// close) → return `msgs` for the caller to dispatch. See
+    /// [`window`] module docs.
     fn apply_ops(&mut self, idx: usize, ops: WindowOps) -> Vec<AppMsg> {
         if ops.close {
             self.stack.remove(idx);
             self.clamp_focus_after_shrink();
         }
         for c in ops.opens {
-            self.push_or_focus(c);
+            self.push_or(c, OnCollision::Focus);
         }
         for c in ops.toggles {
-            self.push_or_toggle(c);
+            self.push_or(c, OnCollision::Close);
         }
         ops.msgs
     }
 
-    /// Push `c` on top **unless** a component matching its dedup
-    /// identity is already on the stack — in that case focus jumps
-    /// to the existing instance and `c` is dropped. This makes
-    /// repeated activation keys (e.g. `i` pressed twice with focus
-    /// on the base between presses) idempotent instead of stacking
-    /// duplicate panels. For toggle semantics (close-if-open) see
-    /// [`push_or_toggle`](Self::push_or_toggle).
+    /// Push `c` on top, or — when a component matching its dedup
+    /// identity is already on the stack — fold the new push into
+    /// the existing instance per `on_collision`:
     ///
-    /// Identity defers to [`Component::dedup_tag`]; when both sides
-    /// supply a tag they're compared as strings, otherwise we fall
-    /// back to `Any::type_id`. Rust-side components keep concrete-
-    /// type dedup for free; adapters like `LuaComponent` opt in by
-    /// returning their plugin-supplied name.
-    fn push_or_focus(&mut self, c: Box<dyn Component>) {
-        if let Some(existing) = self.stack.iter().position(|s| same_identity(&**s, &*c)) {
-            self.focused_idx = existing;
-            return;
-        }
-        self.stack.push(c);
-        self.focused_idx = self.stack.len() - 1;
-    }
-
-    /// Toggle counterpart to [`push_or_focus`]: if a component
-    /// matching `c`'s dedup identity is already on the stack, that
-    /// existing instance closes and `c` is dropped. Otherwise `c`
-    /// is pushed.
+    /// - `OnCollision::Focus` (used by `opens`): refocus the
+    ///   existing one, drop `c`. Makes activation keys idempotent
+    ///   so e.g. pressing `i` twice with focus on the base between
+    ///   presses doesn't stack a second wiki panel.
+    /// - `OnCollision::Close` (used by `toggles`): remove the
+    ///   existing one, drop `c`. The "Toggle X" palette semantic.
     ///
-    /// Used by palette entries labelled "Toggle X" — pressing a
-    /// second time should close the surface, not refocus it.
-    /// Activation keys (`i`, `?`, …) still use `push_or_focus` so
-    /// their refocus semantic is preserved.
-    fn push_or_toggle(&mut self, c: Box<dyn Component>) {
+    /// Identity defers to [`Component::dedup_tag`] (compared as
+    /// strings when both sides supply one) and falls back to
+    /// `Any::type_id` otherwise — Rust-side components keep
+    /// concrete-type dedup for free; adapters like `LuaComponent`
+    /// opt in by returning their plugin-supplied name.
+    fn push_or(&mut self, c: Box<dyn Component>, on_collision: OnCollision) {
         if let Some(existing) = self.stack.iter().position(|s| same_identity(&**s, &*c)) {
-            self.stack.remove(existing);
-            self.clamp_focus_after_shrink();
+            match on_collision {
+                OnCollision::Focus => self.focused_idx = existing,
+                OnCollision::Close => {
+                    self.stack.remove(existing);
+                    self.clamp_focus_after_shrink();
+                }
+            }
             return;
         }
         self.stack.push(c);
