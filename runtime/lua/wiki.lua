@@ -13,6 +13,8 @@
 -- A refresh on 'r' or on (re)open replaces `articles` while
 -- preserving overlap by title; selection clamps if the list shrinks.
 
+local fmt = require "ttymap.fmt"
+
 local LANGUAGE = "en"
 local LIMIT = 50
 
@@ -83,13 +85,6 @@ local function parse_extracts(payload)
         end
     end
     return out
-end
-
-local function format_distance(m)
-    if m < 1000 then
-        return string.format("%dm", math.floor(m + 0.5))
-    end
-    return string.format("%.1fkm", m / 1000)
 end
 
 local function merge_articles(new_articles)
@@ -187,7 +182,7 @@ return {
             local d = state.detail
             local lines = {
                 {{ text = d.title, style = "highlight" }},
-                {{ text = format_distance(d.dist_m) .. "  ", style = "muted" }},
+                {{ text = fmt.distance(d.dist_m) .. "  ", style = "muted" }},
             }
             if d.extract and #d.extract > 0 then
                 table.insert(lines, "")
@@ -209,7 +204,7 @@ return {
             local title_style = (i == state.selected) and "highlight" or "accent"
             table.insert(lines, {
                 { text = a.title,                              style = title_style },
-                { text = "  " .. format_distance(a.dist_m),    style = "muted" },
+                { text = "  " .. fmt.distance(a.dist_m),    style = "muted" },
             })
         end
         return lines
