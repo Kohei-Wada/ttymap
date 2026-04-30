@@ -19,7 +19,7 @@
 use std::sync::{Arc, Mutex, mpsc};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mlua::{Lua, RegistryKey, Table};
+use mlua::Table;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -28,6 +28,7 @@ use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{OverlayWindow, RenderWindow, Window};
 use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
+use crate::lua::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::lua::host::LuaHostShared;
 use crate::theme::StyleKind;
 
@@ -101,23 +102,17 @@ impl LuaLayout {
 /// A Component implemented in Lua.
 #[allow(dead_code)] // first registrar caller lands when the hello.lua plugin is wired into build_registrar
 pub struct LuaComponent {
-    lua: Lua,
-    /// Registry handle for the script's module table — re-fetched
-    /// every dispatch via `lua.registry_value::<Table>(&self.module)`.
-    module: RegistryKey,
-    /// Stable identity assigned by the registration pipeline (file
-    /// stem for bundled plugins, leaked-once-at-startup for user
-    /// plugins). Backs [`Component::dedup_tag`] (stack identity).
-    /// Scripts don't declare this; identity comes from where the
-    /// file lives.
-    id: &'static str,
+    /// Bridge plumbing — fresh `Lua` VM, registered module table,
+    /// log tag (= dedup id). Shared with `LuaPaletteProvider` so
+    /// dispatch-pattern bug fixes only land in one place.
+    handle: LuaHandle,
     /// User-facing display label, read from `module.name`. Backs
     /// [`Component::name`] (focused-footer chip). Falls back to
-    /// `id` when the script omits the field, so a minimal
-    /// `return {}` script still gets a sensible chip. Leaked once
-    /// at construction to satisfy the trait's `&'static str`
-    /// signature; bounded cost since LuaComponent is rebuilt at
-    /// most a few times per program lifetime.
+    /// the handle's log tag (file stem) when the script omits the
+    /// field, so a minimal `return {}` script still gets a sensible
+    /// chip. Leaked once at construction to satisfy the trait's
+    /// `&'static str` signature; bounded cost since LuaComponent
+    /// is rebuilt at most a few times per program lifetime.
     display: &'static str,
     /// Panel placement read from `module.layout` at construction.
     /// Stored on the component so `render` can compute the sub-rect
@@ -159,43 +154,15 @@ impl LuaComponent {
     /// `id` is the stable identity assigned by the registration
     /// pipeline — file stem for bundled plugins, leaked-once-at-
     /// startup for user plugins. Used as both the Lua chunk name
-    /// (for error reporting) and as [`Component::dedup_tag`].
-    /// Distinct from `module.name`, which the script may declare
-    /// for footer-display purposes.
+    /// (for error reporting), the `LuaHandle` log tag, and
+    /// [`Component::dedup_tag`]. Distinct from `module.name`,
+    /// which the script may declare for footer-display purposes.
     pub fn from_source(
         source: &str,
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
-        let lua = super::new_lua();
-        let handles = super::host::install(&lua, "lua-host", shared)?;
-        let module: Table = lua.load(source).set_name(id).eval()?;
-        Self::build(lua, module, id, handles)
-    }
-
-    /// Shared post-eval construction: read the script's metadata
-    /// (layout / render-presence / footer-hint / display-name
-    /// declarations) off the resolved module table, then stash the
-    /// table in the Lua registry so dispatch hooks can re-fetch it
-    /// cheaply.
-    ///
-    /// Persistent host services (HTTP fetch etc.) live in the
-    /// global `ttymap` table whose fields are domain-namespaced
-    /// userdatas (`ttymap.http`, `ttymap.map`, …). They're installed
-    /// by the caller *before* loading the source, so a top-level
-    /// `ttymap.foo:bar()` call in the chunk would see them.
-    fn build(
-        lua: Lua,
-        module: Table,
-        id: &'static str,
-        handles: super::host::LuaHostHandles,
-    ) -> mlua::Result<Self> {
-        let super::host::LuaHostHandles {
-            jump_rx,
-            close_rx,
-            export_rx,
-            center,
-        } = handles;
+        let (lua, module, handles) = fresh_load(source, id, "lua-host", shared)?;
 
         // Display name: script's `module.name` if set, else fall
         // back to id. Leak once so `Component::name` can return
@@ -213,11 +180,16 @@ impl LuaComponent {
             Ok(mlua::Value::Function(_))
         );
         let footer_hints = parse_footer_hints(&module);
-        let module = lua.create_registry_value(module)?;
+
+        let super::host::LuaHostHandles {
+            jump_rx,
+            close_rx,
+            export_rx,
+            center,
+        } = handles;
+        let handle = LuaHandle::new(lua, module, id)?;
         Ok(Self {
-            lua,
-            module,
-            id,
+            handle,
             display,
             layout,
             has_render,
@@ -277,7 +249,7 @@ impl LuaComponent {
             while self.close_rx.try_recv().is_ok() {}
             log::warn!(
                 "lua[{}]: ttymap.window:close() ignored — overlay components don't live on the focusable stack",
-                self.id
+                self.handle.log_tag()
             );
         }
     }
@@ -295,18 +267,13 @@ impl LuaComponent {
     /// Style keyword falls back to `Body` on unknown values so a typo
     /// still renders, just in the default colour.
     fn render_lines(&self) -> Vec<Vec<(String, StyleKind)>> {
-        let result: mlua::Result<Vec<Vec<(String, StyleKind)>>> = (|| {
-            let module: Table = self.lua.registry_value(&self.module)?;
-            let render: mlua::Function = module.get("render")?;
-            let raw: Vec<mlua::Value> = render.call(())?;
-            Ok(raw.into_iter().map(parse_line_value).collect())
-        })();
-        match result {
-            Ok(lines) => lines,
-            Err(e) => {
-                log::warn!("lua[{}]: render() failed: {}", self.id, e);
-                Vec::new()
-            }
+        match self.handle.try_call::<_, Vec<mlua::Value>>("render", ()) {
+            CallOutcome::Ok(raw) => raw.into_iter().map(parse_line_value).collect(),
+            // Missing `render` or runtime error → empty list. The
+            // surrounding panel is skipped via `has_render` for
+            // marker-only plugins, so we never reach here for
+            // those; an erroring `render` already logged.
+            CallOutcome::Missing | CallOutcome::Errored => Vec::new(),
         }
     }
 
@@ -326,22 +293,21 @@ impl LuaComponent {
     ///   a warning and falls back to `Consume` so a buggy plugin
     ///   can't accidentally leak its keys to the rest of the app.
     fn dispatch_event(&self, event: KeyEvent) -> KeyAction {
-        let result: mlua::Result<KeyAction> = (|| {
-            let module: Table = self.lua.registry_value(&self.module)?;
-            let handler: Option<mlua::Function> = module.get("handle_event").ok();
-            let Some(handler) = handler else {
-                return Ok(KeyAction::Ignore);
-            };
-            let key = self.build_key_table(event)?;
-            let ret: mlua::Value = handler.call(key)?;
-            Ok(KeyAction::from_lua_return(ret))
-        })();
-        match result {
-            Ok(action) => action,
+        let key = match self.build_key_table(event) {
+            Ok(k) => k,
             Err(e) => {
-                log::warn!("lua[{}]: handle_event() failed: {}", self.id, e);
-                KeyAction::Consume
+                log::warn!(
+                    "lua[{}]: build_key_table failed: {}",
+                    self.handle.log_tag(),
+                    e
+                );
+                return KeyAction::Consume;
             }
+        };
+        match self.handle.try_call::<_, mlua::Value>("handle_event", key) {
+            CallOutcome::Ok(ret) => KeyAction::from_lua_return(ret),
+            CallOutcome::Missing => KeyAction::Ignore,
+            CallOutcome::Errored => KeyAction::Consume,
         }
     }
 
@@ -350,17 +316,7 @@ impl LuaComponent {
     /// `ttymap` global (`ttymap.http:fetch(url)` etc.). Missing function
     /// is a no-op; runtime errors are logged + recovered.
     fn dispatch_poll(&self) {
-        let result: mlua::Result<()> = (|| {
-            let module: Table = self.lua.registry_value(&self.module)?;
-            let poll: Option<mlua::Function> = module.get("poll").ok();
-            let Some(poll) = poll else {
-                return Ok(());
-            };
-            poll.call(())
-        })();
-        if let Err(e) = result {
-            log::warn!("lua[{}]: poll() failed: {}", self.id, e);
-        }
+        let _ = self.handle.try_call::<_, ()>("poll", ());
     }
 
     /// Run the Lua side of `paint_on_map`. Errors are logged and
@@ -370,25 +326,32 @@ impl LuaComponent {
     /// `MapApi` borrows the ratatui buffer for one frame, so the
     /// Lua-facing handle is built inside `Lua::scope` (closures
     /// over a `RefCell` of the ref) and torn down before this
-    /// method returns.
+    /// method returns. `try_call` doesn't fit here — the painter
+    /// argument is built inside `scope`, not constructible up
+    /// front — so we keep the explicit form.
     fn dispatch_paint(&self, p: &mut MapApi<'_>) {
         let cell = std::cell::RefCell::new(p);
-        let result: mlua::Result<()> = self.lua.scope(|scope| {
-            let module: Table = self.lua.registry_value(&self.module)?;
+        let lua = self.handle.lua();
+        let result: mlua::Result<()> = lua.scope(|scope| {
+            let module = self.handle.module()?;
             let painter: Option<mlua::Function> = module.get("paint_on_map").ok();
             let Some(painter) = painter else {
                 return Ok(());
             };
-            let map_table = super::map_api::make_map_table(&self.lua, scope, &cell)?;
+            let map_table = super::map_api::make_map_table(lua, scope, &cell)?;
             painter.call::<()>(map_table)
         });
         if let Err(e) = result {
-            log::warn!("lua[{}]: paint_on_map() failed: {}", self.id, e);
+            log::warn!(
+                "lua[{}]: paint_on_map() failed: {}",
+                self.handle.log_tag(),
+                e
+            );
         }
     }
 
     fn build_key_table(&self, event: KeyEvent) -> mlua::Result<Table> {
-        let table = self.lua.create_table()?;
+        let table = self.handle.lua().create_table()?;
         let (code, ch) = key_code_to_lua(event.code);
         table.set("code", code)?;
         if let Some(c) = ch {
@@ -626,7 +589,7 @@ impl Component for LuaComponent {
     /// per-plugin id (file stem) instead, assigned by the
     /// registration pipeline. See `compositor::same_identity`.
     fn dedup_tag(&self) -> Option<&str> {
-        Some(self.id)
+        Some(self.handle.log_tag())
     }
 }
 
@@ -974,7 +937,8 @@ mod tests {
         c.dispatch_poll();
         c.dispatch_poll();
         let n: i64 = c
-            .lua
+            .handle
+            .lua()
             .globals()
             .get("lua_test_ticks")
             .expect("global set by lua");
@@ -1197,7 +1161,8 @@ mod tests {
         // the test passes either way (we'd need a stub log capture
         // to fail loudly). Round-trip via a Lua-side flag instead:
         let _: () = c
-            .lua
+            .handle
+            .lua()
             .load(
                 r#"
                 _G.checker_ok = false
@@ -1210,7 +1175,7 @@ mod tests {
             )
             .exec()
             .expect("exec");
-        let ok: bool = c.lua.globals().get("checker_ok").expect("get");
+        let ok: bool = c.handle.lua().globals().get("checker_ok").expect("get");
         assert!(ok, "ttymap global must be present and expose namespaces");
     }
 

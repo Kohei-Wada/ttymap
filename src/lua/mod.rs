@@ -14,6 +14,7 @@
 //!   `log::warn!` + recovery default.
 
 pub mod component;
+pub mod handle;
 pub mod host;
 pub mod init_lua;
 pub mod map_api;

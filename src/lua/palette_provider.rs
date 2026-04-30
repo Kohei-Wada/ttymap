@@ -12,18 +12,22 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use mlua::{Lua, RegistryKey, Table};
+use mlua::Table;
 
 use crate::app::AppMsg;
 use crate::compositor::Context;
 use crate::geo::LonLat;
+use crate::lua::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::lua::host::LuaHostShared;
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {
-    lua: Lua,
-    module: RegistryKey,
+    /// Bridge plumbing shared with `LuaComponent`. The registered
+    /// table here is the `module.palette` sub-table — every method
+    /// (filter / items / execute / poll / is_loading) reads from
+    /// it.
+    handle: LuaHandle,
     /// Cached `prompt` string read once at construction so
     /// [`PaletteProvider::prompt`] can hand back `&str` without
     /// running Lua per call.
@@ -44,18 +48,11 @@ pub struct LuaPaletteProvider {
 impl LuaPaletteProvider {
     pub fn from_source(
         source: &'static str,
-        chunk_name: &str,
+        id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Box<Self>> {
-        let lua = super::new_lua();
+        let (lua, module, handles) = fresh_load(source, id, "lua-palette", shared)?;
 
-        // Same `ttymap` global the Component bridge installs. We only
-        // need the jump channel here; close / export aren't meaningful
-        // for a palette provider (the palette closes itself based on
-        // PaletteAction).
-        let handles = super::host::install(&lua, "lua-palette", shared)?;
-
-        let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         // The script declares palette-provider semantics by exposing
         // a `palette = {...}` sub-table — the dispatcher already
         // checked this. Pull it out and use it as the registry-held
@@ -70,11 +67,10 @@ impl LuaPaletteProvider {
 
         let prompt: String = palette.get("prompt").unwrap_or_else(|_| ":".to_string());
         let submit_mode = parse_submit_mode(&palette);
-        let module = lua.create_registry_value(palette)?;
+        let handle = LuaHandle::new(lua, palette, id)?;
 
         Ok(Box::new(Self {
-            lua,
-            module,
+            handle,
             prompt,
             submit_mode,
             items: Vec::new(),
@@ -82,33 +78,22 @@ impl LuaPaletteProvider {
         }))
     }
 
-    fn module(&self) -> mlua::Result<Table> {
-        self.lua.registry_value(&self.module)
-    }
-
     /// Re-pull `items()` from Lua and cache them. Called after
     /// `filter` and `poll` since both can change the result list.
     fn refresh_items(&mut self) {
-        let result: mlua::Result<Vec<PaletteItem>> = (|| {
-            let items_fn: Option<mlua::Function> = self.module()?.get("items").ok();
-            let Some(items_fn) = items_fn else {
-                return Ok(Vec::new());
-            };
-            let raw: Vec<Table> = items_fn.call(())?;
-            Ok(raw
-                .into_iter()
-                .map(|t| PaletteItem {
-                    label: t.get("label").unwrap_or_default(),
-                    hint: t.get("hint").unwrap_or_default(),
-                })
-                .collect())
-        })();
-        match result {
-            Ok(items) => self.items = items,
-            Err(e) => {
-                log::warn!("lua-palette: items() failed: {}", e);
-                self.items.clear();
+        match self.handle.try_call::<_, Vec<Table>>("items", ()) {
+            CallOutcome::Ok(raw) => {
+                self.items = raw
+                    .into_iter()
+                    .map(|t| PaletteItem {
+                        label: t.get("label").unwrap_or_default(),
+                        hint: t.get("hint").unwrap_or_default(),
+                    })
+                    .collect();
             }
+            // Missing items() means the palette never produces rows
+            // (rare but legal); error already logged.
+            CallOutcome::Missing | CallOutcome::Errored => self.items.clear(),
         }
     }
 }
@@ -147,17 +132,7 @@ impl PaletteProvider for LuaPaletteProvider {
     }
 
     fn filter(&mut self, query: &str) {
-        let result: mlua::Result<()> = (|| {
-            let module = self.module()?;
-            let f: Option<mlua::Function> = module.get("filter").ok();
-            let Some(f) = f else {
-                return Ok(());
-            };
-            f.call::<()>(query.to_string())
-        })();
-        if let Err(e) = result {
-            log::warn!("lua-palette: filter() failed: {}", e);
-        }
+        let _ = self.handle.try_call::<_, ()>("filter", query.to_string());
         self.refresh_items();
     }
 
@@ -166,24 +141,16 @@ impl PaletteProvider for LuaPaletteProvider {
     }
 
     fn execute(&mut self, idx: usize, _ctx: &Context) -> PaletteAction {
-        let result: mlua::Result<PaletteAction> = (|| {
-            let module = self.module()?;
-            let f: Option<mlua::Function> = module.get("execute").ok();
-            let Some(f) = f else {
-                return Ok(PaletteAction::Close);
-            };
-            // Lua arrays are 1-indexed; PaletteProvider hands us a
-            // 0-based index. Bridge here so the script reads
-            // naturally.
-            let ret: mlua::Value = f.call((idx + 1) as i64)?;
-            Ok(self.action_from_lua(ret))
-        })();
-        match result {
-            Ok(action) => action,
-            Err(e) => {
-                log::warn!("lua-palette: execute() failed: {}", e);
-                PaletteAction::Close
-            }
+        // Lua arrays are 1-indexed; PaletteProvider hands us a
+        // 0-based index. Bridge here so the script reads naturally.
+        match self
+            .handle
+            .try_call::<_, mlua::Value>("execute", (idx + 1) as i64)
+        {
+            CallOutcome::Ok(ret) => self.action_from_lua(ret),
+            // Missing handler or runtime error → close. Errors are
+            // already logged inside `try_call`.
+            CallOutcome::Missing | CallOutcome::Errored => PaletteAction::Close,
         }
     }
 
@@ -192,30 +159,15 @@ impl PaletteProvider for LuaPaletteProvider {
     }
 
     fn poll(&mut self) {
-        let result: mlua::Result<()> = (|| {
-            let module = self.module()?;
-            let f: Option<mlua::Function> = module.get("poll").ok();
-            let Some(f) = f else {
-                return Ok(());
-            };
-            f.call::<()>(())
-        })();
-        if let Err(e) = result {
-            log::warn!("lua-palette: poll() failed: {}", e);
-        }
+        let _ = self.handle.try_call::<_, ()>("poll", ());
         self.refresh_items();
     }
 
     fn is_loading(&self) -> bool {
-        let result: mlua::Result<bool> = (|| {
-            let module = self.module()?;
-            let f: Option<mlua::Function> = module.get("is_loading").ok();
-            match f {
-                Some(f) => f.call(()),
-                None => Ok(false),
-            }
-        })();
-        result.unwrap_or(false)
+        match self.handle.try_call::<_, bool>("is_loading", ()) {
+            CallOutcome::Ok(b) => b,
+            CallOutcome::Missing | CallOutcome::Errored => false,
+        }
     }
 }
 
