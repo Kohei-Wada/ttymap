@@ -1,7 +1,7 @@
 use clap::Parser;
 use ttymap::app::App;
 use ttymap::commands::Command as Subcommand;
-use ttymap::config;
+use ttymap::config::Config;
 
 #[derive(Parser)]
 #[command(
@@ -11,7 +11,7 @@ use ttymap::config;
         It renders Mapbox Vector Tiles (MVT/protobuf) as Unicode Braille characters\n\
         with ANSI 256-color in your terminal.\n\n\
         Inspired by and based on mapscii (https://github.com/rastapasta/mapscii).\n\n\
-        Config file:    ~/.config/ttymap/config.toml\n\
+        Config file:    ~/.config/ttymap/init.lua\n\
         User plugins:   ~/.config/ttymap/plugins/\n\
         Bundled runtime: ~/.local/share/ttymap/lua/\n\
         Log file:       ~/.local/state/ttymap/ttymap.log\n\
@@ -50,6 +50,19 @@ fn main() {
     // interactive app write to ~/.local/state/ttymap/ttymap.log.
     ttymap::logging::init().ok();
 
+    // Resolve runtime path before any Lua state spins up. Both the
+    // interactive app and the `snap` subcommand reach for it; doing
+    // this once at the top means we fail fast with a single error
+    // message rather than hitting the same wall in two places.
+    let runtime_path = match ttymap::lua::resolve_runtime_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ttymap: {}", e);
+            std::process::exit(1);
+        }
+    };
+    ttymap::lua::set_runtime_path(runtime_path);
+
     // Subcommands run a single task and exit without booting the full
     // interactive app.
     if let Some(cmd) = cli.command {
@@ -60,8 +73,10 @@ fn main() {
         return;
     }
 
-    // Load config file first, then override with CLI args
-    let mut config = config::load_config();
+    // Run init.lua first, then override with CLI args. `keymap_overrides`
+    // travels to App::new alongside Config because the keymap is
+    // scripted at the same place but lives in its own data shape.
+    let (mut config, keymap_overrides) = ttymap::lua::run_init_lua(Config::default());
 
     if let Some(v) = cli.lat {
         config.map.lat = v;
@@ -101,7 +116,7 @@ fn main() {
         config.map.lon
     );
 
-    let mut app = App::new(config);
+    let mut app = App::new(config, keymap_overrides);
     if let Err(e) = app.run() {
         eprintln!("Error: {e}");
     }

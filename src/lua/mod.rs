@@ -15,13 +15,15 @@
 
 pub mod component;
 pub mod host;
+pub mod init_lua;
 pub mod map_api;
 pub mod palette_provider;
 pub mod runtimepath;
 
 pub use component::LuaComponent;
+pub use init_lua::run_init_lua;
 pub use palette_provider::LuaPaletteProvider;
-pub use runtimepath::{resolve_runtime_dir, runtime_dir, set_runtime_dir};
+pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,34 +33,31 @@ use mlua::{Lua, Table};
 use crate::compositor::Registrar;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
-/// would happen here; for now we hand back the unmodified VM with two
-/// extras wired in:
+/// would happen here; for now we hand back the unmodified VM with
+/// these extras wired in:
 ///
 /// 1. A custom `package.searchers` entry that resolves `require` by
-///    reading `<runtime>/lua/<name>.lua` from disk, so bundled and
-///    user plugins can share helpers via `require "ttymap.fmt"`.
-///    Mirrors Neovim's runtime-path searcher.
-/// 2. `package.path` extended with the user plugin directory and
-///    `<runtime>/lua/` so plugins can `require` their filesystem
-///    siblings:
-///
-/// ```lua
-/// -- ~/.config/ttymap/plugins/main.lua
-/// local utils = require "utils"   -- ~/.config/ttymap/plugins/utils.lua
-/// ```
+///    reading `<layer>/lua/<name>.lua` from disk, walking every
+///    runtime-path layer in priority order — first hit wins, so a
+///    user-tier `~/.config/ttymap/lua/ttymap/fmt.lua` shadows the
+///    bundled one. Mirrors Neovim's runtime-path searcher.
+/// 2. `package.path` extended with each runtime-path layer's `lua/`
+///    plus the user plugin dir, so plugins can `require` their
+///    filesystem siblings.
 ///
 /// Search order follows Lua's own `package.searchers` precedence: the
 /// runtime-libs searcher is appended *after* the standard ones, so a
-/// user plugin file with the same name as a bundled lib still wins
-/// from the filesystem. Conflicts are unlikely in practice (the
-/// bundled namespace is `ttymap.*`).
+/// plugin author who puts a `helper.lua` next to their script still
+/// wins from `package.path` over a runtime-path collision.
 pub fn new_lua() -> Lua {
     let lua = Lua::new();
     if let Err(e) = install_builtin_searcher(&lua) {
         log::warn!("lua: failed to install builtin searcher: {}", e);
     }
-    if let Some(rt) = runtime_dir() {
-        prepend_package_path(&lua, &rt.join("lua"));
+    // Higher-priority layers first — `package.path` is searched in
+    // order, so the user-tier `lua/` wins over bundled.
+    for layer in runtime_path() {
+        prepend_package_path(&lua, &layer.join("lua"));
     }
     if let Some(dir) = user_plugins_dir() {
         prepend_package_path(&lua, &dir);
@@ -67,42 +66,43 @@ pub fn new_lua() -> Lua {
 }
 
 /// Append a `package.searchers` entry that resolves `require "x.y"`
-/// to `<runtime>/lua/x/y.lua` on disk. Mirrors Neovim's runtime-path
-/// searcher: any `.lua` file under the runtime dir is reachable via
-/// `require`, with `.` in the module name expanding to `/` in the
-/// path.
+/// by walking [`runtime_path`] and trying `<layer>/lua/x/y.lua` on
+/// each layer in priority order. First hit wins.
 ///
-/// When [`runtime_dir`] is unset (early test, or runtime resolution
+/// When [`runtime_path`] is empty (early test, or runtime resolution
 /// failed), the searcher reports a miss for every name and Lua falls
 /// through to the standard `package.searchers`.
 ///
 /// The searcher returns:
-/// - `function` (the loaded chunk) on hit, signalling Lua to use it
+/// - `function` (the loaded chunk) on hit
 /// - `string` (error message) on miss, which Lua appends to the
 ///   `module 'X' not found:` accumulator before trying the next
 ///   searcher
 fn install_builtin_searcher(lua: &Lua) -> mlua::Result<()> {
     let searcher = lua.create_function(|lua, name: String| -> mlua::Result<mlua::Value> {
-        let Some(rt) = runtime_dir() else {
-            let msg = format!("\n\tno runtime dir set, can't resolve '{}'", name);
+        let layers = runtime_path();
+        if layers.is_empty() {
+            let msg = format!("\n\tno runtime path set, can't resolve '{}'", name);
             return Ok(mlua::Value::String(lua.create_string(&msg)?));
-        };
+        }
         let rel = name.replace('.', "/");
-        let path = rt.join("lua").join(format!("{}.lua", rel));
-        match std::fs::read_to_string(&path) {
-            Ok(source) => {
-                let chunk = lua.load(source).set_name(&name).into_function()?;
-                Ok(mlua::Value::Function(chunk))
-            }
-            Err(_) => {
-                let msg = format!(
-                    "\n\tno builtin lib '{}' (looked at {})",
-                    name,
-                    path.display()
-                );
-                Ok(mlua::Value::String(lua.create_string(&msg)?))
+        let mut tried: Vec<String> = Vec::new();
+        for layer in layers {
+            let path = layer.join("lua").join(format!("{}.lua", rel));
+            match std::fs::read_to_string(&path) {
+                Ok(source) => {
+                    let chunk = lua.load(source).set_name(&name).into_function()?;
+                    return Ok(mlua::Value::Function(chunk));
+                }
+                Err(_) => tried.push(path.display().to_string()),
             }
         }
+        let msg = format!(
+            "\n\tno builtin lib '{}' (tried: {})",
+            name,
+            tried.join(", ")
+        );
+        Ok(mlua::Value::String(lua.create_string(&msg)?))
     })?;
     let package: Table = lua.globals().get("package")?;
     let searchers: Table = package.get("searchers")?;
@@ -133,41 +133,47 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 
 // ── Bundled plugin discovery ────────────────────────────────────────
 //
-// Bundled Lua plugins live on disk under `<runtime>/lua/*.lua`,
-// alongside lib scripts under `<runtime>/lua/ttymap/*.lua`. Adding a
+// Bundled Lua plugins live on disk under `<layer>/lua/*.lua`,
+// alongside lib scripts under `<layer>/lua/ttymap/*.lua`. Adding a
 // new builtin = drop a `.lua` file under `runtime/lua/` and `make
 // install`. There is no Rust array to keep in sync — `register_one`
 // reads each file's own metadata (`activation`, `kind`, `key`,
 // `label`, `enabled`) to decide how to wire it.
 //
-// The runtime dir itself is discovered at startup via
-// [`runtimepath::resolve_runtime_dir`]; see that module for the
+// The runtime path itself is discovered at startup via
+// [`runtimepath::resolve_runtime_path`]; see that module for the
 // resolution order.
 
 /// Register every bundled Lua plugin with the registrar by walking
-/// `<runtime_dir>/lua/*.lua`. Each script's own metadata drives how
-/// it's wired — see [`register_one`] for the activation / kind
-/// dispatch.
+/// `<layer>/lua/*.lua` for each layer in `runtime_path`, in priority
+/// order. Stem dedup means a higher-priority layer's plugin shadows
+/// a lower-priority one with the same file name — drop a
+/// `~/.config/ttymap/lua/wiki.lua` to replace bundled `wiki`.
 ///
-/// Subdirectories (notably `ttymap/` for lib scripts) are skipped:
-/// the walker filters by `.extension() == Some("lua")` which excludes
-/// directory entries. Lib scripts are reached via the
-/// [`install_builtin_searcher`] hook from `require`, not from this
-/// walk.
+/// Each script's own metadata drives how it's wired — see
+/// [`register_one`] for the activation / kind dispatch.
+///
+/// Subdirectories (notably `ttymap/` for lib scripts) are skipped by
+/// the walker's `.extension() == Some("lua")` filter. Lib scripts are
+/// reached via the [`install_builtin_searcher`] hook from `require`,
+/// not from this walk.
 pub fn register_builtin_plugins(
-    runtime_dir: &Path,
+    runtime_path: &[PathBuf],
     shared: Arc<host::LuaHostShared>,
     r: &mut Registrar,
 ) {
-    let lua_dir = runtime_dir.join("lua");
-    if !lua_dir.is_dir() {
-        log::warn!(
-            "lua: runtime dir {} has no `lua/` subdir, no bundled plugins will load",
-            runtime_dir.display()
-        );
+    if runtime_path.is_empty() {
+        log::warn!("lua: empty runtime path, no bundled plugins will load");
         return;
     }
-    register_plugins_in(&lua_dir, shared, r);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for layer in runtime_path {
+        let lua_dir = layer.join("lua");
+        if !lua_dir.is_dir() {
+            continue;
+        }
+        register_plugins_in(&lua_dir, Some(&mut seen), shared.clone(), r);
+    }
 }
 
 /// Plugin shape parsed out of a script's returned table at register
@@ -419,7 +425,7 @@ pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar
     if !dir.is_dir() {
         return;
     }
-    register_plugins_in(&dir, shared, r);
+    register_plugins_in(&dir, None, shared, r);
 }
 
 /// Walk `dir`, load every `*.lua`, and route each through the same
@@ -428,11 +434,22 @@ pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar
 /// *which* directory you pass, not in how each file is parsed or
 /// wired.
 ///
+/// `seen` is `Some` when the caller is walking multiple layers in
+/// priority order and wants stem dedup (a higher-priority layer's
+/// `wiki.lua` shadows a lower's). Pass `None` for single-dir walks
+/// (the user-plugin dir today) — every file registers regardless of
+/// stem collisions across calls.
+///
 /// Subdirectories (e.g. `ttymap/` under `runtime/lua/`) have no
 /// `.lua` extension and are filtered out naturally. Files are loaded
 /// in alphabetical order so palette entries surface predictably
 /// across runs.
-fn register_plugins_in(dir: &Path, shared: Arc<host::LuaHostShared>, r: &mut Registrar) {
+fn register_plugins_in(
+    dir: &Path,
+    mut seen: Option<&mut std::collections::HashSet<String>>,
+    shared: Arc<host::LuaHostShared>,
+    r: &mut Registrar,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -450,6 +467,16 @@ fn register_plugins_in(dir: &Path, shared: Arc<host::LuaHostShared>, r: &mut Reg
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
+        if let Some(seen) = seen.as_deref_mut() {
+            if !seen.insert(stem.to_string()) {
+                log::info!(
+                    "lua[{}]: shadowed by higher-priority runtime layer, skipping {}",
+                    stem,
+                    path.display()
+                );
+                continue;
+            }
+        }
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -520,11 +547,11 @@ mod tests {
     /// require updating magic numbers.
     #[test]
     fn every_bundled_script_registers() {
-        runtimepath::ensure_runtime_dir_for_tests();
+        runtimepath::ensure_runtime_path_for_tests();
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
-        let rt = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime");
-        register_builtin_plugins(&rt, shared, &mut r);
+        let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
+        register_builtin_plugins(&rtp, shared, &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -629,7 +656,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -644,7 +671,7 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -663,7 +690,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -682,7 +709,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         assert!(labels(&r).iter().any(|l| l.contains("explicit")));
     }
 
@@ -697,7 +724,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -735,7 +762,7 @@ mod tests {
         // Bundled lib script `ttymap.fmt` must be reachable via
         // `require` once the searcher is installed — proves the disk-
         // backed runtime-path searcher is wired into package.searchers.
-        runtimepath::ensure_runtime_dir_for_tests();
+        runtimepath::ensure_runtime_path_for_tests();
         let lua = Lua::new();
         install_builtin_searcher(&lua).expect("install searcher");
         let out: String = lua
@@ -750,7 +777,7 @@ mod tests {
         // The custom searcher must signal "no match" with a string
         // (Lua's searcher protocol) rather than throwing, so unknown
         // requires still hit the standard "module not found" path.
-        runtimepath::ensure_runtime_dir_for_tests();
+        runtimepath::ensure_runtime_path_for_tests();
         let lua = Lua::new();
         install_builtin_searcher(&lua).expect("install searcher");
         let res: mlua::Result<i64> = lua.load(r#"return require("nope.nope")"#).eval();
@@ -778,7 +805,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, host::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
         assert!(r.palette_entries.is_empty());
     }
 }
