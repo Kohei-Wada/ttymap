@@ -101,11 +101,14 @@ function M.make(specs)
         end,
 
         handle_event = function(key)
-            -- In-panel per-sat toggle: lookup char → sat index.
-            -- Stays modal-friendly by consuming (return nil) when
-            -- it's a known sat key, deferring otherwise.
-            if key.code and key_to_idx[key.code] then
-                local idx = key_to_idx[key.code]
+            -- In-panel per-sat toggle. The bridge surfaces char keys
+            -- as `code = "Char"` + `char = <c>` (see
+            -- `key_code_to_lua` in `src/lua/component.rs`), so we
+            -- match on `key.char`, not `key.code`. `return nil`
+            -- consumes the event so it doesn't leak to the base
+            -- layer (which uses `h` for pan-left, etc.).
+            if key.code == "Char" and key.char and key_to_idx[key.char] then
+                local idx = key_to_idx[key.char]
                 sats[idx].visible = not sats[idx].visible
                 return nil
             end
