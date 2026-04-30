@@ -139,6 +139,14 @@ pub trait Component: Any {
     /// and `win.close()` if the component should self-remove.
     fn poll(&mut self, _win: &mut Window) {}
 
+    /// Overlay counterpart to [`poll`](Self::poll). Called every tick
+    /// on every always-on overlay. The handle is narrower —
+    /// [`OverlayWindow`] only exposes `ctx` and `emit`, because
+    /// overlays don't live on the focusable stack and `close` /
+    /// `open` would have nothing to act on. Default no-op for
+    /// stack-only components that never register as overlays.
+    fn poll_overlay(&mut self, _win: &mut window::OverlayWindow) {}
+
     /// Footer hints shown while this component is on top.
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
@@ -153,7 +161,7 @@ pub trait Component: Any {
     }
 }
 
-use window::{Window, WindowOps};
+use window::{OverlayWindow, Window, WindowOps};
 
 // ── Compositor stack ───────────────────────────────────────────────
 
@@ -318,10 +326,10 @@ impl Compositor {
     /// Poll every component; drain all queued `win.emit(...)` /
     /// `win.close()` / `win.open(...)` ops and apply them in the
     /// same way [`handle_event`](Self::handle_event) does. Always-on
-    /// overlays poll too — they may have async work (geocoding,
-    /// throttle ticks) but the only ops they emit are
-    /// `win.emit(AppMsg)`; close/open are ignored on overlays
-    /// because they aren't on the focusable stack.
+    /// overlays poll through the narrower [`Component::poll_overlay`]
+    /// hook — they may have async work (geocoding, throttle ticks)
+    /// but only `emit` is exposed because overlays don't live on the
+    /// focusable stack.
     pub fn poll(&mut self, ctx: &Context) -> Vec<AppMsg> {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; apply
@@ -338,14 +346,8 @@ impl Compositor {
             all_msgs.extend(msgs);
         }
         for c in self.overlays.iter_mut() {
-            let mut ops = WindowOps::default();
-            {
-                let mut win = Window::new(&mut ops, ctx);
-                c.poll(&mut win);
-            }
-            // Overlays only meaningfully emit; close/open are silently
-            // dropped because overlays don't live on the focusable stack.
-            all_msgs.extend(ops.msgs);
+            let mut win = OverlayWindow::new(&mut all_msgs, ctx);
+            c.poll_overlay(&mut win);
         }
         all_msgs
     }
