@@ -70,6 +70,7 @@ end
 return {
     name = "help",
     label = "Toggle help",
+    footer_hint = "help",
     key = "?",
     layout = { anchor = "center", width = 64, height = 22 },
 

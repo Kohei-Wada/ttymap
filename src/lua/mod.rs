@@ -116,6 +116,10 @@ struct ModuleMeta {
     /// the key directly so the keybind and palette entry share a
     /// factory.
     key: Option<char>,
+    /// Optional explicit footer slug (`module.footer_hint`). When
+    /// absent, the footer falls back to the first whitespace-separated
+    /// word of `label` lowercased.
+    footer_hint: Option<String>,
     /// Whether the script asked to be skipped (`module.enabled = false`).
     enabled: bool,
 }
@@ -150,6 +154,7 @@ impl ModuleMeta {
                     kind: Kind::Component,
                     label: format!("Toggle {}", name),
                     key: None,
+                    footer_hint: None,
                     enabled: true,
                 };
             }
@@ -176,6 +181,7 @@ impl ModuleMeta {
         let label: Option<String> = module.get("label").ok();
         let key: Option<String> = module.get("key").ok();
         let key = key.and_then(|s| s.chars().next());
+        let footer_hint: Option<String> = module.get("footer_hint").ok();
         let enabled = !matches!(
             module.get::<mlua::Value>("enabled"),
             Ok(mlua::Value::Boolean(false))
@@ -190,6 +196,7 @@ impl ModuleMeta {
             kind,
             label: label.unwrap_or(default_label),
             key,
+            footer_hint,
             enabled,
         }
     }
@@ -235,6 +242,7 @@ fn register_component(
 
     let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
     let label = meta.label.clone();
+    let footer_hint = meta.footer_hint.clone();
 
     match meta.activation {
         Activation::Overlay => {
@@ -245,7 +253,7 @@ fn register_component(
         }
         Activation::Toggle => {
             let shared_for_toggle = shared.clone();
-            r.add_toggle(label, key_hint, move |_| {
+            r.add_toggle(label, key_hint, footer_hint, move |_| {
                 component_or_placeholder(name, source, shared_for_toggle.clone())
             });
             if let Some(key) = meta.key {
@@ -258,7 +266,7 @@ fn register_component(
         }
         Activation::Spawn => {
             let shared_for_spawn = shared.clone();
-            r.add_spawn(label, key_hint, move |_| {
+            r.add_spawn(label, key_hint, footer_hint, move |_| {
                 component_or_placeholder(name, source, shared_for_spawn.clone())
             });
             if let Some(key) = meta.key {
@@ -286,6 +294,7 @@ fn register_provider(
 
     let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
     let label = meta.label.clone();
+    let footer_hint = meta.footer_hint.clone();
 
     let make = {
         let shared = shared.clone();
@@ -300,7 +309,7 @@ fn register_provider(
         }
     };
 
-    r.add_spawn(label, key_hint, {
+    r.add_spawn(label, key_hint, footer_hint, {
         let make = make.clone();
         move |_| make()
     });
@@ -509,6 +518,21 @@ mod tests {
         assert_eq!(meta.key, Some('i'));
         assert_eq!(meta.label, "Toggle x");
         assert!(!meta.enabled);
+    }
+
+    #[test]
+    fn module_meta_reads_explicit_footer_hint() {
+        let meta = ModuleMeta::parse(
+            r#"return { name = "x", label = "Toggle x", footer_hint = "x" }"#,
+            "x",
+        );
+        assert_eq!(meta.footer_hint.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn module_meta_footer_hint_absent_by_default() {
+        let meta = ModuleMeta::parse(r#"return { name = "x" }"#, "x");
+        assert!(meta.footer_hint.is_none());
     }
 
     // ── directory-based discovery ───────────────────────────────

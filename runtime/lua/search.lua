@@ -51,6 +51,7 @@ return {
     name = "search",
     key = "/",
     label = "Search location",
+    footer_hint = "search",
 
     -- Presence of `palette` makes this script a palette provider.
     -- The dispatcher reads `kind` from the shape, not a field.

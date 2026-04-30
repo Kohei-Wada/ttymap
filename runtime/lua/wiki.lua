@@ -171,6 +171,7 @@ end
 return {
     name = "wiki",
     label = "Toggle wiki",
+    footer_hint = "wiki",
     key = "i",
     layout = { anchor = "right", width = 56 },
 

@@ -464,6 +464,9 @@ pub enum PaletteKind {
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
+    /// Optional footer slug. When `None`, the footer falls back to the
+    /// first whitespace-separated word of `label` lowercased.
+    pub footer_hint: Option<String>,
     pub kind: PaletteKind,
 }
 
@@ -517,6 +520,7 @@ impl Registrar {
         &mut self,
         label: impl Into<String>,
         hint: impl Into<String>,
+        footer_hint: Option<String>,
         factory: F,
     ) where
         F: Fn(&Context) -> C + 'static,
@@ -525,6 +529,7 @@ impl Registrar {
         self.add_palette_entry(PaletteEntry {
             label: label.into(),
             hint: hint.into(),
+            footer_hint,
             kind: PaletteKind::Toggle(Box::new(move |ctx| {
                 Box::new(factory(ctx)) as Box<dyn Component>
             })),
@@ -534,14 +539,20 @@ impl Registrar {
     /// Add a palette entry that spawns a fresh instance every time —
     /// no toggle dedup. Use when the component is meant to be rebuilt
     /// per open (search, palette sub-modes).
-    pub fn add_spawn<F, C>(&mut self, label: impl Into<String>, hint: impl Into<String>, factory: F)
-    where
+    pub fn add_spawn<F, C>(
+        &mut self,
+        label: impl Into<String>,
+        hint: impl Into<String>,
+        footer_hint: Option<String>,
+        factory: F,
+    ) where
         F: Fn(&Context) -> C + 'static,
         C: Component + 'static,
     {
         self.add_palette_entry(PaletteEntry {
             label: label.into(),
             hint: hint.into(),
+            footer_hint,
             kind: PaletteKind::Spawn(Box::new(move |ctx| {
                 Box::new(factory(ctx)) as Box<dyn Component>
             })),
