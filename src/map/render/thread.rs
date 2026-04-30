@@ -147,15 +147,16 @@ fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
     }
 }
 
-/// Drain anything already buffered on `task_rx`. Returns the latest
-/// `Draw` viewport (older ones are stale) or `Err(())` if a
-/// `Shutdown` was seen.
+/// Apply `first` followed by anything else already buffered on
+/// `task_rx`. Returns the latest `Draw` viewport (older ones are
+/// stale) or `Err(())` if a `Shutdown` was seen.
 fn drain_tasks(
+    first: RenderTask,
     task_rx: &cb::Receiver<RenderTask>,
     pipeline: &mut RenderPipeline,
 ) -> Result<Option<Viewport>, ()> {
     let mut latest_draw: Option<Viewport> = None;
-    while let Ok(task) = task_rx.try_recv() {
+    for task in std::iter::once(first).chain(task_rx.try_iter()) {
         match apply_task(task, pipeline) {
             TaskOutcome::Draw(viewport) => latest_draw = Some(viewport),
             TaskOutcome::Continue => {}
@@ -195,28 +196,20 @@ fn run_loop(
         // in the cache.
         cb::select! {
             recv(task_rx) -> task => {
-                // The select! arm pops one message — process it
-                // first, then drain anything else already queued so
-                // redundant draws collapse to the latest viewport
-                // and side-effecting tasks (Resize / SetStyler) apply
-                // in order.
+                // The select! arm pops one message; `drain_tasks`
+                // walks `once(first).chain(rx.try_iter())` so the
+                // first message and anything else already queued
+                // collapse through the same path. Redundant draws
+                // collapse to the latest viewport; side-effecting
+                // tasks (Resize / SetStyler) apply in order.
                 let first = match task {
                     Ok(t) => t,
                     Err(_) => break, // all senders dropped
                 };
-                let mut latest_draw: Option<Viewport> = None;
-                match apply_task(first, &mut pipeline) {
-                    TaskOutcome::Draw(vp) => latest_draw = Some(vp),
-                    TaskOutcome::Continue => {}
-                    TaskOutcome::Shutdown => break,
-                }
-                let drained = match drain_tasks(&task_rx, &mut pipeline) {
+                let latest_draw = match drain_tasks(first, &task_rx, &mut pipeline) {
                     Err(()) => break,
                     Ok(d) => d,
                 };
-                if let Some(vp) = drained {
-                    latest_draw = Some(vp);
-                }
                 match latest_draw {
                     Some(viewport) => {
                         debug!("render: drawing (zoom={:.1})", viewport.zoom);
