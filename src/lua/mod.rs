@@ -487,16 +487,17 @@ fn component_or_placeholder(
     })
 }
 
-/// Scan `~/.config/ttymap/plugins/*.lua` and register each as a
-/// plugin. The whole point: dropping a `.lua` file in that
-/// directory adds a plugin without touching Rust.
+/// Scan `~/.config/ttymap/plugins/` for plugin files / dirs and
+/// register each. Two layouts are accepted:
+/// - flat file: `my.lua` → plugin `my`
+/// - directory: `my/init.lua` → plugin `my`, with siblings
+///   (`my/state.lua`, …) reachable via `require "my.state"`
 ///
-/// Each file becomes a plugin named after its stem (`my.lua` →
-/// `my`). Whether a plugin is *active* is decided by the script
-/// itself via the optional `enabled` field on its returned
-/// module table — `enabled = false` keeps the file in place but
-/// skips registration, which is the natural shape for
-/// user-edited scripts (the file *is* the config).
+/// Whether a plugin is *active* is decided by the script itself
+/// via the optional `enabled` field on its returned module table
+/// — `enabled = false` keeps the file in place but skips
+/// registration, which is the natural shape for user-edited
+/// scripts (the file *is* the config).
 ///
 /// A read / parse failure on a single file logs a warning and
 /// skips it — the rest of the directory still loads. Files are
@@ -512,11 +513,18 @@ pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar
     register_plugins_in(&dir, None, shared, r);
 }
 
-/// Walk `dir`, load every `*.lua`, and route each through the same
-/// [`register_one`] dispatcher used for both bundled and user plugins.
-/// The single shared entry point — bundled vs user differs only in
-/// *which* directory you pass, not in how each file is parsed or
-/// wired.
+/// Walk `dir` and route each plugin through the same [`register_one`]
+/// dispatcher used by both bundled and user plugins. Two layouts
+/// are accepted, both produce the same `<stem>` plugin id:
+///
+/// - **flat file**: `<dir>/wiki.lua` → id `wiki`.
+/// - **directory with `init.lua`**: `<dir>/wiki/init.lua` → id
+///   `wiki`. Lets a larger plugin spread its source across sibling
+///   files (`<dir>/wiki/render.lua`, `<dir>/wiki/state.lua`, …)
+///   reachable via `require "wiki.render"` through the
+///   runtime-path searcher and the extended `package.path`. Shared
+///   lib namespaces (`<dir>/ttymap/`) are skipped because they
+///   don't carry an `init.lua`.
 ///
 /// `seen` is `Some` when the caller is walking multiple layers in
 /// priority order and wants stem dedup (a higher-priority layer's
@@ -524,10 +532,11 @@ pub fn register_user_plugins(shared: Arc<host::LuaHostShared>, r: &mut Registrar
 /// (the user-plugin dir today) — every file registers regardless of
 /// stem collisions across calls.
 ///
-/// Subdirectories (e.g. `ttymap/` under `runtime/lua/`) have no
-/// `.lua` extension and are filtered out naturally. Files are loaded
-/// in alphabetical order so palette entries surface predictably
-/// across runs.
+/// Plugins are loaded in alphabetical order of their stem so palette
+/// entries surface predictably across runs. When both `wiki.lua` and
+/// `wiki/init.lua` exist in the same layer, the file form sorts
+/// first and wins via `seen` dedup; the directory form is logged
+/// and skipped.
 fn register_plugins_in(
     dir: &Path,
     mut seen: Option<&mut std::collections::HashSet<String>>,
@@ -541,18 +550,32 @@ fn register_plugins_in(
             return;
         }
     };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("lua"))
-        .collect();
-    files.sort();
-    for path in files {
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
+
+    // Collect (stem, path-to-lua-source) pairs. Either a flat
+    // `<stem>.lua` or a `<stem>/init.lua`. Sorting by stem gives a
+    // deterministic palette order regardless of filesystem readdir
+    // ordering.
+    let mut plugins: Vec<(String, PathBuf)> = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("lua") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                plugins.push((stem.to_string(), path));
+            }
+        } else if path.is_dir() {
+            let init = path.join("init.lua");
+            if init.is_file()
+                && let Some(name) = path.file_name().and_then(|s| s.to_str())
+            {
+                plugins.push((name.to_string(), init));
+            }
+        }
+    }
+    plugins.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    for (stem, path) in plugins {
         if let Some(seen) = seen.as_deref_mut() {
-            if !seen.insert(stem.to_string()) {
+            if !seen.insert(stem.clone()) {
                 log::info!(
                     "lua[{}]: shadowed by higher-priority runtime layer, skipping {}",
                     stem,
@@ -876,6 +899,53 @@ mod tests {
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
+    }
+
+    #[test]
+    fn dir_discovery_picks_up_plugin_subdirectory_with_init_lua() {
+        // `<dir>/wiki/init.lua` registers as plugin `wiki`, mirroring
+        // Neovim's plugin directory convention. Lets a large script
+        // spread its source across sibling files (state.lua, api.lua,
+        // etc.) reachable via `require "wiki.state"` through the
+        // extended package.path.
+        let dir = temp_plugins_dir("dir-layout");
+        std::fs::create_dir_all(dir.join("biggie")).expect("mkdir");
+        std::fs::write(
+            dir.join("biggie").join("init.lua"),
+            r#"return { name = "biggie", render = function() return {} end }"#,
+        )
+        .expect("write init.lua");
+
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        let ls = labels(&r);
+        assert!(
+            ls.iter().any(|l| l.contains("biggie")),
+            "expected biggie/init.lua to register, got {:?}",
+            ls
+        );
+    }
+
+    #[test]
+    fn dir_discovery_skips_subdirectory_without_init_lua() {
+        // Shared lib namespaces (e.g. `<dir>/ttymap/` carrying
+        // `fmt.lua` and similar) are siblings of plugins, not
+        // plugins themselves. Without an `init.lua` in the dir,
+        // the walker leaves them alone.
+        let dir = temp_plugins_dir("dir-no-init");
+        std::fs::create_dir_all(dir.join("libonly")).expect("mkdir");
+        std::fs::write(
+            dir.join("libonly").join("fmt.lua"),
+            r#"return { format = function(s) return s end }"#,
+        )
+        .expect("write fmt.lua");
+
+        let mut r = Registrar::default();
+        register_plugins_in(&dir, None, host::LuaHostShared::empty(), &mut r);
+        assert!(
+            !labels(&r).iter().any(|l| l.contains("libonly")),
+            "lib-only subdir must not register as a plugin"
+        );
     }
 
     #[test]
