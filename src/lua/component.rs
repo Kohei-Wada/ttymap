@@ -157,37 +157,6 @@ impl LuaComponent {
         Self::build(lua, module, handles)
     }
 
-    /// Multi-entry counterpart to [`from_source`]. Evaluates `source`
-    /// the same way, then drills into `outer.entries[entry_idx + 1]`
-    /// (Lua is 1-indexed) and treats that sub-table as the module.
-    /// Used when a single `.lua` file declares several plugin
-    /// instances under one shared script — see `register_one`'s
-    /// multi-entry path. Each entry gets its own fresh `Lua` state /
-    /// host install, exactly like a single-module plugin would, so
-    /// `ttymap.window:close()` semantics scope correctly per entry.
-    pub fn from_source_entry(
-        source: &str,
-        chunk_name: &str,
-        entry_idx: usize,
-        shared: Arc<LuaHostShared>,
-    ) -> mlua::Result<Self> {
-        let lua = super::new_lua();
-        let handles = super::host::install(&lua, "lua-host", shared)?;
-        let outer: Table = lua.load(source).set_name(chunk_name).eval()?;
-        let entries: Table = outer.get("entries").map_err(|e| {
-            mlua::Error::runtime(format!(
-                "lua[{chunk_name}]: from_source_entry called but module.entries is missing: {e}"
-            ))
-        })?;
-        let module: Table = entries.get(entry_idx + 1).map_err(|e| {
-            mlua::Error::runtime(format!(
-                "lua[{chunk_name}]: entries[{}] missing or wrong shape: {e}",
-                entry_idx + 1,
-            ))
-        })?;
-        Self::build(lua, module, handles)
-    }
-
     /// Shared post-eval construction: read the script's metadata
     /// (name / layout / render-presence / footer-hint declarations)
     /// off the resolved module table, then stash the table in the

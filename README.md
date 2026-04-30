@@ -250,8 +250,6 @@ Per-frame `host` and `map` accessors (a partial list):
 
 To register as a palette provider (search uses this), expose a `palette = { prompt, submit_mode, filter, items, execute, poll, is_loading }` sub-table on the returned module. The dispatcher reads palette-provider semantics from the *shape* of the returned table — there is no separate `kind` field.
 
-For a related family of toggles in one file, return `{ entries = { module_a, module_b, … } }` instead of a single module. Each entry is itself a plugin module (same shape as above) and registers as its own palette entry, with per-entry `name` driving the compositor's stack-dedup so distinct entries coexist. File-level `enabled = false` skips the whole pack; per-entry `enabled = false` skips just that entry. The bundled `satellite.lua` uses this to ship ISS + Hubble from one file via the shared `ttymap.satellites` factory.
-
 Adding a bundled plugin = drop a `.lua` under `runtime/lua/` + 1 line in `BUILTIN_SCRIPTS`. Adding a user plugin = drop a `.lua` into `~/.config/ttymap/plugins/`; the file *is* the config, so `enabled = false` in the returned table is how you turn it off without removing the file. Errors in any callback are logged, not propagated — a buggy plugin can't take the host down.
 
 ### Concurrency
