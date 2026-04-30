@@ -1,9 +1,9 @@
 -- help — keybinding cheatsheet shown as a centred popup.
 --
 -- Modal: any key closes it. The cheatsheet is built lazily at
--- render time from `host:keymap_entries()` (live keymap actions)
--- and `host:plugin_palette_entries()` (sibling plugins' palette
--- hints), so registration order doesn't matter.
+-- render time from `ttymap.help:keymap_entries()` (live keymap
+-- actions) and `ttymap.help:palette_entries()` (sibling plugins'
+-- palette hints), so registration order doesn't matter.
 
 local URL_MAPSCII = "https://github.com/rastapasta/mapscii"
 local URL_HOME = "https://github.com/Kohei-Wada/ttymap"
@@ -47,7 +47,7 @@ local function build_lines()
         blank_line(),
     }
 
-    for _, entry in ipairs(host:keymap_entries()) do
+    for _, entry in ipairs(ttymap.help:keymap_entries()) do
         table.insert(lines, key_line(entry.key, entry.label))
     end
 
@@ -55,7 +55,7 @@ local function build_lines()
     table.insert(lines, key_line("gg", "Zoom to world"))
     table.insert(lines, key_line("Tab/S-Tab", "Cycle focus"))
     table.insert(lines, key_line(":", "Command palette"))
-    for _, entry in ipairs(host:plugin_palette_entries()) do
+    for _, entry in ipairs(ttymap.help:palette_entries()) do
         table.insert(lines, key_line(entry.key, entry.label))
     end
     table.insert(lines, blank_line())

@@ -22,7 +22,7 @@ local state = {
 
 local function search_url(query)
     return string.format("%s?q=%s&format=json&limit=%d",
-        SEARCH_URL, host:url_encode(query), LIMIT)
+        SEARCH_URL, ttymap.http:url_encode(query), LIMIT)
 end
 
 local function parse_results(payload)
@@ -71,7 +71,7 @@ return {
             end
             state.last_query = trimmed
             state.candidates = {}
-            state.job = host:fetch_url(search_url(trimmed))
+            state.job = ttymap.http:fetch(search_url(trimmed))
             state.pending = true
         end,
 
@@ -86,7 +86,7 @@ return {
         execute = function(idx)
             local c = state.candidates[idx]
             if c then
-                host:jump(c.lon, c.lat)
+                ttymap.map:jump(c.lon, c.lat)
                 return nil
             end
             return { close = true }
@@ -96,7 +96,7 @@ return {
             if state.job then
                 local body = state.job:try_take()
                 if body then
-                    state.candidates = parse_results(host:parse_json(body))
+                    state.candidates = parse_results(ttymap.json:parse(body))
                     state.pending = false
                     state.job = nil
                 end

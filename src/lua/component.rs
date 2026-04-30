@@ -13,7 +13,7 @@
 //! Bridge surface so far: `name`, `render` (text lines wrapped in a
 //! framed Paragraph), `handle_event` (Lua-side keymap → close /
 //! ignore / silent consume), `paint_on_map` (Lua draws map markers
-//! via [`MapApi`]), `poll` (Lua-side tick + `host:fetch_url(url)`).
+//! via [`MapApi`]), `poll` (Lua-side tick + `ttymap.http:fetch(url)`).
 //! Wider widget / map vocabulary lands in follow-ups.
 
 use std::sync::{Arc, Mutex, mpsc};
@@ -122,23 +122,23 @@ pub struct LuaComponent {
     /// `&'static str` return type without leaking per call. Empty
     /// when the module omits the field.
     footer_hints: Vec<(&'static str, &'static str)>,
-    /// Receiver for `host:jump(lon, lat)` requests. The Lua side
+    /// Receiver for `ttymap.map:jump(lon, lat)` requests. The Lua side
     /// pushes a `LonLat`; we drain after each `poll` /
     /// `handle_event` and emit `AppMsg::Map(Action::Jump)` through
     /// the host `Window`. Keeps the Lua call site decoupled from
     /// when a `Window` is actually available.
     jump_rx: mpsc::Receiver<LonLat>,
-    /// Receiver for `host:close()` requests. Same pattern as
+    /// Receiver for `ttymap.window:close()` requests. Same pattern as
     /// `jump_rx`: the Lua side fires-and-forgets; we drain after
     /// each callback while still holding the `Window` and call
     /// `Window::close()`. Used by one-shot plugins (here-jump) that
     /// pop themselves once their work is done.
     close_rx: mpsc::Receiver<()>,
-    /// Receiver for `host:export_frame()` requests. Drained beside
+    /// Receiver for `ttymap.window:export_frame()` requests. Drained beside
     /// jump/close after each callback; emits `AppMsg::ExportFrame`
     /// through the host `Window`.
     export_rx: mpsc::Receiver<()>,
-    /// Map centre cell shared with the host so `host:center()` can
+    /// Map centre cell shared with the host so `ttymap.map:center()` can
     /// return the latest value. We refresh it at the start of every
     /// dispatch path that carries a `Window` / `MapApi`.
     center: Arc<Mutex<LonLat>>,
@@ -153,19 +153,18 @@ impl LuaComponent {
     ) -> mlua::Result<Self> {
         let lua = super::new_lua();
 
-        // Persistent host services (HTTP fetch etc.) are exposed as
-        // a global so plugins can reach them from any callback. Set
-        // *before* loading the source so a top-level `host:foo()`
-        // call in the chunk would see it (none today, but cheap).
-        let (host, handles) = super::host::LuaHost::new("lua-host", shared);
+        // Persistent host services (HTTP fetch etc.) are exposed as a
+        // global `ttymap` table whose fields are domain-namespaced
+        // userdatas (`ttymap.http`, `ttymap.map`, …). Installed
+        // *before* loading the source so a top-level
+        // `ttymap.foo:bar()` call in the chunk would see it (none
+        // today, but cheap).
         let super::host::LuaHostHandles {
             jump_rx,
             close_rx,
             export_rx,
             center,
-        } = handles;
-        let host_ud = lua.create_userdata(host)?;
-        lua.globals().set("host", host_ud)?;
+        } = super::host::install(&lua, "lua-host", shared)?;
 
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
@@ -194,7 +193,7 @@ impl LuaComponent {
     /// Refresh the host-shared map centre. Called at the start of
     /// every dispatch path that has access to a current centre
     /// (poll / handle_event via `Window::ctx()`, paint_on_map via
-    /// `MapApi::center()`) so `host:center()` returns up-to-date
+    /// `MapApi::center()`) so `ttymap.map:center()` returns up-to-date
     /// values without each callback having to take it as an arg.
     fn update_center(&self, center: LonLat) {
         if let Ok(mut cell) = self.center.lock() {
@@ -202,7 +201,7 @@ impl LuaComponent {
         }
     }
 
-    /// Drain any `host:jump(...)` and `host:export_frame()` requests
+    /// Drain any `ttymap.map:jump(...)` and `ttymap.window:export_frame()` requests
     /// the Lua side queued during the most recent callback. Calls
     /// `emit` once per queued request; the caller wires this to the
     /// active window's `emit` (works for both [`Window`] and
@@ -216,7 +215,7 @@ impl LuaComponent {
         }
     }
 
-    /// Drain any `host:close()` requests the Lua side queued and
+    /// Drain any `ttymap.window:close()` requests the Lua side queued and
     /// pop the component off the stack. One drain per dispatch is
     /// enough — extra queued closes collapse into one `Window::close`
     /// because the compositor only respects the request once.
@@ -230,7 +229,7 @@ impl LuaComponent {
     }
 
     /// Overlay counterpart to [`drain_close`]. Overlays don't live on
-    /// the focusable stack, so a `host:close()` from one has nothing
+    /// the focusable stack, so a `ttymap.window:close()` from one has nothing
     /// to pop. Drain the channel anyway (it's unbounded; left
     /// undrained it would grow forever) and warn so a misuse is
     /// visible.
@@ -238,7 +237,7 @@ impl LuaComponent {
         if self.close_rx.try_recv().is_ok() {
             while self.close_rx.try_recv().is_ok() {}
             log::warn!(
-                "lua[{}]: host:close() ignored — overlay components don't live on the focusable stack",
+                "lua[{}]: ttymap.window:close() ignored — overlay components don't live on the focusable stack",
                 self.name
             );
         }
@@ -309,7 +308,7 @@ impl LuaComponent {
 
     /// Run the Lua side of `poll`. The plugin's `poll()` function
     /// gets no arguments today — async work is reached through the
-    /// `host` global (`host:fetch_url(url)` etc.). Missing function
+    /// `ttymap` global (`ttymap.http:fetch(url)` etc.). Missing function
     /// is a no-op; runtime errors are logged + recovered.
     fn dispatch_poll(&self) {
         let result: mlua::Result<()> = (|| {
@@ -366,39 +365,22 @@ impl LuaComponent {
     }
 }
 
-/// Read `module.footer_hints` as a sequence of `{key, label}` pairs.
-/// Each pair leaks its strings once so [`Component::footer_hints`]
-/// can hand back `&'static str`. Bounded leak (a plugin declares a
-/// finite list at construction). Missing field → empty hints.
-///
-/// Two accepted shapes per pair:
-/// - `{ "Enter", "open" }` — positional 1-based array.
-/// - `{ key = "Enter", label = "open" }` — named.
+/// Read `module.footer_hints` as a sequence of `{key, label}` pairs
+/// and leak each pair so [`Component::footer_hints`] can hand back
+/// `&'static str`. Bounded leak — a plugin declares a finite list at
+/// construction. Delegates parsing to [`super::parse_footer_hints`]
+/// so the shape (positional / named, missing-field handling) stays
+/// identical between the leak version stored on the component and the
+/// owned version stored in the metadata snapshot.
 fn parse_footer_hints(module: &Table) -> Vec<(&'static str, &'static str)> {
-    let Ok(list): mlua::Result<Table> = module.get("footer_hints") else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in list.sequence_values::<mlua::Value>().flatten() {
-        let mlua::Value::Table(pair) = entry else {
-            continue;
-        };
-        let key: String = pair
-            .get::<String>("key")
-            .or_else(|_| pair.get::<String>(1))
-            .unwrap_or_default();
-        let label: String = pair
-            .get::<String>("label")
-            .or_else(|_| pair.get::<String>(2))
-            .unwrap_or_default();
-        if key.is_empty() && label.is_empty() {
-            continue;
-        }
-        let key: &'static str = Box::leak(key.into_boxed_str());
-        let label: &'static str = Box::leak(label.into_boxed_str());
-        out.push((key, label));
-    }
-    out
+    super::parse_footer_hints(module)
+        .into_iter()
+        .map(|(k, v)| {
+            let k: &'static str = Box::leak(k.into_boxed_str());
+            let v: &'static str = Box::leak(v.into_boxed_str());
+            (k, v)
+        })
+        .collect()
 }
 
 /// Convert one Lua-returned line value into a vec of `(text, kind)`
@@ -1019,7 +1001,7 @@ mod tests {
             r#"return {
                 name = "jumper",
                 handle_event = function(key)
-                    host:jump(139.7595, 35.6828)
+                    ttymap.map:jump(139.7595, 35.6828)
                     return nil
                 end,
             }"#,
@@ -1055,15 +1037,15 @@ mod tests {
 
     #[test]
     fn poll_overlay_drains_host_jump_into_emit() {
-        // An overlay that fires `host:jump` from poll. Verifies the
-        // overlay path keeps emit semantics (the same drain logic that
-        // works for stack components) even though the OverlayWindow
-        // surface is narrower.
+        // An overlay that fires `ttymap.map:jump` from poll. Verifies
+        // the overlay path keeps emit semantics (the same drain logic
+        // that works for stack components) even though the
+        // OverlayWindow surface is narrower.
         let mut c = LuaComponent::from_source(
             r#"return {
                 name = "jumper",
                 poll = function()
-                    host:jump(139.7595, 35.6828)
+                    ttymap.map:jump(139.7595, 35.6828)
                 end,
             }"#,
             "jumper",
@@ -1096,15 +1078,16 @@ mod tests {
 
     #[test]
     fn poll_overlay_drains_host_close_without_emitting() {
-        // An overlay that incorrectly calls `host:close()` from poll.
-        // The overlay path must drain `close_rx` (else the unbounded
-        // channel would grow forever) but emit nothing on the
-        // OverlayWindow — overlays don't live on the focusable stack.
+        // An overlay that incorrectly calls `ttymap.window:close()`
+        // from poll. The overlay path must drain `close_rx` (else the
+        // unbounded channel would grow forever) but emit nothing on
+        // the OverlayWindow — overlays don't live on the focusable
+        // stack.
         let mut c = LuaComponent::from_source(
             r#"return {
                 name = "bad_overlay",
                 poll = function()
-                    host:close()
+                    ttymap.window:close()
                 end,
             }"#,
             "bad_overlay",
@@ -1132,20 +1115,21 @@ mod tests {
         // no jumps / exports leaked into the queue.
         assert!(
             msgs.is_empty(),
-            "overlay poll must not emit anything for a host:close()"
+            "overlay poll must not emit anything for a ttymap.window:close()"
         );
     }
 
     #[test]
-    fn host_global_is_set_for_plugins() {
-        // A poll handler that errors out only if `host` is missing —
+    fn ttymap_global_is_set_for_plugins() {
+        // A poll handler that errors out only if `ttymap` is missing —
         // proves the global is wired and reachable from Lua.
         let c = LuaComponent::from_source(
             r#"return {
                 name = "checker",
                 poll = function()
-                    assert(host ~= nil, "host must be set")
-                    assert(type(host.fetch_url) == "function", "host:fetch_url must exist")
+                    assert(ttymap ~= nil, "ttymap must be set")
+                    assert(type(ttymap.http) == "userdata",
+                        "ttymap.http namespace must exist")
                 end,
             }"#,
             "checker",
@@ -1161,8 +1145,8 @@ mod tests {
                 r#"
                 _G.checker_ok = false
                 local ok = pcall(function()
-                    assert(host ~= nil)
-                    assert(type(host.fetch_url) == "function")
+                    assert(ttymap ~= nil)
+                    assert(type(ttymap.http) == "userdata")
                 end)
                 _G.checker_ok = ok
                 "#,
@@ -1170,7 +1154,7 @@ mod tests {
             .exec()
             .expect("exec");
         let ok: bool = c.lua.globals().get("checker_ok").expect("get");
-        assert!(ok, "host global must be present and have fetch_url");
+        assert!(ok, "ttymap global must be present and expose namespaces");
     }
 
     #[test]

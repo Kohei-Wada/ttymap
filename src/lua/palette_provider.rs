@@ -34,7 +34,7 @@ pub struct LuaPaletteProvider {
     /// `items()` returns `&[PaletteItem]` so we keep a local copy
     /// rather than round-tripping into Lua per call.
     items: Vec<PaletteItem>,
-    /// Inbox for `host:jump(lon, lat)` calls made from inside
+    /// Inbox for `ttymap.map:jump(lon, lat)` calls made from inside
     /// `execute`. Drained right before the action is returned so
     /// the Run-with-Jump path is preserved without exposing the
     /// `AppMsg` enum to Lua.
@@ -49,13 +49,11 @@ impl LuaPaletteProvider {
     ) -> mlua::Result<Box<Self>> {
         let lua = super::new_lua();
 
-        // Same `host` global the Component bridge uses. We only need
-        // the jump channel here; close / export aren't meaningful for
-        // a palette provider (the palette closes itself based on
+        // Same `ttymap` global the Component bridge installs. We only
+        // need the jump channel here; close / export aren't meaningful
+        // for a palette provider (the palette closes itself based on
         // PaletteAction).
-        let (host, handles) = super::host::LuaHost::new("lua-palette", shared);
-        let host_ud = lua.create_userdata(host)?;
-        lua.globals().set("host", host_ud)?;
+        let handles = super::host::install(&lua, "lua-palette", shared)?;
 
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         // The script declares palette-provider semantics by exposing
@@ -226,9 +224,9 @@ impl LuaPaletteProvider {
     /// Three accepted forms:
     /// - `nil` → Close
     /// - `{ close = true }` → Close
-    /// - host:jump(lon, lat) inside execute → Run([Map(Action::Jump(ll))])
+    /// - `ttymap.map:jump(lon, lat)` inside execute → Run([Map(Action::Jump(ll))])
     fn action_from_lua(&self, value: mlua::Value) -> PaletteAction {
-        // First check the in-execute jump channel — host:jump pushes
+        // First check the in-execute jump channel — `ttymap.map:jump` pushes
         // a LonLat that takes priority over any returned table since
         // the script's intent ("jump to this") is unambiguous.
         let mut jumps = Vec::new();
@@ -365,7 +363,7 @@ mod tests {
             return {
                 palette = {
                     execute = function(idx)
-                        host:jump(139.7, 35.7)
+                        ttymap.map:jump(139.7, 35.7)
                         return nil
                     end,
                 },

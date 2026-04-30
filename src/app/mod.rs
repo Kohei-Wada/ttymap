@@ -67,7 +67,7 @@ impl App {
         let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
         // `_lua_shared` is kept alive on the App so every Lua plugin's
-        // host accessor (`host:plugin_palette_entries()` etc.) keeps
+        // host accessor (`ttymap.help:palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
         let BuiltRegistrar {
             registrar,
@@ -401,7 +401,7 @@ fn build_registrar(
     let mut r = Registrar::default();
 
     // Build the shared runtime-data carrier once. Every Lua plugin
-    // (bundled and user) sees the same `host:*` accessor surface;
+    // (bundled and user) sees the same `ttymap.*` accessor surface;
     // there is no per-plugin Rust glue, no per-plugin upvalue
     // injection. Adding a new bundled plugin is one file under
     // `runtime/lua/`; adding a user plugin is one file in
@@ -432,17 +432,10 @@ fn build_registrar(
     // boolean, no rebuild and no TOML.
     crate::lua::register_user_plugins(shared.clone(), &mut r);
 
-    // Snapshot every plugin's palette entries into the shared carrier.
-    // Help reads this lazily (at render time) via
-    // `host:plugin_palette_entries()`, so it sees every sibling
-    // regardless of registration order.
-    let palette_entries: Vec<(String, String)> = r
-        .palette_entries
-        .iter()
-        .filter(|e| !e.hint.is_empty())
-        .map(|e| (e.hint.clone(), e.label.clone()))
-        .collect();
-    shared.set_palette_entries(palette_entries);
+    // Plugin metadata for help is published to `shared.palette_entries`
+    // directly during registration (see `lua::push_plugin_entry`), so
+    // there's no harvest step here. Help reads the snapshot lazily at
+    // render time via `ttymap.help:palette_entries()`.
 
     // Harvest the BaseLayer's footer hints. Has to happen *before*
     // `palette::install` because that call `mem::take`s
@@ -477,7 +470,7 @@ fn build_registrar(
 }
 
 /// Build the `(key-binding, action-label)` pairs that the help plugin
-/// surfaces via `host:keymap_entries()`. Live data — runtime keymap
+/// surfaces via `ttymap.help:keymap_entries()`. Live data — runtime keymap
 /// overrides surface here.
 fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
     use crate::map::Action;

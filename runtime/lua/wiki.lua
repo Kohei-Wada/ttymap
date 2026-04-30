@@ -3,7 +3,7 @@
 -- Two-stage fetch: first the geosearch endpoint returns titles +
 -- coordinates + distance for nearby articles, then a second call to
 -- the extracts endpoint pulls a 5-sentence summary per title. We
--- chain them via a small state machine because each `host:fetch_url`
+-- chain them via a small state machine because each `ttymap.http:fetch`
 -- handle is a single in-flight job; the original Rust impl did both
 -- requests synchronously inside one worker.
 --
@@ -23,7 +23,7 @@ local state = {
     selected = 1,           -- 1-based index into articles
     detail = nil,           -- snapshot of the article being read
     phase = "idle",         -- "idle" | "geosearching" | "extracting"
-    job = nil,              -- in-flight host:fetch_url handle
+    job = nil,              -- in-flight ttymap.http:fetch handle
     pending_pages = nil,    -- titles + coords + dist between geosearch and extracts
     needs_refresh = false,  -- true on (re)open and on 'r'
 }
@@ -38,13 +38,13 @@ end
 
 local function extracts_url(titles)
     -- Wikipedia accepts pipe-separated titles. Encode each title
-    -- individually (host:url_encode handles spaces / non-ASCII /
+    -- individually (ttymap.http:url_encode handles spaces / non-ASCII /
     -- reserved chars) and join with a literal `|`, which the API
     -- treats as the separator. For our ~50-entry limit the URL
     -- fits well under the host's path length limits.
     local encoded = {}
     for _, t in ipairs(titles) do
-        table.insert(encoded, host:url_encode(t))
+        table.insert(encoded, ttymap.http:url_encode(t))
     end
     return string.format(
         "https://%s.wikipedia.org/w/api.php?action=query&prop=extracts"
@@ -109,9 +109,9 @@ local function merge_articles(new_articles)
 end
 
 local function start_refresh()
-    local lon, lat = host:center()
+    local lon, lat = ttymap.map:center()
     state.phase = "geosearching"
-    state.job = host:fetch_url(geosearch_url(lat, lon))
+    state.job = ttymap.http:fetch(geosearch_url(lat, lon))
 end
 
 local function step_state_machine()
@@ -120,7 +120,7 @@ local function step_state_machine()
     if not body then return end
 
     if state.phase == "geosearching" then
-        local pages = parse_geosearch(host:parse_json(body))
+        local pages = parse_geosearch(ttymap.json:parse(body))
         state.job = nil
         if #pages == 0 then
             state.phase = "idle"
@@ -131,9 +131,9 @@ local function step_state_machine()
         for _, p in ipairs(pages) do table.insert(titles, p.title) end
         state.pending_pages = pages
         state.phase = "extracting"
-        state.job = host:fetch_url(extracts_url(titles))
+        state.job = ttymap.http:fetch(extracts_url(titles))
     elseif state.phase == "extracting" then
-        local extracts = parse_extracts(host:parse_json(body))
+        local extracts = parse_extracts(ttymap.json:parse(body))
         local merged = {}
         for _, p in ipairs(state.pending_pages or {}) do
             table.insert(merged, {
@@ -160,7 +160,7 @@ local function move_selection(direction)
         state.selected = state.selected < n and state.selected + 1 or 1
     end
     local a = state.articles[state.selected]
-    if a then host:jump(a.lon, a.lat) end
+    if a then ttymap.map:jump(a.lon, a.lat) end
 end
 
 return {
@@ -261,7 +261,7 @@ return {
             local a = state.articles[state.selected]
             if a then
                 state.detail = a
-                host:jump(a.lon, a.lat)
+                ttymap.map:jump(a.lon, a.lat)
             end
             return nil
         end

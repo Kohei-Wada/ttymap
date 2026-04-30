@@ -138,7 +138,7 @@ return {
             end
         elseif key.code == "Enter" then
             local a = state.aircraft[state.selected]
-            if a then host:jump(a.lon, a.lat) end
+            if a then ttymap.map:jump(a.lon, a.lat) end
         end
         -- Modal feel: consume otherwise.
         return nil
@@ -149,7 +149,7 @@ return {
         if state.job then
             local body = state.job:try_take()
             if body then
-                local payload = host:parse_json(body)
+                local payload = ttymap.json:parse(body)
                 state.aircraft = parse_states(payload)
                 if state.selected > #state.aircraft then
                     state.selected = math.max(1, #state.aircraft)
@@ -161,8 +161,8 @@ return {
         local now = os.time()
         if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
             state.last_fetch_sec = now
-            local lon, lat = host:center()
-            state.job = host:fetch_url(bbox_url(lon, lat))
+            local lon, lat = ttymap.map:center()
+            state.job = ttymap.http:fetch(bbox_url(lon, lat))
         end
     end,
 }

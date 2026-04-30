@@ -160,7 +160,7 @@ impl<'a> Window<'a> {
 ///
 /// Lua plugins are still one [`Component`] impl that may be either an
 /// overlay or a stack component; that adapter has its own runtime
-/// story for `host:close()` from an overlay (drain + log).
+/// story for `ttymap.window:close()` from an overlay (drain + log).
 pub struct OverlayWindow<'a> {
     msgs: &'a mut Vec<AppMsg>,
     ctx: &'a Context,

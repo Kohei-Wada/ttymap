@@ -38,7 +38,7 @@ pub enum Action {
         zoom_in: bool,
     },
     /// Re-centre the map on a specific location. Produced by search,
-    /// the here-plugin, and `host:jump` from any Lua plugin — anything
+    /// the here-plugin, and `ttymap.map:jump` from any Lua plugin — anything
     /// that yields a `LonLat` and wants to move the view there.
     Jump(LonLat),
 }
