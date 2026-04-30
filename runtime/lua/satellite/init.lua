@@ -1,13 +1,13 @@
 -- Satellite tracker — single panel showing N satellites at once.
 --
--- The shared `ttymap.satellites` factory builds one Component that
--- aggregates every configured sat. In-panel key chars (`i`, `h` …)
--- toggle individual visibility; `Enter` recentres on the first
+-- The sibling `satellite.satellites` factory builds one Component
+-- that aggregates every configured sat. In-panel key chars (`i`, `h`
+-- …) toggle individual visibility; `Enter` recentres on the first
 -- visible one. To track an extra satellite, copy this file to
 -- `~/.config/ttymap/lua/satellite.lua` and append its NORAD ID +
 -- a free key char.
 
-return require("ttymap.satellites").make({
+return require("satellite.satellites").make({
     -- Manned LEO stations.
     { display = "ISS",      norad_id = 25544, color = "accent_alt", key = "i" },
     { display = "Tiangong", norad_id = 48274, color = "highlight",  key = "T" },

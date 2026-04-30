@@ -1,4 +1,4 @@
--- ttymap.satellites — multi-sat tracker as a single Component.
+-- satellite.satellites — multi-sat tracker as a single Component.
 --
 -- Each Component instance aggregates N entries (configured by the
 -- consumer), shares one panel for status display, and toggles per-
