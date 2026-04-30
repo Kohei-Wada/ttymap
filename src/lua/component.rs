@@ -20,6 +20,8 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, RegistryKey, Table};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::app::AppMsg;
 use crate::compositor::Component;
@@ -28,7 +30,7 @@ use crate::geo::LonLat;
 use crate::lua::host::LuaHostShared;
 use crate::plugin_api::MapApi;
 use crate::plugin_api::layout::PanelAnchor;
-use crate::widget::{self, Line, Span, StyleKind};
+use crate::theme::StyleKind;
 
 /// Per-plugin layout knobs read from `module.layout`. Without this,
 /// `LuaComponent::render` would paint the framed Paragraph over the
@@ -534,34 +536,27 @@ impl Component for LuaComponent {
             .unwrap_or_else(|| outer.height.saturating_sub(2));
         let area = self.layout.anchor.rect(outer, self.layout.width, height);
 
-        // Wipe the panel rect before drawing. The block underneath
-        // sets `style.bg` but leaves `fg` unset, which means cells
-        // keep the map's previously-rendered foreground colours and
-        // the panel ends up looking like a desaturated translucent
-        // overlay. Clear first, then the framed Paragraph fills bg
-        // and writes text fg from scratch — same trick the shared
-        // `ListPanel` chrome uses.
-        win.clear(area);
+        // `panel` clears the rect and draws the bordered block in one
+        // step, returning the inner content region. Wiping first
+        // matters because the block sets `style.bg` but leaves `fg`
+        // unset, so without the clear cells would keep the map's
+        // foreground colours and the panel would look translucent.
+        let inner = win.panel(area, self.name);
 
         let body = win.style(StyleKind::Body);
-        let lines: Vec<Line> = self
+        let lines: Vec<Line<'static>> = self
             .render_lines()
             .into_iter()
             .map(|spans| {
-                let rendered: Vec<Span> = spans
+                let rendered: Vec<Span<'static>> = spans
                     .into_iter()
                     .map(|(text, kind)| Span::styled(text, win.style(kind)))
                     .collect();
-                Line::from_spans(rendered)
+                Line::from(rendered)
             })
             .collect();
-        let paragraph = widget::Paragraph {
-            lines,
-            style: body,
-            framed_title: Some(self.name.to_string()),
-            ..Default::default()
-        };
-        win.paragraph(paragraph, area);
+        let paragraph = Paragraph::new(lines).style(body);
+        win.paragraph(paragraph, inner);
     }
 
     fn name(&self) -> &'static str {
@@ -945,7 +940,7 @@ mod tests {
         // Default fallback: TopLeft, 32x10. Asserting on the
         // resolved sub-rect inside a 100x40 outer is the cleanest
         // proxy for "didn't paint over the map".
-        let outer = widget::Rect::new(0, 0, 100, 40);
+        let outer = ratatui::layout::Rect::new(0, 0, 100, 40);
         let height = c.layout.height.unwrap_or(outer.height.saturating_sub(2));
         let r = c.layout.anchor.rect(outer, c.layout.width, height);
         assert!(r.width <= 32, "fallback width should be at most 32");

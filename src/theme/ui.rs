@@ -1,10 +1,7 @@
 //! Ratatui adapter — converts palette `u8` values to ratatui styles.
 //!
-//! Plugins never see this type. They get [`crate::widget::StyleKind`]
-//! via `RenderWindow::style()`, which resolves here. Map of concrete
-//! styles is private to the host; this file is the only place in
-//! plugin-facing territory where `ratatui::style::*` is touched (apart
-//! from the `widget::*` conversion floor).
+//! Plugins never see this type. They get [`crate::theme::StyleKind`]
+//! via `RenderWindow::style()`, which resolves here.
 
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
@@ -33,8 +30,7 @@ impl UiTheme {
     }
 
     /// Build a theme-styled bordered block with `title`. Used by
-    /// `RenderWindow::panel` and `widget::Paragraph::into_ratatui`
-    /// (for framed_title).
+    /// `RenderWindow::panel` to wrap content in a framed container.
     pub fn panel(&self, title: &str) -> Block<'static> {
         Block::new()
             .borders(Borders::ALL)

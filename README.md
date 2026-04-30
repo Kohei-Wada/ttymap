@@ -89,12 +89,6 @@ src/
 │   ├── base.rs          BaseLayer — keymap + activation dispatch + gg sequence
 │   └── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
 │
-├── widget/              ratatui-agnostic render vocabulary
-│   ├── geom.rs          Rect / Size
-│   ├── style.rs         StyleKind (Body / Accent / Muted / Selected / Link / …)
-│   ├── text.rs          Line / Span
-│   └── paragraph.rs, list.rs, table.rs
-│
 ├── palette/             `:`-triggered universal picker (itself a Component)
 │   ├── mod.rs           CommandPalette + install(&mut Registrar)
 │   ├── panel.rs         popup layout
@@ -152,7 +146,7 @@ runtime/
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`lua/`** — every in-tree plugin. `BUILTIN_SCRIPTS` lists `(stem, include_str!(...))` pairs; one dispatcher (`register_one`) reads each script's module metadata (`kind` / `activation` / `key` / `label` / `enabled`) and wires it. User plugins under `~/.config/ttymap/plugins/` flow through the same dispatcher. Runtime data (attribution, geoip endpoint, live keymap, palette hints) is exposed via `host:*` accessors backed by `Arc<LuaHostShared>`. The compositor never names a concrete plugin type; Rust never knows a specific plugin's name.
 - **`plugin_api/`** — crate-internal primitives the Lua bridge re-uses (`MapApi`, `PanelAnchor`). The earlier plugin-author prelude (`PolledFeed` / `AsyncJob` / `Throttle` / `NominatimClient` / `InitialJump`) was retired together with the in-tree Rust plugins; equivalents live in Lua scripts.
-- **`widget/`** — ratatui-agnostic render vocabulary. Plugins describe *what* to draw (`widget::Paragraph`, `Line`, `StyleKind::Accent`) and `RenderWindow` translates it to ratatui. Plugins never import ratatui or `UiTheme` directly.
+- **`theme/`** — palette data + `UiTheme` ratatui adapter + `StyleKind` semantic tags. Lua scripts ask for a tag string ("accent" / "muted" / …) and the bridge resolves it through the active `UiTheme` to a concrete `ratatui::Style`. Lua plugins never see `UiTheme` directly.
 
 ### Message flow
 

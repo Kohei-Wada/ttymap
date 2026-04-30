@@ -2,10 +2,12 @@
 //! block enclosing an input line (provider prompt + query) and a
 //! scrollable table driven by the current provider's items.
 
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
+
 use crate::compositor::window::RenderWindow;
-use crate::widget::{
-    Cell, Line, Paragraph, Rect, Row, Size, Span, StyleKind, Table, TableSel, split_rows,
-};
+use crate::theme::StyleKind;
 
 use super::PaletteComponent;
 
@@ -30,30 +32,27 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
 
     let inner = win.panel(popup_area, "command palette");
 
-    let chunks = split_rows(
-        inner,
-        &[
-            Size::Fixed(1), // prompt + query
-            Size::Fixed(1), // blank
-            Size::Min(1),   // table
-        ],
-    );
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // prompt + query
+            Constraint::Length(1), // blank
+            Constraint::Min(1),    // table
+        ])
+        .split(inner);
 
     let body = win.style(StyleKind::Body);
     let muted = win.style(StyleKind::Muted);
     let selected = win.style(StyleKind::Selected);
 
-    let input_text = Paragraph {
-        lines: vec![Line::from_span(Span::styled(
-            format!("{}{}", provider.prompt(), widget.query),
-            body,
-        ))],
-        style: body,
-        ..Default::default()
-    };
+    let input_text = Paragraph::new(Line::from(Span::styled(
+        format!("{}{}", provider.prompt(), widget.query),
+        body,
+    )))
+    .style(body);
     win.paragraph(input_text, chunks[0]);
 
-    let mut table_rows: Vec<Row> = items
+    let mut table_rows: Vec<Row<'static>> = items
         .iter()
         .map(|item| {
             let hint_cell = if item.hint.is_empty() {
@@ -62,8 +61,8 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
                 format!("[{}]", item.hint)
             };
             Row::new(vec![
-                Cell::new(item.label.clone(), body),
-                Cell::new(hint_cell, muted),
+                Cell::from(item.label.clone()).style(body),
+                Cell::from(hint_cell).style(muted),
             ])
         })
         .collect();
@@ -73,25 +72,23 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     // their input registered. Once results arrive the row drops out.
     if loading && items.is_empty() {
         table_rows.push(Row::new(vec![
-            Cell::new("…".to_string(), muted),
-            Cell::new(String::new(), muted),
+            Cell::from("…".to_string()).style(muted),
+            Cell::from(String::new()).style(muted),
         ]));
     }
 
-    let sel = TableSel::new(if items.is_empty() {
+    let mut state = TableState::default();
+    state.select(if items.is_empty() {
         None
     } else {
         Some(widget.selected)
     });
 
-    let table = Table {
-        rows: table_rows,
-        widths: vec![Size::Min(10), Size::Fixed(16)],
-        style: body,
-        highlight_symbol: "> ".to_string(),
-        row_highlight_style: selected,
-        column_spacing: 1,
-    };
+    let table = Table::new(table_rows, [Constraint::Min(10), Constraint::Length(16)])
+        .style(body)
+        .highlight_symbol("> ")
+        .row_highlight_style(selected)
+        .column_spacing(1);
 
-    win.table(table, chunks[2], &sel);
+    win.table(table, chunks[2], &mut state);
 }
