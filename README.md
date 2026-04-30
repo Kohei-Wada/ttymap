@@ -212,11 +212,11 @@ Dedup is by `Any::type_id` for Rust components — pressing an activation key wh
 
 ### Plugin API
 
-A plugin is a Lua module — a table the script returns. Module metadata drives wiring; the dispatcher never special-cases a name.
+A plugin is a Lua module — a table the script returns. Module metadata drives wiring; identity comes from the file path (file stem for bundled, the same for `~/.config/ttymap/plugins/<name>.lua`), so the script never declares its own id.
 
 ```lua
+-- runtime/lua/wiki.lua  -- file stem `wiki` is the identity
 return {
-    name = "wiki",                              -- required identifier
     activation = "toggle",                      -- "toggle" (default) | "overlay" | "spawn"
     key = "i",                                  -- optional activation key char
     label = "Toggle wiki",                      -- palette entry label

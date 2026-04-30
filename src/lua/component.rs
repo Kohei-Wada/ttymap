@@ -105,9 +105,12 @@ pub struct LuaComponent {
     /// Registry handle for the script's module table — re-fetched
     /// every dispatch via `lua.registry_value::<Table>(&self.module)`.
     module: RegistryKey,
-    /// Cached at construction so [`Component::name`] can return
-    /// `&'static str`. Leaked once per component; total cost is a
-    /// few dozen bytes for the lifetime of the program.
+    /// Stable identity assigned by the registration pipeline (file
+    /// stem for bundled plugins, leaked-once-at-startup for user
+    /// plugins). Backs both [`Component::name`] (footer chip text)
+    /// and [`Component::dedup_tag`] (stack identity). The script
+    /// itself doesn't get a say — identity comes from where the
+    /// file lives, not what it claims to be.
     name: &'static str,
     /// Panel placement read from `module.layout` at construction.
     /// Stored on the component so `render` can compute the sub-rect
@@ -146,28 +149,40 @@ pub struct LuaComponent {
 
 #[allow(dead_code)] // mirrors the LuaComponent struct attribute; same reason
 impl LuaComponent {
+    /// `name` is both the chunk name (Lua error reporting) and the
+    /// component's stable identity — used for the focused-footer
+    /// chip and as the [`Component::dedup_tag`] override. The
+    /// caller (typically `register_one`) supplies a `&'static str`
+    /// owned by the registration pipeline (file stem for bundled
+    /// plugins, leaked-once-at-startup for user plugins), so the
+    /// component never has to mint or leak its own.
     pub fn from_source(
         source: &str,
-        chunk_name: &str,
+        name: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
         let lua = super::new_lua();
         let handles = super::host::install(&lua, "lua-host", shared)?;
-        let module: Table = lua.load(source).set_name(chunk_name).eval()?;
-        Self::build(lua, module, handles)
+        let module: Table = lua.load(source).set_name(name).eval()?;
+        Self::build(lua, module, name, handles)
     }
 
     /// Shared post-eval construction: read the script's metadata
-    /// (name / layout / render-presence / footer-hint declarations)
-    /// off the resolved module table, then stash the table in the
-    /// Lua registry so dispatch hooks can re-fetch it cheaply.
+    /// (layout / render-presence / footer-hint declarations) off the
+    /// resolved module table, then stash the table in the Lua
+    /// registry so dispatch hooks can re-fetch it cheaply.
     ///
     /// Persistent host services (HTTP fetch etc.) live in the
     /// global `ttymap` table whose fields are domain-namespaced
     /// userdatas (`ttymap.http`, `ttymap.map`, …). They're installed
     /// by the caller *before* loading the source, so a top-level
     /// `ttymap.foo:bar()` call in the chunk would see them.
-    fn build(lua: Lua, module: Table, handles: super::host::LuaHostHandles) -> mlua::Result<Self> {
+    fn build(
+        lua: Lua,
+        module: Table,
+        name: &'static str,
+        handles: super::host::LuaHostHandles,
+    ) -> mlua::Result<Self> {
         let super::host::LuaHostHandles {
             jump_rx,
             close_rx,
@@ -175,8 +190,6 @@ impl LuaComponent {
             center,
         } = handles;
 
-        let raw_name: String = module.get("name").unwrap_or_else(|_| "lua".to_string());
-        let name: &'static str = Box::leak(raw_name.into_boxed_str());
         let layout = LuaLayout::from_module(&module);
         let has_render = matches!(
             module.get::<mlua::Value>("render"),
@@ -603,26 +616,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn name_falls_back_when_module_omits_it() {
-        // Module with no `name` field — adapter substitutes "lua".
+    fn name_uses_caller_supplied_id_not_module_field() {
+        // Identity comes from the registration pipeline — the
+        // `name` arg to `from_source`, not from `module.name`.
+        // Removes the "self-declared id" footgun where two scripts
+        // with the same `module.name` would dedup-collide while
+        // sitting at different file paths.
+        let c = LuaComponent::from_source(
+            r#"return { name = "ignored", render = function() return {} end }"#,
+            "iss",
+            super::super::host::LuaHostShared::empty(),
+        )
+        .expect("load");
+        assert_eq!(c.name(), "iss");
+        assert_eq!(c.dedup_tag(), Some("iss"));
+    }
+
+    #[test]
+    fn name_works_when_module_omits_it() {
+        // The module no longer has to declare anything — id is
+        // entirely caller-supplied.
         let c = LuaComponent::from_source(
             "return {}",
             "anon",
             super::super::host::LuaHostShared::empty(),
         )
         .expect("load");
-        assert_eq!(c.name(), "lua");
-    }
-
-    #[test]
-    fn name_is_picked_up_from_module() {
-        let c = LuaComponent::from_source(
-            r#"return { name = "hello", render = function() return {} end }"#,
-            "named",
-            super::super::host::LuaHostShared::empty(),
-        )
-        .expect("load");
-        assert_eq!(c.name(), "hello");
+        assert_eq!(c.name(), "anon");
     }
 
     #[test]

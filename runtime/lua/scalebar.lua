@@ -46,7 +46,6 @@ local function clamp(v, lo, hi)
 end
 
 return {
-    name = "scalebar",
     activation = "overlay",
 
     paint_on_map = function(map)

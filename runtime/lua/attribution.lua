@@ -7,7 +7,6 @@
 -- nothing is painted.
 
 return {
-    name = "attribution",
     activation = "overlay",
 
     paint_on_map = function(map)

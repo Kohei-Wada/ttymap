@@ -99,7 +99,6 @@ local function marker_for(a)
 end
 
 return {
-    name = "aircraft",
 
     -- Mirror the Rust plugin's default placement: left-side stripe,
     -- 40 cells wide, full available height.

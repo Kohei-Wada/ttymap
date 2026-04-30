@@ -18,7 +18,6 @@ local state = {
 }
 
 return {
-    name = "here",
     label = "Jump to here (current location)",
 
     handle_event = function(_)

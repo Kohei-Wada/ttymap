@@ -54,7 +54,6 @@ local function highest_magnitude(qs)
 end
 
 return {
-    name = "quakes",
 
     paint_on_map = function(map)
         for _, q in ipairs(state.quakes) do

@@ -68,7 +68,6 @@ local function build_lines()
 end
 
 return {
-    name = "help",
     label = "Toggle help",
     key = "?",
     layout = { anchor = "center", width = 64, height = 22 },
