@@ -326,6 +326,40 @@ quit = ["q", "C-q"]
 
 See `config.example.toml` for all options. Every section and field is optional; omitted values fall back to built-in defaults. Per-plugin behaviour lives inside each `.lua` script — to tweak refresh cadence, panel size, or hardcoded API endpoints, edit `runtime/lua/<name>.lua` (bundled) or drop a copy under `~/.config/ttymap/plugins/` (user).
 
+## Install
+
+ttymap ships a `runtime/` directory of bundled Lua plugins; the
+binary loads them from disk at startup, in the same shape as helix
+or nvim. The Makefile installs both the binary (via `cargo install`)
+and the runtime:
+
+```bash
+git clone https://github.com/Kohei-Wada/ttymap
+cd ttymap
+make install
+```
+
+This installs:
+
+- `~/.cargo/bin/ttymap` (binary, via `cargo install --path .`)
+- `~/.local/share/ttymap/lua/` (bundled Lua plugins + libs)
+
+Single-user, no root. System-wide layouts (`/usr/local/share/ttymap`,
+`/etc/ttymap`) are intentionally unsupported — ttymap is a per-user
+TUI and root-installs aren't worth the path-juggling.
+
+`cargo install` **alone** is not enough — the binary will fail fast
+with a "did you `make install`?" message because the runtime hasn't
+been placed. Run `make install-runtime` (or `make install`) to fix.
+
+### Runtime path resolution
+
+The binary searches for `runtime/` in this order (first hit wins):
+
+1. `$TTYMAP_RUNTIME` — env override (optional escape hatch)
+2. `$XDG_DATA_HOME/ttymap` (default `~/.local/share/ttymap`) — `make install` target
+3. `$CARGO_MANIFEST_DIR/runtime` — `cargo run` from a git checkout
+
 ## Build
 
 ```bash
@@ -339,6 +373,8 @@ cargo clippy
 | Path | Content |
 |------|---------|
 | `~/.config/ttymap/config.toml` | Configuration |
+| `~/.config/ttymap/plugins/` | User Lua plugins (drop `*.lua` here) |
+| `~/.local/share/ttymap/lua/` | Bundled Lua plugins + libs (placed by `make install`) |
 | `~/.cache/ttymap/` | Disk tile cache |
 | `~/.local/state/ttymap/ttymap.log` | Log file (auto-rotated at 1MB) |
 

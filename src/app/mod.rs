@@ -403,8 +403,8 @@ fn build_registrar(
     // Build the shared runtime-data carrier once. Every Lua plugin
     // (bundled and user) sees the same `host:*` accessor surface;
     // there is no per-plugin Rust glue, no per-plugin upvalue
-    // injection. Adding a new bundled plugin is one entry in
-    // `lua::BUILTIN_SCRIPTS`; adding a user plugin is one file in
+    // injection. Adding a new bundled plugin is one file under
+    // `runtime/lua/`; adding a user plugin is one file in
     // `~/.config/ttymap/plugins/`.
     let shared = Arc::new(crate::lua::host::LuaHostShared::new(
         attribution,
@@ -412,12 +412,25 @@ fn build_registrar(
         keymap_entries(keymap),
     ));
 
-    // Bundled plugins (every `.lua` under `src/lua/scripts/`) always
-    // register — disabling one is a source edit. The dispatcher reads
-    // each script's own activation/kind/key/label metadata, so chrome
-    // overlays, palette toggles, key binds, and the search palette
-    // provider all flow through one path.
-    crate::lua::register_builtin_plugins(shared.clone(), &mut r);
+    // Resolve and cache the runtime dir. `new_lua` reads the cached
+    // value for its disk-based `require` searcher, so this needs to
+    // run before any LuaComponent / LuaPaletteProvider is built.
+    let runtime_dir = match crate::lua::resolve_runtime_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("ttymap: {}", e);
+            std::process::exit(1);
+        }
+    };
+    crate::lua::set_runtime_dir(runtime_dir.clone());
+
+    // Bundled plugins (every `*.lua` under `<runtime>/lua/`) always
+    // register — disabling one is an edit to the script itself
+    // (`module.enabled = false`). The dispatcher reads each script's
+    // own activation/kind/key/label metadata, so chrome overlays,
+    // palette toggles, key binds, and the search palette provider
+    // all flow through one path.
+    crate::lua::register_builtin_plugins(&runtime_dir, shared.clone(), &mut r);
 
     // User plugins from `~/.config/ttymap/plugins/*.lua`. Same
     // dispatcher, same host accessors. Each script controls its own
