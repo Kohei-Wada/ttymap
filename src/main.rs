@@ -11,9 +11,11 @@ use ttymap::config;
         It renders Mapbox Vector Tiles (MVT/protobuf) as Unicode Braille characters\n\
         with ANSI 256-color in your terminal.\n\n\
         Inspired by and based on mapscii (https://github.com/rastapasta/mapscii).\n\n\
-        Config file: ~/.config/ttymap/config.toml\n\
-        Log file:    ~/.local/state/ttymap/ttymap.log\n\
-        Tile cache:  ~/.cache/ttymap/",
+        Config file:    ~/.config/ttymap/config.toml\n\
+        User plugins:   ~/.config/ttymap/plugins/\n\
+        Bundled runtime: ~/.local/share/ttymap/lua/\n\
+        Log file:       ~/.local/state/ttymap/ttymap.log\n\
+        Tile cache:     ~/.cache/ttymap/",
     version
 )]
 struct Cli {
