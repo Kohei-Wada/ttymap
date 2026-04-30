@@ -435,19 +435,22 @@ fn build_registrar(
         .filter(|e| !e.hint.is_empty())
         .map(|e| (e.hint.clone(), e.label.clone()))
         .collect();
-    shared.set_palette_entries(palette_entries.clone());
+    shared.set_palette_entries(palette_entries);
 
-    // Harvest the BaseLayer's footer hints from the same snapshot.
-    // Has to happen *before* `palette::install` because that call
-    // `mem::take`s `r.palette_entries`. Leak each pair once so they
-    // satisfy `Component::footer_hints`'s `&'static str` contract —
-    // bounded by the plugin count.
-    let plugin_hints: Vec<(&'static str, &'static str)> = palette_entries
-        .into_iter()
-        .map(|(hint, label)| {
-            let key: &'static str = Box::leak(hint.into_boxed_str());
-            let label: &'static str = Box::leak(plugin_hint_label(&label).into_boxed_str());
-            (key, label)
+    // Harvest the BaseLayer's footer hints. Has to happen *before*
+    // `palette::install` because that call `mem::take`s
+    // `r.palette_entries`. The footer slot is `[<key> <name>]` —
+    // built directly from each entry's keybinding and `module.name`.
+    // No keybinding ⇒ no footer slot. Leak the key string once to
+    // satisfy [`Component::footer_hints`]'s `&'static str` contract;
+    // `name` is already `&'static`.
+    let plugin_hints: Vec<(&'static str, &'static str)> = r
+        .palette_entries
+        .iter()
+        .filter(|e| !e.hint.is_empty())
+        .map(|e| {
+            let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
+            (key, e.name)
         })
         .collect();
 
@@ -464,26 +467,6 @@ fn build_registrar(
         registrar: r,
         plugin_hints,
     }
-}
-
-/// Boil a palette label down to the short form shown in the footer.
-/// `"Toggle wiki"` → `"wiki"`; `"Search location"` → `"search"`. Plain
-/// labels without a leading verb pass through unchanged.
-fn plugin_hint_label(label: &str) -> String {
-    let trimmed = label.trim();
-    for verb in ["Toggle ", "Show ", "Open "] {
-        if let Some(rest) = trimmed.strip_prefix(verb) {
-            return rest.to_string();
-        }
-    }
-    // Multi-word labels (e.g. "Search location", "Jump to here
-    // (current location)") get squeezed to the first word so the
-    // footer doesn't get crowded.
-    trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or(trimmed)
-        .to_lowercase()
 }
 
 /// Build the `(key-binding, action-label)` pairs that the help plugin

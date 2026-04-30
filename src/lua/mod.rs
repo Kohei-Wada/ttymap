@@ -245,7 +245,7 @@ fn register_component(
         }
         Activation::Toggle => {
             let shared_for_toggle = shared.clone();
-            r.add_toggle(label, key_hint, move |_| {
+            r.add_toggle(label, key_hint, name, move |_| {
                 component_or_placeholder(name, source, shared_for_toggle.clone())
             });
             if let Some(key) = meta.key {
@@ -258,7 +258,7 @@ fn register_component(
         }
         Activation::Spawn => {
             let shared_for_spawn = shared.clone();
-            r.add_spawn(label, key_hint, move |_| {
+            r.add_spawn(label, key_hint, name, move |_| {
                 component_or_placeholder(name, source, shared_for_spawn.clone())
             });
             if let Some(key) = meta.key {
@@ -300,7 +300,7 @@ fn register_provider(
         }
     };
 
-    r.add_spawn(label, key_hint, {
+    r.add_spawn(label, key_hint, name, {
         let make = make.clone();
         move |_| make()
     });

@@ -464,6 +464,9 @@ pub enum PaletteKind {
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
+    /// Plugin's canonical short name (`module.name`). Used as the
+    /// footer slug paired with `hint` (`[<hint> <name>]`).
+    pub name: &'static str,
     pub kind: PaletteKind,
 }
 
@@ -517,6 +520,7 @@ impl Registrar {
         &mut self,
         label: impl Into<String>,
         hint: impl Into<String>,
+        name: &'static str,
         factory: F,
     ) where
         F: Fn(&Context) -> C + 'static,
@@ -525,6 +529,7 @@ impl Registrar {
         self.add_palette_entry(PaletteEntry {
             label: label.into(),
             hint: hint.into(),
+            name,
             kind: PaletteKind::Toggle(Box::new(move |ctx| {
                 Box::new(factory(ctx)) as Box<dyn Component>
             })),
@@ -534,14 +539,20 @@ impl Registrar {
     /// Add a palette entry that spawns a fresh instance every time —
     /// no toggle dedup. Use when the component is meant to be rebuilt
     /// per open (search, palette sub-modes).
-    pub fn add_spawn<F, C>(&mut self, label: impl Into<String>, hint: impl Into<String>, factory: F)
-    where
+    pub fn add_spawn<F, C>(
+        &mut self,
+        label: impl Into<String>,
+        hint: impl Into<String>,
+        name: &'static str,
+        factory: F,
+    ) where
         F: Fn(&Context) -> C + 'static,
         C: Component + 'static,
     {
         self.add_palette_entry(PaletteEntry {
             label: label.into(),
             hint: hint.into(),
+            name,
             kind: PaletteKind::Spawn(Box::new(move |ctx| {
                 Box::new(factory(ctx)) as Box<dyn Component>
             })),
