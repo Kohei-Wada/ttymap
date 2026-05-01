@@ -11,3 +11,4 @@
 pub mod component;
 pub mod handle;
 pub mod palette_provider;
+pub mod window_handle;
