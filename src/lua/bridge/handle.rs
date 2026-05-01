@@ -121,10 +121,9 @@ pub enum CallOutcome<R> {
 /// The script self-registers by calling at least one
 /// `ttymap.register_*` API. Two valid shapes:
 ///
-/// 1. **Componented plugin**: calls
-///    `register_plugin` / `register_palette` / `register_overlay`
-///    (sets `kind`), optionally with activation surfaces
-///    (`register_palette_command` / `register_keybind` /
+/// 1. **Componented plugin**: calls `register_plugin` /
+///    `register_palette` (sets `kind`), optionally with activation
+///    surfaces (`register_palette_command` / `register_keybind` /
 ///    `register_footer_hint`).
 /// 2. **Pure-action plugin**: no `kind`, but at least one activation
 ///    surface — typically a `register_palette_command` whose
@@ -166,7 +165,7 @@ pub fn fresh_load(
     if captured.kind.is_none() && !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap.register_* API \
-             (register_plugin / register_palette / register_overlay / \
+             (register_plugin / register_palette / \
              register_palette_command / register_keybind / register_footer_hint)",
         ));
     }

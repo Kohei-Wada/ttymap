@@ -109,9 +109,9 @@ impl LuaPaletteProvider {
         // here is a kind mismatch reported up to the walker.
         let palette = match captured.kind {
             Some(CapturedKind::Palette(t)) => t,
-            Some(CapturedKind::Plugin(_)) | Some(CapturedKind::Overlay(_)) => {
+            Some(CapturedKind::Plugin(_)) => {
                 return Err(mlua::Error::external(
-                    "expected ttymap.register_palette, got ttymap.register_plugin/register_overlay",
+                    "expected ttymap.register_palette, got ttymap.register_plugin",
                 ));
             }
             None => {

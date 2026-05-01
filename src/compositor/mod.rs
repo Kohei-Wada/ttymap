@@ -159,7 +159,7 @@ pub trait Component {
     }
 }
 
-use window::{OverlayWindow, Window, WindowOps};
+use window::{Window, WindowOps};
 
 // ── Compositor stack ───────────────────────────────────────────────
 
@@ -174,12 +174,6 @@ use window::{OverlayWindow, Window, WindowOps};
 /// how the old `Focus::Background` state maps into this design.
 pub struct Compositor {
     stack: Vec<Box<dyn Component>>,
-    /// Always-on, non-focusable Components painted **after** the
-    /// stack so chrome (info bar, scale, attribution) sits on top of
-    /// any toggleable plugin's markers. Populated once at startup
-    /// from `Registrar::overlays`; never receive key events and
-    /// never participate in focus cycling.
-    overlays: Vec<Box<dyn Component>>,
     /// Index of the component that receives key events first.
     /// Invariant: `focused_idx < stack.len()` whenever the stack is
     /// non-empty. After every push, this becomes the new top; after
@@ -191,7 +185,6 @@ impl Compositor {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
-            overlays: Vec::new(),
             focused_idx: 0,
         }
     }
@@ -214,14 +207,6 @@ impl Compositor {
         let idx = self.focused_idx.min(self.stack.len() - 1);
         self.stack.remove(idx);
         self.clamp_focus_after_shrink();
-    }
-
-    /// Install an always-on overlay. Called once at app init from
-    /// the registrar; the component stays for the app's lifetime,
-    /// paints after every regular stack component, and never
-    /// receives key events.
-    pub fn add_overlay(&mut self, c: Box<dyn Component>) {
-        self.overlays.push(c);
     }
 
     pub fn len(&self) -> usize {
@@ -290,11 +275,7 @@ impl Compositor {
 
     /// Poll every component; drain all queued `win.emit(...)` /
     /// `win.close()` / `win.open(...)` ops and apply them in the
-    /// same way [`handle_event`](Self::handle_event) does. Always-on
-    /// overlays poll through the narrower [`Component::poll_overlay`]
-    /// hook — they may have async work (geocoding, throttle ticks)
-    /// but only `emit` is exposed because overlays don't live on the
-    /// focusable stack.
+    /// same way [`handle_event`](Self::handle_event) does.
     pub fn poll(&mut self, ctx: &Context) -> Vec<AppMsg> {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; apply
@@ -309,10 +290,6 @@ impl Compositor {
             }
             let msgs = self.apply_ops(i, ops);
             all_msgs.extend(msgs);
-        }
-        for c in self.overlays.iter_mut() {
-            let mut win = OverlayWindow::new(&mut all_msgs, ctx);
-            c.poll_overlay(&mut win);
         }
         all_msgs
     }
@@ -336,16 +313,11 @@ impl Compositor {
         }
     }
 
-    /// Walk every component and let it paint world-space primitives
-    /// through the supplied [`MapApi`]. Stack first (markers from
-    /// toggleable plugins), then always-on overlays (chrome on top
-    /// of those markers). Drawn before `render` so modal popups sit
-    /// on top of everything.
+    /// Walk every component on the stack and let it paint world-space
+    /// primitives through the supplied [`MapApi`]. Drawn before
+    /// `render` so modal popups sit on top of everything.
     pub fn paint_on_map(&self, p: &mut MapApi<'_>) {
         for c in self.stack.iter() {
-            c.paint_on_map(p);
-        }
-        for c in self.overlays.iter() {
             c.paint_on_map(p);
         }
     }
@@ -445,10 +417,6 @@ pub struct PaletteEntry {
 pub struct Registrar {
     pub activations: Vec<Activation>,
     pub palette_entries: Vec<PaletteEntry>,
-    /// Always-on overlay factories — invoked once at app init and
-    /// pushed into [`Compositor::overlays`]. Used for chrome that's
-    /// always on screen (info bar, scale bar, attribution).
-    pub overlays: Vec<SpawnComponent>,
     /// Plugin-declared per-frame `loop` callbacks. Captured by the
     /// Lua dispatcher when a script calls
     /// `ttymap.register_plugin({ loop = fn })`, and ticked once per
@@ -457,21 +425,12 @@ pub struct Registrar {
     /// `paint_on_map` / `poll` paths still work for now.
     pub plugin_loops: crate::lua::LuaPluginRegistry,
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
-    /// for plugin scripts whose handles aren't owned by a
-    /// `LuaComponent` (i.e. non-overlay plugins — palette providers,
-    /// stack-pushed components built lazily on activation, and any
-    /// `ttymap.api.window.open` / `ttymap.api.palette.open` callers).
-    /// The App takes ownership of this `Vec` in [`crate::app::App::new`]
-    /// and drains each handle's receivers (`push_rx` / `jump_rx` /
-    /// `close_rx` / `export_rx`) once per frame so callbacks running
-    /// in the setup state can request map jumps, frame exports, or
-    /// component pushes without sitting on a dead receiver.
-    ///
-    /// Overlay plugins' handles aren't pushed here — they're moved
-    /// into the per-instance `LuaComponent` via
-    /// [`crate::lua::LuaComponent::from_parts`], which does its own
-    /// drain. `Receiver` is single-owner, so a handle lives in
-    /// exactly one place.
+    /// for every plugin script: the App takes ownership of this `Vec`
+    /// in [`crate::app::App::new`] and drains each handle's receivers
+    /// (`push_rx` / `jump_rx` / `close_rx` / `export_rx`) once per
+    /// frame so callbacks running in the setup state can request map
+    /// jumps, frame exports, or component pushes without sitting on a
+    /// dead receiver.
     pub lua_host_handles: Vec<crate::lua::ttymap::LuaHostHandles>,
 }
 
@@ -524,19 +483,6 @@ impl Registrar {
             name,
             spawn: box_component_factory(factory),
         });
-    }
-
-    /// Register an always-on overlay component. Pushed once at app
-    /// init into [`Compositor::overlays`]; paints after every
-    /// regular stack component, never receives key events. Use for
-    /// chrome that's always on screen (info bar, scale, attribution).
-    #[allow(dead_code)] // plugin-author API; in-tree consumers (info / scalebar / attribution plugins) land later
-    pub fn add_overlay<F, C>(&mut self, factory: F)
-    where
-        F: Fn(&Context) -> C + 'static,
-        C: Component + 'static,
-    {
-        self.overlays.push(box_component_factory(factory));
     }
 }
 

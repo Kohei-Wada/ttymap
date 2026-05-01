@@ -224,19 +224,17 @@ pub struct PluginCtl {
 
 // ── Self-registration capture ────────────────────────────────────────
 
-/// What a plugin script declared by calling `register_plugin /
-/// register_palette / register_overlay`. Exactly one of these per
-/// script — the kind determines what factory the activation
-/// surfaces (`palette_commands` / `keybinds`) push.
+/// What a plugin script declared by calling `register_plugin` /
+/// `register_palette`. Exactly one of these per script — the kind
+/// determines what factory the activation surfaces
+/// (`palette_commands` / `keybinds`) push. (The legacy
+/// `register_overlay` surface was removed in Phase C; always-on
+/// chrome now registers via `register_plugin` + a `loop` callback.)
 pub enum CapturedKind {
     /// Stack-pushed Component plugin (rendered panel).
     Plugin(Table),
     /// Palette provider plugin (`/`-style picker).
     Palette(Table),
-    /// Always-on overlay (paints every frame, no focus, no key).
-    /// Has no activation surface — `palette_commands` / `keybinds`
-    /// are silently ignored when the script registers an overlay.
-    Overlay(Table),
 }
 
 /// One palette row declared by a plugin via
@@ -261,16 +259,17 @@ pub struct KeybindSpec {
 
 /// Everything a single plugin file's setup phase declared. nvim-
 /// style explicit opt-in: the Component itself is one call
-/// (`register_plugin`/`register_palette`/`register_overlay`),
-/// and each activation surface (palette row, keybind) is a
-/// **separate** explicit call with its own Lua callback. Plugins
-/// own whether/when to push by inspecting their own state inside
-/// the callback and returning truthy or falsy.
+/// (`register_plugin` / `register_palette`), and each activation
+/// surface (palette row, keybind) is a **separate** explicit call
+/// with its own Lua callback. Plugins own whether/when to push by
+/// inspecting their own state inside the callback and returning
+/// truthy or falsy.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// The plugin kind itself. `None` means the script never called
-    /// any of `register_plugin / register_palette / register_overlay`
-    /// — the walker logs + skips that file.
+    /// either of `register_plugin / register_palette` — for a script
+    /// that only declares activation surfaces (a "pure-action" plugin)
+    /// this is fine; otherwise the walker logs + skips that file.
     pub kind: Option<CapturedKind>,
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
@@ -380,13 +379,13 @@ pub fn install(
     // call lands. A double-call (or a mix of plugin + palette in
     // the same file) is a Lua-side error — surfaced via mlua so the
     // walker logs + skips the script.
-    // Register the Component itself. Exactly one of these three
-    // per script. A second call on any of them is a Lua-side error.
+    // Register the Component itself. Exactly one of these per
+    // script. A second call on either is a Lua-side error.
     fn set_kind(slot: &CaptureSlot, kind: CapturedKind, who: &str) -> mlua::Result<()> {
         let mut cap = slot.borrow_mut();
         if cap.kind.is_some() {
             return Err(mlua::Error::external(format!(
-                "ttymap.{}: a plugin/palette/overlay was already registered in this script",
+                "ttymap.{}: a plugin/palette was already registered in this script",
                 who
             )));
         }
@@ -405,13 +404,6 @@ pub fn install(
         "register_palette",
         lua.create_function(move |_, spec: Table| {
             set_kind(&cap, CapturedKind::Palette(spec), "register_palette")
-        })?,
-    )?;
-    let cap = slot.clone();
-    ttymap.set(
-        "register_overlay",
-        lua.create_function(move |_, spec: Table| {
-            set_kind(&cap, CapturedKind::Overlay(spec), "register_overlay")
         })?,
     )?;
 

@@ -154,6 +154,12 @@ pub struct OverlayWindow<'a> {
 }
 
 impl<'a> OverlayWindow<'a> {
+    // Production code no longer constructs an `OverlayWindow` (after
+    // C1 dropped the always-on overlay path). The constructor stays
+    // for the unit tests in `lua::bridge::component` that still
+    // exercise `Component::poll_overlay`; those go away in C5 along
+    // with the trait method itself.
+    #[allow(dead_code)]
     pub(crate) fn new(msgs: &'a mut Vec<AppMsg>, ctx: &'a Context) -> Self {
         Self { msgs, ctx }
     }

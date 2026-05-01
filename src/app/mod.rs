@@ -54,19 +54,15 @@ pub struct App {
     /// compositor's `paint_on_map`. Empty during Phase A — no
     /// bundled plugin uses `loop` yet.
     plugin_loops: LuaPluginRegistry,
-    /// Setup-state [`LuaHostHandles`] for non-overlay Lua plugins —
-    /// the palette providers, lazily-pushed plugin components, and
-    /// any `ttymap.api.window.open` / `palette.open` callers. Each
+    /// Setup-state [`LuaHostHandles`] for every Lua plugin script
+    /// (palette providers, plugin components, plugin loops, and any
+    /// `ttymap.api.window.open` / `palette.open` callers). Each
     /// entry's receivers (`push_rx`, `jump_rx`, `close_rx`,
     /// `export_rx`) are drained once per frame in
     /// [`Self::drain_lua_host_handles`]: queued components hit
     /// `compositor.push`, queued map jumps and frame-export requests
     /// are dispatched as `AppMsg`s, and queued `ttymap.window:close()`
     /// calls pop the focused stack component.
-    ///
-    /// Overlay plugins drain their own setup-state handles inside
-    /// [`crate::lua::LuaComponent`] (see `from_parts`) — they don't
-    /// appear here. `Receiver` is single-owner.
     lua_host_handles: Vec<LuaHostHandles>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
@@ -97,17 +93,16 @@ impl App {
             plugin_hints,
         } = build_registrar(&config, tile_cache.attribution(), &keymap);
         // Lift the per-frame loop dispatcher off the registrar before
-        // the rest is consumed (activations / palette_entries /
-        // overlays move into the compositor below). Owned on App so
-        // the per-frame `tick` call has direct access without
-        // threading the registrar reference through.
+        // the rest is consumed (activations / palette_entries move
+        // into the compositor below). Owned on App so the per-frame
+        // `tick` call has direct access without threading the
+        // registrar reference through.
         let plugin_loops = std::mem::take(&mut registrar.plugin_loops);
         // Same pattern for the setup-state handle pool: the App
-        // drains these per frame so non-overlay plugins'
-        // `ttymap.map:jump` / `window:close` / `window:export_frame`
-        // / `api.window.open` / `api.palette.open` calls (all
-        // running on the setup state) reach the compositor and the
-        // app dispatch table.
+        // drains these per frame so plugins' `ttymap.map:jump` /
+        // `window:close` / `window:export_frame` / `api.window.open`
+        // / `api.palette.open` calls (all running on the setup state)
+        // reach the compositor and the app dispatch table.
         let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
@@ -140,23 +135,6 @@ impl App {
             registrar.activations,
             plugin_hints,
         )));
-        // Drain always-on overlay factories from the registrar and
-        // install each overlay. The seed Context uses the same
-        // values App::context produces; cursor starts as None.
-        let overlay_ctx = Context {
-            center: map.center(),
-            theme_id,
-            cursor: None,
-        };
-        for factory in registrar.overlays {
-            // Overlay factories built via `box_component_factory`
-            // always return Some — None would only come from a Lua
-            // plugin's gated callback, but overlays don't have
-            // activation surfaces so they never gate.
-            if let Some(c) = factory(&overlay_ctx) {
-                compositor.add_overlay(c);
-            }
-        }
 
         App {
             map,

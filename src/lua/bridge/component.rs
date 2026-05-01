@@ -166,15 +166,11 @@ impl LuaComponent {
         // here. The component manages its own lifetime via
         // `ttymap.window:close()`.
         let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared, None)?;
-        // Plugin and Overlay both back into a Component — the
-        // distinction (focusable stack vs. always-on chrome) is
-        // decided by where the dispatcher routes the resulting
-        // Component, not by anything inside this constructor.
         let module = match captured.kind {
-            Some(CapturedKind::Plugin(t)) | Some(CapturedKind::Overlay(t)) => t,
+            Some(CapturedKind::Plugin(t)) => t,
             Some(CapturedKind::Palette(_)) => {
                 return Err(mlua::Error::external(
-                    "expected ttymap.register_plugin or register_overlay, got ttymap.register_palette",
+                    "expected ttymap.register_plugin, got ttymap.register_palette",
                 ));
             }
             None => {

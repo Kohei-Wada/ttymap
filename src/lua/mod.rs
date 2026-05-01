@@ -138,8 +138,8 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 // nvim-style two-tier layout per runtime layer:
 //
 // - `<layer>/plugin/*.lua` — auto-discovered plugins. Each script
-//   self-registers via `ttymap.register_plugin / register_palette /
-//   register_overlay` at top level.
+//   self-registers via `ttymap.register_plugin / register_palette`
+//   at top level.
 // - `<layer>/lua/<name>.lua` — `require`-able lib scripts. NOT
 //   auto-discovered. Plugins reach them via `require "<name>"`.
 //
@@ -264,14 +264,13 @@ fn register_one(
 
     // `kind == None` is the **pure-action plugin** shape: the script
     // declared one or more activation surfaces (palette command /
-    // keybind / footer hint) but no `register_plugin / _palette /
-    // _overlay`, so there's no Component to push. `fresh_load` already
-    // rejected the truly-empty case (no kind AND no surfaces); reaching
-    // here with `None` means surfaces exist. Their `invoke` / callback
+    // keybind / footer hint) but no `register_plugin / _palette`,
+    // so there's no Component to push. `fresh_load` already rejected
+    // the truly-empty case (no kind AND no surfaces); reaching here
+    // with `None` means surfaces exist. Their `invoke` / callback
     // closures fire fire-and-forget host APIs (`ttymap.api.frame.export`,
     // `ttymap.map:jump`, …) that flow through `LuaHostHandles`.
     let is_pure_action_kind = captured.kind.is_none();
-    let is_overlay_kind = matches!(captured.kind, Some(ttymap::CapturedKind::Overlay(_)));
     let is_palette_kind = matches!(captured.kind, Some(ttymap::CapturedKind::Palette(_)));
 
     // Take ownership of the spec table when one exists. Pure-action
@@ -279,9 +278,7 @@ fn register_one(
     // `loop` / `footer_hints` from; only `captured.footer_hints` (the
     // explicit `register_footer_hint` calls) applies.
     let module_opt: Option<Table> = captured.kind.map(|k| match k {
-        ttymap::CapturedKind::Plugin(t)
-        | ttymap::CapturedKind::Palette(t)
-        | ttymap::CapturedKind::Overlay(t) => t,
+        ttymap::CapturedKind::Plugin(t) | ttymap::CapturedKind::Palette(t) => t,
     });
     if let Some(module) = module_opt.as_ref()
         && !module_enabled(module)
@@ -326,67 +323,36 @@ fn register_one(
         Vec::new()
     };
 
-    // Overlays install once at app init and stay for the program
-    // lifetime. The LuaComponent shares the setup state — its
-    // hooks (paint_on_map etc.) and the palette/keybind callbacks
-    // see the same module-level Lua locals. That's how
-    // `enabled = not enabled` in a callback flips the next paint.
-    if is_overlay_kind {
-        let module = module_opt.expect("overlay kind always carries a module");
-        let component = match LuaComponent::from_parts(lua.clone(), module, handles, name) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("lua[{}]: failed to build overlay: {}", name, e);
-                return;
-            }
-        };
-        // The overlay slot is a once-returning factory: App::new
-        // calls each registered factory exactly once; the cell
-        // hands back the component the first time and `None`
-        // thereafter (which never happens in practice).
-        let slot = std::cell::RefCell::new(Some(
-            Box::new(component) as Box<dyn crate::compositor::Component>
-        ));
-        r.overlays.push(Box::new(move |_| slot.borrow_mut().take()));
+    // Up-front validate componented plugins so a syntax error
+    // surfaces as one log line instead of a noisy first-
+    // activation failure later. The validation state is
+    // throwaway; activation rebuilds a fresh state per push.
+    // Pure-action plugins have nothing to pre-build (no Component
+    // is ever pushed), so skip validation — `fresh_load` already
+    // confirmed the script parses and registered surfaces.
+    let valid = if is_pure_action_kind {
+        Ok(())
+    } else if is_palette_kind {
+        LuaPaletteProvider::from_source(source, name, shared.clone()).map(|_| ())
     } else {
-        // Up-front validate non-overlay plugins so a syntax error
-        // surfaces as one log line instead of a noisy first-
-        // activation failure later. The validation state is
-        // throwaway; activation rebuilds a fresh state per push.
-        // Pure-action plugins have nothing to pre-build (no Component
-        // is ever pushed), so skip validation — `fresh_load` already
-        // confirmed the script parses and registered surfaces.
-        let valid = if is_pure_action_kind {
-            Ok(())
-        } else if is_palette_kind {
-            LuaPaletteProvider::from_source(source, name, shared.clone()).map(|_| ())
-        } else {
-            LuaComponent::from_source(source, name, shared.clone()).map(|_| ())
-        };
-        if let Err(e) = valid {
-            log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-            return;
-        }
-        // Hand the setup state's `LuaHostHandles` over to the
-        // registrar so the App can drain its receivers per frame.
-        // Non-overlay plugins' setup-state callbacks (palette command
-        // invoke, register_keybind callback, plugin-level `loop`,
-        // and any `ttymap.api.window.open`/`palette.open` spec
-        // callbacks) flip the same setup-state senders that legacy
-        // overlay plugins drained inside `LuaComponent`. Without this
-        // push the receivers would just sit (latent bug pre-A7).
-        //
-        // Pure-action plugins also need this — their palette `invoke`
-        // callbacks fire fire-and-forget APIs (`ttymap.map:jump`,
-        // `ttymap.api.frame.export`) that flow through these very
-        // channels.
-        //
-        // Overlays don't reach this branch — their handles live
-        // inside `LuaComponent::from_parts` for the program lifetime.
-        // `Receiver` is single-owner; pushing an overlay's handles
-        // here would create a second owner and break `try_recv`.
-        r.lua_host_handles.push(handles);
+        LuaComponent::from_source(source, name, shared.clone()).map(|_| ())
+    };
+    if let Err(e) = valid {
+        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+        return;
     }
+    // Hand the setup state's `LuaHostHandles` over to the
+    // registrar so the App can drain its receivers per frame.
+    // Setup-state callbacks (palette command invoke, register_keybind
+    // callback, plugin-level `loop`, and any `ttymap.api.window.open`
+    // / `palette.open` spec callbacks) flip these senders. Without
+    // this push the receivers would just sit (latent bug pre-A7).
+    //
+    // Pure-action plugins also need this — their palette `invoke`
+    // callbacks fire fire-and-forget APIs (`ttymap.map:jump`,
+    // `ttymap.api.frame.export`) that flow through these very
+    // channels.
+    r.lua_host_handles.push(handles);
 
     // Surface plugin metadata to help. Only entries with a key
     // bind are listed today (matching the prior harvest filter); a
@@ -420,11 +386,6 @@ fn register_one(
     //   instance's [`InstanceGuard`] picks up `close_request` on
     //   its next `Component::poll` tick and calls `win.close()`.
     //
-    // Overlays don't push anything: the overlay component already
-    // lives on `r.overlays` for the program lifetime, and the
-    // callback's only job is to mutate Lua-side state that
-    // `paint_on_map` reads.
-    //
     // Whether a plugin allows multiple instances on the stack is
     // a Lua-side decision now — Rust no longer enforces single-
     // instance. A plugin that wants no-double-window keeps an
@@ -437,16 +398,11 @@ fn register_one(
                          shared_clone: Arc<ttymap::LuaHostShared>,
                          ctl: ttymap::PluginCtl|
      -> crate::compositor::SpawnComponent {
-        if is_overlay_kind || is_pure_action_kind {
-            // Overlays and pure-action plugins both run the callback
-            // for its side effects and never push a Component:
-            // - overlays already live on `r.overlays` for the program
-            //   lifetime; the callback only mutates Lua-side state.
-            // - pure-action plugins have no Component to build at all;
-            //   their `invoke` fires fire-and-forget host APIs.
-            // Either way, drain both atomics so a stray `ttymap.plugin:
-            // open()/close()` from one of these callbacks is swallowed
-            // cleanly.
+        if is_pure_action_kind {
+            // Pure-action plugins have no Component to build at all;
+            // their `invoke` fires fire-and-forget host APIs. Drain
+            // both atomics so a stray `ttymap.plugin:open()/close()`
+            // from one of these callbacks is swallowed cleanly.
             Box::new(move |_ctx| {
                 run_lua_callback(&lua_clone, &gate_key, name);
                 ctl.open_request
@@ -777,20 +733,14 @@ mod tests {
             .iter()
             .map(|e| e.label.to_lowercase())
             .collect();
-        // `r.overlays` and `r.plugin_loops` don't carry a name; we
-        // sanity-check the total count of always-on plugins
-        // separately. Each one of info / scalebar / attribution /
-        // center registers itself as either an overlay
-        // (`register_overlay` legacy path) or a plugin loop
-        // (`register_plugin` + `loop` field) — the test treats both
-        // as equivalent so a migration in either direction doesn't
-        // require updating magic numbers.
-        //
-        // Phase B migrations (aircraft / quake / wiki / …) also
-        // register a `loop` callback that runs only while their panel
-        // is open; those land in `plugin_loops` too, so the count is
-        // a lower bound rather than an equality.
-        let always_on_count = r.overlays.len() + r.plugin_loops.len();
+        // `r.plugin_loops` doesn't carry a name; sanity-check the
+        // total count of registered plugin loops as a lower bound.
+        // info / scalebar / attribution / center each register a
+        // `register_plugin` + `loop` callback (after Phase B); Phase B
+        // panel migrations (aircraft / quake / wiki / …) also register
+        // a `loop` for their panel, so this is a lower bound rather
+        // than equality.
+        let always_on_count = r.plugin_loops.len();
 
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased). `satellite` is the
@@ -813,7 +763,7 @@ mod tests {
         }
         assert!(
             always_on_count >= 4,
-            "info/scalebar/attribution/center should each be registered as either an overlay or a plugin loop (got {always_on_count})"
+            "info/scalebar/attribution/center should each register a plugin loop (got {always_on_count})"
         );
     }
 
@@ -856,9 +806,7 @@ mod tests {
 
     fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
         match c.kind.as_ref().expect("script registered something") {
-            ttymap::CapturedKind::Plugin(t)
-            | ttymap::CapturedKind::Palette(t)
-            | ttymap::CapturedKind::Overlay(t) => t,
+            ttymap::CapturedKind::Plugin(t) | ttymap::CapturedKind::Palette(t) => t,
         }
     }
 
@@ -877,12 +825,6 @@ mod tests {
     fn register_palette_yields_palette_variant() {
         let (_lua, c) = parse_spec(r#"ttymap.register_palette({ name = "x" })"#, "x");
         assert!(matches!(c.kind, Some(ttymap::CapturedKind::Palette(_))));
-    }
-
-    #[test]
-    fn register_overlay_yields_overlay_variant() {
-        let (_lua, c) = parse_spec(r#"ttymap.register_overlay({ name = "x" })"#, "x");
-        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Overlay(_))));
     }
 
     #[test]
