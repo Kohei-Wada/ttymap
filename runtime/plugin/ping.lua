@@ -6,15 +6,14 @@
 -- the same time. Pure illustration of "cyber-attack visualisation"
 -- use cases — swap the endpoints / colours / cadence for real data.
 --
--- Each coord is { lon, lat } — same convention as map:point /
--- map:label. The polyline appears in the *next* frame after the
--- push (ephemeral re-submit + 1-frame transport lag), which is
--- invisible at the timescales of typical ping animations.
+-- Toggle via the palette: `:` → "Toggle ping". Off by default so
+-- the screen stays clean unless the user opts in.
 --
--- The `color` field is either an xterm-256 index (0..255) or a
--- keyword string ("accent" / "accent_alt" / "muted" / "road").
--- Numeric indices give the plugin author full control over the
--- look; keywords stay theme-aware across DARK / BRIGHT.
+-- Each coord is { lon, lat } — same convention as map:point /
+-- map:label. The `color` field is either an xterm-256 index
+-- (0..255) or a keyword string ("accent" / "accent_alt" / "muted"
+-- / "road"). Numeric indices give the plugin author full control;
+-- keywords stay theme-aware across DARK / BRIGHT.
 
 local pings = {
   { src = { 139.76,  35.68 }, dst = { -74.01,  40.71 }, color = 196, offset =  0 }, -- Tokyo  → New York   (red)
@@ -28,9 +27,28 @@ local steps = 60
 local pause = 30
 local cycle = steps + pause
 
-local frame = 0
+local enabled = false
+local frame   = 0
+
+local function toggle()
+  enabled = not enabled
+  if enabled then
+    -- Reset phase so the next activation starts the animation
+    -- cleanly from the beginning rather than wherever the silent
+    -- counter happened to land.
+    frame = 0
+  end
+end
+
+ttymap.register_palette_command({
+  label  = "Toggle ping",
+  invoke = toggle,
+})
 
 ttymap.api.frame.on_tick(function(map)
+  if not enabled then
+    return
+  end
   frame = frame + 1
   for _, ping in ipairs(pings) do
     -- Each ping's phase = (frame + offset) mod cycle. The active
