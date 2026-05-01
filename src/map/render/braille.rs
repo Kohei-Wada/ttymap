@@ -96,6 +96,16 @@ impl BrailleBuffer {
     ///   common case where the overlay colour matches the existing
     ///   road colour, this is a no-op).
     ///
+    /// We intentionally do NOT transfer the prior fg into bg or dim the
+    /// colour — both proved problematic in earlier iterations:
+    /// - bg transfer + plain colour: solid bg outshone surrounding `⣿`
+    ///   cells (different perceived brightness).
+    /// - bg = overlay (tint approach): inter-dot bg shows through the
+    ///   `⣿` glyph, mixing badly with the cell's fg colour.
+    ///
+    /// The cleanest visual is just "punch a single overlay-coloured dot through
+    /// saturated cells, accept the 1-cell-wide gap in the fill".
+    ///
     /// Out-of-bounds coordinates are silently ignored.
     pub fn set_pixel_punching(&mut self, x: usize, y: usize, color: u8) {
         if x >= self.width || y >= self.height {
@@ -104,17 +114,6 @@ impl BrailleBuffer {
         let idx = self.cell_index(x, y);
         let bit = BRAILLE_MAP[y & 3][x & 1];
         if self.pixel_buf[idx] == 0xFF {
-            // Saturated cell (e.g. water polygon interior). Transfer the
-            // cell's prior fg colour into bg so the OFF subpixels of the
-            // single-bit overlay mask render against the underlying fill
-            // colour rather than the global bg. Without this, line cells
-            // on water lose the water visual entirely (single dot on
-            // global-black/white bg). Trade-off: the cell's solid bg fill
-            // appears slightly more saturated than the surrounding `⣿`
-            // glyph rendering (which is fg dots on global bg) — accepted
-            // because using a road colour as the overlay (rather than a
-            // bright accent) keeps the contrast modest.
-            self.bg_buf[idx] = self.fg_buf[idx];
             self.pixel_buf[idx] = bit;
         } else {
             self.pixel_buf[idx] |= bit;
@@ -317,8 +316,8 @@ mod tests {
     }
 
     /// Saturated cell + `set_pixel_punching` → mask is replaced with
-    /// just the overlay's bit, fg = overlay colour, bg inherits the
-    /// cell's prior fg so OFF subpixels render against the fill colour.
+    /// just the overlay's bit (the cell's prior `⣿` rendering is
+    /// dropped at this cell), fg = overlay colour, bg untouched.
     #[test]
     fn set_pixel_punching_replaces_mask_on_saturated_cell() {
         let mut buf = BrailleBuffer::new(4, 4);
@@ -329,18 +328,13 @@ mod tests {
         }
         let idx = buf.cell_index(0, 0);
         assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: saturated");
-        assert_eq!(buf.fg_buf[idx], 5, "fixture: fg = fill colour");
 
         buf.set_pixel_punching(0, 0, 7);
 
         let bit = BRAILLE_MAP[0][0];
         assert_eq!(buf.pixel_buf[idx], bit, "mask replaced with overlay bit");
-        assert_eq!(buf.fg_buf[idx], 7, "fg = overlay colour");
-        assert_eq!(
-            buf.bg_buf[idx], 5,
-            "bg inherits the cell's prior fg so OFF dots render against \
-             the underlying fill colour, not the global bg"
-        );
+        assert_eq!(buf.fg_buf[idx], 7, "fg = overlay");
+        assert_eq!(buf.bg_buf[idx], 0, "bg untouched on punch");
     }
 
     /// Sparse non-empty cell + `set_pixel_punching` → mask OR-merges
