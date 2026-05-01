@@ -52,11 +52,24 @@ local function refresh(lat, lon)
     state.job = ttymap.http:fetch(reverse_url(lat, lon))
 end
 
-ttymap.register_overlay({
+ttymap.register_plugin({
     name = "info",
-    paint_on_map = function(map)
+    loop = function(map)
+        -- Drain the in-flight reverse-geocode job, if any.
+        if state.job then
+            local body = state.job:try_take()
+            if body then
+                local payload = ttymap.json:parse(body)
+                state.place_name = format_place(payload)
+                state.job = nil
+            end
+        end
+
         local lon, lat = map:center()
         local zoom = map:zoom()
+
+        -- Kick a new fetch (subject to the per-plugin throttle).
+        refresh(lat, lon)
 
         map:text_anchored("top-right", 0,
             string.format(" center: %.3f, %.3f ", lat, lon), "accent")
@@ -76,18 +89,5 @@ ttymap.register_overlay({
         local place = state.place_name or "unknown"
         map:text_anchored("top-right", 3,
             " place: " .. place .. " ", "accent")
-    end,
-
-    poll = function()
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                local payload = ttymap.json:parse(body)
-                state.place_name = format_place(payload)
-                state.job = nil
-            end
-        end
-        local lon, lat = ttymap.map:center()
-        refresh(lat, lon)
     end,
 })
