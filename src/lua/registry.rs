@@ -75,6 +75,7 @@ mod tests {
     use super::*;
     use crate::geo::LonLat;
     use crate::map::render::frame::MapFrame;
+    use crate::map::render::overlay::UserPolyline;
     use crate::theme::{DARK, UiTheme};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -135,7 +136,8 @@ mod tests {
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
         {
-            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+            let mut sink: Vec<UserPolyline> = Vec::new();
+            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
             reg.tick(&mut api);
         }
         let a: i64 = lua_a.globals().get("a").expect("read a");
@@ -144,7 +146,8 @@ mod tests {
         assert_eq!(b, 1, "first tick should bump b once");
 
         {
-            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+            let mut sink: Vec<UserPolyline> = Vec::new();
+            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
             reg.tick(&mut api);
         }
         let a: i64 = lua_a.globals().get("a").expect("read a");
@@ -181,7 +184,8 @@ mod tests {
         });
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         reg.tick(&mut api);
 
         let good: i64 = lua_good.globals().get("good").expect("read good");
@@ -195,7 +199,8 @@ mod tests {
     fn empty_registry_tick_is_a_noop() {
         let reg = LuaTickRegistry::default();
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         reg.tick(&mut api);
         assert!(reg.is_empty());
     }
