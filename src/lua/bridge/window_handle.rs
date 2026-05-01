@@ -51,6 +51,71 @@ impl UserData for WindowHandle {
     }
 }
 
+/// Generic wrapper that drains a [`CloseFlag`] on each `poll` tick
+/// and forwards every other [`Component`] method to the inner impl.
+///
+/// Used by `ttymap.api.palette.open` (and any future A-series
+/// primitive that wraps a pre-existing `Component`) to add the
+/// shared-flag close protocol without duplicating it inside each
+/// adapter type. [`LuaWindowComponent`] does the same thing inline
+/// in its own `poll` because it owns the flag directly; for adapters
+/// that already exist (`PaletteComponent` wrapping a
+/// [`LuaPaletteProvider`]) wrapping is the cheaper bridge.
+///
+/// [`Component`]: crate::compositor::Component
+/// [`LuaWindowComponent`]: super::window_component::LuaWindowComponent
+/// [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
+pub struct CloseFlagWrapper<C> {
+    inner: C,
+    flag: CloseFlag,
+}
+
+impl<C> CloseFlagWrapper<C> {
+    pub fn new(inner: C, flag: CloseFlag) -> Self {
+        Self { inner, flag }
+    }
+}
+
+impl<C: crate::compositor::Component> crate::compositor::Component for CloseFlagWrapper<C> {
+    fn handle_event(
+        &mut self,
+        event: crossterm::event::KeyEvent,
+        win: &mut crate::compositor::window::Window,
+    ) {
+        self.inner.handle_event(event, win);
+    }
+
+    fn render(&self, win: &mut crate::compositor::window::RenderWindow) {
+        self.inner.render(win);
+    }
+
+    fn paint_on_map(&self, p: &mut crate::compositor::MapApi<'_>) {
+        self.inner.paint_on_map(p);
+    }
+
+    fn poll(&mut self, win: &mut crate::compositor::window::Window) {
+        self.inner.poll(win);
+        if self.flag.take() {
+            win.close();
+        }
+    }
+
+    fn poll_overlay(&mut self, win: &mut crate::compositor::window::OverlayWindow) {
+        // Not really meaningful for stack components, but forwarded
+        // for completeness — `Component`'s default impl is a no-op,
+        // so wrappers around overlay-capable components keep working.
+        self.inner.poll_overlay(win);
+    }
+
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        self.inner.footer_hints()
+    }
+
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +132,55 @@ mod tests {
             .unwrap();
         assert!(flag.take());
         assert!(!flag.take());
+    }
+
+    /// [`CloseFlagWrapper::poll`] must call `win.close()` exactly when
+    /// the shared flag has been flipped — and nothing extra at any
+    /// other time. Mirrors the equivalent test on
+    /// [`super::window_component::LuaWindowComponent`].
+    #[test]
+    fn close_flag_wrapper_polls_close_when_flag_set() {
+        use crate::compositor::Component;
+        use crate::compositor::Context;
+        use crate::compositor::window::{Window, WindowOps};
+        use crate::geo::LonLat;
+
+        /// Inert inner component — no-op for every method so the
+        /// wrapper's behaviour is the only thing under test.
+        struct Inert;
+        impl Component for Inert {}
+
+        const CTX: Context = Context {
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            theme_id: crate::theme::ThemeId::Dark,
+            cursor: None,
+        };
+
+        let flag = CloseFlag::default();
+        let mut wrapped = CloseFlagWrapper::new(Inert, flag.clone());
+
+        // No flip → no close.
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            wrapped.poll(&mut win);
+        }
+        assert!(!ops.close);
+
+        // Flipped flag → close queued, then idempotent.
+        flag.request();
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            wrapped.poll(&mut win);
+        }
+        assert!(ops.close);
+
+        let mut ops = WindowOps::default();
+        {
+            let mut win = Window::new(&mut ops, &CTX);
+            wrapped.poll(&mut win);
+        }
+        assert!(!ops.close);
     }
 }

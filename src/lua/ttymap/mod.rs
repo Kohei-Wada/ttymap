@@ -44,6 +44,9 @@
 //!                                            (LuaWindowComponent) onto
 //!                                            the stack; handle:close()
 //!                                            pops it (idempotent)
+//! ttymap.api.palette.open(spec) -> Handle   push a palette provider
+//!                                            onto the stack; handle:close()
+//!                                            pops it (idempotent)
 //! ttymap.api.frame.export()                 snapshot the current frame to disk
 //! ```
 //!
@@ -481,12 +484,15 @@ pub fn install(
     //
     // - `ttymap.api.window.open(spec) -> WindowHandle` — push a
     //   focused [`LuaWindowComponent`] onto the compositor stack.
+    // - `ttymap.api.palette.open(spec) -> PaletteHandle` — push a
+    //   palette provider (a `PaletteComponent` wrapping a
+    //   [`LuaPaletteProvider`]) onto the stack.
+    // - `ttymap.api.frame.export()` — request the current frame be
+    //   snapshotted to disk.
     //
-    // Future siblings: `ttymap.api.palette.open` (A6),
-    // `ttymap.api.frame.export` (A4). Grouping under `api.*` keeps
-    // the new explicit surface visually distinct from the existing
-    // ambient userdatas (`ttymap.map`, `ttymap.window`, …) while the
-    // legacy ones are phased out.
+    // Grouping under `api.*` keeps the new explicit surface visually
+    // distinct from the existing ambient userdatas (`ttymap.map`,
+    // `ttymap.window`, …) while the legacy ones are phased out.
     let api = lua.create_table()?;
 
     let window_api = lua.create_table()?;
@@ -536,6 +542,50 @@ pub fn install(
         )?,
     )?;
     api.set("window", window_api)?;
+
+    // ── ttymap.api.palette ───────────────────────────────────────────
+    //
+    // Mirror of `ttymap.api.window.open`: build a palette provider on
+    // the same Lua VM (the setup state), wrap it in a
+    // [`PaletteComponent`] plus a [`CloseFlagWrapper`] so the host can
+    // pop the palette via the shared `CloseFlag` the
+    // [`PaletteHandle`] also holds, and queue it onto `push_tx`. The
+    // App drains `push_tx` per frame and pushes each component onto
+    // the compositor stack.
+    let palette_api = lua.create_table()?;
+    let push_tx_for_palette = push_tx.clone();
+    palette_api.set(
+        "open",
+        lua.create_function(
+            move |lua,
+                  spec: Table|
+                  -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
+                use crate::lua::bridge::palette_handle::PaletteHandle;
+                use crate::lua::bridge::palette_provider::LuaPaletteProvider;
+                use crate::lua::bridge::window_handle::{CloseFlag, CloseFlagWrapper};
+                let flag = CloseFlag::default();
+                // Build the provider on the **same** Lua VM that ran
+                // `palette.open` — the setup state. The spec's
+                // callbacks (`filter`, `items`, `execute`, …) capture
+                // upvalues there, so the per-provider Lua handle must
+                // be a clone of it (cheap Arc bump).
+                let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
+                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
+                let wrapped = CloseFlagWrapper::new(palette, flag.clone());
+                if push_tx_for_palette
+                    .send(Box::new(wrapped) as Box<dyn crate::compositor::Component>)
+                    .is_err()
+                {
+                    log::error!(
+                        "lua[{}]: ttymap.api.palette.open: push channel closed (receiver dropped)",
+                        tag
+                    );
+                }
+                Ok(PaletteHandle::new(flag))
+            },
+        )?,
+    )?;
+    api.set("palette", palette_api)?;
 
     // ── ttymap.api.frame ─────────────────────────────────────────────
     //
@@ -1184,6 +1234,45 @@ mod tests {
         // component, this just confirms the userdata method survives
         // the call (idempotent close is the WindowHandle contract).
         lua.load("ttymap_test_handle:close()")
+            .exec()
+            .expect("close");
+    }
+
+    #[test]
+    fn api_palette_open_pushes_component_and_returns_handle() {
+        // Mirror of `api_window_open_pushes_component_and_returns_handle`:
+        // `ttymap.api.palette.open(spec)` must queue a wrapped
+        // `PaletteComponent` on `push_rx` and hand back a
+        // `PaletteHandle` whose `:close()` flips a shared flag without
+        // requiring the App loop to be running.
+        let (lua, handles) = install_for_test();
+        lua.load(
+            r#"
+            local h = ttymap.api.palette.open({
+                prompt = "/",
+                filter = function(_) end,
+                items = function() return {} end,
+                execute = function(_) return { close = true } end,
+                is_loading = function() return false end,
+            })
+            ttymap_test_palette = h
+            "#,
+        )
+        .exec()
+        .expect("exec");
+        // Exactly one component must be queued — `palette.open` pushes
+        // per call, no implicit dedup.
+        assert!(
+            handles.push_rx.try_recv().is_ok(),
+            "push_rx should have received the queued palette component"
+        );
+        assert!(
+            handles.push_rx.try_recv().is_err(),
+            "push_rx should be drained after a single recv"
+        );
+        // `:close()` must round-trip through the userdata without a
+        // panic — same idempotent contract as `WindowHandle`.
+        lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");
     }

@@ -12,7 +12,7 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use mlua::Table;
+use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::app::AppMsg;
@@ -46,6 +46,55 @@ pub struct LuaPaletteProvider {
 }
 
 impl LuaPaletteProvider {
+    /// Build a palette provider from a `spec` table that was already
+    /// constructed in an existing Lua VM (the *setup state* — the VM
+    /// that ran the script's top-level `register_*` calls and continues
+    /// to run palette / keybind callbacks). Used by
+    /// `ttymap.api.palette.open(spec)` where the script builds the spec
+    /// inline inside an activation callback rather than at top level
+    /// via `ttymap.register_palette`.
+    ///
+    /// Unlike [`Self::from_source`] there's no fresh Lua state and no
+    /// `register_palette` capture step — the caller already has the
+    /// spec table. Host services (`ttymap.map`, `ttymap.window`, …)
+    /// are already installed on `lua` by the prior
+    /// [`crate::lua::ttymap::install`] call that produced the setup
+    /// state.
+    ///
+    /// **Channel ownership** (per A3's Path 4 decision): `ttymap.map:jump`
+    /// inside this provider's `execute` callback hits the **setup
+    /// state's** `jump_tx` — drained centrally by [`crate::app::App`]
+    /// per frame and emitted as `AppMsg::Map(Action::Jump)`. So unlike
+    /// [`Self::from_source`], this provider's own `jump_rx` is a
+    /// disconnected channel (sender dropped immediately) — the in-execute
+    /// "jump → Run([Jump])" path is unreachable here, replaced by the
+    /// App's central drain. `execute` always collapses to `Close`.
+    pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
+        // Read the cacheable bits up front, then hand the spec over to
+        // the long-lived `LuaHandle`. Same shape as `from_source`'s
+        // tail — the only difference is that no `fresh_load` /
+        // `register_palette` capture happens here because the spec
+        // is already in hand.
+        let prompt: String = spec.get("prompt").unwrap_or_else(|_| ":".to_string());
+        let submit_mode = parse_submit_mode(&spec);
+        let handle = LuaHandle::new(lua, spec, log_tag)?;
+
+        // Disconnected jump channel — see doc comment above. The
+        // sender goes out of scope immediately, so every `try_recv`
+        // is `Err` and `action_from_lua` falls through to `Close`.
+        // Real jump intent goes through the setup state's `jump_tx`
+        // (held by `ttymap.map`) and is drained centrally by App.
+        let (_jump_tx, jump_rx) = mpsc::channel();
+
+        Ok(Self {
+            handle,
+            prompt,
+            submit_mode,
+            items: Vec::new(),
+            jump_rx,
+        })
+    }
+
     pub fn from_source(
         source: &'static str,
         id: &'static str,
