@@ -151,6 +151,18 @@ impl MapState {
                 self.jump_to(*loc);
                 true
             }
+            Action::SetZoom(z) => {
+                let old = self.zoom;
+                self.zoom = z.clamp(self.min_zoom, max_zoom);
+                self.zoom != old
+            }
+            Action::FlyTo { center, zoom } => {
+                let old_center = self.center;
+                let old_zoom = self.zoom;
+                self.center = *center;
+                self.zoom = zoom.clamp(self.min_zoom, max_zoom);
+                self.center != old_center || self.zoom != old_zoom
+            }
         }
     }
 
@@ -289,5 +301,38 @@ mod tests {
         map.process_action(&Action::ResetPosition);
         assert_ne!(map.center.lon, moved);
         assert_eq!(map.center.lon, map.initial_lon);
+    }
+
+    #[test]
+    fn set_zoom_clamps_into_allowed_range() {
+        // SetZoom must obey the same `[min_zoom, max_zoom]` window that
+        // ZoomIn/ZoomOut land in; out-of-range Lua-side requests get
+        // clamped so a plugin author can pass `1e9` without the host
+        // entering an undefined zoom state.
+        let mut map = default_core();
+        map.process_action(&Action::SetZoom(99.0));
+        assert!((map.zoom - map.max_zoom).abs() < f64::EPSILON);
+        map.process_action(&Action::SetZoom(-99.0));
+        assert!((map.zoom - map.min_zoom).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn fly_to_sets_centre_and_zoom_atomically() {
+        // FlyTo is the composite primitive: one dispatch sets both
+        // centre and zoom so we don't render an intermediate
+        // new-centre / old-zoom frame. The clamp behaviour mirrors
+        // SetZoom.
+        let mut map = default_core();
+        let target = LonLat {
+            lon: 139.7595,
+            lat: 35.6828,
+        };
+        map.process_action(&Action::FlyTo {
+            center: target,
+            zoom: 99.0,
+        });
+        assert!((map.center.lon - target.lon).abs() < 1e-9);
+        assert!((map.center.lat - target.lat).abs() < 1e-9);
+        assert!((map.zoom - map.max_zoom).abs() < f64::EPSILON);
     }
 }

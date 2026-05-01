@@ -22,6 +22,11 @@
 //!                                            stale on-disk copy if any
 //! ttymap.http   :url_encode(s) -> string    RFC 3986 query encoding
 //! ttymap.map    :jump(lon, lat)             recentre the map (fire-and-forget)
+//! ttymap.map    :zoom(level)                set zoom directly (clamped to map's
+//!                                            allowed range; fire-and-forget)
+//! ttymap.map    :fly_to(lon, lat, zoom)     composite recenter + zoom in one
+//!                                            dispatch (avoids the intermediate
+//!                                            new-centre / old-zoom frame)
 //! ttymap.map    :center() -> lon, lat       latest centre, refreshed per dispatch
 //! ttymap.json   :parse(s) -> value|nil      JSON → Lua tables (errors → nil)
 //! ttymap.sgp4   :parse_tle(text) -> handle  parse a TLE for SGP4 propagation
@@ -177,6 +182,14 @@ impl LuaHostShared {
 /// centrally by the App per frame.
 pub struct LuaHostHandles {
     pub jump_rx: mpsc::Receiver<LonLat>,
+    /// Direct zoom requests from `ttymap.map:zoom(level)`. The host
+    /// emits `AppMsg::Map(Action::SetZoom)` per drained value.
+    pub zoom_rx: mpsc::Receiver<f64>,
+    /// Composite recenter+zoom requests from
+    /// `ttymap.map:fly_to(lon, lat, zoom)`. One dispatch produces a
+    /// single render at the new view; emitting `Jump` and `SetZoom`
+    /// separately would render an intermediate frame.
+    pub fly_to_rx: mpsc::Receiver<(LonLat, f64)>,
     pub export_rx: mpsc::Receiver<()>,
     pub center: Arc<Mutex<LonLat>>,
     /// Components queued by `ttymap.api.window.open` (and, in A6,
@@ -268,6 +281,8 @@ pub fn install(
     slot: CaptureSlot,
 ) -> mlua::Result<LuaHostHandles> {
     let (jump_tx, jump_rx) = mpsc::channel();
+    let (zoom_tx, zoom_rx) = mpsc::channel();
+    let (fly_to_tx, fly_to_rx) = mpsc::channel();
     let (export_tx, export_rx) = mpsc::channel();
     // `Box<dyn Component>` is `!Send`; that's fine — the channel
     // stays on the main thread (install + every `window.open` Lua
@@ -288,6 +303,8 @@ pub fn install(
         "map",
         lua.create_userdata(HostMap {
             jump_tx,
+            zoom_tx,
+            fly_to_tx,
             center: center.clone(),
         })?,
     )?;
@@ -505,6 +522,8 @@ pub fn install(
 
     Ok(LuaHostHandles {
         jump_rx,
+        zoom_rx,
+        fly_to_rx,
         export_rx,
         center,
         push_rx,
@@ -555,6 +574,8 @@ impl UserData for HostHttp {
 
 struct HostMap {
     jump_tx: mpsc::Sender<LonLat>,
+    zoom_tx: mpsc::Sender<f64>,
+    fly_to_tx: mpsc::Sender<(LonLat, f64)>,
     center: Arc<Mutex<LonLat>>,
 }
 
@@ -568,6 +589,24 @@ impl UserData for HostMap {
         // being torn down — silently ignore.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             let _ = this.jump_tx.send(LonLat { lon, lat });
+            Ok(())
+        });
+
+        // `ttymap.map:zoom(level)` — request the map zoom directly.
+        // Clamping to the map's `[min_zoom, max_zoom]` happens host-
+        // side in `MapState::process_action` so plugins don't need to
+        // know the bounds. Fire-and-forget; symmetric with `jump`.
+        methods.add_method("zoom", |_, this, level: f64| {
+            let _ = this.zoom_tx.send(level);
+            Ok(())
+        });
+
+        // `ttymap.map:fly_to(lon, lat, zoom)` — composite recenter +
+        // zoom in one dispatch. Emitting `jump` + `zoom` separately
+        // would render two frames; this routes through
+        // `Action::FlyTo` so the user sees a single transition.
+        methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
+            let _ = this.fly_to_tx.send((LonLat { lon, lat }, zoom));
             Ok(())
         });
 
@@ -893,6 +932,32 @@ mod tests {
         let ll = handles.jump_rx.try_recv().expect("jump must be queued");
         assert!((ll.lon - 139.7595).abs() < 1e-9);
         assert!((ll.lat - 35.6828).abs() < 1e-9);
+    }
+
+    #[test]
+    fn host_map_zoom_pushes_to_channel() {
+        // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side
+        // — the level lands on `zoom_rx` and the host emits the
+        // `AppMsg::Map(Action::SetZoom)` per drained value.
+        let (lua, handles) = install_for_test();
+        lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
+        let z = handles.zoom_rx.try_recv().expect("zoom must be queued");
+        assert!((z - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn host_map_fly_to_pushes_centre_and_zoom() {
+        // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
+        // channel value so the host can emit one `Action::FlyTo` per
+        // call (single redraw, no intermediate frame).
+        let (lua, handles) = install_for_test();
+        lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
+            .exec()
+            .expect("exec");
+        let (ll, zoom) = handles.fly_to_rx.try_recv().expect("fly_to queued");
+        assert!((ll.lon - 139.7595).abs() < 1e-9);
+        assert!((ll.lat - 35.6828).abs() < 1e-9);
+        assert!((zoom - 12.0).abs() < 1e-9);
     }
 
     #[test]

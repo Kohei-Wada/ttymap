@@ -258,6 +258,12 @@ impl App {
             while let Ok(ll) = handles.jump_rx.try_recv() {
                 msgs.push(AppMsg::Map(crate::map::Action::Jump(ll)));
             }
+            while let Ok(z) = handles.zoom_rx.try_recv() {
+                msgs.push(AppMsg::Map(crate::map::Action::SetZoom(z)));
+            }
+            while let Ok((center, zoom)) = handles.fly_to_rx.try_recv() {
+                msgs.push(AppMsg::Map(crate::map::Action::FlyTo { center, zoom }));
+            }
             while handles.export_rx.try_recv().is_ok() {
                 msgs.push(AppMsg::ExportFrame);
             }

@@ -41,6 +41,18 @@ pub enum Action {
     /// the here-plugin, and `ttymap.map:jump` from any Lua plugin — anything
     /// that yields a `LonLat` and wants to move the view there.
     Jump(LonLat),
+    /// Set zoom directly (clamped to the map's `[min_zoom, max_zoom]`).
+    /// Produced by `ttymap.map:zoom(level)` from Lua. Programmatic-only
+    /// — not bound from `[keymap]` — so it lives outside `all_listed`.
+    SetZoom(f64),
+    /// Composite recenter + zoom in one dispatch. Produced by
+    /// `ttymap.map:fly_to(lon, lat, zoom)`. Saves a round-trip vs.
+    /// emitting `Jump` and `SetZoom` separately, which would render
+    /// twice (intermediate frame at the new centre but old zoom).
+    FlyTo {
+        center: LonLat,
+        zoom: f64,
+    },
 }
 
 impl Action {
@@ -66,7 +78,11 @@ impl Action {
             Action::ZoomToWorld => "Zoom to world",
             Action::ResetPosition => "Reset position",
             Action::Redraw => "Redraw",
-            Action::PanCells(..) | Action::ZoomAt { .. } | Action::Jump(_) => "",
+            Action::PanCells(..)
+            | Action::ZoomAt { .. }
+            | Action::Jump(_)
+            | Action::SetZoom(_)
+            | Action::FlyTo { .. } => "",
         }
     }
 
@@ -114,7 +130,11 @@ impl Action {
             Action::ZoomToWorld => "zoom_to_world",
             Action::ResetPosition => "reset_position",
             Action::Redraw => "redraw",
-            Action::PanCells(..) | Action::ZoomAt { .. } | Action::Jump(_) => "",
+            Action::PanCells(..)
+            | Action::ZoomAt { .. }
+            | Action::Jump(_)
+            | Action::SetZoom(_)
+            | Action::FlyTo { .. } => "",
         }
     }
 
