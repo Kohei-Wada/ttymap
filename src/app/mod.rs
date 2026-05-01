@@ -25,6 +25,7 @@ use log::{debug, info};
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
 use crate::keymap::{KeyMap, KeybindingOverrides};
+use crate::lua::LuaPluginRegistry;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
@@ -45,6 +46,13 @@ pub struct App {
     compositor: Compositor,
     theme_id: ThemeId,
     ui_theme: UiTheme,
+    /// Per-frame plugin-loop dispatcher. Populated at startup from
+    /// `Registrar.plugin_loops` (every plugin script that declared a
+    /// `loop = function(map) ... end` field lands here) and ticked
+    /// once per frame against the live `MapApi`, before the
+    /// compositor's `paint_on_map`. Empty during Phase A — no
+    /// bundled plugin uses `loop` yet.
+    plugin_loops: LuaPluginRegistry,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -70,9 +78,15 @@ impl App {
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
         let BuiltRegistrar {
-            registrar,
+            mut registrar,
             plugin_hints,
         } = build_registrar(&config, tile_cache.attribution(), &keymap);
+        // Lift the per-frame loop dispatcher off the registrar before
+        // the rest is consumed (activations / palette_entries /
+        // overlays move into the compositor below). Owned on App so
+        // the per-frame `tick` call has direct access without
+        // threading the registrar reference through.
+        let plugin_loops = std::mem::take(&mut registrar.plugin_loops);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -130,6 +144,7 @@ impl App {
             compositor,
             theme_id,
             ui_theme,
+            plugin_loops,
             cursor: None,
         }
     }
@@ -165,6 +180,7 @@ impl App {
                     f,
                     self.map_frame.as_ref(),
                     &self.compositor,
+                    &self.plugin_loops,
                     &self.ui_theme,
                     &ctx,
                 )

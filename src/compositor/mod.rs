@@ -434,6 +434,13 @@ pub struct Registrar {
     /// pushed into [`Compositor::overlays`]. Used for chrome that's
     /// always on screen (info bar, scale bar, attribution).
     pub overlays: Vec<SpawnComponent>,
+    /// Plugin-declared per-frame `loop` callbacks. Captured by the
+    /// Lua dispatcher when a script calls
+    /// `ttymap.register_plugin({ loop = fn })`, and ticked once per
+    /// frame from `App::run` against the live `MapApi`. The unified
+    /// per-frame work mechanism for the new plugin API; old
+    /// `paint_on_map` / `poll` paths still work for now.
+    pub plugin_loops: crate::lua::LuaPluginRegistry,
 }
 
 impl Registrar {

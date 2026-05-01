@@ -15,12 +15,14 @@
 
 pub mod bridge;
 pub mod init_lua;
+pub mod registry;
 pub mod runtimepath;
 pub mod ttymap;
 
 pub use bridge::component::LuaComponent;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use init_lua::run_init_lua;
+pub use registry::LuaPluginRegistry;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;
 
@@ -281,6 +283,27 @@ fn register_one(
         log::info!("lua[{}]: enabled = false, skipping", name);
         drop(lua);
         return;
+    }
+
+    // Capture the plugin's per-frame `loop` callback if it declared
+    // one. Optional and additive: scripts that don't use this field
+    // continue to work through their existing `paint_on_map` / `poll`
+    // hooks. The setup-state Lua is cloned (cheap Arc bump) into the
+    // registry entry so the closure stays callable for the program's
+    // lifetime.
+    if let Ok(loop_fn) = module.get::<mlua::Function>("loop") {
+        match lua.create_registry_value(loop_fn) {
+            Ok(loop_key) => {
+                r.plugin_loops.register(crate::lua::registry::PluginLoop {
+                    name,
+                    lua: lua.clone(),
+                    loop_fn: loop_key,
+                });
+            }
+            Err(e) => {
+                log::warn!("lua[{}]: failed to register loop fn: {}", name, e);
+            }
+        }
     }
 
     // Read footer_hints from the module before it's consumed by
