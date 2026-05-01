@@ -19,11 +19,6 @@ pub use msg::AppMsg;
 use std::io;
 use std::sync::Arc;
 
-/// Minimum interval between overlay-driven redraws. ~30Hz balances
-/// animation smoothness against render-thread CPU; the main loop
-/// still polls events at ~60Hz so user input remains responsive.
-const OVERLAY_REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
@@ -88,6 +83,12 @@ pub struct App {
     /// (pan, zoom, resize, theme change) bypass this check and fire
     /// immediately.
     last_overlay_redraw: std::time::Instant,
+    /// Main event-loop wake interval. Derived from
+    /// `ttymap.opt.runtime.poll_timeout_ms` at startup.
+    poll_timeout: std::time::Duration,
+    /// Minimum interval between overlay-driven redraws. Derived from
+    /// `ttymap.opt.runtime.overlay_redraw_ms` at startup.
+    overlay_redraw_interval: std::time::Duration,
 }
 
 impl App {
@@ -167,6 +168,10 @@ impl App {
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
+            poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
+            overlay_redraw_interval: std::time::Duration::from_millis(
+                config.runtime.overlay_redraw_ms,
+            ),
         }
     }
 
@@ -235,7 +240,7 @@ impl App {
             // resize, theme change) bypass this check and always fire immediately.
             if !self.overlay_sink.is_empty() {
                 let now = std::time::Instant::now();
-                if now.duration_since(self.last_overlay_redraw) >= OVERLAY_REDRAW_INTERVAL {
+                if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
                     self.request_map_redraw();
                     self.last_overlay_redraw = now;
                 }
@@ -247,11 +252,11 @@ impl App {
             // event-driven: a freshly produced render frame (we
             // drain those non-blockingly at the top of the loop)
             // and any plugin whose `on_tick` touches render output
-            // (e.g. ping animation). 50 ms = 20 Hz, low enough that
-            // per-tick work (`ui::draw`, plugin ticks, ratatui paint)
-            // stays cheap, high enough that input latency is
-            // imperceptible and animations look smooth.
-            let mut poll_timeout = Duration::from_millis(50);
+            // (e.g. ping animation). Configurable via
+            // `ttymap.opt.runtime.poll_timeout_ms`; default 50 ms
+            // (20 Hz) keeps per-tick work cheap while input latency
+            // stays imperceptible.
+            let mut poll_timeout = self.poll_timeout;
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
                 match event::read()? {

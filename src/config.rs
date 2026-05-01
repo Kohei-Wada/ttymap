@@ -17,6 +17,7 @@ pub struct Config {
     pub cache: CacheConfig,
     pub geoip: GeoipConfig,
     pub plugins: PluginsConfig,
+    pub runtime: RuntimeConfig,
 }
 
 #[derive(Default, Clone)]
@@ -114,6 +115,31 @@ impl Default for GeoipConfig {
     }
 }
 
+#[derive(Clone)]
+pub struct RuntimeConfig {
+    /// Main event-loop wake interval in milliseconds. Lower = more
+    /// responsive input and smoother animation but higher idle CPU.
+    /// 50 ms (20 Hz) balances input-latency imperceptibility against
+    /// per-tick `ui::draw` cost.
+    pub poll_timeout_ms: u64,
+    /// Minimum interval between overlay-driven redraws in
+    /// milliseconds. Plugins can push polylines every tick at the
+    /// poll rate; the App rate-limits the resulting full-tile re-
+    /// renders to this interval. Lower = smoother animation but
+    /// higher render-thread CPU. 100 ms (10 Hz) is enough for typical
+    /// growing-line animations.
+    pub overlay_redraw_ms: u64,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            poll_timeout_ms: 50,
+            overlay_redraw_ms: 100,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +150,7 @@ mod tests {
         assert_eq!(cfg.map.max_zoom, 18.0);
         assert_eq!(cfg.render.style, "dark");
         assert_eq!(cfg.cache.memory_tiles, 512);
+        assert_eq!(cfg.runtime.poll_timeout_ms, 50);
+        assert_eq!(cfg.runtime.overlay_redraw_ms, 100);
     }
 }
