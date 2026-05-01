@@ -131,49 +131,6 @@ impl<'a> Window<'a> {
     }
 }
 
-// ── OverlayWindow: poll-time handle for always-on overlays ─────────
-
-/// Poll-time handle for [`Compositor`]'s always-on overlays
-/// (`info`, `scalebar`, `attribution`, …). Narrower than [`Window`]:
-/// overlays don't live on the focusable stack, so `close` / `open` /
-/// `toggle` / `ignore` would have nothing to act on. The only useful
-/// op is `emit` (queue an `AppMsg`), which is what this surface
-/// exposes — and what the compositor honours after the hook returns.
-///
-/// Splitting overlays out into their own handle moves "what the
-/// framework will silently drop" from a runtime concern (a comment in
-/// `Compositor::poll`) into a compile-time one — overlay code that
-/// tries to call `close()` simply won't typecheck.
-///
-/// Lua plugins are still one [`Component`] impl that may be either an
-/// overlay or a stack component.
-pub struct OverlayWindow<'a> {
-    msgs: &'a mut Vec<AppMsg>,
-    ctx: &'a Context,
-}
-
-impl<'a> OverlayWindow<'a> {
-    // Production code no longer constructs an `OverlayWindow` (after
-    // C1 dropped the always-on overlay path). The constructor stays
-    // for the unit tests in `lua::bridge::component` that still
-    // exercise `Component::poll_overlay`; those go away in C5 along
-    // with the trait method itself.
-    #[allow(dead_code)]
-    pub(crate) fn new(msgs: &'a mut Vec<AppMsg>, ctx: &'a Context) -> Self {
-        Self { msgs, ctx }
-    }
-
-    /// App-level snapshot for this hook (map center, theme id).
-    pub fn ctx(&self) -> &Context {
-        self.ctx
-    }
-
-    /// Queue `msg` for `App::dispatch`.
-    pub fn emit(&mut self, msg: AppMsg) {
-        self.msgs.push(msg);
-    }
-}
-
 // ── RenderWindow: draw-time handle ─────────────────────────────────
 
 /// Render-time companion to [`Window`]. Carries the ratatui

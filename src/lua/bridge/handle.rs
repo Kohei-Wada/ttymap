@@ -1,5 +1,5 @@
-//! Shared Lua-bridge plumbing for adapter types ([`LuaComponent`],
-//! [`LuaPaletteProvider`], future ones).
+//! Shared Lua-bridge plumbing for adapter types
+//! ([`LuaWindowComponent`], [`LuaPaletteProvider`], future ones).
 //!
 //! Every adapter does the same two things:
 //! 1. **Construction** — spin up a fresh `Lua` VM, install the
@@ -13,7 +13,7 @@
 //! [`LuaHandle::try_call`] for the dispatch shape. [`fresh_load`] is
 //! the one-shot construction helper.
 //!
-//! [`LuaComponent`]: super::component::LuaComponent
+//! [`LuaWindowComponent`]: super::window_component::LuaWindowComponent
 //! [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 
 use std::sync::Arc;
@@ -58,8 +58,8 @@ impl LuaHandle {
     }
 
     /// Direct `Lua` access for callers that need `Lua::scope` or
-    /// must build per-call helper tables — `paint_on_map`'s scoped
-    /// `MapApi` userdata is the only consumer today.
+    /// must build per-call helper tables — the per-frame plugin
+    /// `loop` callback's scoped `MapApi` userdata is one consumer.
     pub fn lua(&self) -> &Lua {
         &self.lua
     }
@@ -75,7 +75,7 @@ impl LuaHandle {
     /// The missing-vs-errored split is intentional: an adapter may
     /// want different recovery for "plugin opted out of this hook"
     /// vs "plugin tried but threw" — e.g.
-    /// [`LuaComponent`](super::component::LuaComponent)'s
+    /// [`LuaWindowComponent`](super::window_component::LuaWindowComponent)'s
     /// `handle_event` maps the former to `KeyAction::Ignore`
     /// (forward to base) and the latter to `KeyAction::Consume`
     /// (don't leak buggy keys).

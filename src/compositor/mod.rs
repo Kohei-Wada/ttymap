@@ -137,14 +137,6 @@ pub trait Component {
     /// and `win.close()` if the component should self-remove.
     fn poll(&mut self, _win: &mut Window) {}
 
-    /// Overlay counterpart to [`poll`](Self::poll). Called every tick
-    /// on every always-on overlay. The handle is narrower —
-    /// [`OverlayWindow`] only exposes `ctx` and `emit`, because
-    /// overlays don't live on the focusable stack and `close` /
-    /// `open` would have nothing to act on. Default no-op for
-    /// stack-only components that never register as overlays.
-    fn poll_overlay(&mut self, _win: &mut window::OverlayWindow) {}
-
     /// Footer hints shown while this component is on top.
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()

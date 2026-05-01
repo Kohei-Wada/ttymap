@@ -19,7 +19,6 @@ pub mod registry;
 pub mod runtimepath;
 pub mod ttymap;
 
-pub use bridge::component::LuaComponent;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use init_lua::run_init_lua;
 pub use registry::LuaPluginRegistry;
@@ -587,32 +586,6 @@ mod tests {
             always_on_count >= 4,
             "info/scalebar/attribution/center should each register a plugin loop (got {always_on_count})"
         );
-    }
-
-    /// Two `LuaComponent` instances coexist on the compositor stack
-    /// — there's no Rust-side identity dedup, so distinct script
-    /// load paths produce independent components, even with the
-    /// same internal `name`. nvim-style: stack push is unconditional.
-    #[test]
-    fn two_lua_components_coexist_on_compositor_stack() {
-        use crate::compositor::Component;
-        let shared = ttymap::LuaHostShared::empty();
-        let iss = LuaComponent::from_source(
-            r#"ttymap.register_plugin({ name = "iss", render = function() return {} end })"#,
-            "iss",
-            shared.clone(),
-        )
-        .expect("build iss");
-        let hubble = LuaComponent::from_source(
-            r#"ttymap.register_plugin({ name = "hubble", render = function() return {} end })"#,
-            "hubble",
-            shared,
-        )
-        .expect("build hubble");
-        // Display names come from the script's `name` field — the
-        // user-facing label, not a registration identity.
-        assert_eq!(iss.name(), "iss");
-        assert_eq!(hubble.name(), "hubble");
     }
 
     /// Helper for spec-table inspection tests. Runs the source in a

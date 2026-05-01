@@ -100,13 +100,6 @@ impl<C: crate::compositor::Component> crate::compositor::Component for CloseFlag
         }
     }
 
-    fn poll_overlay(&mut self, win: &mut crate::compositor::window::OverlayWindow) {
-        // Not really meaningful for stack components, but forwarded
-        // for completeness — `Component`'s default impl is a no-op,
-        // so wrappers around overlay-capable components keep working.
-        self.inner.poll_overlay(win);
-    }
-
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.inner.footer_hints()
     }

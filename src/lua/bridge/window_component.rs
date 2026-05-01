@@ -30,9 +30,8 @@
 //! `ttymap.map:jump(...)` calls hit the setup-state senders, not
 //! per-window receivers.
 //!
-//! Per audit §13 (and the existing [`LuaComponent`] precedent):
-//! errors are logged and recovered, never propagated. A buggy plugin
-//! must not take the host down.
+//! Per audit §13: errors are logged and recovered, never propagated.
+//! A buggy plugin must not take the host down.
 
 use std::sync::{Arc, Mutex};
 
@@ -51,9 +50,7 @@ use crate::theme::StyleKind;
 
 // ── Layout ─────────────────────────────────────────────────────────
 
-/// Per-window layout knobs read from `spec.layout`. Mirrors
-/// [`super::component::LuaComponent`]'s `LuaLayout` so the
-/// resolved-rect behaviour stays identical between the two adapters.
+/// Per-window layout knobs read from `spec.layout`.
 #[derive(Debug, Clone)]
 pub struct WindowLayout {
     anchor: PanelAnchor,
@@ -62,7 +59,7 @@ pub struct WindowLayout {
 }
 
 impl WindowLayout {
-    /// Same fallback as [`LuaComponent`](super::component::LuaComponent):
+    /// Sane default when a plugin omits the `layout` field —
     /// top-left, 32×10. Big enough for a few lines of text, small
     /// enough not to swallow the map.
     fn fallback() -> Self {
@@ -74,11 +71,9 @@ impl WindowLayout {
     }
 }
 
-/// Parse a `spec.layout.anchor` string into [`PanelAnchor`]. Mirrors
-/// the vocabulary [`super::component::LuaComponent`] accepts so a
-/// single layout definition reads the same regardless of which
-/// adapter is consuming it. Unknown strings yield `None` and the
-/// caller falls back to the layout default.
+/// Parse a `spec.layout.anchor` string into [`PanelAnchor`]. Unknown
+/// strings yield `None` and the caller falls back to the layout
+/// default.
 fn parse_panel_anchor(s: &str) -> Option<PanelAnchor> {
     match s.to_ascii_lowercase().as_str() {
         "left" => Some(PanelAnchor::Left),
@@ -221,7 +216,7 @@ impl LuaWindowComponent {
     /// descriptors. Each line is a vec of `(text, style_kind)` spans.
     /// Returns an empty vec on any error (with a warning logged).
     ///
-    /// Supported per-line shapes (mirrors [`super::component::LuaComponent`]):
+    /// Supported per-line shapes:
     /// - **string** → single Body span: `"hello"`
     /// - **array of `{text, style}` records** — multi-span line.
     fn render_lines(&self) -> Vec<Vec<(String, StyleKind)>> {
@@ -232,8 +227,20 @@ impl LuaWindowComponent {
     }
 
     /// Run the Lua side of `handle_event` and return the host action
-    /// the script asked for. Outcome semantics match
-    /// [`super::component::LuaComponent::dispatch_event`] verbatim.
+    /// the script asked for.
+    ///
+    /// Three outcomes:
+    /// - **No `handle_event` field** → `KeyAction::Ignore`. Mirrors
+    ///   the Component trait's default impl: the spec opts out of
+    ///   keymap consumption and the event flows to the base layer.
+    /// - **Lua returned `nil`** → `KeyAction::Consume`. The handler
+    ///   ran, decided "this isn't mine", but doesn't want the base
+    ///   layer to see it either.
+    /// - **Lua returned a table** → its `close` / `ignore` flags map
+    ///   directly to `Window::close` / `Window::ignore`. Anything
+    ///   else (including a malformed table or a runtime error) logs
+    ///   a warning and falls back to `Consume` so a buggy plugin
+    ///   can't accidentally leak its keys to the rest of the app.
     fn dispatch_event(&self, event: KeyEvent) -> KeyAction {
         let key = match self.build_key_table(event) {
             Ok(k) => k,
@@ -338,13 +345,13 @@ impl Component for LuaWindowComponent {
     }
 }
 
-// ── Helpers (mirrors LuaComponent) ─────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────
 
 /// Read `spec.footer_hints` as a sequence of `{key, label}` pairs and
 /// leak each pair so [`Component::footer_hints`] can hand back
 /// `&'static str`. Bounded leak — a window declares a finite list at
 /// construction. Delegates parsing to [`crate::lua::parse_footer_hints`]
-/// so the shape stays identical to the in-tree LuaComponent.
+/// so the shape stays identical to the captured-spec version.
 fn parse_footer_hints(spec: &Table) -> Vec<(&'static str, &'static str)> {
     crate::lua::parse_footer_hints(spec)
         .into_iter()
@@ -403,10 +410,7 @@ fn style_from_str(name: Option<&str>) -> StyleKind {
     }
 }
 
-/// What the Lua `handle_event` handler asked the host to do. Exactly
-/// the same vocabulary as [`super::component::LuaComponent`]'s
-/// internal `KeyAction`; kept private to this module so each adapter
-/// owns its own translation surface.
+/// What the Lua `handle_event` handler asked the host to do.
 #[derive(Debug, PartialEq, Eq)]
 enum KeyAction {
     /// Pass the event to the base layer (Component default).
@@ -503,7 +507,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return {}"#).eval().unwrap();
         let layout = parse_layout(&spec);
-        // Default fallback (matches LuaComponent's LuaLayout::fallback).
+        // Default fallback (matches WindowLayout::fallback).
         assert_eq!(layout.anchor, PanelAnchor::TopLeft);
         assert_eq!(layout.width, 32);
         assert_eq!(layout.height, Some(10));

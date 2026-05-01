@@ -519,8 +519,9 @@ fn build_registrar(
     // provider — so it must run after every plugin's register call.
     crate::palette::install(keymap, &mut r);
 
-    // `shared` is kept alive via Arc clones inside every LuaComponent
-    // / LuaPaletteProvider — dropping it here is fine.
+    // `shared` is kept alive via Arc clones inside every Lua plugin's
+    // setup state and any `LuaPaletteProvider` it creates — dropping
+    // the local handle here is fine.
     drop(shared);
 
     BuiltRegistrar {

@@ -1,8 +1,8 @@
 //! [`LuaPaletteProvider`] — adapter that lets a Lua script implement
 //! [`PaletteProvider`].
 //!
-//! Same shape as [`super::component::LuaComponent`] but for the
-//! palette's universal-picker trait instead of the compositor
+//! Same shape as [`super::window_component::LuaWindowComponent`] but
+//! for the palette's universal-picker trait instead of the compositor
 //! [`Component`] trait. Used by the search plugin's Lua port:
 //! Nominatim's debounced query/result pipeline + Enter→Jump.
 //!
@@ -22,7 +22,7 @@ use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, Subm
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {
-    /// Bridge plumbing shared with `LuaComponent`. The registered
+    /// Bridge plumbing shared with `LuaWindowComponent`. The registered
     /// table here is the `module.palette` sub-table — every method
     /// (filter / items / execute / poll / is_loading) reads from
     /// it.

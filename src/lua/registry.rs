@@ -12,9 +12,9 @@
 //! one plugin's loop are logged and swallowed so a single broken
 //! plugin cannot freeze the host.
 //!
-//! Phase A is purely additive — old `paint_on_map` / `poll` paths
-//! continue to work. Once every bundled plugin migrates to `loop`
-//! the deprecated callbacks come out (Phase C).
+//! After Phase C, this is the only per-frame work mechanism Lua
+//! plugins use — the old `LuaComponent` adapter (with its own
+//! `paint_on_map` / `poll` callbacks) is gone.
 
 use mlua::{Lua, RegistryKey};
 
@@ -59,7 +59,7 @@ impl LuaPluginRegistry {
     /// `MapApi` borrows the ratatui buffer for one frame, so the
     /// Lua-facing handle is built inside `Lua::scope` (closures over
     /// a `RefCell` of the ref) and torn down before this method
-    /// returns. Mirrors `LuaComponent::dispatch_paint`.
+    /// returns.
     pub fn tick(&self, map: &mut MapApi<'_>) {
         let cell = std::cell::RefCell::new(map);
         for entry in &self.entries {

@@ -169,10 +169,9 @@ impl LuaHostShared {
 ///   later `ttymap.api.palette.open` in A6). Drained by the App per
 ///   frame and pushed onto the compositor stack.
 ///
-/// `LuaComponent` (the legacy adapter) still receives a
-/// `LuaHostHandles` at construction for the per-component drains —
-/// **that path is being phased out**. Going forward, the setup state
-/// owns the receivers and App drains them centrally (Path 4).
+/// All receivers are owned by the **setup state** (the Lua VM that
+/// ran the script's top-level `register_*` calls) and drained
+/// centrally by the App per frame.
 pub struct LuaHostHandles {
     pub jump_rx: mpsc::Receiver<LonLat>,
     pub export_rx: mpsc::Receiver<()>,
@@ -598,20 +597,20 @@ impl UserData for HostMap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.map:jump(lon, lat)` — request the map recentre on the
         // given coordinate. The actual `AppMsg::Map(Action::Jump)`
-        // emit happens when the matching `LuaComponent` drains the
-        // channel after its current callback returns, so this is
-        // fire-and-forget from the Lua side. Send errors (channel
-        // disconnected) mean the component is being torn down —
-        // silently ignore.
+        // emit happens when App drains the setup state's `jump_rx`
+        // per frame, so this is fire-and-forget from the Lua side.
+        // Send errors (channel disconnected) mean the setup state is
+        // being torn down — silently ignore.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             let _ = this.jump_tx.send(LonLat { lon, lat });
             Ok(())
         });
 
         // `ttymap.map:center()` -> lon, lat — current map centre, kept
-        // fresh by the LuaComponent before each dispatch. Plugins
-        // use this to scope upstream queries (e.g. an OpenSky
-        // bounding box around the user's view).
+        // fresh by the host before each dispatch path that carries a
+        // `Window` / `MapApi`. Plugins use this to scope upstream
+        // queries (e.g. an OpenSky bounding box around the user's
+        // view).
         methods.add_method("center", |_, this, _: ()| {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
@@ -775,8 +774,8 @@ impl UserData for HostHelp {
 // ── Job ─────────────────────────────────────────────────────────────
 
 /// One-shot fetch handle. Stays alive in the Lua state until the
-/// plugin drops its reference (or until the Lua state itself is
-/// dropped, which happens when the LuaComponent is rebuilt).
+/// plugin drops its reference (or until the setup-state Lua VM
+/// itself is dropped at program exit).
 pub struct LuaJob {
     rx: mpsc::Receiver<String>,
 }

@@ -4,11 +4,11 @@
 //! Rust traits so the compositor / palette can drive it without
 //! caring that the implementation is scripted:
 //!
-//! - [`component::LuaComponent`] — `Component` impl
+//! - [`window_component::LuaWindowComponent`] — `Component` impl,
+//!   pushed by `ttymap.api.window.open`
 //! - [`palette_provider::LuaPaletteProvider`] — `PaletteProvider` impl
 //! - [`handle::LuaHandle`] — shared dispatch plumbing reused by both
 
-pub mod component;
 pub mod handle;
 pub mod palette_handle;
 pub mod palette_provider;
