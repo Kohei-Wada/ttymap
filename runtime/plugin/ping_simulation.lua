@@ -1,4 +1,4 @@
--- ping.lua — reference plugin demonstrating animated polyline overlay.
+-- ping_simulation.lua — reference plugin demonstrating animated polyline overlay.
 --
 -- Draws several ping lines growing from origin toward destination
 -- over ~60 frames each, then pauses ~30 frames and restarts. Each
@@ -6,7 +6,7 @@
 -- the same time. Pure illustration of "cyber-attack visualisation"
 -- use cases — swap the endpoints / colours / cadence for real data.
 --
--- Toggle via the palette: `:` → "Toggle ping". Off by default so
+-- Toggle via the palette: `:` → "Toggle ping simulation". Off by default so
 -- the screen stays clean unless the user opts in.
 --
 -- Each coord is { lon, lat } — same convention as map:point /
@@ -46,7 +46,7 @@ local function toggle()
 end
 
 ttymap.register_palette_command({
-  label  = "Toggle ping",
+  label  = "Toggle ping simulation",
   invoke = toggle,
 })
 
