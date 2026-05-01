@@ -273,8 +273,8 @@ mod tests {
         // Should produce a polygon covering (0,0)-(50,50) area
         assert!(clipped.len() >= 3);
         for &(x, y) in &clipped {
-            assert!(x >= 0 && x <= 100, "x={} out of bounds", x);
-            assert!(y >= 0 && y <= 100, "y={} out of bounds", y);
+            assert!((0..=100).contains(&x), "x={} out of bounds", x);
+            assert!((0..=100).contains(&y), "y={} out of bounds", y);
         }
     }
 
