@@ -14,7 +14,7 @@
 use std::rc::Rc;
 
 use crate::app::AppMsg;
-use crate::compositor::{Context, PaletteEntry as RegistrarEntry, PaletteKind};
+use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::ThemeId;
@@ -152,10 +152,7 @@ impl PaletteProvider for CommandProvider {
             Kind::MapAction(a) => PaletteAction::Run(vec![AppMsg::Map(a.clone())]),
             Kind::PluginEntry(i) => {
                 let entry = &self.seed.plugin_entries[*i];
-                match &entry.kind {
-                    PaletteKind::Spawn(spawn) => PaletteAction::Push(spawn(ctx)),
-                    PaletteKind::Toggle(spawn) => PaletteAction::Toggle(spawn(ctx)),
-                }
+                PaletteAction::Push((entry.spawn)(ctx))
             }
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))

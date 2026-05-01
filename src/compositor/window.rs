@@ -49,15 +49,11 @@ pub(crate) struct WindowOps {
     /// calling component. Applied before `opens` so `close + open`
     /// replaces the component in the stack slot.
     pub close: bool,
-    /// Components queued by [`Window::open`]. Each goes through
-    /// TypeId dedup when pushed; a duplicate of an existing stack
-    /// entry shifts focus to the existing one instead.
+    /// Components queued by [`Window::open`]. Each pushes a fresh
+    /// stack entry — nvim-style, no identity dedup. Plugins that
+    /// want toggle semantics ("close if already open") handle that
+    /// themselves in their own `handle_event`.
     pub opens: Vec<Box<dyn Component>>,
-    /// Components queued by [`Window::toggle`]. TypeId dedup with
-    /// close-on-collision — if the same concrete type is already on
-    /// the stack, that existing instance is popped and the new
-    /// component is dropped. Otherwise pushed like `open`.
-    pub toggles: Vec<Box<dyn Component>>,
     /// Messages for [`App::dispatch`](crate::app::App). Returned
     /// from `Compositor::handle_event` to the caller (App), which
     /// dispatches them after the ops have been applied.
@@ -74,7 +70,7 @@ impl WindowOps {
     /// hook's only effect was `ignore()`, this is also true (ignore
     /// itself is a signal, not an op).
     pub(crate) fn is_ignorable_noop(&self) -> bool {
-        !self.close && self.opens.is_empty() && self.toggles.is_empty() && self.msgs.is_empty()
+        !self.close && self.opens.is_empty() && self.msgs.is_empty()
     }
 }
 
@@ -107,22 +103,13 @@ impl<'a> Window<'a> {
         self.ops.close = true;
     }
 
-    /// Push `c` on top of the stack after the hook returns. Subject
-    /// to TypeId dedup: if a component of the same concrete type is
-    /// already on the stack, focus shifts to the existing instance
-    /// and `c` is dropped. For toggle semantics (close the existing
-    /// one) see [`toggle`](Self::toggle).
+    /// Push `c` on top of the stack after the hook returns. Always
+    /// pushes a fresh entry — no identity dedup. A plugin that
+    /// wants "open or focus existing" semantics implements that
+    /// inside its own `handle_event` (return `close` when already
+    /// open, push otherwise).
     pub fn open(&mut self, c: Box<dyn Component>) {
         self.ops.opens.push(c);
-    }
-
-    /// Toggle `c` onto the stack after the hook returns. If a
-    /// component of the same concrete type is already on the stack,
-    /// that existing instance closes and `c` is dropped. Otherwise
-    /// pushed like [`open`](Self::open). Used by palette entries
-    /// whose label promises toggle semantics (e.g. "Toggle wiki").
-    pub fn toggle(&mut self, c: Box<dyn Component>) {
-        self.ops.toggles.push(c);
     }
 
     /// Queue `msg` for `App::dispatch`. Dispatched by the caller

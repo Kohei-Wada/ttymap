@@ -136,10 +136,10 @@ impl LuaHostShared {
         }
     }
 
-    /// All-empty default for tests and metadata-parse passes that
-    /// don't need real runtime data. Used by `ModuleMeta::parse` so
-    /// the `ttymap.*` host surface still installs in a Lua state used
-    /// only to capture the script's `register_*` call.
+    /// All-empty default for tests and registration-time loads that
+    /// don't need real runtime data. The `ttymap.*` host surface
+    /// still installs in a Lua state used only to capture the
+    /// script's `register_*` call.
     pub fn empty() -> Arc<Self> {
         Arc::new(Self::new(None, String::new(), Vec::new()))
     }
@@ -159,17 +159,22 @@ pub struct LuaHostHandles {
 
 // ── Self-registration capture ────────────────────────────────────────
 
-/// What a plugin script declared by calling `ttymap.register_plugin`
-/// or `ttymap.register_palette`. The Lua subsystem doesn't know which
+/// What a plugin script declared by calling one of the three
+/// `ttymap.register_*` APIs. The Lua subsystem doesn't know which
 /// kind a given file is until the script tells it. nvim-style: the
 /// runtime just executes the script; the script self-declares.
 pub enum CapturedRegistration {
-    /// Component plugin (rendered panel, map overlay, etc.). Carries
-    /// the spec table the script handed to `register_plugin`.
+    /// Stack-pushed Component plugin (rendered panel, key-activated).
+    /// Spec table from `register_plugin`.
     Plugin(Table),
-    /// Palette provider plugin (`/`-style picker). Carries the spec
-    /// table the script handed to `register_palette`.
+    /// Palette provider plugin (`/`-style picker, key-activated).
+    /// Spec table from `register_palette`.
     Palette(Table),
+    /// Always-on overlay (paints every frame, no focus, no key).
+    /// Spec table from `register_overlay`. Used by plugins like
+    /// the info bar / scale bar / attribution that paint chrome
+    /// over the map without ever being focusable.
+    Overlay(Table),
 }
 
 /// Slot used by a fresh Lua state to capture exactly one registration
@@ -263,7 +268,7 @@ pub fn install(
             Ok(())
         })?,
     )?;
-    let cap = slot;
+    let cap = slot.clone();
     ttymap.set(
         "register_palette",
         lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
@@ -273,6 +278,19 @@ pub fn install(
                 ));
             }
             *cap.borrow_mut() = Some(CapturedRegistration::Palette(spec));
+            Ok(())
+        })?,
+    )?;
+    let cap = slot;
+    ttymap.set(
+        "register_overlay",
+        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
+            if cap.borrow().is_some() {
+                return Err(mlua::Error::external(
+                    "ttymap.register_overlay: already registered in this script",
+                ));
+            }
+            *cap.borrow_mut() = Some(CapturedRegistration::Overlay(spec));
             Ok(())
         })?,
     )?;

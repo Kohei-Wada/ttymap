@@ -6,10 +6,8 @@
 -- provider returns nil/empty (custom backends without OSM data),
 -- nothing is painted.
 
-ttymap.register_plugin({
+ttymap.register_overlay({
     name = "attribution",
-    activation = "overlay",
-
     paint_on_map = function(map)
         local text = ttymap.tile:attribution()
         if text and #text > 0 then

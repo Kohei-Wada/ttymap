@@ -175,117 +175,30 @@ pub fn register_builtin_plugins(
     }
 }
 
-/// Plugin shape parsed out of a script's returned table at register
-/// time. Drives the dispatcher in [`register_one`].
-struct ModuleMeta {
-    /// Activation pattern. `"toggle"` (default) installs an
-    /// add_toggle palette entry; `"overlay"` installs an always-on
-    /// overlay; `"spawn"` installs an add_spawn palette entry (one
-    /// new instance per click — used by here/export self-closing
-    /// components and by the search palette provider).
-    activation: Activation,
-    /// Plugin flavour. Components push onto the compositor stack;
-    /// providers seed the universal palette picker.
-    kind: Kind,
-    /// Palette label. Defaults to `"Toggle <name>"` for toggles,
-    /// `<name>` for spawns. Empty for overlays (no palette entry).
-    label: String,
-    /// Optional activation key — for `toggle`/`spawn`, also binds
-    /// the key directly so the keybind and palette entry share a
-    /// factory.
-    key: Option<char>,
-    /// Whether the script asked to be skipped (`module.enabled = false`).
-    enabled: bool,
-    /// Plugin-local key bindings declared as `module.footer_hints`.
-    /// Surfaced to help via `ttymap.help:palette_entries()` so the
-    /// cheatsheet shows every plugin's local keys, not just its
-    /// activation key. Empty when the script omits the field.
-    footer_hints: Vec<(String, String)>,
+/// Whether the script asked to be skipped via `enabled = false`.
+fn module_enabled(module: &Table) -> bool {
+    !matches!(
+        module.get::<mlua::Value>("enabled"),
+        Ok(mlua::Value::Boolean(false))
+    )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Activation {
-    Toggle,
-    Spawn,
-    Overlay,
+/// Read the script-supplied palette label, falling back to the file
+/// stem when the spec omits it.
+fn module_label(module: &Table, fallback: &str) -> String {
+    module
+        .get::<String>("label")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Component,
-    Provider,
-}
-
-impl ModuleMeta {
-    /// Defaults returned when the script can't be loaded or doesn't
-    /// register anything. The real load attempt later surfaces the
-    /// underlying error in one place; here we just hand back enough
-    /// to keep the dispatcher walking.
-    fn defaults(name: &str) -> Self {
-        Self {
-            activation: Activation::Toggle,
-            kind: Kind::Component,
-            label: format!("Toggle {}", name),
-            key: None,
-            enabled: true,
-            footer_hints: Vec::new(),
-        }
-    }
-
-    /// Read the plugin's metadata fields by running the source once
-    /// in a throwaway Lua state and inspecting whatever it registered
-    /// via `ttymap.register_plugin` / `ttymap.register_palette`. The
-    /// kind is determined by *which* register function the script
-    /// called — the Lua subsystem doesn't pre-classify scripts by
-    /// path or table layout.
-    ///
-    /// Defaults are picked so a script that fails to load (or omits
-    /// the register call) surfaces as a toggle Component named after
-    /// the file stem; the activation-time load attempt logs the real
-    /// error.
-    fn parse(source: &str, name: &str) -> Self {
-        let shared = ttymap::LuaHostShared::empty();
-        let (lua, captured, _handles) =
-            match bridge::handle::fresh_load(source, name, "lua-meta", shared) {
-                Ok(t) => t,
-                Err(_) => return Self::defaults(name),
-            };
-        let (module, kind) = match captured {
-            ttymap::CapturedRegistration::Plugin(t) => (t, Kind::Component),
-            ttymap::CapturedRegistration::Palette(t) => (t, Kind::Provider),
-        };
-        let activation_str: Option<String> = module.get("activation").ok();
-        let activation = match activation_str.as_deref() {
-            Some("overlay") => Activation::Overlay,
-            Some("spawn") => Activation::Spawn,
-            // Providers default to spawn (each open is a fresh provider).
-            None if kind == Kind::Provider => Activation::Spawn,
-            _ => Activation::Toggle,
-        };
-        let label: Option<String> = module.get("label").ok();
-        let key: Option<String> = module.get("key").ok();
-        let key = key.and_then(|s| s.chars().next());
-        let enabled = !matches!(
-            module.get::<mlua::Value>("enabled"),
-            Ok(mlua::Value::Boolean(false))
-        );
-        let default_label = match activation {
-            Activation::Toggle => format!("Toggle {}", name),
-            Activation::Spawn => name.to_string(),
-            Activation::Overlay => String::new(),
-        };
-        let footer_hints = parse_footer_hints(&module);
-        let out = Self {
-            activation,
-            kind,
-            label: label.unwrap_or(default_label),
-            key,
-            enabled,
-            footer_hints,
-        };
-        drop(lua); // captured Table held a reference; drop after reads
-        out
-    }
+/// Read the script-supplied activation key (first char of `key`).
+fn module_key(module: &Table) -> Option<char> {
+    module
+        .get::<String>("key")
+        .ok()
+        .and_then(|s| s.chars().next())
 }
 
 /// Read `module.footer_hints` as owned `(key, label)` pairs.
@@ -329,83 +242,146 @@ fn register_one(
     shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
-    let meta = ModuleMeta::parse(source, name);
-    if !meta.enabled {
-        log::info!(
-            "lua[{}]: disabled via module.enabled = false, skipping",
-            name
-        );
+    // Run the script once to capture its registration call. The
+    // captured variant tells us which kind of plugin it is — Lua
+    // is the source of truth, not file path or table layout.
+    let shared_for_meta = shared.clone();
+    let (lua, captured, _handles) =
+        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+                return;
+            }
+        };
+
+    let module: &Table = match &captured {
+        ttymap::CapturedRegistration::Plugin(t)
+        | ttymap::CapturedRegistration::Palette(t)
+        | ttymap::CapturedRegistration::Overlay(t) => t,
+    };
+    if !module_enabled(module) {
+        log::info!("lua[{}]: enabled = false, skipping", name);
+        drop(lua);
         return;
     }
+    let label = module_label(module, name);
+    let key = module_key(module);
+    let footer_hints = parse_footer_hints(module);
 
-    match meta.kind {
-        Kind::Component => register_component(name, source, &meta, shared, r),
-        Kind::Provider => register_provider(name, source, &meta, shared, r),
+    match captured {
+        ttymap::CapturedRegistration::Plugin(_) => {
+            register_component(name, source, label, key, footer_hints, shared, r);
+        }
+        ttymap::CapturedRegistration::Palette(_) => {
+            register_provider(name, source, label, key, footer_hints, shared, r);
+        }
+        ttymap::CapturedRegistration::Overlay(_) => {
+            register_overlay(name, source, shared, r);
+        }
     }
+    // `module` Table held a reference into `lua`; drop after reads.
+    drop(lua);
 }
 
-/// Wire one Component-shaped Lua module — single-module file or
-/// one entry within a multi-entry pack. `entry_idx` is `Some(i)`
-/// for the entries path, `None` otherwise; it threads through to
-/// the factory closure that re-builds the `LuaComponent` on each
-/// activation.
+/// Wire a script registered as a Component plugin: bind its key to
+/// push a fresh `LuaComponent` on the stack, and add a palette entry
+/// pointing at the same factory. Plugins close themselves via their
+/// own `handle_event` returning `{ close = true }`.
 fn register_component(
     name: &'static str,
     source: &'static str,
-    meta: &ModuleMeta,
+    label: String,
+    key: Option<char>,
+    footer_hints: Vec<(String, String)>,
     shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
-    // Validate up front so a syntax error surfaces as one log line
-    // instead of a noisy first-toggle failure.
     if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
         log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
         return;
     }
+    let key_hint = key.map(|c| c.to_string()).unwrap_or_default();
 
-    let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
-    let label = meta.label.clone();
-
-    match meta.activation {
-        Activation::Overlay => {
-            let shared_for_factory = shared.clone();
-            r.add_overlay(move |_| {
-                component_or_placeholder(name, source, shared_for_factory.clone())
-            });
-        }
-        Activation::Toggle => {
-            let shared_for_toggle = shared.clone();
-            r.add_toggle(label.clone(), key_hint.clone(), name, move |_| {
-                component_or_placeholder(name, source, shared_for_toggle.clone())
-            });
-            if let Some(key) = meta.key {
-                use crossterm::event::{KeyCode, KeyModifiers};
-                let shared_for_key = shared.clone();
-                r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
-                    component_or_placeholder(name, source, shared_for_key.clone())
-                });
-            }
-            if !key_hint.is_empty() {
-                push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
-            }
-        }
-        Activation::Spawn => {
-            let shared_for_spawn = shared.clone();
-            r.add_spawn(label.clone(), key_hint.clone(), name, move |_| {
-                component_or_placeholder(name, source, shared_for_spawn.clone())
-            });
-            if let Some(key) = meta.key {
-                use crossterm::event::{KeyCode, KeyModifiers};
-                let shared_for_key = shared.clone();
-                r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| {
-                    component_or_placeholder(name, source, shared_for_key.clone())
-                });
-            }
-            if !key_hint.is_empty() {
-                push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
-            }
-        }
+    let shared_for_palette = shared.clone();
+    r.add_palette(label.clone(), key_hint.clone(), name, move |_| {
+        component_or_placeholder(name, source, shared_for_palette.clone())
+    });
+    if let Some(k) = key {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let shared_for_key = shared.clone();
+        r.bind(KeyCode::Char(k), KeyModifiers::NONE, move |_| {
+            component_or_placeholder(name, source, shared_for_key.clone())
+        });
     }
+    if !key_hint.is_empty() {
+        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
+    }
+}
+
+/// Wire a script registered as a palette provider. Same shape as
+/// `register_component` but builds a `PaletteComponent` wrapping a
+/// `LuaPaletteProvider`.
+fn register_provider(
+    name: &'static str,
+    source: &'static str,
+    label: String,
+    key: Option<char>,
+    footer_hints: Vec<(String, String)>,
+    shared: Arc<ttymap::LuaHostShared>,
+    r: &mut Registrar,
+) {
+    if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
+        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+        return;
+    }
+    let key_hint = key.map(|c| c.to_string()).unwrap_or_default();
+
+    let make = {
+        let shared = shared.clone();
+        move || -> crate::palette::PaletteComponent {
+            let provider = LuaPaletteProvider::from_source(source, name, shared.clone())
+                .unwrap_or_else(|e| {
+                    log::warn!("lua[{}]: re-load failed: {}", name, e);
+                    LuaPaletteProvider::from_source(
+                        "ttymap.register_palette({})",
+                        "lua-fallback",
+                        shared.clone(),
+                    )
+                    .expect("trivial provider always loads")
+                });
+            crate::palette::PaletteComponent::with_provider(provider)
+        }
+    };
+
+    r.add_palette(label.clone(), key_hint.clone(), name, {
+        let make = make.clone();
+        move |_| make()
+    });
+    if let Some(k) = key {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        r.bind(KeyCode::Char(k), KeyModifiers::NONE, move |_| make());
+    }
+    if !key_hint.is_empty() {
+        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
+    }
+}
+
+/// Wire a script registered as an overlay — always-painted chrome.
+/// No key, no palette entry, no focus path. The factory rebuilds the
+/// `LuaComponent` once at app init; from there the overlay just
+/// participates in `paint_on_map` and `poll` for the program lifetime.
+fn register_overlay(
+    name: &'static str,
+    source: &'static str,
+    shared: Arc<ttymap::LuaHostShared>,
+    r: &mut Registrar,
+) {
+    if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
+        log::warn!("lua[{}]: failed to load, overlay skipped: {}", name, e);
+        return;
+    }
+    r.add_overlay(move |_| component_or_placeholder(name, source, shared.clone()));
 }
 
 /// Surface a plugin's metadata to help via the shared snapshot.
@@ -426,51 +402,6 @@ fn push_plugin_entry(
         label: label.to_string(),
         footer_hints: footer_hints.to_vec(),
     });
-}
-
-fn register_provider(
-    name: &'static str,
-    source: &'static str,
-    meta: &ModuleMeta,
-    shared: Arc<ttymap::LuaHostShared>,
-    r: &mut Registrar,
-) {
-    if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
-        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-        return;
-    }
-
-    let key_hint = meta.key.map(|c| c.to_string()).unwrap_or_default();
-    let label = meta.label.clone();
-
-    let make = {
-        let shared = shared.clone();
-        move || -> crate::palette::PaletteComponent {
-            let provider = LuaPaletteProvider::from_source(source, name, shared.clone())
-                .unwrap_or_else(|e| {
-                    log::warn!("lua[{}]: re-load failed: {}", name, e);
-                    LuaPaletteProvider::from_source(
-                        "ttymap.register_plugin({})",
-                        "lua-fallback",
-                        shared.clone(),
-                    )
-                    .expect("trivial provider always loads")
-                });
-            crate::palette::PaletteComponent::with_provider(provider)
-        }
-    };
-
-    r.add_spawn(label.clone(), key_hint.clone(), name, {
-        let make = make.clone();
-        move |_| make()
-    });
-    if let Some(key) = meta.key {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        r.bind(KeyCode::Char(key), KeyModifiers::NONE, move |_| make());
-    }
-    if !key_hint.is_empty() {
-        push_plugin_entry(&shared, name, &key_hint, &label, &meta.footer_hints);
-    }
 }
 
 /// Try to build a `LuaComponent` from `source`; on failure log + fall
@@ -693,12 +624,10 @@ mod tests {
         assert_eq!(overlay_count, 3, "info/scalebar/attribution overlays");
     }
 
-    /// Two `LuaComponent` instances with distinct `name`s coexist
-    /// on the compositor stack when toggled in sequence — the
-    /// production scenario behind #188. Without `dedup_tag`'s
-    /// override this would collapse via TypeId fallback (every
-    /// Lua plugin shares `Any::type_id`), the first toggle would
-    /// be evicted, and the second would never push.
+    /// Two `LuaComponent` instances coexist on the compositor stack
+    /// — there's no Rust-side identity dedup, so distinct script
+    /// load paths produce independent components, even with the
+    /// same internal `name`. nvim-style: stack push is unconditional.
     #[test]
     fn two_lua_components_coexist_on_compositor_stack() {
         use crate::compositor::Component;
@@ -715,67 +644,68 @@ mod tests {
             shared,
         )
         .expect("build hubble");
-        // Per-instance dedup identity is the script's `name`, not
-        // TypeId — the override returns `Some(name)`.
-        assert_eq!(iss.dedup_tag(), Some("iss"));
-        assert_eq!(hubble.dedup_tag(), Some("hubble"));
-        assert_ne!(
-            iss.dedup_tag(),
-            hubble.dedup_tag(),
-            "distinct scripts must declare distinct dedup tags",
-        );
+        // Display names come from the script's `name` field — the
+        // user-facing label, not a registration identity.
+        assert_eq!(iss.name(), "iss");
+        assert_eq!(hubble.name(), "hubble");
     }
 
-    /// Module metadata: defaults, overrides, kind/activation flips.
-    #[test]
-    fn module_meta_defaults_are_toggle_component() {
-        let meta = ModuleMeta::parse(r#"ttymap.register_plugin({ name = "x" })"#, "x");
-        assert!(matches!(meta.activation, Activation::Toggle));
-        assert!(matches!(meta.kind, Kind::Component));
-        assert_eq!(meta.label, "Toggle x");
-        assert!(meta.key.is_none());
-        assert!(meta.enabled);
+    /// Helper for spec-table inspection tests. Runs the source in a
+    /// throwaway Lua state, returns the captured spec table along
+    /// with its variant tag so the test can assert on both. Mirrors
+    /// what `register_one` does at registration time.
+    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
+        let shared = ttymap::LuaHostShared::empty();
+        let (lua, captured, _handles) =
+            bridge::handle::fresh_load(source, name, "lua-test", shared).expect("load");
+        (lua, captured)
     }
 
-    #[test]
-    fn module_meta_picks_up_overlay_activation() {
-        let meta = ModuleMeta::parse(
-            r#"ttymap.register_plugin({ name = "x", activation = "overlay" })"#,
-            "x",
-        );
-        assert!(matches!(meta.activation, Activation::Overlay));
+    fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
+        match c {
+            ttymap::CapturedRegistration::Plugin(t)
+            | ttymap::CapturedRegistration::Palette(t)
+            | ttymap::CapturedRegistration::Overlay(t) => t,
+        }
     }
 
     #[test]
-    fn register_palette_marks_module_as_provider() {
-        // Kind is decided by which API the script called, not by
-        // any sub-table presence. `register_palette` → Provider.
-        let meta = ModuleMeta::parse(r#"ttymap.register_palette({ name = "x" })"#, "x");
-        assert!(matches!(meta.kind, Kind::Provider));
-        // Providers default to spawn (each open is a fresh provider).
-        assert!(matches!(meta.activation, Activation::Spawn));
+    fn register_plugin_yields_plugin_variant() {
+        let (_lua, c) = parse_spec(r#"ttymap.register_plugin({ name = "x" })"#, "x");
+        assert!(matches!(c, ttymap::CapturedRegistration::Plugin(_)));
+        let t = captured_table(&c);
+        assert_eq!(module_label(t, "x"), "x");
+        assert!(module_key(t).is_none());
+        assert!(module_enabled(t));
     }
 
     #[test]
-    fn register_plugin_marks_module_as_component() {
-        let meta = ModuleMeta::parse(r#"ttymap.register_plugin({ name = "x" })"#, "x");
-        assert!(matches!(meta.kind, Kind::Component));
+    fn register_palette_yields_palette_variant() {
+        let (_lua, c) = parse_spec(r#"ttymap.register_palette({ name = "x" })"#, "x");
+        assert!(matches!(c, ttymap::CapturedRegistration::Palette(_)));
     }
 
     #[test]
-    fn module_meta_reads_key_label_enabled() {
-        let meta = ModuleMeta::parse(
+    fn register_overlay_yields_overlay_variant() {
+        let (_lua, c) = parse_spec(r#"ttymap.register_overlay({ name = "x" })"#, "x");
+        assert!(matches!(c, ttymap::CapturedRegistration::Overlay(_)));
+    }
+
+    #[test]
+    fn module_helpers_read_key_label_enabled() {
+        let (_lua, c) = parse_spec(
             r#"ttymap.register_plugin({ name = "x", key = "i", label = "Toggle x", enabled = false })"#,
             "x",
         );
-        assert_eq!(meta.key, Some('i'));
-        assert_eq!(meta.label, "Toggle x");
-        assert!(!meta.enabled);
+        let t = captured_table(&c);
+        assert_eq!(module_key(t), Some('i'));
+        assert_eq!(module_label(t, "fallback"), "Toggle x");
+        assert!(!module_enabled(t));
     }
 
     #[test]
-    fn module_meta_reads_footer_hints_in_both_shapes() {
-        let meta = ModuleMeta::parse(
+    fn parse_footer_hints_accepts_both_shapes() {
+        let (_lua, c) = parse_spec(
             r#"ttymap.register_plugin({
                 name = "x",
                 footer_hints = {
@@ -785,9 +715,10 @@ mod tests {
             })"#,
             "x",
         );
-        assert_eq!(meta.footer_hints.len(), 2);
-        assert_eq!(meta.footer_hints[0], ("Enter".into(), "open".into()));
-        assert_eq!(meta.footer_hints[1], ("Esc".into(), "back".into()));
+        let hints = parse_footer_hints(captured_table(&c));
+        assert_eq!(hints.len(), 2);
+        assert_eq!(hints[0], ("Enter".into(), "open".into()));
+        assert_eq!(hints[1], ("Esc".into(), "back".into()));
     }
 
     #[test]

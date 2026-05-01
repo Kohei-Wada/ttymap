@@ -35,8 +35,6 @@ pub mod window;
 pub use base::BaseLayer;
 pub use map_api::MapApi;
 
-use std::any::Any;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -89,11 +87,11 @@ pub struct Context {
 /// No `is_visible` / `activate` / `deactivate` contract — existence on
 /// the stack is the visibility lifecycle.
 ///
-/// Component extends [`Any`] so the compositor can deduplicate pushes
-/// by concrete type without each plugin having to declare a stable
-/// tag. Pressing an activation key twice with the base focused in
-/// between still produces one instance of the plugin on the stack,
-/// because the framework notices the type already present.
+/// nvim-style: the compositor never deduplicates pushes. Pressing an
+/// activation key twice produces two instances of the plugin on the
+/// stack. Plugins that want toggle behavior implement self-close in
+/// their own `handle_event` (return `win.close()` when the activation
+/// key fires while focused).
 ///
 /// The event-producing hooks ([`handle_event`](Self::handle_event)
 /// and [`poll`](Self::poll)) receive a
@@ -102,7 +100,7 @@ pub struct Context {
 /// The framework applies those ops atomically after the hook
 /// returns, so components cannot break stack / focus invariants
 /// regardless of what order they call the methods.
-pub trait Component: Any {
+pub trait Component {
     /// Handle a single key event. Call `win.close()` / `open(c)` /
     /// `emit(msg)` / `ignore()` to express what should happen next.
     /// Silence (no `win.*` call) is implicit consumption — the
@@ -159,49 +157,9 @@ pub trait Component: Any {
     fn name(&self) -> &'static str {
         ""
     }
-
-    /// Stable identity used by the compositor when deduplicating
-    /// stack pushes (`push_or_focus`, `push_or_toggle`). `None`
-    /// keeps today's `Any::type_id` semantics — concrete-type dedup,
-    /// which is the right shape for Rust-side components where the
-    /// type itself *is* the identity.
-    ///
-    /// Adapters that share a single Rust type across many distinct
-    /// plugin instances (notably [`LuaComponent`](crate::lua::LuaComponent),
-    /// where every Lua-driven plugin is wrapped in the same struct)
-    /// must override this to return a per-instance string. Without
-    /// the override the compositor would treat all Lua plugins as
-    /// the same kind and refuse to stack a second one on top of the
-    /// first.
-    fn dedup_tag(&self) -> Option<&str> {
-        None
-    }
 }
 
 use window::{OverlayWindow, Window, WindowOps};
-
-/// Identity comparison for stack dedup. Two components are
-/// considered "the same kind" when both supply a [`dedup_tag`](Component::dedup_tag)
-/// and the tags match; otherwise we fall back to `Any::type_id`.
-/// Mixed cases (one tagged, one untagged) compare via TypeId — a
-/// Rust component and a Lua component never accidentally collide on
-/// a shared name.
-fn same_identity(a: &dyn Component, b: &dyn Component) -> bool {
-    match (a.dedup_tag(), b.dedup_tag()) {
-        (Some(x), Some(y)) => x == y,
-        _ => Any::type_id(a) == Any::type_id(b),
-    }
-}
-
-/// What to do when [`Compositor::push_or`] hits an existing
-/// component with the same dedup identity. `Focus` is the activation-
-/// key path (idempotent re-press refocuses); `Close` is the toggle-
-/// palette path (re-toggle closes).
-#[derive(Clone, Copy)]
-enum OnCollision {
-    Focus,
-    Close,
-}
 
 // ── Compositor stack ───────────────────────────────────────────────
 
@@ -298,52 +256,21 @@ impl Compositor {
     }
 
     /// Drain a [`WindowOps`] queue in the documented order:
-    /// `close` → `opens` (dedup → refocus) → `toggles` (dedup →
-    /// close) → return `msgs` for the caller to dispatch. See
-    /// [`window`] module docs.
+    /// `close` → `opens` → return `msgs` for the caller to dispatch.
+    /// Always pushes new instances on `open` — nvim-style, no
+    /// identity dedup. Plugins that want toggle behavior implement
+    /// it inside their own `handle_event` (return `close = true`
+    /// when the activation key fires).
     fn apply_ops(&mut self, idx: usize, ops: WindowOps) -> Vec<AppMsg> {
         if ops.close {
             self.stack.remove(idx);
             self.clamp_focus_after_shrink();
         }
         for c in ops.opens {
-            self.push_or(c, OnCollision::Focus);
-        }
-        for c in ops.toggles {
-            self.push_or(c, OnCollision::Close);
+            self.stack.push(c);
+            self.focused_idx = self.stack.len() - 1;
         }
         ops.msgs
-    }
-
-    /// Push `c` on top, or — when a component matching its dedup
-    /// identity is already on the stack — fold the new push into
-    /// the existing instance per `on_collision`:
-    ///
-    /// - `OnCollision::Focus` (used by `opens`): refocus the
-    ///   existing one, drop `c`. Makes activation keys idempotent
-    ///   so e.g. pressing `i` twice with focus on the base between
-    ///   presses doesn't stack a second wiki panel.
-    /// - `OnCollision::Close` (used by `toggles`): remove the
-    ///   existing one, drop `c`. The "Toggle X" palette semantic.
-    ///
-    /// Identity defers to [`Component::dedup_tag`] (compared as
-    /// strings when both sides supply one) and falls back to
-    /// `Any::type_id` otherwise — Rust-side components keep
-    /// concrete-type dedup for free; adapters like `LuaComponent`
-    /// opt in by returning their plugin-supplied name.
-    fn push_or(&mut self, c: Box<dyn Component>, on_collision: OnCollision) {
-        if let Some(existing) = self.stack.iter().position(|s| same_identity(&**s, &*c)) {
-            match on_collision {
-                OnCollision::Focus => self.focused_idx = existing,
-                OnCollision::Close => {
-                    self.stack.remove(existing);
-                    self.clamp_focus_after_shrink();
-                }
-            }
-            return;
-        }
-        self.stack.push(c);
-        self.focused_idx = self.stack.len() - 1;
     }
 
     /// Poll every component; drain all queued `win.emit(...)` /
@@ -476,25 +403,18 @@ pub struct Activation {
     pub spawn: SpawnComponent,
 }
 
-/// What a palette entry does when selected.
-pub enum PaletteKind {
-    /// Push a new component. TypeId dedup refocuses an existing
-    /// instance of the same concrete type (search, palette sub-mode, …).
-    Spawn(SpawnComponent),
-    /// Toggle semantics: same as [`Spawn`](Self::Spawn) on first
-    /// selection, but closes the existing instance on re-selection.
-    /// Used by palette labels of the form "Toggle X".
-    Toggle(SpawnComponent),
-}
-
-/// Palette entry description owned by the registrar.
+/// Palette entry description owned by the registrar. Selection
+/// always pushes a fresh component on the stack — there's no
+/// toggle/spawn distinction now that the compositor doesn't dedup.
+/// A plugin that wants "close on re-select" closes itself in its
+/// own `handle_event`.
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
     /// Plugin's canonical short name (`module.name`). Used as the
     /// footer slug paired with `hint` (`[<hint> <name>]`).
     pub name: &'static str,
-    pub kind: PaletteKind,
+    pub spawn: SpawnComponent,
 }
 
 /// Collector passed to each plugin's `register` function. Plugins
@@ -540,10 +460,10 @@ impl Registrar {
         });
     }
 
-    /// Add a palette entry that toggles a component on/off — opens it
-    /// on first selection, closes the existing instance on
-    /// re-selection.
-    pub fn add_toggle<F, C>(
+    /// Add a palette entry that pushes a fresh component on
+    /// selection. Plugins that want toggle behavior implement self-
+    /// close in their own `handle_event`.
+    pub fn add_palette<F, C>(
         &mut self,
         label: impl Into<String>,
         hint: impl Into<String>,
@@ -557,28 +477,7 @@ impl Registrar {
             label: label.into(),
             hint: hint.into(),
             name,
-            kind: PaletteKind::Toggle(box_component_factory(factory)),
-        });
-    }
-
-    /// Add a palette entry that spawns a fresh instance every time —
-    /// no toggle dedup. Use when the component is meant to be rebuilt
-    /// per open (search, palette sub-modes).
-    pub fn add_spawn<F, C>(
-        &mut self,
-        label: impl Into<String>,
-        hint: impl Into<String>,
-        name: &'static str,
-        factory: F,
-    ) where
-        F: Fn(&Context) -> C + 'static,
-        C: Component + 'static,
-    {
-        self.add_palette_entry(PaletteEntry {
-            label: label.into(),
-            hint: hint.into(),
-            name,
-            kind: PaletteKind::Spawn(box_component_factory(factory)),
+            spawn: box_component_factory(factory),
         });
     }
 
@@ -718,14 +617,12 @@ mod tests {
         }
     }
 
-    /// Pushing a component whose concrete type matches something
-    /// already on the stack is idempotent: focus moves to the
-    /// existing one, no duplicate entry. Verifies the fix for
-    /// "`i` with base focused while wiki is already open spawns
-    /// wiki2". Dedup is by `Any::type_id`, so plugin authors don't
-    /// have to declare identity — the type *is* the identity.
+    /// `open` always pushes a new instance, even if a component
+    /// with the same concrete type is already on the stack. nvim-
+    /// style: no Rust-side identity dedup. A plugin that wants
+    /// "open or focus existing" semantics implements that itself.
     #[test]
-    fn push_with_existing_type_focuses_existing() {
+    fn push_always_stacks_new_instance() {
         let ctx = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
             theme_id: ThemeId::Dark,
@@ -747,162 +644,12 @@ mod tests {
         c.cycle(true);
         assert_eq!(focused_tag(&c), "base");
 
-        // Press `i` again — would spawn a second TagComponent, but
-        // the compositor sees TypeId collision and focuses the
-        // existing instance. Stack length stays 2.
+        // Press `i` again — pushes a second wiki on top. Plugins
+        // that want toggle behavior implement self-close in their
+        // own handle_event.
         c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 2, "no duplicate of same type in stack");
-        assert_eq!(focused_tag(&c), "wiki", "focus moves to existing instance");
-    }
-
-    /// Component that calls `win.toggle(c)` (instead of `win.open(c)`)
-    /// for a given key. Used to exercise the toggle-API close path.
-    struct Toggler {
-        label: &'static str,
-        spawn_key: KeyCode,
-        spawn_label: &'static str,
-    }
-
-    impl Component for Toggler {
-        fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-            if event.code == self.spawn_key {
-                win.toggle(Box::new(TagComponent(self.spawn_label)));
-            }
-        }
-        fn render(&self, _: &mut window::RenderWindow) {}
-        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-            vec![(self.label, "")]
-        }
-    }
-
-    /// Test component that overrides [`Component::dedup_tag`] to a
-    /// per-instance string. Mirrors how [`crate::lua::LuaComponent`]
-    /// differentiates Lua plugins despite sharing a Rust type — same
-    /// concrete struct, distinct identity per instance via the tag.
-    struct TaggedComponent {
-        label: &'static str,
-        tag: &'static str,
-    }
-
-    impl Component for TaggedComponent {
-        fn handle_event(&mut self, _: KeyEvent, _: &mut Window) {}
-        fn render(&self, _: &mut window::RenderWindow) {}
-        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-            vec![(self.label, "")]
-        }
-        fn dedup_tag(&self) -> Option<&str> {
-            Some(self.tag)
-        }
-    }
-
-    /// Toggler that spawns `TaggedComponent`s — `a` → tag-a, `b` →
-    /// tag-b. Used to drive the full `push_or_toggle` path through
-    /// `win.toggle` while exercising the new dedup-tag identity.
-    struct MultiToggler;
-
-    impl Component for MultiToggler {
-        fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-            let component = match event.code {
-                KeyCode::Char('a') => Some(("a", "tag-a")),
-                KeyCode::Char('b') => Some(("b", "tag-b")),
-                _ => None,
-            };
-            if let Some((label, tag)) = component {
-                win.toggle(Box::new(TaggedComponent { label, tag }));
-            }
-        }
-        fn render(&self, _: &mut window::RenderWindow) {}
-        fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-            vec![("base", "")]
-        }
-    }
-
-    /// Two components sharing a Rust type (`TaggedComponent`) but
-    /// declaring different `dedup_tag` values must both end up on
-    /// the stack — the regression that motivated #188 and the
-    /// dedup-tag override. Without the fix, the second toggle would
-    /// hit the TypeId match path, evict the first, and drop the
-    /// second.
-    #[test]
-    fn dedup_tag_lets_distinct_tags_coexist_under_toggle() {
-        let ctx = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            theme_id: ThemeId::Dark,
-            cursor: None,
-        };
-        let mut c = Compositor::new();
-        c.push(Box::new(MultiToggler));
-
-        // Toggle 'a' — tag-a lands on top.
-        c.handle_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 2);
-        assert_eq!(focused_tag(&c), "a");
-
-        // Cycle back to base so the next handle_event reaches MultiToggler.
-        c.cycle(true);
-        assert_eq!(focused_tag(&c), "base");
-
-        // Toggle 'b' — distinct tag, must coexist with tag-a.
-        c.handle_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE), &ctx);
-        assert_eq!(
-            c.len(),
-            3,
-            "different dedup_tag values must coexist on the stack",
-        );
-        assert_eq!(focused_tag(&c), "b");
-    }
-
-    /// Re-toggling the same `dedup_tag` still closes — same-identity
-    /// dedup is preserved. This is the path "Toggle ISS pressed
-    /// while ISS is already open" exercises in production.
-    #[test]
-    fn dedup_tag_matching_tags_close_under_toggle() {
-        let ctx = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            theme_id: ThemeId::Dark,
-            cursor: None,
-        };
-        let mut c = Compositor::new();
-        c.push(Box::new(MultiToggler));
-
-        c.handle_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 2);
-        c.cycle(true);
-
-        // Second 'a' — same tag, closes the existing one.
-        c.handle_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 1, "same dedup_tag must close existing");
-        assert_eq!(focused_tag(&c), "base");
-    }
-
-    /// `win.toggle(c)` closes an existing instance of the same
-    /// concrete type instead of refocusing it — the semantic palette
-    /// entries labelled "Toggle X" need. Mirror of the refocus test
-    /// above, same setup / different op.
-    #[test]
-    fn toggle_with_existing_type_closes_existing() {
-        let ctx = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            theme_id: ThemeId::Dark,
-            cursor: None,
-        };
-
-        let mut c = Compositor::new();
-        c.push(Box::new(Toggler {
-            label: "base",
-            spawn_key: KeyCode::Char('i'),
-            spawn_label: "wiki",
-        }));
-        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 2);
+        assert_eq!(c.len(), 3, "second activation pushes a new instance");
         assert_eq!(focused_tag(&c), "wiki");
-
-        c.cycle(true);
-        assert_eq!(focused_tag(&c), "base");
-
-        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
-        assert_eq!(c.len(), 1, "toggle op closes existing of same type");
-        assert_eq!(focused_tag(&c), "base", "focus returns to base layer");
     }
 
     /// Tab delivery is framework-level: even a component that

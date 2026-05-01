@@ -31,15 +31,9 @@ pub enum PaletteAction {
     /// Close the palette and dispatch these messages.
     Run(Vec<AppMsg>),
     /// Close the palette and push `component` onto the compositor.
-    /// Refocus semantic: if `component`'s concrete type is already
-    /// on the stack, focus shifts to the existing instance.
+    /// Always stacks new — no Rust-side dedup. A plugin that wants
+    /// "close existing on re-select" implements that itself.
     Push(Box<dyn Component>),
-    /// Close the palette and toggle `component` onto the compositor.
-    /// Close-on-collision semantic: if `component`'s concrete type is
-    /// already on the stack, the existing instance is popped and
-    /// `component` is dropped. Otherwise pushed like `Push`. Used by
-    /// palette entries whose label promises toggle semantics.
-    Toggle(Box<dyn Component>),
     /// Swap the palette's provider in place — sub-mode transition
     /// (e.g. "Theme"). Palette stays open.
     SwitchProvider(Box<dyn PaletteProvider>),

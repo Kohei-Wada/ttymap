@@ -57,9 +57,9 @@ impl LuaPaletteProvider {
         // here is a kind mismatch reported up to the walker.
         let palette = match captured {
             CapturedRegistration::Palette(t) => t,
-            CapturedRegistration::Plugin(_) => {
+            CapturedRegistration::Plugin(_) | CapturedRegistration::Overlay(_) => {
                 return Err(mlua::Error::external(
-                    "expected ttymap.register_palette, got ttymap.register_plugin",
+                    "expected ttymap.register_palette, got ttymap.register_plugin/register_overlay",
                 ));
             }
         };

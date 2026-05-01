@@ -52,10 +52,8 @@ local function refresh(lat, lon)
     state.job = ttymap.http:fetch(reverse_url(lat, lon))
 end
 
-ttymap.register_plugin({
+ttymap.register_overlay({
     name = "info",
-    activation = "overlay",
-
     paint_on_map = function(map)
         local lon, lat = map:center()
         local zoom = map:zoom()

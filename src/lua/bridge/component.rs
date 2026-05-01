@@ -163,11 +163,15 @@ impl LuaComponent {
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
         let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared)?;
+        // Plugin and Overlay both back into a Component — the
+        // distinction (focusable stack vs. always-on chrome) is
+        // decided by where the dispatcher routes the resulting
+        // Component, not by anything inside this constructor.
         let module = match captured {
-            CapturedRegistration::Plugin(t) => t,
+            CapturedRegistration::Plugin(t) | CapturedRegistration::Overlay(t) => t,
             CapturedRegistration::Palette(_) => {
                 return Err(mlua::Error::external(
-                    "expected ttymap.register_plugin, got ttymap.register_palette",
+                    "expected ttymap.register_plugin or register_overlay, got ttymap.register_palette",
                 ));
             }
         };
@@ -590,15 +594,6 @@ impl Component for LuaComponent {
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.footer_hints.clone()
     }
-
-    /// Stack identity. All `LuaComponent` instances share
-    /// `Any::type_id`, so the compositor's TypeId fallback would
-    /// collapse every Lua plugin to "the same kind". Return the
-    /// per-plugin id (file stem) instead, assigned by the
-    /// registration pipeline. See `compositor::same_identity`.
-    fn dedup_tag(&self) -> Option<&str> {
-        Some(self.handle.log_tag())
-    }
 }
 
 #[cfg(test)]
@@ -606,11 +601,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_picks_up_module_name_dedup_tag_stays_id() {
-        // The script can declare `module.name = "..."` purely as
-        // the user-facing footer label. Identity (`dedup_tag`) is
-        // still the registration-supplied id, so two scripts with
-        // the same `module.name` at different file paths coexist.
+    fn display_picks_up_module_name() {
+        // The script declares `name = "..."` as the user-facing
+        // footer label. Two scripts with the same name at different
+        // paths coexist on the stack — nvim-style, no Rust dedup.
         let c = LuaComponent::from_source(
             r#"ttymap.register_plugin({ name = "International Space Station", render = function() return {} end })"#,
             "iss",
@@ -618,18 +612,15 @@ mod tests {
         )
         .expect("load");
         assert_eq!(c.name(), "International Space Station");
-        assert_eq!(c.dedup_tag(), Some("iss"));
     }
 
     #[test]
     fn display_falls_back_to_id_when_module_omits_name() {
-        // Minimal `return {}` — display defaults to id. dedup_tag
-        // is still the id.
+        // Minimal spec — display defaults to id (registration tag).
         let c =
             LuaComponent::from_source("ttymap.register_plugin({})", "anon", LuaHostShared::empty())
                 .expect("load");
         assert_eq!(c.name(), "anon");
-        assert_eq!(c.dedup_tag(), Some("anon"));
     }
 
     #[test]
