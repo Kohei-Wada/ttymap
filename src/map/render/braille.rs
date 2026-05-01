@@ -100,6 +100,14 @@ impl BrailleBuffer {
         let idx = self.cell_index(x, y);
         let bit = BRAILLE_MAP[y & 3][x & 1];
         if self.pixel_buf[idx] == 0xFF {
+            // Saturated cell — replace the mask with just the overlay's
+            // bit so the line shows as a thin shape, AND transfer the
+            // cell's current fg into bg so the now-OFF subpixels render
+            // against the underlying fill colour (water blue, forest
+            // green, …) instead of the global bg (typically black).
+            // Without the bg transfer, the line would float on the
+            // global bg with the fill colour erased.
+            self.bg_buf[idx] = self.fg_buf[idx];
             self.pixel_buf[idx] = bit;
         } else {
             self.pixel_buf[idx] |= bit;
@@ -303,13 +311,19 @@ mod tests {
 
     /// Saturated cell + `set_pixel_punching` → mask is replaced with
     /// just the overlay's bit (cell becomes a thin shape on the existing
-    /// background), and `fg` is updated. This is the load-bearing
-    /// behaviour for the user-overlay third pass: a polyline over water
-    /// must not show as a thick block of overlay colour.
+    /// background), `fg` is updated to the overlay colour, and the
+    /// cell's prior fg is transferred into `bg` so the OFF subpixels
+    /// render against the underlying fill colour (water blue, forest
+    /// green, …) rather than the global bg (typically black).
+    /// This is the load-bearing behaviour for the user-overlay third
+    /// pass: a polyline over water must not show as a thick block of
+    /// overlay colour, and the water fill colour must remain visible.
     #[test]
     fn set_pixel_punching_replaces_mask_on_saturated_cell() {
         let mut buf = BrailleBuffer::new(4, 4);
-        // Saturate cell (0, 0) by setting all 8 subpixels.
+        // Saturate cell (0, 0) by setting all 8 subpixels at fg colour 5
+        // (the "fill" colour the saturated cell will keep as bg after
+        // punching).
         for sx in 0..2 {
             for sy in 0..4 {
                 buf.set_pixel(sx, sy, 5);
@@ -317,6 +331,7 @@ mod tests {
         }
         let idx = buf.cell_index(0, 0);
         assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: cell starts saturated");
+        assert_eq!(buf.fg_buf[idx], 5, "fixture: cell fg is the fill colour");
 
         // Punch a single subpixel from the overlay at (0, 0) with colour 7.
         buf.set_pixel_punching(0, 0, 7);
@@ -327,6 +342,11 @@ mod tests {
             "saturated cell must be replaced with just the overlay's bit"
         );
         assert_eq!(buf.fg_buf[idx], 7, "fg follows the overlay colour");
+        assert_eq!(
+            buf.bg_buf[idx], 5,
+            "bg must inherit the cell's prior fg so OFF dots render \
+             against the underlying fill, not the global bg"
+        );
     }
 
     /// Sparse cell + `set_pixel_punching` → behaves like `set_pixel`
