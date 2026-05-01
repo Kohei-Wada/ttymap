@@ -1,60 +1,39 @@
 -- here — palette action that jumps to the user's IP-geolocated
 -- coordinates.
 --
--- Headless: pushed onto the compositor stack on palette select,
--- fires a single geoip GET on first poll, emits `ttymap.map:jump(...)`
--- when the response arrives, then self-closes via
--- `ttymap.window:close()`. The component itself paints nothing;
--- render / paint_on_map are omitted so the map underneath stays
--- untouched.
+-- Windowless: nothing is pushed onto the compositor stack. The
+-- palette `invoke` kicks a geoip GET if one isn't already in flight;
+-- the per-frame `loop` polls the inflight job and, when the response
+-- lands, fires `ttymap.map:jump(...)` (drained by App per A7) and
+-- clears state.
 --
 -- The endpoint comes from `ttymap.config:geoip_endpoint()`, which
 -- reads `[geoip] endpoint` from `config.toml`.
 
-local state = {
-    job = nil,
-    started = false,
-    done = false,
-}
+local state = { job = nil }
 
 ttymap.register_plugin({
     name = "here",
-    handle_event = function(_)
-        -- Non-modal: never consume keys. Lets the user keep panning
-        -- while the lookup runs (typically <1s).
-        return { ignore = true }
-    end,
-
-    poll = function()
-        if state.done then return end
-
-        if not state.started then
-            state.started = true
-            state.job = ttymap.http:fetch(ttymap.config:geoip_endpoint())
-            return
-        end
-
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                state.job = nil
-                local payload = ttymap.json:parse(body)
-                if payload
-                    and type(payload.latitude) == "number"
-                    and type(payload.longitude) == "number" then
-                    ttymap.map:jump(payload.longitude, payload.latitude)
-                end
-                state.done = true
-                ttymap.window:close()
+    loop = function()
+        if not state.job then return end
+        local body = state.job:try_take()
+        if body then
+            local p = ttymap.json:parse(body)
+            if p
+                and type(p.latitude) == "number"
+                and type(p.longitude) == "number" then
+                ttymap.map:jump(p.longitude, p.latitude)
             end
+            state.job = nil
         end
     end,
 })
 
--- One-shot: every palette press opens a fresh component (with a
--- fresh local `state`), which fires the geoip lookup and
--- self-closes via `ttymap.window:close()` once the response lands.
 ttymap.register_palette_command({
     label = "Jump to here (current location)",
-    invoke = function() ttymap.plugin:open() end,
+    invoke = function()
+        if not state.job then
+            state.job = ttymap.http:fetch(ttymap.config:geoip_endpoint())
+        end
+    end,
 })
