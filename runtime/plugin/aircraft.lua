@@ -185,7 +185,6 @@ local function toggle()
     if w then close() else open() end
 end
 
-ttymap.register_keybind("a", toggle)
 ttymap.register_palette_command({
     label  = "Toggle aircraft",
     invoke = toggle,
