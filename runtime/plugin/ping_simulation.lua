@@ -79,6 +79,15 @@ ttymap.api.frame.on_tick(function(map)
     return
   end
   frame = frame + 1
+
+  -- Always-on endpoint markers — show where each ping's route starts
+  -- and ends, in the same colour as the line, regardless of animation
+  -- phase. `◎` reads as "endpoint" / "node".
+  for _, ping in ipairs(pings) do
+    map:point(ping.src[1], ping.src[2], "◎", ping.color)
+    map:point(ping.dst[1], ping.dst[2], "◎", ping.color)
+  end
+
   for _, ping in ipairs(pings) do
     local i = (frame + ping.offset) % cycle
     if i == 0 then
