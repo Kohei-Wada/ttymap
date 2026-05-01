@@ -20,10 +20,10 @@
 //! [`Window::close`]. Idempotent — a flipped-then-flipped flag does
 //! nothing extra.
 //!
-//! Drain plumbing (`ttymap.map:jump`, `ttymap.window:close`,
-//! `ttymap.window:export_frame`) lives in the **setup state** that ran
-//! the script's top-level `register_*` calls — *not* on this
-//! per-window component. Those receivers are returned by
+//! Drain plumbing (`ttymap.map:jump`, `ttymap.api.frame.export`)
+//! lives in the **setup state** that ran the script's top-level
+//! `register_*` calls — *not* on this per-window component. Those
+//! receivers are returned by
 //! [`crate::lua::ttymap::install`] inside [`LuaHostHandles`] and
 //! drained centrally by `App` per frame. This is by design:
 //! `window.open` runs in the setup state's Lua VM, so its callbacks'
@@ -172,8 +172,8 @@ impl LuaWindowComponent {
     /// `center` is the setup state's shared `Arc<Mutex<LonLat>>` —
     /// refreshed each dispatch so `ttymap.map:center()` works from
     /// inside the spec callbacks. The setup state owns the Sender /
-    /// Receiver pairs for jump / close / export_frame; this component
-    /// does not drain them (App drains them centrally).
+    /// Receiver pairs for jump / frame.export; this component does
+    /// not drain them (App drains them centrally).
     pub fn from_spec(
         lua: Lua,
         spec: Table,
@@ -274,9 +274,9 @@ impl Component for LuaWindowComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         self.refresh_center(win.ctx().center);
         let action = self.dispatch_event(event);
-        // Host-side jump / close / export_frame the callback queued
-        // hits the setup state's senders, not per-window receivers.
-        // App drains those centrally each frame.
+        // Host-side jump / frame.export the callback queued hits the
+        // setup state's senders, not per-window receivers. App drains
+        // those centrally each frame.
         match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),

@@ -52,7 +52,7 @@ impl LuaPaletteProvider {
     /// `ttymap.api.palette.open(spec)` where the script builds the spec
     /// inline inside an activation callback rather than at top level.
     ///
-    /// Host services (`ttymap.map`, `ttymap.window`, …) are already
+    /// Host services (`ttymap.map`, `ttymap.api`, …) are already
     /// installed on `lua` by the prior [`crate::lua::ttymap::install`]
     /// call that produced the setup state.
     ///

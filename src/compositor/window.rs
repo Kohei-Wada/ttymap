@@ -146,8 +146,7 @@ impl<'a> Window<'a> {
 /// tries to call `close()` simply won't typecheck.
 ///
 /// Lua plugins are still one [`Component`] impl that may be either an
-/// overlay or a stack component; that adapter has its own runtime
-/// story for `ttymap.window:close()` from an overlay (drain + log).
+/// overlay or a stack component.
 pub struct OverlayWindow<'a> {
     msgs: &'a mut Vec<AppMsg>,
     ctx: &'a Context,

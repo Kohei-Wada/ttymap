@@ -23,8 +23,6 @@
 //! ttymap.http   :url_encode(s) -> string    RFC 3986 query encoding
 //! ttymap.map    :jump(lon, lat)             recentre the map (fire-and-forget)
 //! ttymap.map    :center() -> lon, lat       latest centre, refreshed per dispatch
-//! ttymap.window :close()                    pop this component off the stack
-//! ttymap.window :export_frame()             snapshot the current frame to disk
 //! ttymap.json   :parse(s) -> value|nil      JSON → Lua tables (errors → nil)
 //! ttymap.sgp4   :parse_tle(text) -> handle  parse a TLE for SGP4 propagation
 //! ttymap.sgp4   :parse_tles(text) -> array  parse a multi-TLE block (groups)
@@ -44,10 +42,9 @@
 //! ttymap.api.frame.export()                 snapshot the current frame to disk
 //! ```
 //!
-//! `ttymap.map:jump(...)` and `ttymap.window:close()` are
-//! fire-and-forget from the Lua side; the matching `Receiver`s on
-//! [`LuaComponent`] drain after each callback while the `Window` is
-//! still in scope. `ttymap.map:center()` reads a `Mutex<LonLat>` the
+//! `ttymap.map:jump(...)` is fire-and-forget from the Lua side; the
+//! matching `Receiver` on the App drains after each setup-state
+//! callback. `ttymap.map:center()` reads a `Mutex<LonLat>` the
 //! component refreshes at the start of every dispatch path that
 //! carries a `Window` / `MapApi`, so callers see the latest centre
 //! without threading anything through their signatures.
@@ -56,7 +53,7 @@
 //! (`ttymap.opt`, `ttymap.keymap`) — that's a different Lua state
 //! (see `init_lua.rs`), so the namespaces don't collide at runtime.
 //! The split is by *scope*, not by name: `opt` / `keymap` live in
-//! init; `http` / `map` / `window` / etc. live in plugin runtime.
+//! init; `http` / `map` / etc. live in plugin runtime.
 
 pub mod map_api;
 pub mod sgp4;
@@ -161,11 +158,10 @@ impl LuaHostShared {
 /// `install()` returns this once per state; the App routes the
 /// receivers to the right consumers.
 ///
-/// - `jump_rx` / `close_rx` / `export_rx` — drained by the App per
-///   frame and emitted as `AppMsg`s. These fire from inside any setup
-///   callback (palette `invoke`, `register_keybind` callback, and —
-///   once `ttymap.api.window.open` lands — the spec callbacks of
-///   windows opened via `window.open`).
+/// - `jump_rx` / `export_rx` — drained by the App per frame and
+///   emitted as `AppMsg`s. These fire from inside any setup callback
+///   (palette `invoke`, `register_keybind` callback, and the spec
+///   callbacks of windows opened via `ttymap.api.window.open`).
 /// - `center` — shared with `ttymap.map`'s userdata so
 ///   `ttymap.map:center()` returns the live centre. Components
 ///   refresh it on each dispatch path that carries a `Window`.
@@ -179,7 +175,6 @@ impl LuaHostShared {
 /// owns the receivers and App drains them centrally (Path 4).
 pub struct LuaHostHandles {
     pub jump_rx: mpsc::Receiver<LonLat>,
-    pub close_rx: mpsc::Receiver<()>,
     pub export_rx: mpsc::Receiver<()>,
     pub center: Arc<Mutex<LonLat>>,
     /// Components queued by `ttymap.api.window.open` (and, in A6,
@@ -289,7 +284,6 @@ pub fn install(
     slot: CaptureSlot,
 ) -> mlua::Result<LuaHostHandles> {
     let (jump_tx, jump_rx) = mpsc::channel();
-    let (close_tx, close_rx) = mpsc::channel();
     let (export_tx, export_rx) = mpsc::channel();
     // `Box<dyn Component>` is `!Send`; that's fine — the channel
     // stays on the main thread (install + every `window.open` Lua
@@ -311,16 +305,6 @@ pub fn install(
         lua.create_userdata(HostMap {
             jump_tx,
             center: center.clone(),
-        })?,
-    )?;
-    // Clone `export_tx` for the new `ttymap.api.frame.export` entry
-    // point further down — both surfaces drive the same `export_rx`.
-    let export_tx_for_api = export_tx.clone();
-    ttymap.set(
-        "window",
-        lua.create_userdata(HostWindow {
-            close_tx,
-            export_tx,
         })?,
     )?;
     ttymap.set("json", lua.create_userdata(HostJson)?)?;
@@ -431,7 +415,7 @@ pub fn install(
 
     // ── ttymap.api ────────────────────────────────────────────────
     //
-    // The new (nvim-style) plugin API surface. Currently hosts:
+    // The (nvim-style) plugin API surface. Currently hosts:
     //
     // - `ttymap.api.window.open(spec) -> WindowHandle` — push a
     //   focused [`LuaWindowComponent`] onto the compositor stack.
@@ -440,10 +424,6 @@ pub fn install(
     //   [`LuaPaletteProvider`]) onto the stack.
     // - `ttymap.api.frame.export()` — request the current frame be
     //   snapshotted to disk.
-    //
-    // Grouping under `api.*` keeps the new explicit surface visually
-    // distinct from the existing ambient userdatas (`ttymap.map`,
-    // `ttymap.window`, …) while the legacy ones are phased out.
     let api = lua.create_table()?;
 
     let window_api = lua.create_table()?;
@@ -540,15 +520,14 @@ pub fn install(
 
     // ── ttymap.api.frame ─────────────────────────────────────────────
     //
-    // Reuses the same `export_tx` channel that `ttymap.window:export_frame`
-    // already drains. The new dot-call surface is the nvim-style entry
-    // point; `ttymap.window:export_frame()` stays as the legacy alias
-    // until callers migrate.
+    // Fire-and-forget request to snapshot the current frame to disk;
+    // the App drains `export_rx` per frame and emits
+    // `AppMsg::ExportFrame`.
     let frame_api = lua.create_table()?;
     frame_api.set(
         "export",
         lua.create_function(move |_, _: ()| {
-            if export_tx_for_api.send(()).is_err() {
+            if export_tx.send(()).is_err() {
                 log::error!("lua-host: ttymap.api.frame.export: export channel closed");
             }
             Ok(())
@@ -562,7 +541,6 @@ pub fn install(
 
     Ok(LuaHostHandles {
         jump_rx,
-        close_rx,
         export_rx,
         center,
         push_rx,
@@ -637,38 +615,6 @@ impl UserData for HostMap {
         methods.add_method("center", |_, this, _: ()| {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
-        });
-    }
-}
-
-// ── ttymap.window ─────────────────────────────────────────────────────
-
-struct HostWindow {
-    close_tx: mpsc::Sender<()>,
-    export_tx: mpsc::Sender<()>,
-}
-
-impl UserData for HostWindow {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.window:close()` — fire-and-forget request to pop the
-        // component off the compositor stack. The Lua side calls
-        // this when its work is done (e.g. one-shot here-jump);
-        // [`LuaComponent`] drains the channel after the current
-        // callback returns and invokes `Window::close()` while it
-        // still holds the borrow.
-        methods.add_method("close", |_, this, _: ()| {
-            let _ = this.close_tx.send(());
-            Ok(())
-        });
-
-        // `ttymap.window:export_frame()` — fire-and-forget request to
-        // emit `AppMsg::ExportFrame`, which `App::dispatch` translates
-        // into "snapshot the current `MapFrame` to disk as ANSI".
-        // Drained in lockstep with jump/close after each Lua callback
-        // while a `Window` is still in scope.
-        methods.add_method("export_frame", |_, this, _: ()| {
-            let _ = this.export_tx.send(());
-            Ok(())
         });
     }
 }
@@ -942,9 +888,7 @@ mod tests {
         let (lua, _handles) = install_for_test();
         // Each namespace lookup must return a userdata; the shape
         // confirms the install wired all namespaces in.
-        for ns in [
-            "http", "map", "window", "json", "sgp4", "tile", "config", "help",
-        ] {
+        for ns in ["http", "map", "json", "sgp4", "tile", "config", "help"] {
             let ud: mlua::AnyUserData = lua
                 .load(format!("return ttymap.{ns}"))
                 .eval()
@@ -966,22 +910,6 @@ mod tests {
         let ll = handles.jump_rx.try_recv().expect("jump must be queued");
         assert!((ll.lon - 139.7595).abs() < 1e-9);
         assert!((ll.lat - 35.6828).abs() < 1e-9);
-    }
-
-    #[test]
-    fn host_window_close_pushes_to_channel() {
-        let (lua, handles) = install_for_test();
-        lua.load("ttymap.window:close()").exec().expect("exec");
-        assert!(handles.close_rx.try_recv().is_ok());
-    }
-
-    #[test]
-    fn host_window_export_frame_pushes_to_channel() {
-        let (lua, handles) = install_for_test();
-        lua.load("ttymap.window:export_frame()")
-            .exec()
-            .expect("exec");
-        assert!(handles.export_rx.try_recv().is_ok());
     }
 
     #[test]

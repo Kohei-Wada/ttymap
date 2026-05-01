@@ -194,21 +194,6 @@ impl Compositor {
         self.focused_idx = self.stack.len() - 1;
     }
 
-    /// Pop the focused component off the stack. No-op when the stack
-    /// is empty. Used by the App's setup-state-handle drain to honour
-    /// `ttymap.window:close()` calls that arrive from outside any
-    /// in-progress `handle_event` / `poll` (i.e. from a Lua callback
-    /// that ran via the App's drain stanza, not via the compositor's
-    /// own focus-aware dispatch).
-    pub fn pop_top(&mut self) {
-        if self.stack.is_empty() {
-            return;
-        }
-        let idx = self.focused_idx.min(self.stack.len() - 1);
-        self.stack.remove(idx);
-        self.clamp_focus_after_shrink();
-    }
-
     pub fn len(&self) -> usize {
         self.stack.len()
     }
@@ -427,10 +412,10 @@ pub struct Registrar {
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::app::App::new`] and drains each handle's receivers
-    /// (`push_rx` / `jump_rx` / `close_rx` / `export_rx`) once per
-    /// frame so callbacks running in the setup state can request map
-    /// jumps, frame exports, or component pushes without sitting on a
-    /// dead receiver.
+    /// (`push_rx` / `jump_rx` / `export_rx`) once per frame so
+    /// callbacks running in the setup state can request map jumps,
+    /// frame exports, or component pushes without sitting on a dead
+    /// receiver.
     pub lua_host_handles: Vec<crate::lua::ttymap::LuaHostHandles>,
 }
 

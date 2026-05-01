@@ -133,16 +133,6 @@ pub struct LuaComponent {
     /// the host `Window`. Keeps the Lua call site decoupled from
     /// when a `Window` is actually available.
     jump_rx: mpsc::Receiver<LonLat>,
-    /// Receiver for `ttymap.window:close()` requests. Same pattern as
-    /// `jump_rx`: the Lua side fires-and-forgets; we drain after
-    /// each callback while still holding the `Window` and call
-    /// `Window::close()`. Used by one-shot plugins (here-jump) that
-    /// pop themselves once their work is done.
-    close_rx: mpsc::Receiver<()>,
-    /// Receiver for `ttymap.window:export_frame()` requests. Drained beside
-    /// jump/close after each callback; emits `AppMsg::ExportFrame`
-    /// through the host `Window`.
-    export_rx: mpsc::Receiver<()>,
     /// Map centre cell shared with the host so `ttymap.map:center()` can
     /// return the latest value. We refresh it at the start of every
     /// dispatch path that carries a `Window` / `MapApi`.
@@ -204,15 +194,14 @@ impl LuaComponent {
         );
         let footer_hints = parse_footer_hints(&module);
 
-        // The legacy `LuaComponent` adapter only consumes the
-        // per-component drain channels. The new `push_rx` (used by
-        // `ttymap.api.window.open` to queue components for the App
-        // to push) is owned by the App-side caller, not by this
-        // adapter — explicitly ignore it here.
+        // The legacy `LuaComponent` adapter consumes the per-component
+        // jump drain channel only. `push_rx` (used by
+        // `ttymap.api.window.open`), `export_rx` (used by
+        // `ttymap.api.frame.export`) are drained at the App level off
+        // the setup-state handles, not here.
         let LuaHostHandles {
             jump_rx,
-            close_rx,
-            export_rx,
+            export_rx: _,
             center,
             push_rx: _,
         } = handles;
@@ -224,8 +213,6 @@ impl LuaComponent {
             has_render,
             footer_hints,
             jump_rx,
-            close_rx,
-            export_rx,
             center,
         })
     }
@@ -241,45 +228,13 @@ impl LuaComponent {
         }
     }
 
-    /// Drain any `ttymap.map:jump(...)` and `ttymap.window:export_frame()` requests
-    /// the Lua side queued during the most recent callback. Calls
-    /// `emit` once per queued request; the caller wires this to the
-    /// active window's `emit` (works for both [`Window`] and
-    /// [`OverlayWindow`]).
+    /// Drain any `ttymap.map:jump(...)` requests the Lua side queued
+    /// during the most recent callback. Calls `emit` once per queued
+    /// request; the caller wires this to the active window's `emit`
+    /// (works for both [`Window`] and [`OverlayWindow`]).
     fn drain_emits(&self, mut emit: impl FnMut(AppMsg)) {
         while let Ok(ll) = self.jump_rx.try_recv() {
             emit(AppMsg::Map(crate::map::Action::Jump(ll)));
-        }
-        while self.export_rx.try_recv().is_ok() {
-            emit(AppMsg::ExportFrame);
-        }
-    }
-
-    /// Drain any `ttymap.window:close()` requests the Lua side queued and
-    /// pop the component off the stack. One drain per dispatch is
-    /// enough — extra queued closes collapse into one `Window::close`
-    /// because the compositor only respects the request once.
-    fn drain_close(&self, win: &mut Window) {
-        if self.close_rx.try_recv().is_ok() {
-            // Drain any further close requests so they don't leak
-            // into the next dispatch path.
-            while self.close_rx.try_recv().is_ok() {}
-            win.close();
-        }
-    }
-
-    /// Overlay counterpart to [`drain_close`]. Overlays don't live on
-    /// the focusable stack, so a `ttymap.window:close()` from one has nothing
-    /// to pop. Drain the channel anyway (it's unbounded; left
-    /// undrained it would grow forever) and warn so a misuse is
-    /// visible.
-    fn drain_close_overlay(&self) {
-        if self.close_rx.try_recv().is_ok() {
-            while self.close_rx.try_recv().is_ok() {}
-            log::warn!(
-                "lua[{}]: ttymap.window:close() ignored — overlay components don't live on the focusable stack",
-                self.handle.log_tag()
-            );
         }
     }
 
@@ -534,7 +489,6 @@ impl Component for LuaComponent {
         self.update_center(win.ctx().center);
         let action = self.dispatch_event(event);
         self.drain_emits(|m| win.emit(m));
-        self.drain_close(win);
         match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),
@@ -551,14 +505,12 @@ impl Component for LuaComponent {
         self.update_center(win.ctx().center);
         self.dispatch_poll();
         self.drain_emits(|m| win.emit(m));
-        self.drain_close(win);
     }
 
     fn poll_overlay(&mut self, win: &mut OverlayWindow) {
         self.update_center(win.ctx().center);
         self.dispatch_poll();
         self.drain_emits(|m| win.emit(m));
-        self.drain_close_overlay();
     }
 
     fn render(&self, win: &mut RenderWindow) {
@@ -1105,49 +1057,6 @@ mod tests {
         assert_eq!(jumps.len(), 1);
         assert!((jumps[0].lon - 139.7595).abs() < 1e-9);
         assert!((jumps[0].lat - 35.6828).abs() < 1e-9);
-    }
-
-    #[test]
-    fn poll_overlay_drains_host_close_without_emitting() {
-        // An overlay that incorrectly calls `ttymap.window:close()`
-        // from poll. The overlay path must drain `close_rx` (else the
-        // unbounded channel would grow forever) but emit nothing on
-        // the OverlayWindow — overlays don't live on the focusable
-        // stack.
-        let mut c = LuaComponent::from_source(
-            r#"ttymap.register_plugin({
-                name = "bad_overlay",
-                poll = function()
-                    ttymap.window:close()
-                end,
-            })"#,
-            "bad_overlay",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
-
-        use crate::compositor::Context;
-        const CTX: Context = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            theme_id: crate::theme::ThemeId::Dark,
-            cursor: None,
-        };
-        let mut msgs: Vec<AppMsg> = Vec::new();
-        {
-            let mut win = OverlayWindow::new(&mut msgs, &CTX);
-            c.poll_overlay(&mut win);
-            // Second tick — the channel must have been drained on
-            // the first call. A missing drain would log a second
-            // warning here; correctness is unaffected because the
-            // OverlayWindow has no close path either way.
-            c.poll_overlay(&mut win);
-        }
-        // No close-path msgs exist on OverlayWindow; just assert
-        // no jumps / exports leaked into the queue.
-        assert!(
-            msgs.is_empty(),
-            "overlay poll must not emit anything for a ttymap.window:close()"
-        );
     }
 
     #[test]
