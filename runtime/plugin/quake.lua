@@ -59,45 +59,42 @@ local function highest_magnitude(qs)
     return best
 end
 
-ttymap.register_plugin({
-    name = "quakes",
-    -- Per-frame work runs only while the plugin is enabled: drains
-    -- the in-flight fetch, schedules the next, and paints markers.
-    -- Toggling off (`enabled = false`) immediately stops fetching.
-    loop = function(map)
-        if not enabled then return end
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                local payload = ttymap.json:parse(body)
-                state.quakes = parse_features(payload)
-                -- Auto-recentre on the first non-empty result so
-                -- the user lands somewhere meaningful right after
-                -- toggling on.
-                if not state.initial_jump_done and #state.quakes > 0 then
-                    local top = highest_magnitude(state.quakes)
-                    if top then
-                        state.initial_jump_done = true
-                        ttymap.map:jump(top.lon, top.lat)
-                    end
+-- Per-frame work runs only while the plugin is enabled: drains
+-- the in-flight fetch, schedules the next, and paints markers.
+-- Toggling off (`enabled = false`) immediately stops fetching.
+ttymap.api.frame.on_tick(function(map)
+    if not enabled then return end
+    if state.job then
+        local body = state.job:try_take()
+        if body then
+            local payload = ttymap.json:parse(body)
+            state.quakes = parse_features(payload)
+            -- Auto-recentre on the first non-empty result so
+            -- the user lands somewhere meaningful right after
+            -- toggling on.
+            if not state.initial_jump_done and #state.quakes > 0 then
+                local top = highest_magnitude(state.quakes)
+                if top then
+                    state.initial_jump_done = true
+                    ttymap.map:jump(top.lon, top.lat)
                 end
-                state.job = nil
             end
+            state.job = nil
         end
-        local now = os.time()
-        if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
-            state.last_fetch_sec = now
-            state.job = ttymap.http:fetch(URL)
+    end
+    local now = os.time()
+    if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
+        state.last_fetch_sec = now
+        state.job = ttymap.http:fetch(URL)
+    end
+    for _, q in ipairs(state.quakes) do
+        if q.mag >= NOTABLE_MAGNITUDE then
+            map:point(q.lon, q.lat, "✸", "accent_alt")
+        else
+            map:point(q.lon, q.lat, "·", "accent")
         end
-        for _, q in ipairs(state.quakes) do
-            if q.mag >= NOTABLE_MAGNITUDE then
-                map:point(q.lon, q.lat, "✸", "accent_alt")
-            else
-                map:point(q.lon, q.lat, "·", "accent")
-            end
-        end
-    end,
-})
+    end
+end)
 
 local function toggle()
     enabled = not enabled

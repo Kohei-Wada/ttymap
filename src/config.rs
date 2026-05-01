@@ -23,8 +23,8 @@ pub struct Config {
 pub struct PluginsConfig {
     /// User-supplied opt-out list, matched against each plugin's
     /// stem (file name minus `.lua`). Set via
-    /// `ttymap.opt.plugins.disable = { "wiki", "quake" }` in
-    /// init.lua. Plugins matching any entry are silently skipped at
+    /// `ttymap.opt.disable = { "wiki", "quake" }` in init.lua.
+    /// Plugins matching any entry are silently skipped at
     /// registration time.
     pub disable: Vec<String>,
 }

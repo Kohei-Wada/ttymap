@@ -115,26 +115,21 @@ pub enum CallOutcome<R> {
 }
 
 /// Build a fresh Lua state, install host services, run `source`, and
-/// hand back the captured registration spec for the caller to inspect
+/// hand back the captured registration for the caller to inspect
 /// before constructing a [`LuaHandle`].
 ///
-/// The script self-registers by calling at least one
-/// `ttymap.register_*` API. Two valid shapes:
+/// nvim-style: the script's existence in `<runtime>/plugin/` is the
+/// registration. Identity = file stem (the caller passes it as
+/// `chunk_name` and forwards it to the registrar). The script
+/// participates in the host loop by calling some combination of:
 ///
-/// 1. **Componented plugin**: calls `register_plugin` (which captures
-///    the spec table), optionally with activation surfaces
-///    (`register_palette_command` / `register_keybind`). Palette
-///    providers are *not* declared at top level anymore; they're
-///    pushed dynamically via `ttymap.api.palette.open(spec)` from
-///    inside an activation callback.
-/// 2. **Pure-action plugin**: no spec, but at least one activation
-///    surface — typically a `register_palette_command` whose
-///    `invoke` calls a fire-and-forget host API like
-///    `ttymap.api.frame.export()` or `ttymap.map:jump(...)`.
-///    `export.lua` is the canonical example.
+/// - `ttymap.api.frame.on_tick(fn)` — per-frame work (paint markers,
+///   drain async fetches, etc.)
+/// - `ttymap.register_palette_command({label, invoke})` — palette row
+/// - `ttymap.register_keybind(key, callback)` — top-level keybind
 ///
-/// A script that calls *none* of the registration APIs surfaces as
-/// an `mlua::Error` here.
+/// At least one of those calls is required; a script that subscribes
+/// to nothing surfaces as an `mlua::Error` here.
 ///
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
@@ -150,12 +145,14 @@ pub fn fresh_load(
     let handles = host::install(&lua, host_tag, shared, slot.clone())?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
-    let has_surface = !captured.palette_commands.is_empty() || !captured.keybinds.is_empty();
-    if captured.spec.is_none() && !has_surface {
+    let has_surface = !captured.palette_commands.is_empty()
+        || !captured.keybinds.is_empty()
+        || !captured.ticks.is_empty();
+    if !has_surface {
         return Err(mlua::Error::external(
-            "script did not call any ttymap.register_* API \
-             (register_plugin, register_palette_command, \
-             or register_keybind)",
+            "script did not call any ttymap registration API \
+             (ttymap.api.frame.on_tick, ttymap.register_palette_command, \
+             or ttymap.register_keybind)",
         ));
     }
     Ok((lua, captured, handles))

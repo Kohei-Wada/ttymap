@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::compositor::{Compositor, Context, MapApi};
-use crate::lua::LuaPluginRegistry;
+use crate::lua::LuaTickRegistry;
 use crate::map::render::frame::MapFrame;
 use crate::theme::UiTheme;
 
@@ -27,7 +27,7 @@ pub fn draw(
     f: &mut Frame,
     map_frame: Option<&MapFrame>,
     compositor: &Compositor,
-    plugin_loops: &LuaPluginRegistry,
+    tick_registry: &LuaTickRegistry,
     theme: &UiTheme,
     ctx: &Context,
 ) {
@@ -50,12 +50,12 @@ pub fn draw(
         // Focus-gated: closing a panel drops the component which drops
         // its paint hook.
         let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme, ctx.cursor);
-        // Tick every plugin-declared `loop` callback against the
+        // Tick every plugin-declared `on_tick` callback against the
         // live MapApi *before* the compositor paints — so any
         // plugin-emitted points lie underneath focused-component
         // overlays in the same frame, matching the layering plugin
         // authors expect from `Component::paint_on_map`.
-        plugin_loops.tick(&mut api);
+        tick_registry.tick(&mut api);
         compositor.paint_on_map(&mut api);
     }
 

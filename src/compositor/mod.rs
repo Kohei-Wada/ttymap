@@ -394,13 +394,12 @@ pub struct PaletteEntry {
 pub struct Registrar {
     pub activations: Vec<Activation>,
     pub palette_entries: Vec<PaletteEntry>,
-    /// Plugin-declared per-frame `loop` callbacks. Captured by the
-    /// Lua dispatcher when a script calls
-    /// `ttymap.register_plugin({ loop = fn })`, and ticked once per
-    /// frame from `App::run` against the live `MapApi`. The unified
-    /// per-frame work mechanism for the new plugin API; old
-    /// `paint_on_map` / `poll` paths still work for now.
-    pub plugin_loops: crate::lua::LuaPluginRegistry,
+    /// Plugin-declared per-frame callbacks. Captured by the Lua
+    /// dispatcher when a script calls `ttymap.api.frame.on_tick(fn)`
+    /// (zero or more times per script), and ticked once per frame
+    /// from `App::run` against the live `MapApi`. The unified
+    /// per-frame work mechanism for the nvim-style plugin API.
+    pub tick_registry: crate::lua::LuaTickRegistry,
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::app::App::new`] and drains each handle's receivers

@@ -33,7 +33,6 @@ local s = require("satellite.satellites").make({
     { display = "GPS",      norad_id = 26360, color = "highlight",  key = "G" },
 })
 
-ttymap.register_plugin(s.plugin_spec)
 ttymap.register_palette_command({
     label = "Toggle satellite",
     invoke = s.toggle,

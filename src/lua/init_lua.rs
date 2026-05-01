@@ -196,13 +196,11 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     geoip.set("timeout_ms", d.geoip.timeout_ms)?;
     opt.set("geoip", geoip)?;
 
-    let plugins = lua.create_table()?;
     let disable = lua.create_table()?;
     for (i, name) in d.plugins.disable.iter().enumerate() {
         disable.set(i + 1, name.as_str())?;
     }
-    plugins.set("disable", disable)?;
-    opt.set("plugins", plugins)?;
+    opt.set("disable", disable)?;
 
     Ok(opt)
 }
@@ -305,9 +303,7 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
             cfg.geoip.timeout_ms = v;
         }
     }
-    if let Ok(t) = opt.get::<Table>("plugins")
-        && let Ok(disable) = t.get::<Table>("disable")
-    {
+    if let Ok(disable) = opt.get::<Table>("disable") {
         cfg.plugins.disable = disable
             .sequence_values::<String>()
             .filter_map(Result::ok)

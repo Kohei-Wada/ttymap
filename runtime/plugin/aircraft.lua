@@ -110,40 +110,37 @@ local function build_lines()
     return lines
 end
 
-ttymap.register_plugin({
-    name = "aircraft",
-    -- Per-frame work runs only while the panel is open: drains the
-    -- in-flight fetch, schedules the next one, and paints markers.
-    -- Closing the panel (`w = nil`) immediately stops fetching, which
-    -- preserves the legacy "no traffic when hidden" budget behavior.
-    loop = function(map)
-        if not w then return end
-        -- Drain any in-flight fetch.
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                local payload = ttymap.json:parse(body)
-                state.aircraft = parse_states(payload)
-                if state.selected > #state.aircraft then
-                    state.selected = math.max(1, #state.aircraft)
-                end
-                state.job = nil
+-- Per-frame work runs only while the panel is open: drains the
+-- in-flight fetch, schedules the next one, and paints markers.
+-- Closing the panel (`w = nil`) immediately stops fetching, which
+-- preserves the legacy "no traffic when hidden" budget behavior.
+ttymap.api.frame.on_tick(function(map)
+    if not w then return end
+    -- Drain any in-flight fetch.
+    if state.job then
+        local body = state.job:try_take()
+        if body then
+            local payload = ttymap.json:parse(body)
+            state.aircraft = parse_states(payload)
+            if state.selected > #state.aircraft then
+                state.selected = math.max(1, #state.aircraft)
             end
+            state.job = nil
         end
-        -- Schedule the next fetch when the interval has elapsed.
-        local now = os.time()
-        if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
-            state.last_fetch_sec = now
-            local lon, lat = map:center()
-            state.job = ttymap.http:fetch(bbox_url(lon, lat))
-        end
-        -- Markers.
-        for i, a in ipairs(state.aircraft) do
-            local color = (i == state.selected) and "accent_alt" or "accent"
-            map:point(a.lon, a.lat, marker_for(a), color)
-        end
-    end,
-})
+    end
+    -- Schedule the next fetch when the interval has elapsed.
+    local now = os.time()
+    if not state.job and (now - state.last_fetch_sec) >= INTERVAL_SEC then
+        state.last_fetch_sec = now
+        local lon, lat = map:center()
+        state.job = ttymap.http:fetch(bbox_url(lon, lat))
+    end
+    -- Markers.
+    for i, a in ipairs(state.aircraft) do
+        local color = (i == state.selected) and "accent_alt" or "accent"
+        map:point(a.lon, a.lat, marker_for(a), color)
+    end
+end)
 
 local function close()
     if w then

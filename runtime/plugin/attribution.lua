@@ -6,12 +6,9 @@
 -- provider returns nil/empty (custom backends without OSM data),
 -- nothing is painted.
 
-ttymap.register_plugin({
-    name = "attribution",
-    loop = function(map)
-        local text = ttymap.tile:attribution()
-        if text and #text > 0 then
-            map:text_anchored("bottom-left", 0, text, "muted")
-        end
-    end,
-})
+ttymap.api.frame.on_tick(function(map)
+    local text = ttymap.tile:attribution()
+    if text and #text > 0 then
+        map:text_anchored("bottom-left", 0, text, "muted")
+    end
+end)

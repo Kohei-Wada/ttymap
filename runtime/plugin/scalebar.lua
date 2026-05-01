@@ -45,23 +45,20 @@ local function clamp(v, lo, hi)
     return v
 end
 
-ttymap.register_plugin({
-    name = "scalebar",
-    loop = function(map)
-        local _, lat = map:center()
-        local zoom = map:zoom()
-        local width = map:area_width()
-        if width == 0 then return end
+ttymap.api.frame.on_tick(function(map)
+    local _, lat = map:center()
+    local zoom = map:zoom()
+    local width = map:area_width()
+    if width == 0 then return end
 
-        local mpc = meters_per_cell(lat, zoom)
-        local target_cells = math.max(width / 5, 4)
-        local target_meters = target_cells * mpc
-        local distance = pick_distance(target_meters)
-        local cells = math.floor(distance / mpc + 0.5)
-        cells = clamp(cells, 2, math.floor(width / 3))
-        if cells < 2 then return end
+    local mpc = meters_per_cell(lat, zoom)
+    local target_cells = math.max(width / 5, 4)
+    local target_meters = target_cells * mpc
+    local distance = pick_distance(target_meters)
+    local cells = math.floor(distance / mpc + 0.5)
+    cells = clamp(cells, 2, math.floor(width / 3))
+    if cells < 2 then return end
 
-        local bar = "├" .. string.rep("─", cells - 2) .. "┤ " .. fmt.distance(distance) .. " "
-        map:text_anchored("bottom-right", 0, bar, "accent")
-    end,
-})
+    local bar = "├" .. string.rep("─", cells - 2) .. "┤ " .. fmt.distance(distance) .. " "
+    map:text_anchored("bottom-right", 0, bar, "accent")
+end)

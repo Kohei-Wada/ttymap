@@ -21,7 +21,7 @@ pub mod ttymap;
 
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use init_lua::run_init_lua;
-pub use registry::LuaPluginRegistry;
+pub use registry::LuaTickRegistry;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;
 
@@ -136,9 +136,10 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 //
 // nvim-style two-tier layout per runtime layer:
 //
-// - `<layer>/plugin/*.lua` — auto-discovered plugins. Each script
-//   self-registers via `ttymap.register_plugin` at top level (or
-//   declares only activation surfaces for "pure-action" plugins).
+// - `<layer>/plugin/*.lua` — auto-discovered plugins. The script's
+//   existence is the registration; identity = file stem. The script
+//   subscribes to host loops via `ttymap.api.frame.on_tick(fn)` /
+//   `register_palette_command` / `register_keybind`.
 // - `<layer>/lua/<name>.lua` — `require`-able lib scripts. NOT
 //   auto-discovered. Plugins reach them via `require "<name>"`.
 //
@@ -155,11 +156,9 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 /// shadows a lower-priority one with the same file name — drop a
 /// `~/.config/ttymap/plugin/wiki.lua` to replace bundled `wiki`.
 ///
-/// `disable` is the user-supplied opt-out list
-/// (`ttymap.opt.plugins.disable`). A plugin whose stem matches any
-/// entry is skipped at registration time. Each script's own
-/// metadata drives how a registered plugin is wired — see
-/// [`register_one`] for the kind dispatch.
+/// `disable` is the user-supplied opt-out list (`ttymap.opt.disable`).
+/// A plugin whose stem matches any entry is skipped at registration
+/// time.
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
@@ -180,34 +179,22 @@ pub fn register_builtin_plugins(
     }
 }
 
-/// Whether the script asked to be skipped via `enabled = false`.
-fn module_enabled(module: &Table) -> bool {
-    !matches!(
-        module.get::<mlua::Value>("enabled"),
-        Ok(mlua::Value::Boolean(false))
-    )
-}
-
 /// Register one Lua script with the registrar by reading its own
-/// metadata. The single dispatcher used by both bundled and user
-/// plugins — Rust never knows a specific plugin's name.
+/// subscriptions. The single dispatcher used by both bundled and
+/// user plugins — Rust never knows a specific plugin's name; the
+/// caller passes the file stem as `name`.
 fn register_one(
     name: &'static str,
     source: &'static str,
     shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
-    // Run the script once to capture its registration call. The
-    // captured spec tells us whether the script registered a plugin
-    // table (`Some`) or only activation surfaces (`None`, "pure-
-    // action" plugin) — Lua is the source of truth, not file path or
-    // table layout.
-    //
-    // The `lua` returned here is the **setup state**: it holds the
-    // module-level Lua locals from `register_*` setup, plus the
-    // RegistryKey'd palette / keybind callbacks. We keep clones of
-    // it in every closure that fires later so module-level vars
-    // (e.g. an `enabled` flag) survive across the program's
+    // Run the script once to capture its activation surfaces and
+    // tick subscriptions. The `lua` returned here is the **setup
+    // state**: it holds the module-level Lua locals from setup, plus
+    // the RegistryKey'd palette / keybind / tick callbacks. We keep
+    // clones of it in every closure that fires later so module-level
+    // vars (e.g. an `enabled` flag) survive across the program's
     // lifetime — that's the hook for plugin-side toggle state.
     let shared_for_meta = shared.clone();
     let (lua, captured, handles) =
@@ -219,37 +206,16 @@ fn register_one(
             }
         };
 
-    // Pure-action plugins (no `register_plugin` call) skip the
-    // block that reads `enabled` / `loop`.
-    if let Some(module) = captured.spec.as_ref()
-        && !module_enabled(module)
-    {
-        log::info!("lua[{}]: enabled = false, skipping", name);
-        drop(lua);
-        return;
-    }
-
-    // Capture the plugin's per-frame `loop` callback if it declared
-    // one. Optional and additive: scripts that don't use this field
-    // continue to work through their existing hooks. The setup-state
-    // Lua is cloned (cheap Arc bump) into the registry entry so the
-    // closure stays callable for the program's lifetime. Scripts
-    // without a spec have no `loop`.
-    if let Some(module) = captured.spec.as_ref()
-        && let Ok(loop_fn) = module.get::<mlua::Function>("loop")
-    {
-        match lua.create_registry_value(loop_fn) {
-            Ok(loop_key) => {
-                r.plugin_loops.register(crate::lua::registry::PluginLoop {
-                    name,
-                    lua: lua.clone(),
-                    loop_fn: loop_key,
-                });
-            }
-            Err(e) => {
-                log::warn!("lua[{}]: failed to register loop fn: {}", name, e);
-            }
-        }
+    // Each `ttymap.api.frame.on_tick(fn)` capture lands as a
+    // separate TickEntry. The setup-state Lua is cloned (cheap Arc
+    // bump) into each entry so the closure stays callable for the
+    // program's lifetime. Order = registration order.
+    for callback in captured.ticks {
+        r.tick_registry.add(crate::lua::registry::TickEntry {
+            name,
+            lua: lua.clone(),
+            callback,
+        });
     }
 
     // Hand the setup state's `LuaHostHandles` over to the
@@ -425,10 +391,7 @@ fn register_plugins_in(
             }
         }
         if disable.iter().any(|d| d == &stem) {
-            log::info!(
-                "lua[{}]: disabled via ttymap.opt.plugins.disable, skipping",
-                stem
-            );
+            log::info!("lua[{}]: disabled via ttymap.opt.disable, skipping", stem);
             continue;
         }
         let source = match std::fs::read_to_string(&path) {
@@ -483,8 +446,8 @@ mod tests {
 
     /// Every bundled script must register cleanly through the same
     /// dispatcher production uses. Asserts each plugin shows up in
-    /// some registrar slot (overlay / palette / key bind) — the
-    /// dispatcher itself decides which based on `module.activation`,
+    /// some registrar slot (palette / key bind / tick) — the
+    /// dispatcher just routes whatever the script subscribes to,
     /// so this round-trips the parse + meta + wire path. Set-
     /// membership rather than counts so adding a builtin doesn't
     /// require updating magic numbers.
@@ -501,14 +464,12 @@ mod tests {
             .iter()
             .map(|e| e.label.to_lowercase())
             .collect();
-        // `r.plugin_loops` doesn't carry a name; sanity-check the
-        // total count of registered plugin loops as a lower bound.
-        // info / scalebar / attribution / center each register a
-        // `register_plugin` + `loop` callback (after Phase B); Phase B
-        // panel migrations (aircraft / quake / wiki / …) also register
-        // a `loop` for their panel, so this is a lower bound rather
-        // than equality.
-        let always_on_count = r.plugin_loops.len();
+        // info / scalebar / attribution / center each subscribe one
+        // tick callback (always-on chrome / toggleable overlay).
+        // Panel migrations (aircraft / quake / wiki / search / here /
+        // satellite) also subscribe a tick for async drain + paint,
+        // so this is a lower bound rather than equality.
+        let tick_count = r.tick_registry.len();
 
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased). `satellite` is the
@@ -530,16 +491,16 @@ mod tests {
             );
         }
         assert!(
-            always_on_count >= 4,
-            "info/scalebar/attribution/center should each register a plugin loop (got {always_on_count})"
+            tick_count >= 4,
+            "info/scalebar/attribution/center should each subscribe a tick callback (got {tick_count})"
         );
     }
 
-    /// Helper for spec-table inspection tests. Runs the source in a
+    /// Helper for capture inspection tests. Runs the source in a
     /// throwaway Lua state and returns the captured registration so
-    /// the test can assert on the captured spec / activation
-    /// surfaces. Mirrors what `register_one` does at registration
-    /// time.
+    /// the test can assert on the activation surfaces and tick
+    /// subscriptions. Mirrors what `register_one` does at
+    /// registration time.
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
         let shared = ttymap::LuaHostShared::empty();
         let (lua, captured, _handles) =
@@ -547,36 +508,10 @@ mod tests {
         (lua, captured)
     }
 
-    fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
-        c.spec.as_ref().expect("script registered a plugin spec")
-    }
-
-    #[test]
-    fn register_plugin_captures_spec_table() {
-        let (_lua, c) = parse_spec(r#"ttymap.register_plugin({ name = "x" })"#, "x");
-        assert!(c.spec.is_some());
-        let t = captured_table(&c);
-        assert!(module_enabled(t));
-        // No surfaces declared: empty palette_commands + keybinds.
-        assert!(c.palette_commands.is_empty());
-        assert!(c.keybinds.is_empty());
-    }
-
-    #[test]
-    fn enabled_false_surfaces_through_module_enabled() {
-        let (_lua, c) = parse_spec(
-            r#"ttymap.register_plugin({ name = "x", enabled = false })"#,
-            "x",
-        );
-        let t = captured_table(&c);
-        assert!(!module_enabled(t));
-    }
-
     #[test]
     fn explicit_palette_command_and_keybind_are_captured() {
         let (_lua, c) = parse_spec(
             r#"
-            ttymap.register_plugin({ name = "x" })
             ttymap.register_palette_command({ label = "Toggle x", invoke = function() return true end })
             ttymap.register_keybind("i", function() return true end)
             "#,
@@ -589,19 +524,47 @@ mod tests {
     }
 
     #[test]
+    fn on_tick_subscriptions_are_captured() {
+        // Each `ttymap.api.frame.on_tick(fn)` call lands as a
+        // separate entry in `captured.ticks`. Order = registration
+        // order (Vec push semantics). Combined with at least one
+        // activation surface so the load passes the
+        // "must subscribe to something" gate.
+        let (_lua, c) = parse_spec(
+            r#"
+            ttymap.api.frame.on_tick(function(_map) end)
+            ttymap.api.frame.on_tick(function(_map) end)
+            ttymap.register_palette_command({ label = "x", invoke = function() end })
+            "#,
+            "x",
+        );
+        assert_eq!(c.ticks.len(), 2);
+    }
+
+    #[test]
+    fn script_with_only_on_tick_passes_subscription_gate() {
+        // A script that only subscribes via `on_tick` (no palette
+        // command, no keybind) is a valid plugin — always-on chrome
+        // like info / scalebar fits this shape.
+        let (_lua, c) = parse_spec(r#"ttymap.api.frame.on_tick(function(_map) end)"#, "chrome");
+        assert!(c.palette_commands.is_empty());
+        assert!(c.keybinds.is_empty());
+        assert_eq!(c.ticks.len(), 1);
+    }
+
+    #[test]
     fn registering_a_plugin_publishes_metadata() {
         // Round-trip the registration path: a Lua source declaring
         // `key` + `label` should land in the shared snapshot help
-        // reads via `ttymap.help:palette_entries()`.
+        // reads via `ttymap.help:palette_entries()`. The plugin's
+        // identity is the file stem (`demo`), passed to the registrar
+        // by the walker.
         let dir = temp_plugins_dir("publish-meta");
         write_plugin(
             &dir,
             "demo.lua",
             r#"
-            ttymap.register_plugin({
-                name = "demo",
-                render = function() return {} end,
-            })
+            ttymap.api.frame.on_tick(function(_map) end)
             ttymap.register_palette_command({ label = "Toggle demo", invoke = function() return true end })
             ttymap.register_keybind("d", function() return true end)
             "#,
@@ -648,14 +611,12 @@ mod tests {
         write_plugin(
             &dir,
             "first.lua",
-            r#"ttymap.register_plugin({ name = "first", render = function() return {} end })
-            ttymap.register_palette_command({ label = "first", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "first", invoke = function() return true end })"#,
         );
         write_plugin(
             &dir,
             "second.lua",
-            r#"ttymap.register_plugin({ name = "second", render = function() return {} end })
-            ttymap.register_palette_command({ label = "second", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "second", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
@@ -671,8 +632,7 @@ mod tests {
         write_plugin(
             &dir,
             "ok.lua",
-            r#"ttymap.register_plugin({ name = "ok" })
-            ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
         );
         // README, backup files, etc. should be ignored.
         std::fs::write(dir.join("README.md"), "ignore me").unwrap();
@@ -686,25 +646,24 @@ mod tests {
     }
 
     #[test]
-    fn dir_discovery_honours_module_enabled_false() {
-        let dir = temp_plugins_dir("self-disable");
+    fn dir_discovery_honours_opt_disable_list() {
+        // `ttymap.opt.disable = { "beta" }` — the walker skips the
+        // matching stem at registration time.
+        let dir = temp_plugins_dir("opt-disable");
         write_plugin(
             &dir,
             "alpha.lua",
-            r#"ttymap.register_plugin({ name = "alpha" })
-            ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
         );
-        // beta opts itself out — the file stays, but the plugin
-        // doesn't register.
         write_plugin(
             &dir,
             "beta.lua",
-            r#"ttymap.register_plugin({ name = "beta", enabled = false })
-            ttymap.register_palette_command({ label = "beta", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "beta", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        let disable = vec!["beta".to_string()];
+        register_plugins_in(&dir, None, &disable, ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -721,8 +680,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("biggie")).expect("mkdir");
         std::fs::write(
             dir.join("biggie").join("init.lua"),
-            r#"ttymap.register_plugin({ name = "biggie", render = function() return {} end })
-            ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
         )
         .expect("write init.lua");
 
@@ -746,7 +704,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("libonly")).expect("mkdir");
         std::fs::write(
             dir.join("libonly").join("fmt.lua"),
-            r#"ttymap.register_plugin({ format = function(s) return s end })"#,
+            r#"return { format = function(s) return s end }"#,
         )
         .expect("write fmt.lua");
 
@@ -759,32 +717,13 @@ mod tests {
     }
 
     #[test]
-    fn dir_discovery_module_enabled_true_is_explicit_default() {
-        // Belt-and-suspenders: a plugin that explicitly sets
-        // `enabled = true` registers same as one that omits the
-        // field. Guards against accidental tightening of the gate.
-        let dir = temp_plugins_dir("self-enable");
-        write_plugin(
-            &dir,
-            "explicit.lua",
-            r#"ttymap.register_plugin({ name = "explicit", enabled = true })
-            ttymap.register_palette_command({ label = "explicit", invoke = function() return true end })"#,
-        );
-
-        let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
-        assert!(labels(&r).iter().any(|l| l.contains("explicit")));
-    }
-
-    #[test]
     fn dir_discovery_skips_broken_lua_but_keeps_going() {
         let dir = temp_plugins_dir("broken");
         write_plugin(&dir, "broken.lua", "this is not lua syntax !!!");
         write_plugin(
             &dir,
             "ok.lua",
-            r#"ttymap.register_plugin({ name = "ok", render = function() return {} end })
-            ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
+            r#"ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();

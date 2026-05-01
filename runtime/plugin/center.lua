@@ -7,14 +7,11 @@
 
 local enabled = false
 
-ttymap.register_plugin({
-    name = "center",
-    loop = function(map)
-        if not enabled then return end
-        local lon, lat = map:center()
-        map:point(lon, lat, "+", "accent_alt")
-    end,
-})
+ttymap.api.frame.on_tick(function(map)
+    if not enabled then return end
+    local lon, lat = map:center()
+    map:point(lon, lat, "+", "accent_alt")
+end)
 
 local function toggle()
     enabled = not enabled

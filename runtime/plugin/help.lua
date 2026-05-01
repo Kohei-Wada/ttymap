@@ -5,10 +5,9 @@
 -- actions) and `ttymap.help:palette_entries()` (sibling plugins'
 -- palette hints), so registration order doesn't matter.
 --
--- No `loop` field — help is a static cheatsheet with no async work
--- and no map paint. The plugin still registers (so it shows up in
--- the bundled-script roll call) and uses the standard window.open
--- pattern for the popup itself.
+-- Pure-action plugin: no `on_tick` (static cheatsheet, no async
+-- work, no map paint). Just a palette command + keybind that open
+-- the popup window via `ttymap.api.window.open`.
 
 local URL_MAPSCII = "https://github.com/rastapasta/mapscii"
 local URL_HOME = "https://github.com/Kohei-Wada/ttymap"
@@ -73,10 +72,6 @@ local function build_lines()
 
     return lines
 end
-
-ttymap.register_plugin({
-    name = "help",
-})
 
 local function close()
     if w then

@@ -1,50 +1,45 @@
-//! Plugin-loop dispatcher.
+//! Per-frame tick dispatcher.
 //!
-//! Each `ttymap.register_plugin({ name, loop })` declaration with a
-//! `loop = function(map) ... end` field lands here. The App's main
-//! thread calls [`LuaPluginRegistry::tick`] once per frame, which
-//! walks the registry and dispatches each `loop_fn(map)` against a
-//! per-frame `MapApi` table.
+//! Each `ttymap.api.frame.on_tick(fn)` call from a plugin script
+//! lands here as a [`TickEntry`]. The App's main thread calls
+//! [`LuaTickRegistry::tick`] once per frame, which walks the registry
+//! and dispatches each callback against a per-frame `MapApi` table.
 //!
-//! This is the unified per-frame work mechanism for the new
+//! This is the unified per-frame work mechanism for the nvim-style
 //! plugin API: plugins that paint markers, drain async fetches, or
-//! do periodic work all use the same `loop` callback. Errors from
-//! one plugin's loop are logged and swallowed so a single broken
+//! do periodic work all use the same `on_tick` subscription. Errors
+//! from one callback are logged and swallowed so a single broken
 //! plugin cannot freeze the host.
-//!
-//! After Phase C, this is the only per-frame work mechanism Lua
-//! plugins use — the old `LuaComponent` adapter (with its own
-//! `paint_on_map` / `poll` callbacks) is gone.
 
 use mlua::{Lua, RegistryKey};
 
 use crate::compositor::MapApi;
 use crate::lua::ttymap::map_api;
 
-/// One registered plugin's loop callback. The Lua state is the
-/// plugin's setup state (cloned from `register_one`); the registry
-/// key points at the `loop` function inside that state.
-pub struct PluginLoop {
+/// One registered per-frame callback. The Lua state is the plugin's
+/// setup state (cloned from `register_one`); the registry key points
+/// at the function passed to `ttymap.api.frame.on_tick`.
+pub struct TickEntry {
     pub name: &'static str,
     pub lua: Lua,
-    pub loop_fn: RegistryKey,
+    pub callback: RegistryKey,
 }
 
-/// Registry of every plugin-declared per-frame `loop` callback.
+/// Registry of every plugin-declared per-frame `on_tick` callback.
 /// Built up by `register_one` as bundled and user plugins load,
 /// then ticked once per frame from `App::run`.
 #[derive(Default)]
-pub struct LuaPluginRegistry {
-    entries: Vec<PluginLoop>,
+pub struct LuaTickRegistry {
+    entries: Vec<TickEntry>,
 }
 
-impl LuaPluginRegistry {
-    pub fn register(&mut self, entry: PluginLoop) {
+impl LuaTickRegistry {
+    pub fn add(&mut self, entry: TickEntry) {
         self.entries.push(entry);
     }
 
-    /// Number of registered loops. Used by tests and could be useful
-    /// to surface in diagnostics.
+    /// Number of registered tick callbacks. Used by tests and could
+    /// be useful to surface in diagnostics.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -53,8 +48,8 @@ impl LuaPluginRegistry {
         self.entries.is_empty()
     }
 
-    /// Run every plugin's loop once. Errors are logged and the loop
-    /// continues — a single broken plugin must not freeze the app.
+    /// Run every registered callback once. Errors are logged and the
+    /// loop continues — a single broken plugin must not freeze the app.
     ///
     /// `MapApi` borrows the ratatui buffer for one frame, so the
     /// Lua-facing handle is built inside `Lua::scope` (closures over
@@ -65,11 +60,11 @@ impl LuaPluginRegistry {
         for entry in &self.entries {
             let result: mlua::Result<()> = entry.lua.scope(|scope| {
                 let map_table = map_api::make_map_table(&entry.lua, scope, &cell)?;
-                let f: mlua::Function = entry.lua.registry_value(&entry.loop_fn)?;
+                let f: mlua::Function = entry.lua.registry_value(&entry.callback)?;
                 f.call::<()>(map_table)
             });
             if let Err(e) = result {
-                log::warn!("lua[{}]: loop failed: {}", entry.name, e);
+                log::warn!("lua[{}]: on_tick failed: {}", entry.name, e);
             }
         }
     }
@@ -121,20 +116,20 @@ mod tests {
     }
 
     #[test]
-    fn tick_calls_each_registered_loop_once_per_call() {
+    fn tick_calls_each_registered_callback_once_per_call() {
         let (lua_a, key_a) = lua_with_counter("a");
         let (lua_b, key_b) = lua_with_counter("b");
 
-        let mut reg = LuaPluginRegistry::default();
-        reg.register(PluginLoop {
+        let mut reg = LuaTickRegistry::default();
+        reg.add(TickEntry {
             name: "a",
             lua: lua_a.clone(),
-            loop_fn: key_a,
+            callback: key_a,
         });
-        reg.register(PluginLoop {
+        reg.add(TickEntry {
             name: "b",
             lua: lua_b.clone(),
-            loop_fn: key_b,
+            callback: key_b,
         });
         assert_eq!(reg.len(), 2);
 
@@ -158,11 +153,11 @@ mod tests {
         assert_eq!(b, 2, "second tick should bump b again");
     }
 
-    /// A loop that throws is logged and swallowed; subsequent loops
-    /// in the same registry still fire. Guards against the "one
-    /// buggy plugin freezes everyone" failure mode.
+    /// A callback that throws is logged and swallowed; subsequent
+    /// callbacks in the same registry still fire. Guards against the
+    /// "one buggy plugin freezes everyone" failure mode.
     #[test]
-    fn tick_continues_after_a_loop_errors() {
+    fn tick_continues_after_a_callback_errors() {
         let lua_bad = Lua::new();
         lua_bad
             .load(r#"function bang(_map) error("boom") end"#)
@@ -173,16 +168,16 @@ mod tests {
 
         let (lua_good, good_key) = lua_with_counter("good");
 
-        let mut reg = LuaPluginRegistry::default();
-        reg.register(PluginLoop {
+        let mut reg = LuaTickRegistry::default();
+        reg.add(TickEntry {
             name: "bad",
             lua: lua_bad,
-            loop_fn: bad_key,
+            callback: bad_key,
         });
-        reg.register(PluginLoop {
+        reg.add(TickEntry {
             name: "good",
             lua: lua_good.clone(),
-            loop_fn: good_key,
+            callback: good_key,
         });
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
@@ -192,13 +187,13 @@ mod tests {
         let good: i64 = lua_good.globals().get("good").expect("read good");
         assert_eq!(
             good, 1,
-            "broken upstream loop should not stop downstream loops"
+            "broken upstream callback should not stop downstream callbacks"
         );
     }
 
     #[test]
     fn empty_registry_tick_is_a_noop() {
-        let reg = LuaPluginRegistry::default();
+        let reg = LuaTickRegistry::default();
         let (mut buf, area, frame, theme) = fixture(20, 5);
         let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
         reg.tick(&mut api);

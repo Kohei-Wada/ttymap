@@ -2,9 +2,9 @@
 -- provider, opened on `/` or "Search location" palette command.
 --
 -- Two halves:
---   * `register_plugin` runs per-frame and drains the in-flight HTTP
---     job (the palette spec no longer carries a `poll` field — A6
---     moved that responsibility to the plugin's `loop`).
+--   * `ttymap.api.frame.on_tick` runs per-frame and drains the
+--     in-flight HTTP job (the palette spec carries no `poll` field;
+--     async drain belongs in the plugin's tick callback).
 --   * `open()` calls `ttymap.api.palette.open(spec)` which pushes a
 --     `PaletteComponent` onto the compositor and hands back a handle.
 --     `execute` self-closes via `w:close(); w = nil` so the next
@@ -52,22 +52,19 @@ local function parse_results(payload)
     return out
 end
 
-ttymap.register_plugin({
-    name = "search",
-    -- Per-frame async drain. Runs whether or not the palette is open
-    -- — the in-flight job outlives a re-open if the user dismisses
-    -- and reopens the palette mid-fetch (state is module-scoped).
-    loop = function()
-        if state.job then
-            local body = state.job:try_take()
-            if body then
-                state.candidates = parse_results(ttymap.json:parse(body))
-                state.pending = false
-                state.job = nil
-            end
+-- Per-frame async drain. Runs whether or not the palette is open —
+-- the in-flight job outlives a re-open if the user dismisses and
+-- reopens the palette mid-fetch (state is module-scoped).
+ttymap.api.frame.on_tick(function()
+    if state.job then
+        local body = state.job:try_take()
+        if body then
+            state.candidates = parse_results(ttymap.json:parse(body))
+            state.pending = false
+            state.job = nil
         end
-    end,
-})
+    end
+end)
 
 local function open()
     if w then return end

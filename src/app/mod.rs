@@ -25,7 +25,7 @@ use log::{debug, info};
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
 use crate::keymap::{KeyMap, KeybindingOverrides};
-use crate::lua::LuaPluginRegistry;
+use crate::lua::LuaTickRegistry;
 use crate::lua::ttymap::LuaHostHandles;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
@@ -47,13 +47,12 @@ pub struct App {
     compositor: Compositor,
     theme_id: ThemeId,
     ui_theme: UiTheme,
-    /// Per-frame plugin-loop dispatcher. Populated at startup from
-    /// `Registrar.plugin_loops` (every plugin script that declared a
-    /// `loop = function(map) ... end` field lands here) and ticked
-    /// once per frame against the live `MapApi`, before the
-    /// compositor's `paint_on_map`. Empty during Phase A — no
-    /// bundled plugin uses `loop` yet.
-    plugin_loops: LuaPluginRegistry,
+    /// Per-frame tick dispatcher. Populated at startup from
+    /// `Registrar.tick_registry` (every `ttymap.api.frame.on_tick(fn)`
+    /// call across all plugin scripts lands here) and ticked once per
+    /// frame against the live `MapApi`, before the compositor's
+    /// `paint_on_map`.
+    tick_registry: LuaTickRegistry,
     /// Setup-state [`LuaHostHandles`] for every Lua plugin script
     /// (palette providers, plugin components, plugin loops, and any
     /// `ttymap.api.window.open` / `palette.open` callers). Each
@@ -90,12 +89,12 @@ impl App {
             mut registrar,
             plugin_hints,
         } = build_registrar(&config, tile_cache.attribution(), &keymap);
-        // Lift the per-frame loop dispatcher off the registrar before
+        // Lift the per-frame tick dispatcher off the registrar before
         // the rest is consumed (activations / palette_entries move
         // into the compositor below). Owned on App so the per-frame
         // `tick` call has direct access without threading the
         // registrar reference through.
-        let plugin_loops = std::mem::take(&mut registrar.plugin_loops);
+        let tick_registry = std::mem::take(&mut registrar.tick_registry);
         // Same pattern for the setup-state handle pool: the App
         // drains these per frame so plugins' `ttymap.map:jump` /
         // `api.frame.export` / `api.window.open` / `api.palette.open`
@@ -142,7 +141,7 @@ impl App {
             compositor,
             theme_id,
             ui_theme,
-            plugin_loops,
+            tick_registry,
             lua_host_handles,
             cursor: None,
         }
@@ -191,7 +190,7 @@ impl App {
                     f,
                     self.map_frame.as_ref(),
                     &self.compositor,
-                    &self.plugin_loops,
+                    &self.tick_registry,
                     &self.ui_theme,
                     &ctx,
                 )

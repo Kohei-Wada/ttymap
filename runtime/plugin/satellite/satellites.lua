@@ -1,15 +1,14 @@
--- satellite.satellites — multi-sat tracker built on the new
--- `register_plugin({ loop })` + `ttymap.api.window.open` shape.
+-- satellite.satellites — multi-sat tracker.
 --
 -- Each `make(specs)` call wires up one tracker:
---   * a `plugin_spec` table the caller hands to `ttymap.register_plugin`,
---     whose `loop` callback drives TLE fetch + SGP4 propagation + map
---     paint while the panel is open (gated on the captured `w` window
---     handle, same convention as aircraft / wiki),
---   * an `open` / `close` / `toggle` trio the caller wires to a palette
---     command or keybind. The window owns per-sat visibility keystrokes
---     (`i` for ISS, `H` for Hubble, …) and C-n / C-p / Enter focus
---     navigation.
+--   * subscribes a `ttymap.api.frame.on_tick` callback that drives TLE
+--     fetch + SGP4 propagation + map paint while the panel is open
+--     (gated on the captured `w` window handle, same convention as
+--     aircraft / wiki),
+--   * returns an `open` / `close` / `toggle` trio the caller wires to a
+--     palette command or keybind. The window owns per-sat visibility
+--     keystrokes (`i` for ISS, `H` for Hubble, …) and C-n / C-p / Enter
+--     focus navigation.
 --
 -- Two entry shapes (unchanged from the previous shape):
 --
@@ -79,9 +78,10 @@ end
 ---                       while the panel is focused. Optional; sats
 ---                       without a key stay always-visible.
 ---
---- @return table { plugin_spec, open, close, toggle } — caller hands
----   `plugin_spec` to `ttymap.register_plugin` and wires `toggle` (or
----   `open` / `close` individually) to a palette command / keybind.
+--- @return table { open, close, toggle } — caller wires `toggle`
+---   (or `open` / `close` individually) to a palette command /
+---   keybind. The factory itself subscribes the per-frame callback
+---   via `ttymap.api.frame.on_tick`.
 function M.make(specs)
     -- Per-entry runtime state. Lives for the program lifetime;
     -- visibility flags persist across panel toggles. TLE fetches are
@@ -366,17 +366,13 @@ function M.make(specs)
     -- Closing the panel (`w = nil`) immediately stops propagation
     -- and the markers vanish, mirroring the legacy "Component
     -- pushed only while open" behavior.
-    local function loop_fn(map)
+    ttymap.api.frame.on_tick(function(map)
         if not w then return end
         step(map)
         paint_markers(map)
-    end
+    end)
 
     return {
-        plugin_spec = {
-            name = "satellite",
-            loop = loop_fn,
-        },
         open = open,
         close = close,
         toggle = toggle,

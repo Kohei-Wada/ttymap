@@ -40,6 +40,9 @@
 //!                                            onto the stack; handle:close()
 //!                                            pops it (idempotent)
 //! ttymap.api.frame.export()                 snapshot the current frame to disk
+//! ttymap.api.frame.on_tick(callback)        register a per-frame callback
+//!                                            (called with `MapApi`); multiple
+//!                                            calls per script are stacked
 //! ```
 //!
 //! `ttymap.map:jump(...)` is fire-and-forget from the Lua side; the
@@ -211,27 +214,23 @@ pub struct KeybindSpec {
 }
 
 /// Everything a single plugin file's setup phase declared. nvim-
-/// style explicit opt-in: the Component itself is one call
-/// (`register_plugin`), and each activation surface (palette row,
-/// keybind) is a **separate** explicit call with its own Lua
-/// callback. Plugins own whether/when to push by inspecting their
-/// own state inside the callback and calling
+/// style: each activation surface is a separate explicit call with
+/// its own Lua callback. Plugins own whether/when to push by
+/// inspecting their own state inside the callback and calling
 /// `ttymap.api.window.open(spec)` / `ttymap.api.palette.open(spec)`.
+/// Per-frame work subscribes via `ttymap.api.frame.on_tick(fn)` —
+/// stacked: each call appends a callback that fires every frame.
 #[derive(Default)]
 pub struct CapturedRegistration {
-    /// The plugin spec table from `ttymap.register_plugin(spec)`.
-    /// `None` means the script never called `register_plugin` — for a
-    /// script that only declares activation surfaces (a "pure-action"
-    /// plugin) this is fine; otherwise the walker logs + skips that
-    /// file. Always-on chrome uses `register_plugin` + a `loop`
-    /// callback; palette providers are pushed dynamically via
-    /// `ttymap.api.palette.open(spec)` rather than self-declared at
-    /// top level.
-    pub spec: Option<Table>,
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
     /// Each `ttymap.register_keybind(key, callback)` call.
     pub keybinds: Vec<KeybindSpec>,
+    /// Each `ttymap.api.frame.on_tick(fn)` call. Stored as registry
+    /// keys; the host walks them at register time and pushes a
+    /// [`crate::lua::registry::TickEntry`] per entry into the
+    /// per-frame dispatcher.
+    pub ticks: Vec<mlua::RegistryKey>,
 }
 
 /// Slot used by a fresh Lua state to capture the script's
@@ -254,11 +253,11 @@ pub fn new_capture_slot() -> CaptureSlot {
 /// install per Lua state — same surface for components and palette
 /// providers, so the bridge stays uniform.
 ///
-/// `slot` receives the spec from a `ttymap.register_plugin(...)` call
-/// inside the script. The Lua subsystem walks plugin files and runs
-/// each script; the script itself decides whether (and how) to
-/// register. Rust never inspects the script's return value or table
-/// layout.
+/// `slot` receives any `register_palette_command` / `register_keybind`
+/// declarations and any `ttymap.api.frame.on_tick` subscriptions the
+/// script makes. Rust never inspects the script's return value or
+/// table layout — the script is a plugin by virtue of existing in
+/// `<runtime>/plugin/`, identity = file stem.
 pub fn install(
     lua: &Lua,
     tag: &'static str,
@@ -304,30 +303,6 @@ pub fn install(
         })?,
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
-
-    // Self-registration entry point. The script calls
-    // `register_plugin` (at most once) to declare itself. The Lua
-    // subsystem doesn't know what's a plugin until this call lands.
-    // A second call is a Lua-side error — surfaced via mlua so the
-    // walker logs + skips the script. Palette providers no longer
-    // self-register at top level; they're pushed dynamically via
-    // `ttymap.api.palette.open(spec)` from inside an activation
-    // callback.
-    fn set_spec(slot: &CaptureSlot, spec: Table) -> mlua::Result<()> {
-        let mut cap = slot.borrow_mut();
-        if cap.spec.is_some() {
-            return Err(mlua::Error::external(
-                "ttymap.register_plugin: a plugin was already registered in this script",
-            ));
-        }
-        cap.spec = Some(spec);
-        Ok(())
-    }
-    let cap = slot.clone();
-    ttymap.set(
-        "register_plugin",
-        lua.create_function(move |_, spec: Table| set_spec(&cap, spec))?,
-    )?;
 
     // Activation surfaces. Each is opt-in and explicit — the host
     // never auto-adds a palette row or keybind from the plugin's
@@ -483,9 +458,17 @@ pub fn install(
 
     // ── ttymap.api.frame ─────────────────────────────────────────────
     //
-    // Fire-and-forget request to snapshot the current frame to disk;
-    // the App drains `export_rx` per frame and emits
-    // `AppMsg::ExportFrame`.
+    // Per-frame primitives:
+    //
+    // - `export()`     fire-and-forget request to snapshot the current
+    //                  frame to disk; the App drains `export_rx` per
+    //                  frame and emits `AppMsg::ExportFrame`.
+    // - `on_tick(fn)`  subscribe a callback to per-frame dispatch. The
+    //                  host walks the captured registry keys after the
+    //                  script runs and pushes one [`TickEntry`] per
+    //                  call into the global `LuaTickRegistry`. Multiple
+    //                  calls per script are stacked in registration
+    //                  order.
     let frame_api = lua.create_table()?;
     frame_api.set(
         "export",
@@ -493,6 +476,15 @@ pub fn install(
             if export_tx.send(()).is_err() {
                 log::error!("lua-host: ttymap.api.frame.export: export channel closed");
             }
+            Ok(())
+        })?,
+    )?;
+    let cap = slot.clone();
+    frame_api.set(
+        "on_tick",
+        lua.create_function(move |lua, callback: mlua::Function| -> mlua::Result<()> {
+            let key = lua.create_registry_value(callback)?;
+            cap.borrow_mut().ticks.push(key);
             Ok(())
         })?,
     )?;
@@ -869,6 +861,28 @@ mod tests {
         let (lua, handles) = install_for_test();
         lua.load("ttymap.api.frame.export()").exec().expect("exec");
         assert!(handles.export_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn api_frame_on_tick_registers_each_callback() {
+        // Each `ttymap.api.frame.on_tick(fn)` call must land as one
+        // entry in the capture slot's `ticks` vector. Multiple calls
+        // stack in registration order; the host walks the slot at
+        // `register_one` time and pushes one TickEntry per key.
+        let lua = mlua::Lua::new();
+        let slot = new_capture_slot();
+        let _handles = install(&lua, "lua-test", LuaHostShared::empty(), slot.clone())
+            .expect("install ttymap table");
+        lua.load(
+            r#"
+            ttymap.api.frame.on_tick(function() end)
+            ttymap.api.frame.on_tick(function() end)
+            "#,
+        )
+        .exec()
+        .expect("exec");
+        let cap = slot.borrow();
+        assert_eq!(cap.ticks.len(), 2, "two on_tick calls -> two entries");
     }
 
     #[test]

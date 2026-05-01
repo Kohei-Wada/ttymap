@@ -8,10 +8,10 @@
 //! - `handle_event = function(key) return action end` — focused keys
 //! - `footer_hints = { {key, label}, ... }` — focused footer hints
 //!
-//! **No `paint_on_map`, no `poll`, no `loop`** — those belong on the
-//! plugin's `register_plugin({ loop })` registration (added in A5).
+//! **No `paint_on_map`, no `poll`, no `loop`** — those belong on a
+//! `ttymap.api.frame.on_tick(fn)` subscription (host-side).
 //! A window opened via `window.open` does focused-UI work only; map
-//! paint and async drain run in the plugin loop on the main thread.
+//! paint and async drain run in the per-frame tick on the main thread.
 //!
 //! Lifetime: the matching [`WindowHandle`] (returned to Lua by
 //! `window.open`) carries a clone of the same [`CloseFlag`]. Either
@@ -329,8 +329,8 @@ impl Component for LuaWindowComponent {
         self.refresh_center(win.ctx().center);
         // The only Lua-facing poll work this Component does is
         // honour the shared close flag. NO callback into the spec —
-        // async work belongs on the plugin's `register_plugin({ loop })`
-        // (A5), not on the focused window.
+        // async work belongs on a `ttymap.api.frame.on_tick(fn)`
+        // subscription, not on the focused window.
         if self.flag.take() {
             win.close();
         }

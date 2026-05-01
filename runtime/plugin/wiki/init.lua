@@ -197,29 +197,26 @@ local function build_lines()
     return lines
 end
 
-ttymap.register_plugin({
-    name = "wiki",
-    -- Per-frame work runs only while the panel is open: drives the
-    -- geosearch → extracts state machine, kicks the initial fetch,
-    -- and paints article markers. Closing the panel (`w = nil`)
-    -- immediately stops the pipeline and the markers vanish.
-    loop = function(map)
-        if not w then return end
-        if state.needs_refresh and not state.job then
-            state.needs_refresh = false
-            start_refresh()
-        end
-        step_state_machine()
-        -- Initial fetch on first tick after open.
-        if #state.articles == 0 and not state.job and state.phase == "idle" then
-            start_refresh()
-        end
-        for i, a in ipairs(state.articles) do
-            local color = (i == state.selected) and "accent_alt" or "accent"
-            map:point(a.lon, a.lat, "●", color)
-        end
-    end,
-})
+-- Per-frame work runs only while the panel is open: drives the
+-- geosearch → extracts state machine, kicks the initial fetch,
+-- and paints article markers. Closing the panel (`w = nil`)
+-- immediately stops the pipeline and the markers vanish.
+ttymap.api.frame.on_tick(function(map)
+    if not w then return end
+    if state.needs_refresh and not state.job then
+        state.needs_refresh = false
+        start_refresh()
+    end
+    step_state_machine()
+    -- Initial fetch on first tick after open.
+    if #state.articles == 0 and not state.job and state.phase == "idle" then
+        start_refresh()
+    end
+    for i, a in ipairs(state.articles) do
+        local color = (i == state.selected) and "accent_alt" or "accent"
+        map:point(a.lon, a.lat, "●", color)
+    end
+end)
 
 local function close()
     if w then
