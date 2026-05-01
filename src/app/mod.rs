@@ -113,7 +113,13 @@ impl App {
             cursor: None,
         };
         for factory in registrar.overlays {
-            compositor.add_overlay(factory(&overlay_ctx));
+            // Overlay factories built via `box_component_factory`
+            // always return Some — None would only come from a Lua
+            // plugin's gated callback, but overlays don't have
+            // activation surfaces so they never gate.
+            if let Some(c) = factory(&overlay_ctx) {
+                compositor.add_overlay(c);
+            }
         }
 
         App {

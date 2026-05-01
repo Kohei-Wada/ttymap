@@ -152,7 +152,12 @@ impl PaletteProvider for CommandProvider {
             Kind::MapAction(a) => PaletteAction::Run(vec![AppMsg::Map(a.clone())]),
             Kind::PluginEntry(i) => {
                 let entry = &self.seed.plugin_entries[*i];
-                PaletteAction::Push((entry.spawn)(ctx))
+                // Factory may decline (Lua plugin returned falsy);
+                // close the palette without pushing in that case.
+                match (entry.spawn)(ctx) {
+                    Some(c) => PaletteAction::Push(c),
+                    None => PaletteAction::Close,
+                }
             }
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))

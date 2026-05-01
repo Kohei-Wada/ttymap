@@ -174,27 +174,43 @@ pub enum CapturedKind {
     Overlay(Table),
 }
 
+/// One palette row declared by a plugin via
+/// `ttymap.register_palette_command(spec)`. The `invoke` callback is
+/// stored as a [`RegistryKey`] so it survives the registration call
+/// and can be invoked from the persistent Lua state at activation
+/// time. The state must be kept alive (held by the registrar) for
+/// the program lifetime.
+pub struct PaletteCommandSpec {
+    pub label: String,
+    pub hint: String,
+    pub invoke: mlua::RegistryKey,
+}
+
+/// One keybind declared via `ttymap.register_keybind(key, callback)`.
+/// `key` is a single Char activation; `callback` runs at press time
+/// and (truthy return) opts into pushing the file's plugin component.
+pub struct KeybindSpec {
+    pub key: char,
+    pub callback: mlua::RegistryKey,
+}
+
 /// Everything a single plugin file's setup phase declared. nvim-
 /// style explicit opt-in: the Component itself is one call
 /// (`register_plugin`/`register_palette`/`register_overlay`),
 /// and each activation surface (palette row, keybind) is a
-/// **separate** explicit call. Plugins control which surfaces
-/// they want; the host never auto-derives them from a `key` /
-/// `label` field.
+/// **separate** explicit call with its own Lua callback. Plugins
+/// own whether/when to push by inspecting their own state inside
+/// the callback and returning truthy or falsy.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// The plugin kind itself. `None` means the script never called
     /// any of `register_plugin / register_palette / register_overlay`
     /// — the walker logs + skips that file.
     pub kind: Option<CapturedKind>,
-    /// Each `ttymap.register_palette_command(spec)` call. Spec
-    /// fields: `label` (required), `hint` (optional). Activates the
-    /// `kind` plugin when selected.
-    pub palette_commands: Vec<Table>,
-    /// Each `ttymap.register_keybind(key)` call. The string is
-    /// expected to be a single character; longer strings take only
-    /// the first char (warned). Activates the `kind` plugin on press.
-    pub keybinds: Vec<String>,
+    /// Each `ttymap.register_palette_command({label, invoke})` call.
+    pub palette_commands: Vec<PaletteCommandSpec>,
+    /// Each `ttymap.register_keybind(key, callback)` call.
+    pub keybinds: Vec<KeybindSpec>,
     /// Each `ttymap.register_footer_hint({ key, label })` call,
     /// surfaced via `ttymap.help:palette_entries()` so the help
     /// cheatsheet shows in-panel keys per plugin. Empty by default.
@@ -317,24 +333,50 @@ pub fn install(
 
     // Activation surfaces. Each is opt-in and explicit — the host
     // never auto-adds a palette row or keybind from the plugin's
-    // `name` / `label` fields. A plugin with no surfaces is
-    // unreachable; that's fine for overlays (always painted) and
-    // for plugins activated by other plugins via `ttymap.window:open`.
+    // `name` / `label` fields. The Lua callback (`spec.invoke` /
+    // 2nd arg of register_keybind) is the plugin's chance to inspect
+    // its own state and decide whether to push a fresh component:
+    // truthy return → host pushes, falsy → no-op.
     let cap = slot.clone();
     ttymap.set(
         "register_palette_command",
-        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
-            cap.borrow_mut().palette_commands.push(spec);
+        lua.create_function(move |lua, spec: Table| -> mlua::Result<()> {
+            let label: String = spec.get("label").map_err(|_| {
+                mlua::Error::external("ttymap.register_palette_command: spec.label is required")
+            })?;
+            let hint: String = spec.get("hint").unwrap_or_default();
+            let invoke: mlua::Function = spec.get("invoke").map_err(|_| {
+                mlua::Error::external(
+                    "ttymap.register_palette_command: spec.invoke (a function) is required",
+                )
+            })?;
+            let invoke_key = lua.create_registry_value(invoke)?;
+            cap.borrow_mut().palette_commands.push(PaletteCommandSpec {
+                label,
+                hint,
+                invoke: invoke_key,
+            });
             Ok(())
         })?,
     )?;
     let cap = slot.clone();
     ttymap.set(
         "register_keybind",
-        lua.create_function(move |_, key: String| -> mlua::Result<()> {
-            cap.borrow_mut().keybinds.push(key);
-            Ok(())
-        })?,
+        lua.create_function(
+            move |lua, (key, callback): (String, mlua::Function)| -> mlua::Result<()> {
+                let Some(c) = key.chars().next() else {
+                    return Err(mlua::Error::external(
+                        "ttymap.register_keybind: key must be a non-empty string",
+                    ));
+                };
+                let callback_key = lua.create_registry_value(callback)?;
+                cap.borrow_mut().keybinds.push(KeybindSpec {
+                    key: c,
+                    callback: callback_key,
+                });
+                Ok(())
+            },
+        )?,
     )?;
     let cap = slot;
     ttymap.set(

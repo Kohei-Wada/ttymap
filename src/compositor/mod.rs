@@ -392,7 +392,13 @@ impl Default for Compositor {
 /// snapshot so plugins that read app-level state at activation time
 /// (e.g. palette seeds its "(current)" theme hint from `theme_id`)
 /// can do so without a separate lifecycle hook.
-pub type SpawnComponent = Box<dyn Fn(&Context) -> Box<dyn Component>>;
+///
+/// Returns `None` when the factory wants to skip the push entirely
+/// — used by Lua plugins whose activation callback returned a falsy
+/// value, signalling "I read my state and decided not to open this
+/// time". For built-in factories that always produce a component,
+/// see [`box_component_factory`] which wraps them in `Some`.
+pub type SpawnComponent = Box<dyn Fn(&Context) -> Option<Box<dyn Component>>>;
 
 /// One activation entry — "when this key is pressed while nothing
 /// modal is above the bottom layer, invoke `spawn` and push the
@@ -505,7 +511,7 @@ where
     F: Fn(&Context) -> C + 'static,
     C: Component + 'static,
 {
-    Box::new(move |ctx| Box::new(factory(ctx)) as Box<dyn Component>)
+    Box::new(move |ctx| Some(Box::new(factory(ctx)) as Box<dyn Component>))
 }
 
 #[cfg(test)]

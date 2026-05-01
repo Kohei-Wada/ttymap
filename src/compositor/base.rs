@@ -103,10 +103,14 @@ impl Component for BaseLayer {
         let keymap_msg = self.resolve_keymap(code, modifiers);
 
         // Activation keys: spawn the plugin's fresh component and
-        // push it on top.
+        // push it on top. Some factories (Lua plugins behind a
+        // `register_keybind` callback) may decline by returning
+        // `None`; the key is still consumed so it doesn't fall
+        // through to the keymap.
         if let Some(activation) = self.activation_for(code, modifiers) {
-            let new_component = (activation.spawn)(win.ctx());
-            win.open(new_component);
+            if let Some(new_component) = (activation.spawn)(win.ctx()) {
+                win.open(new_component);
+            }
             return;
         }
 

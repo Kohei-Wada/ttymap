@@ -204,11 +204,11 @@ pub fn install(keymap: &KeyMap, r: &mut Registrar) {
     r.add_activation(Activation {
         code: KeyCode::Char(':'),
         modifiers: KeyModifiers::NONE,
-        spawn: Box::new(move |ctx: &Context| -> Box<dyn Component> {
-            Box::new(PaletteComponent::new_default(
+        spawn: Box::new(move |ctx: &Context| -> Option<Box<dyn Component>> {
+            Some(Box::new(PaletteComponent::new_default(
                 seed_for_spawn.clone(),
                 ctx.theme_id,
-            ))
+            )))
         }),
     });
 }

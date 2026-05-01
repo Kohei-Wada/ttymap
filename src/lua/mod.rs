@@ -289,19 +289,131 @@ fn register_one(
         parse_footer_hints(module)
     };
 
+    // The script can use EITHER auto-derive (`spec.key` /
+    // `spec.label`) OR explicit register_palette_command /
+    // register_keybind, but not both — auto-derive runs only when
+    // the script declared no explicit activation surfaces. This
+    // keeps a migrating plugin from accidentally getting two
+    // palette rows or two keybinds.
+    let has_explicit = !captured.palette_commands.is_empty() || !captured.keybinds.is_empty();
+    let footer_hints_for_legacy = footer_hints.clone();
+
     match kind {
         ttymap::CapturedKind::Plugin(_) => {
-            register_component(name, source, label, key, footer_hints, shared, r);
+            if !has_explicit {
+                register_component(
+                    name,
+                    source,
+                    label,
+                    key,
+                    footer_hints_for_legacy,
+                    shared.clone(),
+                    r,
+                );
+            } else {
+                // Validate up front so a syntax error surfaces as one
+                // log line instead of a noisy first-activation failure.
+                if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
+                    log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+                    return;
+                }
+            }
         }
         ttymap::CapturedKind::Palette(_) => {
-            register_provider(name, source, label, key, footer_hints, shared, r);
+            if !has_explicit {
+                register_provider(
+                    name,
+                    source,
+                    label,
+                    key,
+                    footer_hints_for_legacy,
+                    shared.clone(),
+                    r,
+                );
+            } else if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
+                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+                return;
+            }
         }
         ttymap::CapturedKind::Overlay(_) => {
-            register_overlay(name, source, shared, r);
+            register_overlay(name, source, shared.clone(), r);
+            if has_explicit {
+                log::warn!(
+                    "lua[{}]: register_overlay does not support palette/keybind activation; ignoring",
+                    name
+                );
+                return;
+            }
         }
     }
-    // `module` Table held a reference into `lua`; drop after reads.
-    drop(lua);
+    let _ = footer_hints;
+
+    // Explicit-callback paths: each register_palette_command and
+    // register_keybind from the script gets its own gated factory.
+    // The factory calls the captured Lua callback in the persistent
+    // Lua state; truthy return means "push a fresh component", falsy
+    // means "no-op" (palette closes, key consumed without push).
+    use crate::compositor::{Activation, Component, PaletteEntry};
+    use crossterm::event::{KeyCode, KeyModifiers};
+    for cmd in captured.palette_commands {
+        let lua_clone = lua.clone();
+        let shared_for_factory = shared.clone();
+        let invoke = cmd.invoke;
+        let factory: crate::compositor::SpawnComponent = Box::new(move |_ctx| {
+            lua_callback_gate(&lua_clone, &invoke, name).then(|| {
+                let c = component_or_placeholder(name, source, shared_for_factory.clone());
+                Box::new(c) as Box<dyn Component>
+            })
+        });
+        r.palette_entries.push(PaletteEntry {
+            label: cmd.label,
+            hint: cmd.hint,
+            name,
+            spawn: factory,
+        });
+    }
+    for bind in captured.keybinds {
+        let lua_clone = lua.clone();
+        let shared_for_factory = shared.clone();
+        let callback = bind.callback;
+        let factory: crate::compositor::SpawnComponent = Box::new(move |_ctx| {
+            lua_callback_gate(&lua_clone, &callback, name).then(|| {
+                let c = component_or_placeholder(name, source, shared_for_factory.clone());
+                Box::new(c) as Box<dyn Component>
+            })
+        });
+        r.activations.push(Activation {
+            code: KeyCode::Char(bind.key),
+            modifiers: KeyModifiers::NONE,
+            spawn: factory,
+        });
+    }
+
+    // `lua` was cloned into each gated factory (clones share the
+    // underlying VM, so any one alive keeps callbacks invokable).
+    // The original handle goes out of scope here.
+}
+
+/// Run a captured Lua callback (palette command's invoke or
+/// keybind's callback) and decide whether to push the plugin's
+/// component. Truthy return → push, falsy / nil / error → skip.
+/// Errors are logged with the plugin's name but don't propagate.
+fn lua_callback_gate(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) -> bool {
+    let f: mlua::Function = match lua.registry_value(key) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("lua[{}]: callback registry lookup failed: {}", name, e);
+            return false;
+        }
+    };
+    match f.call::<mlua::Value>(()) {
+        Ok(mlua::Value::Nil) | Ok(mlua::Value::Boolean(false)) => false,
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!("lua[{}]: callback failed: {}", name, e);
+            false
+        }
+    }
 }
 
 /// Wire a script registered as a Component plugin: bind its key to
