@@ -14,6 +14,12 @@
 //! `scope.create_function`-wrapped closures over a `RefCell` of the
 //! `MapApi` ref. The table mimics a userdata to the script — same
 //! `map:method(...)` syntax — but avoids the lifetime restriction.
+//!
+//! All three drawing primitives (`point`, `label`, `polyline`) now
+//! accept the same colour argument shape: either a keyword string
+//! (`"accent"` / `"accent_alt"` / `"muted"` / `"road"`) or a direct
+//! xterm-256 integer index (0..=255). `nil` / unknown values fall
+//! back to the theme's accent colour.
 
 use std::cell::RefCell;
 
@@ -108,18 +114,8 @@ fn anchor_from_str(s: &str) -> Anchor {
     }
 }
 
-/// Resolve a Lua-side colour keyword. Unknown keywords fall back to
-/// `accent_color` — a typo-y plugin still renders, just in the
-/// "wrong" colour, instead of crashing the script.
-fn resolve_color(p: &MapApi<'_>, name: Option<&mlua::String>) -> ratatui::style::Color {
-    match name.and_then(|s| s.to_str().ok()) {
-        Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
-        Some(s) if &*s == "muted" => p.muted_color(),
-        _ => p.accent_color(),
-    }
-}
-
-/// Resolve a Lua-side colour argument for `map:polyline`.
+/// Resolve a Lua-side colour argument used by all three drawing
+/// primitives (`point`, `label`, `polyline`).
 ///
 /// Accepts:
 /// - **`nil`** → default to the theme's accent colour.
@@ -154,24 +150,25 @@ fn xterm_index(color: ratatui::style::Color) -> u8 {
     }
 }
 
+/// Thin wrapper around [`resolve_color_arg`] that returns a
+/// `ratatui::style::Color::Indexed` for use by buffer-side primitives
+/// (`point`, `label`) that take a `Color` directly.
+fn resolve_color_value(p: &MapApi<'_>, arg: Option<&mlua::Value>) -> ratatui::style::Color {
+    ratatui::style::Color::Indexed(resolve_color_arg(p, arg))
+}
+
 // First param is the receiver from Lua's `map:point(...)` colon
 // syntax — `map:point(a, b, c)` desugars to `map.point(map, a, b, c)`,
 // so the closure sees the map table itself as its first argument.
 // We discard it; the actual `MapApi` handle is the captured `cell`.
 fn point(
     cell: &RefCell<&mut MapApi<'_>>,
-    (_self, lon, lat, glyph, color_name): (
-        mlua::Table,
-        f64,
-        f64,
-        mlua::String,
-        Option<mlua::String>,
-    ),
+    (_self, lon, lat, glyph, color_arg): (mlua::Table, f64, f64, mlua::String, Option<mlua::Value>),
 ) -> mlua::Result<()> {
     let glyph_str = glyph.to_str()?;
     let glyph_char = glyph_str.chars().next().unwrap_or(' ');
     let mut p = cell.borrow_mut();
-    let color = resolve_color(&p, color_name.as_ref());
+    let color = resolve_color_value(&p, color_arg.as_ref());
     p.point(LonLat { lon, lat }, glyph_char, color);
     Ok(())
 }
@@ -182,19 +179,19 @@ fn point(
 // `rows_in` offsets toward the interior.
 fn text_anchored(
     cell: &RefCell<&mut MapApi<'_>>,
-    (_self, anchor, rows_in, text, color_name): (
+    (_self, anchor, rows_in, text, color_arg): (
         mlua::Table,
         mlua::String,
         u16,
         mlua::String,
-        Option<mlua::String>,
+        Option<mlua::Value>,
     ),
 ) -> mlua::Result<()> {
     let anchor_str = anchor.to_str()?;
     let anchor = anchor_from_str(&anchor_str);
     let text_str = text.to_str()?;
     let mut p = cell.borrow_mut();
-    let color = resolve_color(&p, color_name.as_ref());
+    let color = resolve_color_value(&p, color_arg.as_ref());
     p.text_anchored(anchor, rows_in, &text_str, color);
     Ok(())
 }
@@ -204,17 +201,11 @@ fn text_anchored(
 // the same colour fallback as `point`.
 fn label(
     cell: &RefCell<&mut MapApi<'_>>,
-    (_self, lon, lat, text, color_name): (
-        mlua::Table,
-        f64,
-        f64,
-        mlua::String,
-        Option<mlua::String>,
-    ),
+    (_self, lon, lat, text, color_arg): (mlua::Table, f64, f64, mlua::String, Option<mlua::Value>),
 ) -> mlua::Result<()> {
     let text_str = text.to_str()?;
     let mut p = cell.borrow_mut();
-    let color = resolve_color(&p, color_name.as_ref());
+    let color = resolve_color_value(&p, color_arg.as_ref());
     p.label(LonLat { lon, lat }, &text_str, color);
     Ok(())
 }
@@ -438,5 +429,71 @@ mod tests {
         drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(sink[0].color, DARK.road_motorway);
+    }
+
+    /// `map:point(0, 0, "x", 196)` accepts an integer as a direct
+    /// xterm-256 index — the painted cell's fg must be `Indexed(196)`.
+    #[test]
+    fn point_accepts_integer_xterm_index() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:point(0, 0, "x", 196)"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        let mut found = false;
+        for x in 0..area.width {
+            for y in 0..area.height {
+                let cell = &buf[(x, y)];
+                if cell.symbol() == "x" {
+                    assert_eq!(
+                        cell.style().fg,
+                        Some(ratatui::style::Color::Indexed(196)),
+                        "fg must be Indexed(196)"
+                    );
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "expected 'x' cell painted somewhere");
+    }
+
+    /// `map:label(0, 0, "hi", 214)` accepts an integer colour — the
+    /// painted cells' fg must all be `Indexed(214)`.
+    #[test]
+    fn label_accepts_integer_xterm_index() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:label(0, 0, "hi", 214)"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        let mut found = false;
+        for x in 0..area.width {
+            for y in 0..area.height {
+                let cell = &buf[(x, y)];
+                if cell.symbol() == "h" || cell.symbol() == "i" {
+                    assert_eq!(
+                        cell.style().fg,
+                        Some(ratatui::style::Color::Indexed(214)),
+                        "fg must be Indexed(214)"
+                    );
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "expected 'h' or 'i' cell painted somewhere");
     }
 }
