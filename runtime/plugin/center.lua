@@ -7,7 +7,6 @@ ttymap.register_plugin({
     name = "center",
     label = "Toggle center marker",
     key = "c",
-    activation = "toggle",
 
     paint_on_map = function(map)
         local lon, lat = map:center()
