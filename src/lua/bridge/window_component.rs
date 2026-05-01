@@ -33,8 +33,6 @@
 //! Per audit §13: errors are logged and recovered, never propagated.
 //! A buggy plugin must not take the host down.
 
-use std::sync::{Arc, Mutex};
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, Table};
 use ratatui::text::{Line, Span};
@@ -45,7 +43,6 @@ use super::window_handle::CloseFlag;
 use crate::compositor::Component;
 use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::geo::LonLat;
 use crate::theme::StyleKind;
 
 // ── Layout ─────────────────────────────────────────────────────────
@@ -146,17 +143,6 @@ pub struct LuaWindowComponent {
     /// `&'static str` without leaking per call. Empty when the spec
     /// omits the field.
     footer_hints: Vec<(&'static str, &'static str)>,
-    /// Map centre cell shared with the setup-state `ttymap.map`
-    /// userdata so `ttymap.map:center()` returns the latest value
-    /// from inside this window's callbacks. Refreshed at the start of
-    /// every dispatch path that carries a `Window`. The same Arc the
-    /// setup state holds — `window.open` clones it in.
-    center: Arc<Mutex<LonLat>>,
-    /// Zoom cell shared with the setup-state `ttymap.map` userdata
-    /// so `ttymap.map:zoom()` (getter form) returns the latest value
-    /// from inside this window's callbacks. Refreshed alongside
-    /// `center`.
-    zoom: Arc<Mutex<f64>>,
 }
 
 impl LuaWindowComponent {
@@ -169,19 +155,15 @@ impl LuaWindowComponent {
     /// (`lua[<log_tag>]: render() failed: …`) and as the fallback
     /// for [`Component::name`] when `spec.name` is missing.
     ///
-    /// `center` and `zoom` are the setup state's shared mutexes —
-    /// refreshed each dispatch so `ttymap.map:center()` and
-    /// `ttymap.map:zoom()` (no-arg getter) work from inside the spec
-    /// callbacks. The setup state owns the Sender / Receiver pairs
-    /// for jump / frame.export; this component does not drain them
-    /// (App drains them centrally).
+    /// The setup state owns the Sender / Receiver pairs for jump /
+    /// frame.export and the host-shared `center` / `zoom` mutexes;
+    /// this component does not drain them (App drains them
+    /// centrally per loop iteration).
     pub fn from_spec(
         lua: Lua,
         spec: Table,
         log_tag: &'static str,
         flag: CloseFlag,
-        center: Arc<Mutex<LonLat>>,
-        zoom: Arc<Mutex<f64>>,
     ) -> mlua::Result<Self> {
         // Display name: spec's `name` if set, else the log tag.
         // Leak once; bounded by the number of windows opened.
@@ -205,29 +187,7 @@ impl LuaWindowComponent {
             layout,
             has_render,
             footer_hints,
-            center,
-            zoom,
         })
-    }
-
-    /// Refresh the host-shared map centre. Called at the start of
-    /// every dispatch path that carries a `Window` so
-    /// `ttymap.map:center()` returns up-to-date values without each
-    /// callback having to take it as an arg.
-    fn refresh_center(&self, center: LonLat) {
-        if let Ok(mut cell) = self.center.lock() {
-            *cell = center;
-        }
-    }
-
-    /// Refresh the host-shared zoom level. Symmetric with
-    /// [`Self::refresh_center`]; called from the same dispatch
-    /// paths so `ttymap.map:zoom()` (getter form) tracks the live
-    /// value without callbacks taking it as an arg.
-    fn refresh_zoom(&self, zoom: f64) {
-        if let Ok(mut cell) = self.zoom.lock() {
-            *cell = zoom;
-        }
     }
 
     /// Pull the `render()` lines from the Lua spec as raw line
@@ -297,8 +257,6 @@ impl LuaWindowComponent {
 
 impl Component for LuaWindowComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-        self.refresh_center(win.ctx().center);
-        self.refresh_zoom(win.ctx().zoom);
         let action = self.dispatch_event(event);
         // Host-side jump / frame.export the callback queued hits the
         // setup state's senders, not per-window receivers. App drains
@@ -345,8 +303,6 @@ impl Component for LuaWindowComponent {
     }
 
     fn poll(&mut self, win: &mut Window) {
-        self.refresh_center(win.ctx().center);
-        self.refresh_zoom(win.ctx().zoom);
         // The only Lua-facing poll work this Component does is
         // honour the shared close flag. NO callback into the spec —
         // async work belongs on a `ttymap.api.frame.on_tick(fn)`
@@ -506,19 +462,6 @@ fn key_code_to_lua(code: KeyCode) -> (&'static str, Option<char>) {
 mod tests {
     use super::*;
 
-    /// Throwaway centre cell for tests that don't care about the
-    /// host-API drain. The setup state owns the channels in
-    /// production; per-window tests build a fresh Arc<Mutex<LonLat>>
-    /// each call so dispatch refresh has somewhere to write.
-    fn dummy_center() -> Arc<Mutex<LonLat>> {
-        Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }))
-    }
-
-    /// Throwaway zoom cell, paired with [`dummy_center`].
-    fn dummy_zoom() -> Arc<Mutex<f64>> {
-        Arc::new(Mutex::new(0.0))
-    }
-
     /// Minimal helper: build a `LuaWindowComponent` from a Lua source
     /// snippet that returns the spec table directly. `window.open`
     /// gets its spec the same way — caller-side `eval`, resulting
@@ -527,15 +470,7 @@ mod tests {
     fn make(source: &str, log_tag: &'static str) -> LuaWindowComponent {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(source).eval().expect("eval spec");
-        LuaWindowComponent::from_spec(
-            lua,
-            spec,
-            log_tag,
-            CloseFlag::default(),
-            dummy_center(),
-            dummy_zoom(),
-        )
-        .expect("from_spec")
+        LuaWindowComponent::from_spec(lua, spec, log_tag, CloseFlag::default()).expect("from_spec")
     }
 
     #[test]
@@ -718,19 +653,9 @@ mod tests {
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaWindowComponent::from_spec(
-            lua,
-            spec,
-            "win",
-            flag.clone(),
-            dummy_center(),
-            dummy_zoom(),
-        )
-        .unwrap();
+        let mut c = LuaWindowComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
 
         const CTX: Context = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 0.0,
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };
@@ -750,19 +675,9 @@ mod tests {
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaWindowComponent::from_spec(
-            lua,
-            spec,
-            "win",
-            flag.clone(),
-            dummy_center(),
-            dummy_zoom(),
-        )
-        .unwrap();
+        let mut c = LuaWindowComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
 
         const CTX: Context = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 0.0,
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };

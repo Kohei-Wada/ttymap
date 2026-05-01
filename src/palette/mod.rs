@@ -218,14 +218,11 @@ mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::app::AppMsg;
-    use crate::geo::LonLat;
     use crate::map::Action;
     use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {
-        center: LonLat { lon: 0.0, lat: 0.0 },
-        zoom: 0.0,
         theme_id: ThemeId::Dark,
         cursor: None,
     };
