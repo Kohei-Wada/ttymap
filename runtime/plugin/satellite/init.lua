@@ -1,13 +1,13 @@
 -- Satellite tracker — single panel showing N satellites at once.
 --
--- The sibling `satellite.satellites` factory builds one Component
--- that aggregates every configured sat. In-panel key chars (`i`, `h`
--- …) toggle individual visibility; `Enter` recentres on the first
--- visible one. To track an extra satellite, copy this file to
--- `~/.config/ttymap/lua/satellite.lua` and append its NORAD ID +
--- a free key char.
+-- The sibling `satellite.satellites` factory builds one tracker
+-- (plugin loop + window open/close) for the configured sat list.
+-- In-panel key chars (`i`, `H` …) toggle individual visibility;
+-- `Enter` re-centres on the focused one. To track an extra
+-- satellite, copy this file to `~/.config/ttymap/plugin/satellite/init.lua`
+-- and append its NORAD ID + a free key char.
 
-ttymap.register_plugin(require("satellite.satellites").make({
+local s = require("satellite.satellites").make({
     -- Manned LEO stations.
     { display = "ISS",      norad_id = 25544, color = "accent_alt", key = "i" },
     { display = "Tiangong", norad_id = 48274, color = "highlight",  key = "T" },
@@ -31,9 +31,10 @@ ttymap.register_plugin(require("satellite.satellites").make({
     -- MEO (~20,000 km, 12 h period). Slow drift across the map,
     -- a different rhythm to the LEO sats.
     { display = "GPS",      norad_id = 26360, color = "highlight",  key = "G" },
-}))
+})
 
+ttymap.register_plugin(s.plugin_spec)
 ttymap.register_palette_command({
     label = "Toggle satellite",
-    invoke = function() ttymap.plugin:open() end,
+    invoke = s.toggle,
 })

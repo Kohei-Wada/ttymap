@@ -1,8 +1,17 @@
--- satellite.satellites — multi-sat tracker as a single Component.
+-- satellite.satellites — multi-sat tracker built on the new
+-- `register_plugin({ loop })` + `ttymap.api.window.open` shape.
 --
--- Each Component instance aggregates N entries (configured by the
--- consumer), shares one panel for status display, and toggles per-
--- entry visibility via in-panel keystrokes. Two entry shapes:
+-- Each `make(specs)` call wires up one tracker:
+--   * a `plugin_spec` table the caller hands to `ttymap.register_plugin`,
+--     whose `loop` callback drives TLE fetch + SGP4 propagation + map
+--     paint while the panel is open (gated on the captured `w` window
+--     handle, same convention as aircraft / wiki),
+--   * an `open` / `close` / `toggle` trio the caller wires to a palette
+--     command or keybind. The window owns per-sat visibility keystrokes
+--     (`i` for ISS, `H` for Hubble, …) and C-n / C-p / Enter focus
+--     navigation.
+--
+-- Two entry shapes (unchanged from the previous shape):
 --
 --   * **single** — one NORAD ID, one marker + label, one row showing
 --     position + altitude. Use for ISS, Hubble, etc.
@@ -13,9 +22,11 @@
 --     N propagations cross the Lua/Rust boundary in one call.
 --
 -- One palette entry, one window, regardless of how many entries the
--- consumer configures. C-n / C-p (or Up / Down) move the focus
--- among visible entries and auto-jump the map there, mirroring
--- the wiki widget's selection model.
+-- consumer configures. Visibility flags survive a panel toggle —
+-- `make` runs once at plugin registration, so per-sat `visible` state
+-- persists across open/close cycles. Toggling the panel does NOT
+-- re-trigger TLE fetches; the disk-cached `fetch_cached` reuses the
+-- prior body for an hour anyway, so this is a non-issue.
 
 local M = {}
 
@@ -67,11 +78,15 @@ end
 ---   key        string?: single-char keybind to toggle visibility
 ---                       while the panel is focused. Optional; sats
 ---                       without a key stay always-visible.
+---
+--- @return table { plugin_spec, open, close, toggle } — caller hands
+---   `plugin_spec` to `ttymap.register_plugin` and wires `toggle` (or
+---   `open` / `close` individually) to a palette command / keybind.
 function M.make(specs)
-    -- Per-entry runtime state. Created once per Component instance —
-    -- toggling the panel off and on rebuilds it (LuaComponent is
-    -- re-created each push), which doubles as a "refresh TLE"
-    -- shortcut without needing an extra command.
+    -- Per-entry runtime state. Lives for the program lifetime;
+    -- visibility flags persist across panel toggles. TLE fetches are
+    -- one-shot per sat (re-fetched only if `tles` is cleared, which
+    -- nothing currently does — `fetch_cached` handles staleness).
     local sats = {}
     for _, spec in ipairs(specs) do
         table.insert(sats, {
@@ -88,7 +103,8 @@ function M.make(specs)
         })
     end
 
-    -- Map char → index for handle_event dispatch + footer hint list.
+    -- Map char → index for handle_event dispatch + window-local
+    -- footer hint list (visible only while the panel is focused).
     local key_to_idx = {}
     local hints = {}
     for i, sat in ipairs(sats) do
@@ -99,6 +115,7 @@ function M.make(specs)
     end
     table.insert(hints, { "C-n/C-p", "focus" })
     table.insert(hints, { "Enter", "re-centre" })
+    table.insert(hints, { "Esc/q", "close" })
 
     -- Block::Borders::ALL eats one row top + one row bottom, so the
     -- visible content area is `height - 2`. Width fits a highlighted
@@ -110,8 +127,8 @@ function M.make(specs)
     local selected = 1
     local initial_jump_done = false
 
-    -- Helpers shared by render / paint_on_map / poll. Inlined as
-    -- local functions so they capture the same `sats` upvalue.
+    -- Helpers shared by render / paint / loop. Inlined as locals so
+    -- they capture the same `sats` upvalue.
 
     local function single_body(sat)
         return format_position(sat.positions)
@@ -152,174 +169,217 @@ function M.make(specs)
         -- All invisible: leave `selected` as-is.
     end
 
-    return {
-        name = "satellite",
-        label = "Toggle satellite",
-        layout = { anchor = "top-left", width = panel_width, height = panel_height },
-        footer_hints = hints,
-
-        render = function()
-            local lines = {}
-            for i, sat in ipairs(sats) do
-                local marker = sat.visible and "●" or "○"
-                local body
-                if not sat.visible then
-                    body = "(off)"
-                elseif sat.kind == "group" then
-                    body = group_body(sat)
-                else
-                    body = single_body(sat)
-                end
-                local key_hint = sat.key and ("[" .. sat.key .. "] ") or "    "
-                local row = string.format("%s %s%-8s %s",
-                    marker, key_hint, sat.display, body)
-                if i == selected and sat.visible then
-                    -- Highlight the focused row the same way wiki
-                    -- highlights its selected article.
-                    table.insert(lines, { { text = row, style = "highlight" } })
-                else
-                    table.insert(lines, row)
-                end
+    local function build_lines()
+        local lines = {}
+        for i, sat in ipairs(sats) do
+            local marker = sat.visible and "●" or "○"
+            local body
+            if not sat.visible then
+                body = "(off)"
+            elseif sat.kind == "group" then
+                body = group_body(sat)
+            else
+                body = single_body(sat)
             end
-            return lines
-        end,
+            local key_hint = sat.key and ("[" .. sat.key .. "] ") or "    "
+            local row = string.format("%s %s%-8s %s",
+                marker, key_hint, sat.display, body)
+            if i == selected and sat.visible then
+                -- Highlight the focused row the same way wiki
+                -- highlights its selected article.
+                table.insert(lines, { { text = row, style = "highlight" } })
+            else
+                table.insert(lines, row)
+            end
+        end
+        return lines
+    end
 
-        paint_on_map = function(map)
-            -- Spatial dedup for group entries: at low zoom Starlink-
-            -- class constellations pack hundreds of sats into a few
-            -- pixels and the map turns into solid colour. Bucket
-            -- positions into a degree-grid that scales with zoom so
-            -- only one sat per visible cell renders. 5° at zoom 0
-            -- (~world view) → 0.005° at zoom 10. Same icon (`◉`) as
-            -- single sats — by the time dedup runs, count is low
-            -- enough that a real marker reads fine.
-            local zoom = map:zoom()
-            local cell_deg = 5 / (2 ^ zoom)
+    local w = nil  -- window handle while open; nil while closed (also
+                   -- the enabled flag for the loop)
 
-            for i, sat in ipairs(sats) do
-                if not sat.visible then goto continue end
-                local color = (i == selected) and "accent_alt" or sat.color
-                if sat.kind == "group" then
-                    if sat.positions then
-                        local seen = {}
-                        for _, p in ipairs(sat.positions) do
-                            if p then
-                                local kx = math.floor(p.lon / cell_deg)
-                                local ky = math.floor(p.lat / cell_deg)
-                                local k = kx .. ":" .. ky
-                                if not seen[k] then
-                                    seen[k] = true
-                                    map:point(p.lon, p.lat, "◉", color)
-                                end
+    local function paint_markers(map)
+        -- Spatial dedup for group entries: at low zoom Starlink-class
+        -- constellations pack hundreds of sats into a few pixels and
+        -- the map turns into solid colour. Bucket positions into a
+        -- degree-grid that scales with zoom so only one sat per visible
+        -- cell renders. 5° at zoom 0 (~world view) → 0.005° at zoom 10.
+        -- Same icon (`◉`) as single sats — by the time dedup runs,
+        -- count is low enough that a real marker reads fine.
+        local zoom = map:zoom()
+        local cell_deg = 5 / (2 ^ zoom)
+
+        for i, sat in ipairs(sats) do
+            if not sat.visible then goto continue end
+            local color = (i == selected) and "accent_alt" or sat.color
+            if sat.kind == "group" then
+                if sat.positions then
+                    local seen = {}
+                    for _, p in ipairs(sat.positions) do
+                        if p then
+                            local kx = math.floor(p.lon / cell_deg)
+                            local ky = math.floor(p.lat / cell_deg)
+                            local k = kx .. ":" .. ky
+                            if not seen[k] then
+                                seen[k] = true
+                                map:point(p.lon, p.lat, "◉", color)
                             end
                         end
                     end
-                else
-                    if sat.positions then
-                        map:point(sat.positions.lon, sat.positions.lat, "◉", color)
-                        map:label(sat.positions.lon, sat.positions.lat, " " .. sat.display, color)
-                    end
                 end
-                ::continue::
-            end
-        end,
-
-        handle_event = function(key)
-            local code = key.code
-            local ch = key.char
-            local ctrl = key.ctrl
-
-            -- In-panel per-entry visibility toggle. Char keys come
-            -- through as `code = "Char"` + `char = <c>`; match on
-            -- `key.char`. `return nil` consumes so the event doesn't
-            -- leak to the base layer (which uses `h` for pan-left
-            -- etc.). Skip when ctrl is held so C-n / C-p reach the
-            -- focus-navigation branch even if a sat is bound to `n`
-            -- or `p`.
-            if code == "Char" and ch and not ctrl and key_to_idx[ch] then
-                local idx = key_to_idx[ch]
-                sats[idx].visible = not sats[idx].visible
-                return nil
-            end
-
-            local up = (ctrl and code == "Char" and ch == "p") or code == "Up"
-            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
-            if up or down then
-                move_selection(up and -1 or 1)
-                return nil
-            end
-
-            if code == "Enter" then
-                -- Re-centre on the focused sat — handy after the
-                -- user pans away to look at something else.
-                local lon, lat = focus_point(sats[selected])
-                if lon then ttymap.map:jump(lon, lat) end
-                return nil
-            end
-
-            return { ignore = true }
-        end,
-
-        poll = function()
-            for _, sat in ipairs(sats) do
-                -- TLE fetch: kick off once, only for visible sats.
-                -- An invisible entry that the user toggles on later
-                -- starts its fetch the next poll tick.
-                if sat.visible and not sat.tles and not sat.fetch_job then
-                    local url = sat.kind == "group"
-                        and group_url(sat.group)
-                        or single_url(sat.norad_id)
-                    -- Disk-cached fetch with a 1h freshness window.
-                    -- CelesTrak's gp.php refreshes every ~2h and 403s
-                    -- a same-IP repeat fetch within that window — so
-                    -- a normal `fetch` would strand us on "awaiting"
-                    -- on every restart inside a single CelesTrak
-                    -- bucket. `fetch_cached` reads the prior body
-                    -- from disk first, falls back to it on HTTP
-                    -- error, and only round-trips when stale.
-                    sat.fetch_job = ttymap.http:fetch_cached(url, 3600)
+            else
+                if sat.positions then
+                    map:point(sat.positions.lon, sat.positions.lat, "◉", color)
+                    map:label(sat.positions.lon, sat.positions.lat, " " .. sat.display, color)
                 end
-                if sat.fetch_job then
-                    local body = sat.fetch_job:try_take()
-                    if body then
-                        if sat.kind == "group" then
-                            sat.tles = ttymap.sgp4:parse_tles(body)
-                        else
-                            sat.tles = ttymap.sgp4:parse_tle(body)
-                        end
-                        sat.fetch_job = nil
-                    end
-                end
+            end
+            ::continue::
+        end
+    end
 
-                -- Re-propagate every poll while visible. Pure-Rust
-                -- SGP4 runs in microseconds; passing nil for the
-                -- time arg uses sub-second wall-clock for smooth
-                -- motion. `propagate_batch` keeps a few-thousand-sat
-                -- group to one Lua/Rust crossing per frame.
-                if sat.visible and sat.tles then
+    local function step(_map)
+        for _, sat in ipairs(sats) do
+            -- TLE fetch: kick off once, only for visible sats.
+            -- An invisible entry that the user toggles on later
+            -- starts its fetch the next loop tick.
+            if sat.visible and not sat.tles and not sat.fetch_job then
+                local url = sat.kind == "group"
+                    and group_url(sat.group)
+                    or single_url(sat.norad_id)
+                -- Disk-cached fetch with a 1h freshness window.
+                -- CelesTrak's gp.php refreshes every ~2h and 403s
+                -- a same-IP repeat fetch within that window — so
+                -- a normal `fetch` would strand us on "awaiting"
+                -- on every restart inside a single CelesTrak
+                -- bucket. `fetch_cached` reads the prior body
+                -- from disk first, falls back to it on HTTP
+                -- error, and only round-trips when stale.
+                sat.fetch_job = ttymap.http:fetch_cached(url, 3600)
+            end
+            if sat.fetch_job then
+                local body = sat.fetch_job:try_take()
+                if body then
                     if sat.kind == "group" then
-                        sat.positions = ttymap.sgp4:propagate_batch(sat.tles)
+                        sat.tles = ttymap.sgp4:parse_tles(body)
                     else
-                        local pos = ttymap.sgp4:propagate(sat.tles)
-                        if pos then sat.positions = pos end
+                        sat.tles = ttymap.sgp4:parse_tle(body)
                     end
+                    sat.fetch_job = nil
                 end
             end
 
-            -- Auto-recentre on the first usable position after the
-            -- panel opens, so the marker is immediately visible
-            -- without forcing the user to navigate.
-            if not initial_jump_done then
-                for _, sat in ipairs(sats) do
-                    local lon, lat = focus_point(sat)
-                    if lon then
-                        initial_jump_done = true
-                        ttymap.map:jump(lon, lat)
-                        break
-                    end
+            -- Re-propagate every loop tick while visible. Pure-Rust
+            -- SGP4 runs in microseconds; passing nil for the time
+            -- arg uses sub-second wall-clock for smooth motion.
+            -- `propagate_batch` keeps a few-thousand-sat group to
+            -- one Lua/Rust crossing per frame.
+            if sat.visible and sat.tles then
+                if sat.kind == "group" then
+                    sat.positions = ttymap.sgp4:propagate_batch(sat.tles)
+                else
+                    local pos = ttymap.sgp4:propagate(sat.tles)
+                    if pos then sat.positions = pos end
                 end
             end
-        end,
+        end
+
+        -- Auto-recentre on the first usable position after the panel
+        -- opens, so the marker is immediately visible without forcing
+        -- the user to navigate. `initial_jump_done` is reset on close
+        -- so each (re)open re-centres.
+        if not initial_jump_done then
+            for _, sat in ipairs(sats) do
+                local lon, lat = focus_point(sat)
+                if lon then
+                    initial_jump_done = true
+                    ttymap.map:jump(lon, lat)
+                    break
+                end
+            end
+        end
+    end
+
+    local function close()
+        if w then
+            w:close()
+            w = nil
+            initial_jump_done = false
+        end
+    end
+
+    local function open()
+        if w then return end
+        w = ttymap.api.window.open({
+            layout = { anchor = "top-left", width = panel_width, height = panel_height },
+            footer_hints = hints,
+            render = build_lines,
+            handle_event = function(key)
+                local code = key.code
+                local ch = key.char
+                local ctrl = key.ctrl
+
+                -- In-panel per-entry visibility toggle. Char keys
+                -- come through as `code = "Char"` + `char = <c>`;
+                -- match on `key.char`. `return nil` consumes so the
+                -- event doesn't leak to the base layer (which uses
+                -- `h` for pan-left etc.). Skip when ctrl is held so
+                -- C-n / C-p reach the focus-navigation branch even
+                -- if a sat is bound to `n` or `p`.
+                if code == "Char" and ch and not ctrl and key_to_idx[ch] then
+                    local idx = key_to_idx[ch]
+                    sats[idx].visible = not sats[idx].visible
+                    return nil
+                end
+
+                local up = (ctrl and code == "Char" and ch == "p") or code == "Up"
+                local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
+                if up or down then
+                    move_selection(up and -1 or 1)
+                    return nil
+                end
+
+                if code == "Enter" then
+                    -- Re-centre on the focused sat — handy after the
+                    -- user pans away to look at something else.
+                    local lon, lat = focus_point(sats[selected])
+                    if lon then ttymap.map:jump(lon, lat) end
+                    return nil
+                end
+
+                -- Esc / q close the panel.
+                if code == "Esc" or (code == "Char" and ch == "q") then
+                    close()
+                    return nil
+                end
+
+                return { ignore = true }
+            end,
+        })
+    end
+
+    local function toggle()
+        if w then close() else open() end
+    end
+
+    -- Per-frame work runs only while the panel is open: drains
+    -- TLE fetches, propagates SGP4 for visible sats, paints markers.
+    -- Closing the panel (`w = nil`) immediately stops propagation
+    -- and the markers vanish, mirroring the legacy "Component
+    -- pushed only while open" behavior.
+    local function loop_fn(map)
+        if not w then return end
+        step(map)
+        paint_markers(map)
+    end
+
+    return {
+        plugin_spec = {
+            name = "satellite",
+            loop = loop_fn,
+        },
+        open = open,
+        close = close,
+        toggle = toggle,
     }
 end
 
