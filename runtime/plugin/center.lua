@@ -16,7 +16,9 @@ ttymap.register_plugin({
     end,
 
     handle_event = function(_)
-        -- Marker-only plugin; let navigation keys fall through.
+        -- Marker-only plugin; pass every key through to the base
+        -- layer so navigation / activation still works while center
+        -- is focused.
         return { ignore = true }
     end,
 })

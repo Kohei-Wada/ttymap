@@ -187,32 +187,12 @@ fn module_enabled(module: &Table) -> bool {
     )
 }
 
-/// Read the script-supplied palette label, falling back to the file
-/// stem when the spec omits it.
-fn module_label(module: &Table, fallback: &str) -> String {
-    module
-        .get::<String>("label")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| fallback.to_string())
-}
-
-/// Read the script-supplied activation key (first char of `key`).
-fn module_key(module: &Table) -> Option<char> {
-    module
-        .get::<String>("key")
-        .ok()
-        .and_then(|s| s.chars().next())
-}
-
-/// Read `module.footer_hints` as owned `(key, label)` pairs.
-/// Mirrors the leak-and-static version in [`component::parse_footer_hints`]
-/// but returns owned strings so the snapshot in [`ttymap::PluginEntry`]
-/// can be rebuilt on each app run without leaking. Two accepted shapes
-/// per pair:
+/// Read `module.footer_hints` as owned `(key, label)` pairs. Used as
+/// a fallback when the script didn't call `register_footer_hint`
+/// explicitly. Two accepted shapes per pair:
 /// - `{ "Enter", "open" }` — positional 1-based array.
 /// - `{ key = "Enter", label = "open" }` — named.
-fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
+pub(crate) fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
     let Ok(list): mlua::Result<Table> = module.get("footer_hints") else {
         return Vec::new();
     };
@@ -277,76 +257,59 @@ fn register_one(
         drop(lua);
         return;
     }
-    let label = module_label(module, name);
-    let key = module_key(module);
-    // Footer hints are now collected from explicit
-    // `ttymap.register_footer_hint(...)` calls, but for backwards
-    // compatibility we also read the spec table's `footer_hints`
-    // field. The explicit list wins when both are present.
+
+    // Up-front validate: a syntax error here surfaces as one log
+    // line instead of a noisy first-activation failure later.
+    match &kind {
+        ttymap::CapturedKind::Plugin(_) | ttymap::CapturedKind::Overlay(_) => {
+            if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
+                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+                return;
+            }
+        }
+        ttymap::CapturedKind::Palette(_) => {
+            if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
+                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+                return;
+            }
+        }
+    }
+
+    // Overlays are always-on; they don't take palette/keybind
+    // activation. Push the factory and surface the snapshot, then
+    // skip the activation-surface wiring below.
+    if matches!(kind, ttymap::CapturedKind::Overlay(_)) {
+        register_overlay(name, source, shared.clone(), r);
+        if !captured.palette_commands.is_empty() || !captured.keybinds.is_empty() {
+            log::warn!(
+                "lua[{}]: register_overlay does not support palette/keybind activation; ignoring",
+                name
+            );
+        }
+        return;
+    }
+
+    // Surface plugin metadata to help. Only entries with a key
+    // bind are listed today (matching the prior harvest filter); a
+    // plugin with palette commands but no keybind shows up via the
+    // palette itself, not via the help cheatsheet.
     let footer_hints = if !captured.footer_hints.is_empty() {
         captured.footer_hints
     } else {
         parse_footer_hints(module)
     };
-
-    // The script can use EITHER auto-derive (`spec.key` /
-    // `spec.label`) OR explicit register_palette_command /
-    // register_keybind, but not both — auto-derive runs only when
-    // the script declared no explicit activation surfaces. This
-    // keeps a migrating plugin from accidentally getting two
-    // palette rows or two keybinds.
-    let has_explicit = !captured.palette_commands.is_empty() || !captured.keybinds.is_empty();
-    let footer_hints_for_legacy = footer_hints.clone();
-
-    match kind {
-        ttymap::CapturedKind::Plugin(_) => {
-            if !has_explicit {
-                register_component(
-                    name,
-                    source,
-                    label,
-                    key,
-                    footer_hints_for_legacy,
-                    shared.clone(),
-                    r,
-                );
-            } else {
-                // Validate up front so a syntax error surfaces as one
-                // log line instead of a noisy first-activation failure.
-                if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
-                    log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                    return;
-                }
-            }
-        }
-        ttymap::CapturedKind::Palette(_) => {
-            if !has_explicit {
-                register_provider(
-                    name,
-                    source,
-                    label,
-                    key,
-                    footer_hints_for_legacy,
-                    shared.clone(),
-                    r,
-                );
-            } else if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
-                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                return;
-            }
-        }
-        ttymap::CapturedKind::Overlay(_) => {
-            register_overlay(name, source, shared.clone(), r);
-            if has_explicit {
-                log::warn!(
-                    "lua[{}]: register_overlay does not support palette/keybind activation; ignoring",
-                    name
-                );
-                return;
-            }
-        }
+    if let Some(first_keybind) = captured.keybinds.first() {
+        // Pick the activation hint from the first registered
+        // keybind. Most plugins declare exactly one; the rare
+        // multi-keybind plugin still gets a single help row.
+        let key_hint = first_keybind.key.to_string();
+        let label = captured
+            .palette_commands
+            .first()
+            .map(|c| c.label.clone())
+            .unwrap_or_else(|| name.to_string());
+        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
     }
-    let _ = footer_hints;
 
     // Explicit-callback paths: each register_palette_command and
     // register_keybind from the script gets its own gated factory.
@@ -433,89 +396,6 @@ fn lua_callback_gate(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) -> 
             log::warn!("lua[{}]: callback failed: {}", name, e);
             false
         }
-    }
-}
-
-/// Wire a script registered as a Component plugin: bind its key to
-/// push a fresh `LuaComponent` on the stack, and add a palette entry
-/// pointing at the same factory. Plugins close themselves via their
-/// own `handle_event` returning `{ close = true }`.
-fn register_component(
-    name: &'static str,
-    source: &'static str,
-    label: String,
-    key: Option<char>,
-    footer_hints: Vec<(String, String)>,
-    shared: Arc<ttymap::LuaHostShared>,
-    r: &mut Registrar,
-) {
-    if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
-        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-        return;
-    }
-    let key_hint = key.map(|c| c.to_string()).unwrap_or_default();
-
-    let shared_for_palette = shared.clone();
-    r.add_palette(label.clone(), key_hint.clone(), name, move |_| {
-        component_or_placeholder(name, source, shared_for_palette.clone())
-    });
-    if let Some(k) = key {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        let shared_for_key = shared.clone();
-        r.bind(KeyCode::Char(k), KeyModifiers::NONE, move |_| {
-            component_or_placeholder(name, source, shared_for_key.clone())
-        });
-    }
-    if !key_hint.is_empty() {
-        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
-    }
-}
-
-/// Wire a script registered as a palette provider. Same shape as
-/// `register_component` but builds a `PaletteComponent` wrapping a
-/// `LuaPaletteProvider`.
-fn register_provider(
-    name: &'static str,
-    source: &'static str,
-    label: String,
-    key: Option<char>,
-    footer_hints: Vec<(String, String)>,
-    shared: Arc<ttymap::LuaHostShared>,
-    r: &mut Registrar,
-) {
-    if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
-        log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-        return;
-    }
-    let key_hint = key.map(|c| c.to_string()).unwrap_or_default();
-
-    let make = {
-        let shared = shared.clone();
-        move || -> crate::palette::PaletteComponent {
-            let provider = LuaPaletteProvider::from_source(source, name, shared.clone())
-                .unwrap_or_else(|e| {
-                    log::warn!("lua[{}]: re-load failed: {}", name, e);
-                    LuaPaletteProvider::from_source(
-                        "ttymap.register_palette({})",
-                        "lua-fallback",
-                        shared.clone(),
-                    )
-                    .expect("trivial provider always loads")
-                });
-            crate::palette::PaletteComponent::with_provider(provider)
-        }
-    };
-
-    r.add_palette(label.clone(), key_hint.clone(), name, {
-        let make = make.clone();
-        move |_| make()
-    });
-    if let Some(k) = key {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        r.bind(KeyCode::Char(k), KeyModifiers::NONE, move |_| make());
-    }
-    if !key_hint.is_empty() {
-        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
     }
 }
 
@@ -797,9 +677,10 @@ mod tests {
         let (_lua, c) = parse_spec(r#"ttymap.register_plugin({ name = "x" })"#, "x");
         assert!(matches!(c.kind, Some(ttymap::CapturedKind::Plugin(_))));
         let t = captured_table(&c);
-        assert_eq!(module_label(t, "x"), "x");
-        assert!(module_key(t).is_none());
         assert!(module_enabled(t));
+        // No surfaces declared: empty palette_commands + keybinds.
+        assert!(c.palette_commands.is_empty());
+        assert!(c.keybinds.is_empty());
     }
 
     #[test]
@@ -815,15 +696,29 @@ mod tests {
     }
 
     #[test]
-    fn module_helpers_read_key_label_enabled() {
+    fn enabled_false_surfaces_through_module_enabled() {
         let (_lua, c) = parse_spec(
-            r#"ttymap.register_plugin({ name = "x", key = "i", label = "Toggle x", enabled = false })"#,
+            r#"ttymap.register_plugin({ name = "x", enabled = false })"#,
             "x",
         );
         let t = captured_table(&c);
-        assert_eq!(module_key(t), Some('i'));
-        assert_eq!(module_label(t, "fallback"), "Toggle x");
         assert!(!module_enabled(t));
+    }
+
+    #[test]
+    fn explicit_palette_command_and_keybind_are_captured() {
+        let (_lua, c) = parse_spec(
+            r#"
+            ttymap.register_plugin({ name = "x" })
+            ttymap.register_palette_command({ label = "Toggle x", invoke = function() return true end })
+            ttymap.register_keybind("i", function() return true end)
+            "#,
+            "x",
+        );
+        assert_eq!(c.palette_commands.len(), 1);
+        assert_eq!(c.palette_commands[0].label, "Toggle x");
+        assert_eq!(c.keybinds.len(), 1);
+        assert_eq!(c.keybinds[0].key, 'i');
     }
 
     #[test]
@@ -856,14 +751,14 @@ mod tests {
             r#"
             ttymap.register_plugin({
                 name = "demo",
-                key = "d",
-                label = "Toggle demo",
                 render = function() return {} end,
                 footer_hints = {
                     { "Enter", "open" },
                     { "Esc",   "close" },
                 },
             })
+            ttymap.register_palette_command({ label = "Toggle demo", invoke = function() return true end })
+            ttymap.register_keybind("d", function() return true end)
             "#,
         );
 
@@ -911,12 +806,14 @@ mod tests {
         write_plugin(
             &dir,
             "first.lua",
-            r#"ttymap.register_plugin({ name = "first", render = function() return {} end })"#,
+            r#"ttymap.register_plugin({ name = "first", render = function() return {} end })
+            ttymap.register_palette_command({ label = "first", invoke = function() return true end })"#,
         );
         write_plugin(
             &dir,
             "second.lua",
-            r#"ttymap.register_plugin({ name = "second", render = function() return {} end })"#,
+            r#"ttymap.register_plugin({ name = "second", render = function() return {} end })
+            ttymap.register_palette_command({ label = "second", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
@@ -929,7 +826,12 @@ mod tests {
     #[test]
     fn dir_discovery_skips_non_lua_files() {
         let dir = temp_plugins_dir("skip-non-lua");
-        write_plugin(&dir, "ok.lua", r#"ttymap.register_plugin({ name = "ok" })"#);
+        write_plugin(
+            &dir,
+            "ok.lua",
+            r#"ttymap.register_plugin({ name = "ok" })
+            ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
+        );
         // README, backup files, etc. should be ignored.
         std::fs::write(dir.join("README.md"), "ignore me").unwrap();
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
@@ -947,14 +849,16 @@ mod tests {
         write_plugin(
             &dir,
             "alpha.lua",
-            r#"ttymap.register_plugin({ name = "alpha" })"#,
+            r#"ttymap.register_plugin({ name = "alpha" })
+            ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
         );
         // beta opts itself out — the file stays, but the plugin
         // doesn't register.
         write_plugin(
             &dir,
             "beta.lua",
-            r#"ttymap.register_plugin({ name = "beta", enabled = false })"#,
+            r#"ttymap.register_plugin({ name = "beta", enabled = false })
+            ttymap.register_palette_command({ label = "beta", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
@@ -975,7 +879,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("biggie")).expect("mkdir");
         std::fs::write(
             dir.join("biggie").join("init.lua"),
-            r#"ttymap.register_plugin({ name = "biggie", render = function() return {} end })"#,
+            r#"ttymap.register_plugin({ name = "biggie", render = function() return {} end })
+            ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
         )
         .expect("write init.lua");
 
@@ -1020,7 +925,8 @@ mod tests {
         write_plugin(
             &dir,
             "explicit.lua",
-            r#"ttymap.register_plugin({ name = "explicit", enabled = true })"#,
+            r#"ttymap.register_plugin({ name = "explicit", enabled = true })
+            ttymap.register_palette_command({ label = "explicit", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
@@ -1035,7 +941,8 @@ mod tests {
         write_plugin(
             &dir,
             "ok.lua",
-            r#"ttymap.register_plugin({ name = "ok", render = function() return {} end })"#,
+            r#"ttymap.register_plugin({ name = "ok", render = function() return {} end })
+            ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
         );
 
         let mut r = Registrar::default();
