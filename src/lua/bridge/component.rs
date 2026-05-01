@@ -168,11 +168,6 @@ impl LuaComponent {
         let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared, None)?;
         let module = match captured.kind {
             Some(CapturedKind::Plugin(t)) => t,
-            Some(CapturedKind::Palette(_)) => {
-                return Err(mlua::Error::external(
-                    "expected ttymap.register_plugin, got ttymap.register_palette",
-                ));
-            }
             None => {
                 return Err(mlua::Error::external(
                     "script did not call any ttymap.register_* API",

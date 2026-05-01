@@ -224,17 +224,18 @@ pub struct PluginCtl {
 
 // ── Self-registration capture ────────────────────────────────────────
 
-/// What a plugin script declared by calling `register_plugin` /
-/// `register_palette`. Exactly one of these per script — the kind
-/// determines what factory the activation surfaces
-/// (`palette_commands` / `keybinds`) push. (The legacy
-/// `register_overlay` surface was removed in Phase C; always-on
-/// chrome now registers via `register_plugin` + a `loop` callback.)
+/// What a plugin script declared by calling `register_plugin`. At
+/// most one of these per script — its presence determines whether
+/// activation surfaces (`palette_commands` / `keybinds`) push a
+/// fresh Component (kind = `Plugin`) or run a fire-and-forget
+/// callback (kind = `None`, "pure-action" plugin). Always-on chrome
+/// uses `register_plugin` + a `loop` callback; palette providers are
+/// pushed dynamically via `ttymap.api.palette.open(spec)` rather than
+/// self-declared at top level. (Legacy `register_overlay` /
+/// `register_palette` surfaces were removed in Phase C.)
 pub enum CapturedKind {
     /// Stack-pushed Component plugin (rendered panel).
     Plugin(Table),
-    /// Palette provider plugin (`/`-style picker).
-    Palette(Table),
 }
 
 /// One palette row declared by a plugin via
@@ -259,17 +260,17 @@ pub struct KeybindSpec {
 
 /// Everything a single plugin file's setup phase declared. nvim-
 /// style explicit opt-in: the Component itself is one call
-/// (`register_plugin` / `register_palette`), and each activation
-/// surface (palette row, keybind) is a **separate** explicit call
-/// with its own Lua callback. Plugins own whether/when to push by
-/// inspecting their own state inside the callback and returning
-/// truthy or falsy.
+/// (`register_plugin`), and each activation surface (palette row,
+/// keybind) is a **separate** explicit call with its own Lua
+/// callback. Plugins own whether/when to push by inspecting their
+/// own state inside the callback and signalling open/close via
+/// `ttymap.plugin:open()` / `:close()`.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// The plugin kind itself. `None` means the script never called
-    /// either of `register_plugin / register_palette` — for a script
-    /// that only declares activation surfaces (a "pure-action" plugin)
-    /// this is fine; otherwise the walker logs + skips that file.
+    /// `register_plugin` — for a script that only declares activation
+    /// surfaces (a "pure-action" plugin) this is fine; otherwise the
+    /// walker logs + skips that file.
     pub kind: Option<CapturedKind>,
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
@@ -301,11 +302,11 @@ pub fn new_capture_slot() -> CaptureSlot {
 /// install per Lua state — same surface for components and palette
 /// providers, so the bridge stays uniform.
 ///
-/// `slot` receives the spec from a `ttymap.register_plugin(...)` /
-/// `ttymap.register_palette(...)` call inside the script. The Lua
-/// subsystem walks plugin files and runs each script; the script
-/// itself decides whether (and how) to register. Rust never inspects
-/// the script's return value or table layout.
+/// `slot` receives the spec from a `ttymap.register_plugin(...)` call
+/// inside the script. The Lua subsystem walks plugin files and runs
+/// each script; the script itself decides whether (and how) to
+/// register. Rust never inspects the script's return value or table
+/// layout.
 pub fn install(
     lua: &Lua,
     tag: &'static str,
@@ -373,19 +374,19 @@ pub fn install(
         ttymap.set("plugin", lua.create_userdata(HostPlugin { ctl })?)?;
     }
 
-    // Self-registration entry points. The script calls one of these
-    // (at most once per script) to declare itself. The Lua subsystem
-    // doesn't know what's a plugin or what kind it is until this
-    // call lands. A double-call (or a mix of plugin + palette in
-    // the same file) is a Lua-side error — surfaced via mlua so the
-    // walker logs + skips the script.
-    // Register the Component itself. Exactly one of these per
-    // script. A second call on either is a Lua-side error.
+    // Self-registration entry point. The script calls
+    // `register_plugin` (at most once) to declare itself. The Lua
+    // subsystem doesn't know what's a plugin until this call lands.
+    // A second call is a Lua-side error — surfaced via mlua so the
+    // walker logs + skips the script. Palette providers no longer
+    // self-register at top level; they're pushed dynamically via
+    // `ttymap.api.palette.open(spec)` from inside an activation
+    // callback.
     fn set_kind(slot: &CaptureSlot, kind: CapturedKind, who: &str) -> mlua::Result<()> {
         let mut cap = slot.borrow_mut();
         if cap.kind.is_some() {
             return Err(mlua::Error::external(format!(
-                "ttymap.{}: a plugin/palette was already registered in this script",
+                "ttymap.{}: a plugin was already registered in this script",
                 who
             )));
         }
@@ -397,13 +398,6 @@ pub fn install(
         "register_plugin",
         lua.create_function(move |_, spec: Table| {
             set_kind(&cap, CapturedKind::Plugin(spec), "register_plugin")
-        })?,
-    )?;
-    let cap = slot.clone();
-    ttymap.set(
-        "register_palette",
-        lua.create_function(move |_, spec: Table| {
-            set_kind(&cap, CapturedKind::Palette(spec), "register_palette")
         })?,
     )?;
 

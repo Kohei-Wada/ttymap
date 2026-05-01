@@ -138,8 +138,8 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 // nvim-style two-tier layout per runtime layer:
 //
 // - `<layer>/plugin/*.lua` — auto-discovered plugins. Each script
-//   self-registers via `ttymap.register_plugin / register_palette`
-//   at top level.
+//   self-registers via `ttymap.register_plugin` at top level (or
+//   declares only activation surfaces for "pure-action" plugins).
 // - `<layer>/lua/<name>.lua` — `require`-able lib scripts. NOT
 //   auto-discovered. Plugins reach them via `require "<name>"`.
 //
@@ -264,21 +264,20 @@ fn register_one(
 
     // `kind == None` is the **pure-action plugin** shape: the script
     // declared one or more activation surfaces (palette command /
-    // keybind / footer hint) but no `register_plugin / _palette`,
-    // so there's no Component to push. `fresh_load` already rejected
-    // the truly-empty case (no kind AND no surfaces); reaching here
-    // with `None` means surfaces exist. Their `invoke` / callback
-    // closures fire fire-and-forget host APIs (`ttymap.api.frame.export`,
+    // keybind / footer hint) but no `register_plugin`, so there's no
+    // Component to push. `fresh_load` already rejected the truly-
+    // empty case (no kind AND no surfaces); reaching here with `None`
+    // means surfaces exist. Their `invoke` / callback closures fire
+    // fire-and-forget host APIs (`ttymap.api.frame.export`,
     // `ttymap.map:jump`, …) that flow through `LuaHostHandles`.
     let is_pure_action_kind = captured.kind.is_none();
-    let is_palette_kind = matches!(captured.kind, Some(ttymap::CapturedKind::Palette(_)));
 
     // Take ownership of the spec table when one exists. Pure-action
     // plugins skip this block — there's no module to read `enabled` /
     // `loop` / `footer_hints` from; only `captured.footer_hints` (the
     // explicit `register_footer_hint` calls) applies.
     let module_opt: Option<Table> = captured.kind.map(|k| match k {
-        ttymap::CapturedKind::Plugin(t) | ttymap::CapturedKind::Palette(t) => t,
+        ttymap::CapturedKind::Plugin(t) => t,
     });
     if let Some(module) = module_opt.as_ref()
         && !module_enabled(module)
@@ -332,8 +331,6 @@ fn register_one(
     // confirmed the script parses and registered surfaces.
     let valid = if is_pure_action_kind {
         Ok(())
-    } else if is_palette_kind {
-        LuaPaletteProvider::from_source(source, name, shared.clone()).map(|_| ())
     } else {
         LuaComponent::from_source(source, name, shared.clone()).map(|_| ())
     };
@@ -410,31 +407,6 @@ fn register_one(
                 ctl.close_request
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 None
-            })
-        } else if is_palette_kind {
-            Box::new(move |_ctx| {
-                run_lua_callback(&lua_clone, &gate_key, name);
-                if !ctl
-                    .open_request
-                    .swap(false, std::sync::atomic::Ordering::Relaxed)
-                {
-                    return None;
-                }
-                let provider = LuaPaletteProvider::from_source(source, name, shared_clone.clone())
-                    .unwrap_or_else(|e| {
-                        log::warn!("lua[{}]: re-load failed: {}", name, e);
-                        LuaPaletteProvider::from_source(
-                            "ttymap.register_palette({})",
-                            "lua-fallback",
-                            shared_clone.clone(),
-                        )
-                        .expect("trivial provider always loads")
-                    });
-                let palette = crate::palette::PaletteComponent::with_provider(provider);
-                Some(Box::new(InstanceGuard {
-                    inner: palette,
-                    close_request: ctl.close_request.clone(),
-                }) as Box<dyn Component>)
             })
         } else {
             Box::new(move |_ctx| {
@@ -806,7 +778,7 @@ mod tests {
 
     fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
         match c.kind.as_ref().expect("script registered something") {
-            ttymap::CapturedKind::Plugin(t) | ttymap::CapturedKind::Palette(t) => t,
+            ttymap::CapturedKind::Plugin(t) => t,
         }
     }
 
@@ -819,12 +791,6 @@ mod tests {
         // No surfaces declared: empty palette_commands + keybinds.
         assert!(c.palette_commands.is_empty());
         assert!(c.keybinds.is_empty());
-    }
-
-    #[test]
-    fn register_palette_yields_palette_variant() {
-        let (_lua, c) = parse_spec(r#"ttymap.register_palette({ name = "x" })"#, "x");
-        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Palette(_))));
     }
 
     #[test]

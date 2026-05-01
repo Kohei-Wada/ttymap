@@ -121,10 +121,12 @@ pub enum CallOutcome<R> {
 /// The script self-registers by calling at least one
 /// `ttymap.register_*` API. Two valid shapes:
 ///
-/// 1. **Componented plugin**: calls `register_plugin` /
-///    `register_palette` (sets `kind`), optionally with activation
-///    surfaces (`register_palette_command` / `register_keybind` /
-///    `register_footer_hint`).
+/// 1. **Componented plugin**: calls `register_plugin` (sets `kind`),
+///    optionally with activation surfaces (`register_palette_command` /
+///    `register_keybind` / `register_footer_hint`). Palette providers
+///    are *not* declared at top level anymore; they're pushed
+///    dynamically via `ttymap.api.palette.open(spec)` from inside
+///    an activation callback.
 /// 2. **Pure-action plugin**: no `kind`, but at least one activation
 ///    surface — typically a `register_palette_command` whose
 ///    `invoke` calls a fire-and-forget host API like
@@ -137,10 +139,6 @@ pub enum CallOutcome<R> {
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
 /// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
-///   Two distinct tags exist today (`"lua-host"` for components,
-///   `"lua-palette"` for palette providers) and are kept for
-///   backwards compatibility with anything an upstream might
-///   filter on.
 /// - `plugin_ctl` enables `ttymap.plugin:open()` / `:close()` for
 ///   setup-phase Lua states. The setup state used by
 ///   `register_one` passes `Some(...)` so palette / keybind
@@ -165,8 +163,8 @@ pub fn fresh_load(
     if captured.kind.is_none() && !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap.register_* API \
-             (register_plugin / register_palette / \
-             register_palette_command / register_keybind / register_footer_hint)",
+             (register_plugin / register_palette_command / \
+             register_keybind / register_footer_hint)",
         ));
     }
     Ok((lua, captured, handles))

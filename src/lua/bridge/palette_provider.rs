@@ -9,16 +9,15 @@
 //! Errors in any callback are logged + recovered (empty results,
 //! Close action) to keep a buggy plugin from crashing the host.
 
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use mlua::{Lua, Table};
 
-use super::handle::{CallOutcome, LuaHandle, fresh_load};
+use super::handle::{CallOutcome, LuaHandle};
 use crate::app::AppMsg;
 use crate::compositor::Context;
 use crate::geo::LonLat;
-use crate::lua::ttymap::{CapturedKind, LuaHostShared};
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
@@ -51,30 +50,22 @@ impl LuaPaletteProvider {
     /// that ran the script's top-level `register_*` calls and continues
     /// to run palette / keybind callbacks). Used by
     /// `ttymap.api.palette.open(spec)` where the script builds the spec
-    /// inline inside an activation callback rather than at top level
-    /// via `ttymap.register_palette`.
+    /// inline inside an activation callback rather than at top level.
     ///
-    /// Unlike [`Self::from_source`] there's no fresh Lua state and no
-    /// `register_palette` capture step — the caller already has the
-    /// spec table. Host services (`ttymap.map`, `ttymap.window`, …)
-    /// are already installed on `lua` by the prior
-    /// [`crate::lua::ttymap::install`] call that produced the setup
-    /// state.
+    /// Host services (`ttymap.map`, `ttymap.window`, …) are already
+    /// installed on `lua` by the prior [`crate::lua::ttymap::install`]
+    /// call that produced the setup state.
     ///
     /// **Channel ownership** (per A3's Path 4 decision): `ttymap.map:jump`
     /// inside this provider's `execute` callback hits the **setup
     /// state's** `jump_tx` — drained centrally by [`crate::app::App`]
-    /// per frame and emitted as `AppMsg::Map(Action::Jump)`. So unlike
-    /// [`Self::from_source`], this provider's own `jump_rx` is a
-    /// disconnected channel (sender dropped immediately) — the in-execute
-    /// "jump → Run([Jump])" path is unreachable here, replaced by the
-    /// App's central drain. `execute` always collapses to `Close`.
+    /// per frame and emitted as `AppMsg::Map(Action::Jump)`. This
+    /// provider's own `jump_rx` is a disconnected channel (sender
+    /// dropped immediately) — the in-execute "jump → Run([Jump])" path
+    /// is unreachable here, replaced by the App's central drain.
+    /// `execute` always collapses to `Close` (modulo the legacy
+    /// `jump_rx` priority check kept for forward compatibility).
     pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
-        // Read the cacheable bits up front, then hand the spec over to
-        // the long-lived `LuaHandle`. Same shape as `from_source`'s
-        // tail — the only difference is that no `fresh_load` /
-        // `register_palette` capture happens here because the spec
-        // is already in hand.
         let prompt: String = spec.get("prompt").unwrap_or_else(|_| ":".to_string());
         let submit_mode = parse_submit_mode(&spec);
         let handle = LuaHandle::new(lua, spec, log_tag)?;
@@ -93,45 +84,6 @@ impl LuaPaletteProvider {
             items: Vec::new(),
             jump_rx,
         })
-    }
-
-    pub fn from_source(
-        source: &'static str,
-        id: &'static str,
-        shared: Arc<LuaHostShared>,
-    ) -> mlua::Result<Box<Self>> {
-        // Per-instance Lua state — `ttymap.plugin` is not exposed
-        // here. The provider closes itself by returning a
-        // `PaletteAction::Close` from `execute`.
-        let (lua, captured, handles) = fresh_load(source, id, "lua-palette", shared, None)?;
-        // The script self-declares as a palette provider via
-        // `ttymap.register_palette(...)`. A `register_plugin` call
-        // here is a kind mismatch reported up to the walker.
-        let palette = match captured.kind {
-            Some(CapturedKind::Palette(t)) => t,
-            Some(CapturedKind::Plugin(_)) => {
-                return Err(mlua::Error::external(
-                    "expected ttymap.register_palette, got ttymap.register_plugin",
-                ));
-            }
-            None => {
-                return Err(mlua::Error::external(
-                    "script did not call any ttymap.register_* API",
-                ));
-            }
-        };
-
-        let prompt: String = palette.get("prompt").unwrap_or_else(|_| ":".to_string());
-        let submit_mode = parse_submit_mode(&palette);
-        let handle = LuaHandle::new(lua, palette, id)?;
-
-        Ok(Box::new(Self {
-            handle,
-            prompt,
-            submit_mode,
-            items: Vec::new(),
-            jump_rx: handles.jump_rx,
-        }))
     }
 
     /// Re-pull `items()` from Lua and cache them. Called after
@@ -255,6 +207,7 @@ impl LuaPaletteProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lua::ttymap::{LuaHostShared, install, new_capture_slot};
     use crate::theme::ThemeId;
 
     fn ctx() -> Context {
@@ -265,63 +218,40 @@ mod tests {
         }
     }
 
+    /// Build a setup-state Lua VM (`ttymap` global installed) and run
+    /// `script` against it, expecting `script` to return the spec
+    /// table for `from_spec`. Mirrors how `ttymap.api.palette.open`
+    /// receives a spec from a Lua callback at runtime.
+    fn build_provider(script: &str) -> LuaPaletteProvider {
+        let lua = Lua::new();
+        let slot = new_capture_slot();
+        let _handles =
+            install(&lua, "lua-test", LuaHostShared::empty(), slot, None).expect("install ttymap");
+        let spec: Table = lua.load(script).eval().expect("eval spec");
+        LuaPaletteProvider::from_spec(lua, spec, "lua-test").expect("from_spec")
+    }
+
     #[test]
-    fn prompt_falls_back_to_colon_when_palette_omits_it() {
-        let p = LuaPaletteProvider::from_source(
-            "ttymap.register_palette({})",
-            "anon",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+    fn prompt_falls_back_to_colon_when_spec_omits_it() {
+        let p = build_provider("return {}");
         assert_eq!(p.prompt(), ":");
     }
 
     #[test]
-    fn prompt_picks_up_palette_value() {
-        let p = LuaPaletteProvider::from_source(
-            r#"ttymap.register_palette({ prompt = "/" })"#,
-            "named",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+    fn prompt_picks_up_spec_value() {
+        let p = build_provider(r#"return { prompt = "/" }"#);
         assert_eq!(p.prompt(), "/");
     }
 
     #[test]
-    fn from_source_rejects_when_script_calls_register_plugin_instead() {
-        // The script self-declares as a Component, but the palette
-        // adapter expects a palette declaration — kind mismatch
-        // surfaces as an error rather than a silent miscoercion.
-        let err = LuaPaletteProvider::from_source(
-            "ttymap.register_plugin({})",
-            "wrong-kind",
-            LuaHostShared::empty(),
-        );
-        assert!(
-            err.is_err(),
-            "register_plugin should fail to load as a palette provider"
-        );
-    }
-
-    #[test]
     fn submit_mode_defaults_on_each_key() {
-        let p = LuaPaletteProvider::from_source(
-            "ttymap.register_palette({})",
-            "anon",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        let p = build_provider("return {}");
         assert!(matches!(p.submit_mode(), SubmitMode::OnEachKey));
     }
 
     #[test]
     fn submit_mode_string_debounced_uses_default_ms() {
-        let p = LuaPaletteProvider::from_source(
-            r#"ttymap.register_palette({ submit_mode = "debounced" })"#,
-            "anon",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        let p = build_provider(r#"return { submit_mode = "debounced" }"#);
         match p.submit_mode() {
             SubmitMode::Debounced(d) => assert_eq!(d, Duration::from_millis(400)),
             _ => panic!("expected Debounced"),
@@ -330,12 +260,7 @@ mod tests {
 
     #[test]
     fn submit_mode_table_lets_plugin_pick_ms() {
-        let p = LuaPaletteProvider::from_source(
-            r#"ttymap.register_palette({ submit_mode = { kind = "debounced", ms = 250 } })"#,
-            "anon",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        let p = build_provider(r#"return { submit_mode = { kind = "debounced", ms = 250 } }"#);
         match p.submit_mode() {
             SubmitMode::Debounced(d) => assert_eq!(d, Duration::from_millis(250)),
             _ => panic!("expected Debounced"),
@@ -344,10 +269,13 @@ mod tests {
 
     #[test]
     fn items_round_trip_through_lua() {
-        let mut p = LuaPaletteProvider::from_source(
+        // The spec captures `items_list` as a closure upvalue inside
+        // the same Lua VM the provider runs against, so `filter`
+        // mutating it is visible to the next `items` call.
+        let mut p = build_provider(
             r#"
             local items_list = {}
-            ttymap.register_palette({
+            return {
                 filter = function(q)
                     items_list = {}
                     if q ~= "" then
@@ -356,12 +284,9 @@ mod tests {
                     end
                 end,
                 items = function() return items_list end,
-            })
+            }
             "#,
-            "round-trip",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        );
         p.filter("hi");
         assert_eq!(p.items().len(), 2);
         assert_eq!(p.items()[0].label, "hi a");
@@ -369,59 +294,21 @@ mod tests {
     }
 
     #[test]
-    fn execute_jump_returns_run_with_jump() {
-        let mut p = LuaPaletteProvider::from_source(
-            r#"
-            ttymap.register_palette({
-                execute = function(idx)
-                    ttymap.map:jump(139.7, 35.7)
-                    return nil
-                end,
-            })
-            "#,
-            "exec-jump",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
-        match p.execute(0, &ctx()) {
-            PaletteAction::Run(msgs) => {
-                assert_eq!(msgs.len(), 1);
-                assert!(matches!(msgs[0], AppMsg::Map(crate::map::Action::Jump(_))));
-            }
-            _ => panic!("expected Run([Jump])"),
-        }
-    }
-
-    #[test]
     fn execute_close_table_returns_close() {
-        let mut p = LuaPaletteProvider::from_source(
-            r#"ttymap.register_palette({ execute = function(_) return { close = true } end })"#,
-            "exec-close",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        let mut p =
+            build_provider(r#"return { execute = function(_) return { close = true } end }"#);
         assert!(matches!(p.execute(0, &ctx()), PaletteAction::Close));
     }
 
     #[test]
     fn is_loading_defaults_false() {
-        let p = LuaPaletteProvider::from_source(
-            "ttymap.register_palette({})",
-            "anon",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+        let p = build_provider("return {}");
         assert!(!p.is_loading());
     }
 
     #[test]
-    fn is_loading_reads_palette_function() {
-        let p = LuaPaletteProvider::from_source(
-            r#"ttymap.register_palette({ is_loading = function() return true end })"#,
-            "loading",
-            LuaHostShared::empty(),
-        )
-        .expect("load");
+    fn is_loading_reads_spec_function() {
+        let p = build_provider(r#"return { is_loading = function() return true end }"#);
         assert!(p.is_loading());
     }
 }
