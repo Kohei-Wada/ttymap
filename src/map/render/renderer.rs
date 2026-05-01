@@ -219,29 +219,38 @@ impl Renderer {
             self.draw_symbol(resolved);
         }
 
-        // Third pass: user overlays from Lua plugins. Uses
-        // `polyline_punching` so that saturated cells (fully-filled tile
-        // fills such as water) have their mask replaced with just the
-        // overlay's single bit — producing a one-cell gap in the fill
-        // where the line passes through. Sparse cells receive the normal
-        // OR-merge. Same render budget applies.
+        // Third pass: user overlays from Lua plugins. Drawn on the same
+        // canvas as tile features so dots OR-merge / punching applies.
+        // Same render budget applies — pathological coord lists stop
+        // early instead of starving the next frame.
+        //
+        // For each polyline:
+        // 1. Split at antimeridian crossings (segments with |dlon| > 180)
+        //    so each sub-polyline takes the shorter great-circle arc.
+        // 2. Project each sub-polyline continuously (first point centre-
+        //    aware, subsequent points anchored to previous) so adjacent
+        //    points stay near each other in subpixel space — no Bresenham
+        //    "teleport" across the canvas when one point lands on the
+        //    far left and the other on the far right.
         let mut buf: Vec<(i32, i32)> = std::mem::take(&mut self.scratches.line);
         for poly in overlays {
             if std::time::Instant::now() > deadline {
                 break;
             }
-            buf.clear();
-            for ll in &poly.coords {
-                buf.push(crate::map::render::overlay::ll_to_subpixel(
-                    *ll,
+            for sub in crate::map::render::overlay::split_antimeridian(&poly.coords) {
+                if std::time::Instant::now() > deadline {
+                    break;
+                }
+                buf = crate::map::render::overlay::project_polyline_continuous(
+                    &sub,
                     center,
                     zoom,
                     self.width,
                     self.height,
-                ));
-            }
-            if buf.len() >= 2 {
-                self.canvas.polyline_punching(&buf, poly.color);
+                );
+                if buf.len() >= 2 {
+                    self.canvas.polyline_punching(&buf, poly.color);
+                }
             }
         }
         self.scratches.line = buf;
