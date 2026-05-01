@@ -1,36 +1,28 @@
--- center.lua — Always-on central marker for better visibility.
---
--- Displays a fixed crosshair at the map's current center point.
--- Useful as a reference when navigating or for precise positioning.
+-- center marker — toggle a fixed crosshair at the map's current
+-- centre. The plugin lives as an always-on overlay; visibility is
+-- a plugin-internal flag the activation callbacks flip. Setup
+-- state is shared between the callbacks and the overlay's
+-- `paint_on_map`, so `enabled = not enabled` in `register_keybind`
+-- is visible on the next paint tick.
 
--- center marker — explicit opt-in for palette + keybind.
--- Activation surfaces are separate from the plugin definition; the
--- plugin author controls when (and whether) to push via callbacks.
+local enabled = false
 
-ttymap.register_plugin({
+ttymap.register_overlay({
     name = "center",
-
     paint_on_map = function(map)
+        if not enabled then return end
         local lon, lat = map:center()
         map:point(lon, lat, "+", "accent_alt")
     end,
-
-    handle_event = function(_)
-        -- Marker-only plugin; pass every key through to the base
-        -- layer so navigation / activation still works while center
-        -- is focused.
-        return { ignore = true }
-    end,
 })
 
--- Add a row to the `:` palette. The callback returns true to push
--- a fresh component, false to skip — that's the hook for plugin-
--- side state management. Trivially "always push" here; a true
--- toggle would track an `opened` flag and gate accordingly.
+local function toggle()
+    enabled = not enabled
+end
+
 ttymap.register_palette_command({
     label = "Toggle center marker",
-    invoke = function() return true end,
+    invoke = toggle,
 })
 
--- Activation key. Same callback shape as register_palette_command.
-ttymap.register_keybind("c", function() return true end)
+ttymap.register_keybind("c", toggle)

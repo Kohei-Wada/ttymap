@@ -180,7 +180,22 @@ impl LuaComponent {
                 ));
             }
         };
+        Self::from_parts(lua, module, handles, id)
+    }
 
+    /// Build a `LuaComponent` from already-constructed parts —
+    /// the registration phase loaded the script once and kept the
+    /// state alive (so palette command / keybind callbacks survive),
+    /// and we want the Component's hooks to share that same state
+    /// rather than reload from source. Sharing means a callback that
+    /// flips a module-level `enabled = not enabled` is visible to
+    /// the next `paint_on_map` tick.
+    pub fn from_parts(
+        lua: mlua::Lua,
+        module: Table,
+        handles: LuaHostHandles,
+        id: &'static str,
+    ) -> mlua::Result<Self> {
         // Display name: script's `module.name` if set, else fall
         // back to id. Leak once so `Component::name` can return
         // `&'static str`; cost is bounded by the number of

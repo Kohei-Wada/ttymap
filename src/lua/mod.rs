@@ -229,8 +229,15 @@ fn register_one(
     // Run the script once to capture its registration call. The
     // captured variant tells us which kind of plugin it is — Lua
     // is the source of truth, not file path or table layout.
+    //
+    // The `lua` returned here is the **setup state**: it holds the
+    // module-level Lua locals from `register_*` setup, plus the
+    // RegistryKey'd palette / keybind callbacks. We keep clones of
+    // it in every closure that fires later so module-level vars
+    // (e.g. an `enabled` flag) survive across the program's
+    // lifetime — that's the hook for plugin-side toggle state.
     let shared_for_meta = shared.clone();
-    let (lua, captured, _handles) =
+    let (lua, captured, handles) =
         match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta) {
             Ok(t) => t,
             Err(e) => {
@@ -247,57 +254,72 @@ fn register_one(
         drop(lua);
         return;
     };
-    let module: &Table = match &kind {
+    let is_overlay_kind = matches!(kind, ttymap::CapturedKind::Overlay(_));
+    let is_palette_kind = matches!(kind, ttymap::CapturedKind::Palette(_));
+
+    // Take ownership of the spec table for kind-specific setup.
+    let module: Table = match kind {
         ttymap::CapturedKind::Plugin(t)
         | ttymap::CapturedKind::Palette(t)
         | ttymap::CapturedKind::Overlay(t) => t,
     };
-    if !module_enabled(module) {
+    if !module_enabled(&module) {
         log::info!("lua[{}]: enabled = false, skipping", name);
         drop(lua);
         return;
     }
 
-    // Up-front validate: a syntax error here surfaces as one log
-    // line instead of a noisy first-activation failure later.
-    match &kind {
-        ttymap::CapturedKind::Plugin(_) | ttymap::CapturedKind::Overlay(_) => {
-            if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
-                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                return;
-            }
-        }
-        ttymap::CapturedKind::Palette(_) => {
-            if let Err(e) = LuaPaletteProvider::from_source(source, name, shared.clone()) {
-                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                return;
-            }
-        }
-    }
+    // Read footer_hints from the module before it's consumed by
+    // the kind-specific branch below. Spec-level `footer_hints`
+    // is the legacy fallback; explicit
+    // `ttymap.register_footer_hint(...)` calls win when present.
+    let footer_hints = if !captured.footer_hints.is_empty() {
+        captured.footer_hints.clone()
+    } else {
+        parse_footer_hints(&module)
+    };
 
-    // Overlays are always-on; they don't take palette/keybind
-    // activation. Push the factory and surface the snapshot, then
-    // skip the activation-surface wiring below.
-    if matches!(kind, ttymap::CapturedKind::Overlay(_)) {
-        register_overlay(name, source, shared.clone(), r);
-        if !captured.palette_commands.is_empty() || !captured.keybinds.is_empty() {
-            log::warn!(
-                "lua[{}]: register_overlay does not support palette/keybind activation; ignoring",
-                name
-            );
+    // Overlays install once at app init and stay for the program
+    // lifetime. The LuaComponent shares the setup state — its
+    // hooks (paint_on_map etc.) and the palette/keybind callbacks
+    // see the same module-level Lua locals. That's how
+    // `enabled = not enabled` in a callback flips the next paint.
+    if is_overlay_kind {
+        let component = match LuaComponent::from_parts(lua.clone(), module, handles, name) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("lua[{}]: failed to build overlay: {}", name, e);
+                return;
+            }
+        };
+        // The overlay slot is a once-returning factory: App::new
+        // calls each registered factory exactly once; the cell
+        // hands back the component the first time and `None`
+        // thereafter (which never happens in practice).
+        let slot = std::cell::RefCell::new(Some(
+            Box::new(component) as Box<dyn crate::compositor::Component>
+        ));
+        r.overlays.push(Box::new(move |_| slot.borrow_mut().take()));
+    } else {
+        // Up-front validate non-overlay plugins so a syntax error
+        // surfaces as one log line instead of a noisy first-
+        // activation failure later. The validation state is
+        // throwaway; activation rebuilds a fresh state per push.
+        let valid = if is_palette_kind {
+            LuaPaletteProvider::from_source(source, name, shared.clone()).map(|_| ())
+        } else {
+            LuaComponent::from_source(source, name, shared.clone()).map(|_| ())
+        };
+        if let Err(e) = valid {
+            log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+            return;
         }
-        return;
     }
 
     // Surface plugin metadata to help. Only entries with a key
     // bind are listed today (matching the prior harvest filter); a
     // plugin with palette commands but no keybind shows up via the
     // palette itself, not via the help cheatsheet.
-    let footer_hints = if !captured.footer_hints.is_empty() {
-        captured.footer_hints
-    } else {
-        parse_footer_hints(module)
-    };
     if let Some(first_keybind) = captured.keybinds.first() {
         // Pick the activation hint from the first registered
         // keybind. Most plugins declare exactly one; the rare
@@ -312,21 +334,29 @@ fn register_one(
     }
 
     // Explicit-callback paths: each register_palette_command and
-    // register_keybind from the script gets its own gated factory.
-    // The factory calls the captured Lua callback in the persistent
-    // Lua state; truthy return means "push a fresh component", falsy
-    // means "no-op" (palette closes, key consumed without push). The
-    // built component varies by `kind`: register_plugin → LuaComponent,
-    // register_palette → PaletteComponent wrapping a LuaPaletteProvider.
-    // Overlays don't take activation surfaces (warned above).
+    // register_keybind from the script gets its own factory. The
+    // factory calls the captured Lua callback in the persistent
+    // setup state, then dispatches by kind:
+    //
+    // - register_plugin  → truthy return pushes a fresh LuaComponent
+    // - register_palette → truthy return pushes a fresh
+    //   PaletteComponent wrapping a LuaPaletteProvider
+    // - register_overlay → callback is side-effect-only; the
+    //   factory always returns `None` (overlay is already on
+    //   `r.overlays`, the callback's job is to mutate plugin state
+    //   that paint_on_map reads)
     use crate::compositor::{Activation, Component, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
-    let is_palette_kind = matches!(kind, ttymap::CapturedKind::Palette(_));
     let build_factory = |gate_key: mlua::RegistryKey,
                          lua_clone: mlua::Lua,
                          shared_clone: Arc<ttymap::LuaHostShared>|
      -> crate::compositor::SpawnComponent {
-        if is_palette_kind {
+        if is_overlay_kind {
+            Box::new(move |_ctx| {
+                let _ = lua_callback_gate(&lua_clone, &gate_key, name);
+                None
+            })
+        } else if is_palette_kind {
             Box::new(move |_ctx| {
                 if !lua_callback_gate(&lua_clone, &gate_key, name) {
                     return None;
@@ -397,23 +427,6 @@ fn lua_callback_gate(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) -> 
             false
         }
     }
-}
-
-/// Wire a script registered as an overlay — always-painted chrome.
-/// No key, no palette entry, no focus path. The factory rebuilds the
-/// `LuaComponent` once at app init; from there the overlay just
-/// participates in `paint_on_map` and `poll` for the program lifetime.
-fn register_overlay(
-    name: &'static str,
-    source: &'static str,
-    shared: Arc<ttymap::LuaHostShared>,
-    r: &mut Registrar,
-) {
-    if let Err(e) = LuaComponent::from_source(source, name, shared.clone()) {
-        log::warn!("lua[{}]: failed to load, overlay skipped: {}", name, e);
-        return;
-    }
-    r.add_overlay(move |_| component_or_placeholder(name, source, shared.clone()));
 }
 
 /// Surface a plugin's metadata to help via the shared snapshot.
@@ -624,7 +637,10 @@ mod tests {
                 "expected `{stem}` palette entry, got {palette:?}",
             );
         }
-        assert_eq!(overlay_count, 3, "info/scalebar/attribution overlays");
+        assert_eq!(
+            overlay_count, 4,
+            "info/scalebar/attribution/center overlays"
+        );
     }
 
     /// Two `LuaComponent` instances coexist on the compositor stack
