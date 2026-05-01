@@ -952,9 +952,10 @@ mod tests {
     /// interior of a water polygon) replace the cell's `⣿` mask with
     /// just the overlay's bit. The cell shows as a sparse Braille char
     /// (single dot or similar) in the overlay's colour, on the cell's
-    /// existing bg (typically the global bg, since punching does not
-    /// transfer fg into bg). Net visual: a one-cell gap in the water
-    /// fill where the line passes through.
+    /// existing bg (now the cell's prior fg — the water colour — since
+    /// punching transfers fg→bg on saturated cells). Net visual: the
+    /// line cell shows the overlay colour as its dot, with the water
+    /// colour as the bg for OFF subpixels.
     #[test]
     fn overlay_polyline_punches_thin_line_through_saturated_cell() {
         use std::collections::HashMap;
@@ -1033,6 +1034,11 @@ mod tests {
                     mask_b.count_ones()
                 );
                 assert_eq!(b.fg, 222, "cell {i} fg = overlay colour");
+                assert_eq!(
+                    b.bg, t.fg,
+                    "cell {i} bg must inherit the tile-only fg (water colour, here {}) so the line cell's OFF subpixels render against water rather than global bg",
+                    t.fg
+                );
                 found = true;
                 break;
             }
