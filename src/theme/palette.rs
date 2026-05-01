@@ -194,12 +194,37 @@ pub(crate) fn xterm_to_rgb(idx: u8) -> [u8; 3] {
     }
 }
 
-/// Halve the brightness of an xterm-256 palette index by round-tripping
-/// through RGB. Used by the user-overlay third pass to render line
-/// cells over saturated tile fills (water, dense forests, …) at a
-/// brightness that matches the surrounding `⣿` glyph cells (which
-/// are perceptually dim because the font's Braille dots cover only
-/// ~30-50% of the cell area).
+/// Step down each RGB channel by N cube levels (`[0, 95, 135, 175,
+/// 215, 255]`), clamped at level 0. Preserves hue better than RGB
+/// halving + nearest-cube quantisation: the channel ratios remain
+/// monotonic in cube space.
+fn step_down_to_cube(value: u8, steps: usize) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    // Nearest cube index for `value`.
+    let mut nearest = 0usize;
+    let mut best = u32::MAX;
+    for (i, &lvl) in LEVELS.iter().enumerate() {
+        let d = (value as i32 - lvl as i32).unsigned_abs();
+        if d < best {
+            best = d;
+            nearest = i;
+        }
+    }
+    let target = nearest.saturating_sub(steps);
+    LEVELS[target]
+}
+
+/// Return an xterm-256 index that's perceptually darker than `idx`
+/// while preserving its hue. Used by the user-overlay third pass to
+/// render saturated punched cells (water/forest/…) at a brightness
+/// matching the surrounding `⣿` glyphs.
+///
+/// Stepping down by 2 cube levels per channel is empirically about
+/// half-brightness for typical map colours; halving raw RGB and
+/// rounding to the nearest cube produces the same darkness but
+/// drifts the hue (`yellow` → `olive`, etc.) because the cube has
+/// only 6 levels per channel and rounding can land on a different
+/// channel ratio.
 ///
 /// `Modifier::DIM` (ANSI `\x1b[2m`) doesn't work for this path: that
 /// attribute is foreground-only in essentially every terminal, so
@@ -208,8 +233,12 @@ pub(crate) fn xterm_to_rgb(idx: u8) -> [u8; 3] {
 /// before storing it in `bg_buf` / `fg_buf` is the only portable
 /// way to reduce perceived brightness.
 pub(crate) fn dim_xterm(idx: u8) -> u8 {
+    const STEP_DOWN: usize = 2;
     let [r, g, b] = xterm_to_rgb(idx);
-    rgb_to_x256(r / 2, g / 2, b / 2)
+    let dr = step_down_to_cube(r, STEP_DOWN);
+    let dg = step_down_to_cube(g, STEP_DOWN);
+    let db = step_down_to_cube(b, STEP_DOWN);
+    rgb_to_x256(dr, dg, db)
 }
 
 pub const DARK: ColorPalette = ColorPalette {
@@ -453,20 +482,40 @@ mod tests {
     }
 
     #[test]
-    fn dim_xterm_halves_perceived_brightness() {
-        // White -> mid-gray-ish.
-        let dim_white = dim_xterm(231); // white in cube
-        let rgb = xterm_to_rgb(dim_white);
+    fn dim_xterm_preserves_hue_for_pure_yellow() {
+        // Yellow lives at cube (5, 5, 0) ≡ xterm 226. Stepping each
+        // channel down by 2 lands at cube (3, 3, 0) ≡ xterm 142, which
+        // remains R==G with B==0 — i.e. still yellow-ish, not olive
+        // shifted toward green.
+        let dim = dim_xterm(226);
+        let [r, g, b] = xterm_to_rgb(dim);
+        assert_eq!(r, g, "dim of yellow must keep R == G to remain yellow-hue");
+        assert_eq!(b, 0, "dim of yellow must keep B == 0");
+        assert!(r < 255, "dim of yellow must be strictly darker than 255");
+    }
+
+    #[test]
+    fn dim_xterm_preserves_hue_for_pure_blue() {
+        // Pure blue lives at cube (0, 0, 5) ≡ xterm 21. Stepping each
+        // channel down by 2 lands at cube (0, 0, 3) ≡ xterm 19 — still
+        // pure blue, just darker.
+        let dim = dim_xterm(21);
+        let [r, g, b] = xterm_to_rgb(dim);
+        assert_eq!(r, 0, "dim of blue keeps R == 0");
+        assert_eq!(g, 0, "dim of blue keeps G == 0");
         assert!(
-            rgb[0] < 200 && rgb[1] < 200 && rgb[2] < 200,
-            "dim white should be visibly darker than 255, got {rgb:?}"
+            b < 255 && b > 0,
+            "dim of blue stays in the blue channel, darker"
         );
-        // Pure red darkens toward dark red.
-        let dim_red = dim_xterm(196);
-        let rgb = xterm_to_rgb(dim_red);
-        assert!(
-            rgb[0] < 200 && rgb[1] < 80 && rgb[2] < 80,
-            "dim red should be predominantly darker red, got {rgb:?}"
-        );
+    }
+
+    #[test]
+    fn dim_xterm_clamps_at_zero_for_already_dark_inputs() {
+        // Black should stay black.
+        assert_eq!(dim_xterm(16), 16);
+        // A cube colour at level 1 in one channel and 0 in others
+        // becomes (0, 0, 0) after a 2-step-down per channel.
+        let dim = dim_xterm(17); // cube (0, 0, 1) — barely-blue
+        assert_eq!(dim, 16, "dim of barely-blue clamps to black");
     }
 }
