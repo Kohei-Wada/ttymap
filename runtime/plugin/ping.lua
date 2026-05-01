@@ -24,9 +24,8 @@ local pings = {
 }
 
 -- Animation phases per ping cycle:
---   [0           , out_steps        ): outbound — line grows from src toward dst
---   [out_steps   , out_steps+ret    ): return — line shrinks toward dst (tail
---                                       moves from src toward dst)
+--   [0           , out_steps        ): outbound — new line grows from src toward dst
+--   [out_steps   , out_steps+ret    ): return — separate new line grows from dst toward src
 --   [out_steps+ret, cycle           ): pause — nothing drawn
 local out_steps = 45
 local ret_steps = 45
@@ -86,18 +85,19 @@ ttymap.api.frame.on_tick(function(map)
       goto continue
     end
     if i <= out_steps then
-      -- Outbound: tip interpolates src → dst, line is { src, tip }.
+      -- Outbound: a new line grows from src; tip interpolates src → dst.
       local t   = i / out_steps
       local lon = interp_lon(ping.src[1], ping.dst[1], t)
       local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
       map:polyline({ ping.src, { lon, lat } }, ping.color)
     elseif i <= out_steps + ret_steps then
-      -- Return: tail interpolates src → dst (so the line shrinks
-      -- toward dst as the request "travels back"). Line is { tail, dst }.
+      -- Return: a new line grows from dst; tip interpolates dst → src.
+      -- (The previous outbound line is gone — overlays are ephemeral
+      -- per frame, only what we push this frame is drawn.)
       local t   = (i - out_steps) / ret_steps
-      local lon = interp_lon(ping.src[1], ping.dst[1], t)
-      local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
-      map:polyline({ { lon, lat }, ping.dst }, ping.color)
+      local lon = interp_lon(ping.dst[1], ping.src[1], t)
+      local lat = ping.dst[2] + (ping.src[2] - ping.dst[2]) * t
+      map:polyline({ ping.dst, { lon, lat } }, ping.color)
     end
     -- else: pause phase, draw nothing.
     ::continue::
