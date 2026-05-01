@@ -113,9 +113,6 @@ pub struct PluginEntry {
     pub name: String,
     pub key: String,
     pub label: String,
-    /// Plugin-local keybindings parsed from `module.footer_hints`.
-    /// Empty when the script omits the field.
-    pub footer_hints: Vec<(String, String)>,
 }
 
 impl LuaHostShared {
@@ -235,10 +232,6 @@ pub struct CapturedRegistration {
     pub palette_commands: Vec<PaletteCommandSpec>,
     /// Each `ttymap.register_keybind(key, callback)` call.
     pub keybinds: Vec<KeybindSpec>,
-    /// Each `ttymap.register_footer_hint({ key, label })` call,
-    /// surfaced via `ttymap.help:palette_entries()` so the help
-    /// cheatsheet shows in-panel keys per plugin. Empty by default.
-    pub footer_hints: Vec<(String, String)>,
 }
 
 /// Slot used by a fresh Lua state to capture the script's
@@ -383,22 +376,6 @@ pub fn install(
             },
         )?,
     )?;
-    let cap = slot;
-    ttymap.set(
-        "register_footer_hint",
-        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
-            let key: String = spec.get("key").or_else(|_| spec.get(1)).unwrap_or_default();
-            let label: String = spec
-                .get("label")
-                .or_else(|_| spec.get(2))
-                .unwrap_or_default();
-            if !key.is_empty() || !label.is_empty() {
-                cap.borrow_mut().footer_hints.push((key, label));
-            }
-            Ok(())
-        })?,
-    )?;
-
     // ── ttymap.api ────────────────────────────────────────────────
     //
     // The (nvim-style) plugin API surface. Currently hosts:
@@ -722,15 +699,12 @@ impl UserData for HostHelp {
             Ok(table)
         });
 
-        // `ttymap.help:palette_entries() -> [{name, key, label,
-        // footer_hints}, …]` — snapshot of every plugin's metadata,
-        // appended during registration. Read lazily so help can be
-        // loaded mid-registration and still see every sibling at
-        // render time. `footer_hints` is a 1-indexed list of
-        // `{key, label}` rows mirroring the plugin's
-        // `module.footer_hints` declaration; empty when the script
-        // omits the field. Returns an empty list when the snapshot
-        // hasn't been populated yet.
+        // `ttymap.help:palette_entries() -> [{name, key, label}, …]`
+        // — snapshot of every plugin's metadata, appended during
+        // registration. Read lazily so help can be loaded mid-
+        // registration and still see every sibling at render time.
+        // Returns an empty list when the snapshot hasn't been
+        // populated yet.
         methods.add_method("palette_entries", |lua, this, _: ()| {
             let table = lua.create_table()?;
             let entries = this.shared.palette_entries.lock();
@@ -743,14 +717,6 @@ impl UserData for HostHelp {
                 row.set("name", entry.name.as_str())?;
                 row.set("key", entry.key.as_str())?;
                 row.set("label", entry.label.as_str())?;
-                let hints = lua.create_table()?;
-                for (j, (k, v)) in entry.footer_hints.iter().enumerate() {
-                    let hint = lua.create_table()?;
-                    hint.set("key", k.as_str())?;
-                    hint.set("label", v.as_str())?;
-                    hints.set(j + 1, hint)?;
-                }
-                row.set("footer_hints", hints)?;
                 table.set(i + 1, row)?;
             }
             Ok(table)

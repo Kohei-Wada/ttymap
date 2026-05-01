@@ -89,6 +89,9 @@ local function open()
     if w then return end
     w = ttymap.api.window.open({
         layout = { anchor = "center", width = 64, height = 22 },
+        footer_hints = {
+            { key = "any key", label = "close" },
+        },
         render = build_lines,
         handle_event = function(_)
             close()
@@ -103,4 +106,3 @@ end
 
 ttymap.register_palette_command({ label = "Toggle help", invoke = toggle })
 ttymap.register_keybind("?", toggle)
-ttymap.register_footer_hint({ key = "any key", label = "close" })

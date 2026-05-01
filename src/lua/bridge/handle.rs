@@ -123,11 +123,10 @@ pub enum CallOutcome<R> {
 ///
 /// 1. **Componented plugin**: calls `register_plugin` (which captures
 ///    the spec table), optionally with activation surfaces
-///    (`register_palette_command` / `register_keybind` /
-///    `register_footer_hint`). Palette providers are *not* declared
-///    at top level anymore; they're pushed dynamically via
-///    `ttymap.api.palette.open(spec)` from inside an activation
-///    callback.
+///    (`register_palette_command` / `register_keybind`). Palette
+///    providers are *not* declared at top level anymore; they're
+///    pushed dynamically via `ttymap.api.palette.open(spec)` from
+///    inside an activation callback.
 /// 2. **Pure-action plugin**: no spec, but at least one activation
 ///    surface — typically a `register_palette_command` whose
 ///    `invoke` calls a fire-and-forget host API like
@@ -151,14 +150,12 @@ pub fn fresh_load(
     let handles = host::install(&lua, host_tag, shared, slot.clone())?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
-    let has_surface = !captured.palette_commands.is_empty()
-        || !captured.keybinds.is_empty()
-        || !captured.footer_hints.is_empty();
+    let has_surface = !captured.palette_commands.is_empty() || !captured.keybinds.is_empty();
     if captured.spec.is_none() && !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap.register_* API \
              (register_plugin, register_palette_command, \
-             register_keybind, or register_footer_hint)",
+             or register_keybind)",
         ));
     }
     Ok((lua, captured, handles))

@@ -350,17 +350,34 @@ impl Component for LuaWindowComponent {
 /// Read `spec.footer_hints` as a sequence of `{key, label}` pairs and
 /// leak each pair so [`Component::footer_hints`] can hand back
 /// `&'static str`. Bounded leak — a window declares a finite list at
-/// construction. Delegates parsing to [`crate::lua::parse_footer_hints`]
-/// so the shape stays identical to the captured-spec version.
+/// construction. Two accepted shapes per pair:
+/// - `{ "Enter", "open" }` — positional 1-based array.
+/// - `{ key = "Enter", label = "open" }` — named.
 fn parse_footer_hints(spec: &Table) -> Vec<(&'static str, &'static str)> {
-    crate::lua::parse_footer_hints(spec)
-        .into_iter()
-        .map(|(k, v)| {
-            let k: &'static str = Box::leak(k.into_boxed_str());
-            let v: &'static str = Box::leak(v.into_boxed_str());
-            (k, v)
-        })
-        .collect()
+    let Ok(list): mlua::Result<Table> = spec.get("footer_hints") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in list.sequence_values::<mlua::Value>().flatten() {
+        let mlua::Value::Table(pair) = entry else {
+            continue;
+        };
+        let key: String = pair
+            .get::<String>("key")
+            .or_else(|_| pair.get::<String>(1))
+            .unwrap_or_default();
+        let label: String = pair
+            .get::<String>("label")
+            .or_else(|_| pair.get::<String>(2))
+            .unwrap_or_default();
+        if key.is_empty() && label.is_empty() {
+            continue;
+        }
+        let key: &'static str = Box::leak(key.into_boxed_str());
+        let label: &'static str = Box::leak(label.into_boxed_str());
+        out.push((key, label));
+    }
+    out
 }
 
 /// Convert one Lua-returned line value into a vec of `(text, kind)`

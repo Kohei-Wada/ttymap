@@ -234,6 +234,13 @@ local function open()
     state.needs_refresh = true
     w = ttymap.api.window.open({
         layout = { anchor = "right", width = 56 },
+        footer_hints = {
+            { key = "C-n/C-p", label = "select" },
+            { key = "Enter",   label = "open" },
+            { key = "Esc",     label = "back" },
+            { key = "r",       label = "refresh" },
+            { key = "i",       label = "close wiki" },
+        },
         render = build_lines,
         handle_event = function(key)
             local code = key.code
@@ -302,8 +309,3 @@ end
 
 ttymap.register_palette_command({ label = "Toggle wiki", invoke = toggle })
 ttymap.register_keybind("i", toggle)
-ttymap.register_footer_hint({ key = "C-n/C-p", label = "select" })
-ttymap.register_footer_hint({ key = "Enter",   label = "open" })
-ttymap.register_footer_hint({ key = "Esc",     label = "back" })
-ttymap.register_footer_hint({ key = "r",       label = "refresh" })
-ttymap.register_footer_hint({ key = "i",       label = "close wiki" })

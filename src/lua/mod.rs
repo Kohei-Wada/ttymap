@@ -188,36 +188,6 @@ fn module_enabled(module: &Table) -> bool {
     )
 }
 
-/// Read `module.footer_hints` as owned `(key, label)` pairs. Used as
-/// a fallback when the script didn't call `register_footer_hint`
-/// explicitly. Two accepted shapes per pair:
-/// - `{ "Enter", "open" }` — positional 1-based array.
-/// - `{ key = "Enter", label = "open" }` — named.
-pub(crate) fn parse_footer_hints(module: &Table) -> Vec<(String, String)> {
-    let Ok(list): mlua::Result<Table> = module.get("footer_hints") else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in list.sequence_values::<mlua::Value>().flatten() {
-        let mlua::Value::Table(pair) = entry else {
-            continue;
-        };
-        let key: String = pair
-            .get::<String>("key")
-            .or_else(|_| pair.get::<String>(1))
-            .unwrap_or_default();
-        let label: String = pair
-            .get::<String>("label")
-            .or_else(|_| pair.get::<String>(2))
-            .unwrap_or_default();
-        if key.is_empty() && label.is_empty() {
-            continue;
-        }
-        out.push((key, label));
-    }
-    out
-}
-
 /// Register one Lua script with the registrar by reading its own
 /// metadata. The single dispatcher used by both bundled and user
 /// plugins — Rust never knows a specific plugin's name.
@@ -250,9 +220,7 @@ fn register_one(
         };
 
     // Pure-action plugins (no `register_plugin` call) skip the
-    // block that reads `enabled` / `loop` / spec-level `footer_hints`.
-    // Only `captured.footer_hints` (the explicit
-    // `register_footer_hint` calls) applies in that case.
+    // block that reads `enabled` / `loop`.
     if let Some(module) = captured.spec.as_ref()
         && !module_enabled(module)
     {
@@ -284,17 +252,6 @@ fn register_one(
         }
     }
 
-    // Read footer_hints from the spec table when present. Spec-level
-    // `footer_hints` is the legacy fallback; explicit
-    // `ttymap.register_footer_hint(...)` calls win when present.
-    let footer_hints = if !captured.footer_hints.is_empty() {
-        captured.footer_hints.clone()
-    } else if let Some(module) = captured.spec.as_ref() {
-        parse_footer_hints(module)
-    } else {
-        Vec::new()
-    };
-
     // Hand the setup state's `LuaHostHandles` over to the
     // registrar so the App can drain its receivers per frame.
     // Setup-state callbacks (palette command invoke, register_keybind
@@ -317,7 +274,7 @@ fn register_one(
             .first()
             .map(|c| c.label.clone())
             .unwrap_or_else(|| name.to_string());
-        push_plugin_entry(&shared, name, &key_hint, &label, &footer_hints);
+        push_plugin_entry(&shared, name, &key_hint, &label);
     }
 
     // Explicit-callback paths: each register_palette_command and
@@ -387,18 +344,11 @@ fn run_lua_callback(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) {
 /// entries with a top-level keybinding — matching the harvest filter
 /// help relied on previously. Overlays don't show up in the palette
 /// and aren't help-relevant, so they're never pushed.
-fn push_plugin_entry(
-    shared: &Arc<ttymap::LuaHostShared>,
-    name: &str,
-    key: &str,
-    label: &str,
-    footer_hints: &[(String, String)],
-) {
+fn push_plugin_entry(shared: &Arc<ttymap::LuaHostShared>, name: &str, key: &str, label: &str) {
     shared.push_palette_entry(ttymap::PluginEntry {
         name: name.to_string(),
         key: key.to_string(),
         label: label.to_string(),
-        footer_hints: footer_hints.to_vec(),
     });
 }
 
@@ -639,28 +589,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_footer_hints_accepts_both_shapes() {
-        let (_lua, c) = parse_spec(
-            r#"ttymap.register_plugin({
-                name = "x",
-                footer_hints = {
-                    { "Enter", "open" },
-                    { key = "Esc", label = "back" },
-                },
-            })"#,
-            "x",
-        );
-        let hints = parse_footer_hints(captured_table(&c));
-        assert_eq!(hints.len(), 2);
-        assert_eq!(hints[0], ("Enter".into(), "open".into()));
-        assert_eq!(hints[1], ("Esc".into(), "back".into()));
-    }
-
-    #[test]
-    fn registering_a_plugin_publishes_metadata_with_footer_hints() {
+    fn registering_a_plugin_publishes_metadata() {
         // Round-trip the registration path: a Lua source declaring
-        // `key`, `label`, and `footer_hints` should land in the
-        // shared snapshot help reads via `ttymap.help:palette_entries()`.
+        // `key` + `label` should land in the shared snapshot help
+        // reads via `ttymap.help:palette_entries()`.
         let dir = temp_plugins_dir("publish-meta");
         write_plugin(
             &dir,
@@ -669,10 +601,6 @@ mod tests {
             ttymap.register_plugin({
                 name = "demo",
                 render = function() return {} end,
-                footer_hints = {
-                    { "Enter", "open" },
-                    { "Esc",   "close" },
-                },
             })
             ttymap.register_palette_command({ label = "Toggle demo", invoke = function() return true end })
             ttymap.register_keybind("d", function() return true end)
@@ -690,9 +618,6 @@ mod tests {
             .expect("demo plugin should be in snapshot");
         assert_eq!(demo.key, "d");
         assert_eq!(demo.label, "Toggle demo");
-        assert_eq!(demo.footer_hints.len(), 2);
-        assert_eq!(demo.footer_hints[0], ("Enter".into(), "open".into()));
-        assert_eq!(demo.footer_hints[1], ("Esc".into(), "close".into()));
     }
 
     // ── directory-based discovery ───────────────────────────────
