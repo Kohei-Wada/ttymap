@@ -35,5 +35,5 @@ ttymap.register_plugin(require("satellite.satellites").make({
 
 ttymap.register_palette_command({
     label = "Toggle satellite",
-    invoke = function() return true end,
+    invoke = function() ttymap.plugin:open() end,
 })

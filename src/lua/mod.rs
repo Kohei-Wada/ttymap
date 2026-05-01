@@ -236,15 +236,29 @@ fn register_one(
     // it in every closure that fires later so module-level vars
     // (e.g. an `enabled` flag) survive across the program's
     // lifetime — that's the hook for plugin-side toggle state.
+    //
+    // `plugin_ctl` is the open/close primitive surfaced as
+    // `ttymap.plugin:open()` / `:close()` on this state only. The
+    // factory closures below drain its atomics after each callback
+    // (`open_request` → push a fresh component, `close_request` →
+    // poll-tick close on the InstanceGuard wrapper). Per-instance
+    // Lua states (built inside the factories) don't get this
+    // userdata — they manage themselves via `ttymap.window:close()`.
     let shared_for_meta = shared.clone();
-    let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                return;
-            }
-        };
+    let plugin_ctl = ttymap::PluginCtl::default();
+    let (lua, captured, handles) = match bridge::handle::fresh_load(
+        source,
+        name,
+        "lua-meta",
+        shared_for_meta,
+        Some(plugin_ctl.clone()),
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+            return;
+        }
+    };
 
     let Some(kind) = captured.kind else {
         log::warn!(
@@ -335,46 +349,56 @@ fn register_one(
 
     // Explicit-callback paths: each register_palette_command and
     // register_keybind from the script gets its own factory. The
-    // factory calls the captured Lua callback in the persistent
-    // setup state, then dispatches by kind:
+    // factory runs the captured Lua callback in the persistent
+    // setup state and then drains the per-plugin open/close
+    // primitives:
     //
-    // - register_plugin  → truthy return pushes a fresh LuaComponent
-    // - register_palette → truthy return pushes a fresh
-    //   PaletteComponent wrapping a LuaPaletteProvider
-    // - register_overlay → callback is side-effect-only; the
-    //   factory always returns `None` (overlay is already on
-    //   `r.overlays`, the callback's job is to mutate plugin state
-    //   that paint_on_map reads)
+    // - The callback ran some plugin-side state mutation
+    //   (`enabled = not enabled`, append to a list, …).
+    // - If it called `ttymap.plugin:open()` while running,
+    //   `open_request` is now true — the factory builds a fresh
+    //   instance and pushes it onto the stack.
+    // - If it called `ttymap.plugin:close()`, the running
+    //   instance's [`InstanceGuard`] picks up `close_request` on
+    //   its next `Component::poll` tick and calls `win.close()`.
     //
-    // For non-overlay kinds, an `instance_open` Arc<AtomicBool>
-    // tracks whether an instance is currently on the stack. The
-    // [`InstanceGuard`] wrapping the component flips it false on
-    // Drop (= when the component is popped). Subsequent activation
-    // calls see `true` and short-circuit — that's the no-double-
-    // window guarantee, regardless of focus state. Plugins still
-    // self-close via `handle_event` returning `{ close = true }`
-    // on the activation key.
-    use std::sync::atomic::{AtomicBool, Ordering};
-
+    // Overlays don't push anything: the overlay component already
+    // lives on `r.overlays` for the program lifetime, and the
+    // callback's only job is to mutate Lua-side state that
+    // `paint_on_map` reads.
+    //
+    // Whether a plugin allows multiple instances on the stack is
+    // a Lua-side decision now — Rust no longer enforces single-
+    // instance. A plugin that wants no-double-window keeps an
+    // `enabled` flag (or stash the Window handle from `:open()`)
+    // and only calls `plugin:open()` when the flag flips on.
     use crate::compositor::{Activation, Component, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
-    let instance_open = Arc::new(AtomicBool::new(false));
     let build_factory = |gate_key: mlua::RegistryKey,
                          lua_clone: mlua::Lua,
                          shared_clone: Arc<ttymap::LuaHostShared>,
-                         instance_open: Arc<AtomicBool>|
+                         ctl: ttymap::PluginCtl|
      -> crate::compositor::SpawnComponent {
         if is_overlay_kind {
             Box::new(move |_ctx| {
-                let _ = lua_callback_gate(&lua_clone, &gate_key, name);
+                run_lua_callback(&lua_clone, &gate_key, name);
+                // Reading drains either flag — overlays never
+                // push or close anything from here, but if a
+                // plugin author misuses `ttymap.plugin:open()`
+                // from an overlay's callback, swallow it cleanly.
+                ctl.open_request
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                ctl.close_request
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
                 None
             })
         } else if is_palette_kind {
             Box::new(move |_ctx| {
-                if instance_open.load(Ordering::Relaxed) {
-                    return None;
-                }
-                if !lua_callback_gate(&lua_clone, &gate_key, name) {
+                run_lua_callback(&lua_clone, &gate_key, name);
+                if !ctl
+                    .open_request
+                    .swap(false, std::sync::atomic::Ordering::Relaxed)
+                {
                     return None;
                 }
                 let provider = LuaPaletteProvider::from_source(source, name, shared_clone.clone())
@@ -388,37 +412,31 @@ fn register_one(
                         .expect("trivial provider always loads")
                     });
                 let palette = crate::palette::PaletteComponent::with_provider(provider);
-                instance_open.store(true, Ordering::Relaxed);
                 Some(Box::new(InstanceGuard {
                     inner: palette,
-                    open: instance_open.clone(),
+                    close_request: ctl.close_request.clone(),
                 }) as Box<dyn Component>)
             })
         } else {
             Box::new(move |_ctx| {
-                if instance_open.load(Ordering::Relaxed) {
-                    return None;
-                }
-                if !lua_callback_gate(&lua_clone, &gate_key, name) {
+                run_lua_callback(&lua_clone, &gate_key, name);
+                if !ctl
+                    .open_request
+                    .swap(false, std::sync::atomic::Ordering::Relaxed)
+                {
                     return None;
                 }
                 let inner = component_or_placeholder(name, source, shared_clone.clone());
-                instance_open.store(true, Ordering::Relaxed);
                 Some(Box::new(InstanceGuard {
                     inner,
-                    open: instance_open.clone(),
+                    close_request: ctl.close_request.clone(),
                 }) as Box<dyn Component>)
             })
         }
     };
 
     for cmd in captured.palette_commands {
-        let factory = build_factory(
-            cmd.invoke,
-            lua.clone(),
-            shared.clone(),
-            instance_open.clone(),
-        );
+        let factory = build_factory(cmd.invoke, lua.clone(), shared.clone(), plugin_ctl.clone());
         r.palette_entries.push(PaletteEntry {
             label: cmd.label,
             hint: cmd.hint,
@@ -431,7 +449,7 @@ fn register_one(
             bind.callback,
             lua.clone(),
             shared.clone(),
-            instance_open.clone(),
+            plugin_ctl.clone(),
         );
         r.activations.push(Activation {
             code: KeyCode::Char(bind.key),
@@ -440,33 +458,24 @@ fn register_one(
         });
     }
 
-    // `lua` was cloned into each gated factory (clones share the
+    // `lua` was cloned into each factory closure (clones share the
     // underlying VM, so any one alive keeps callbacks invokable).
     // The original handle goes out of scope here.
 }
 
 /// Wrapper that forwards every [`Component`] call to `inner` and
-/// flips an `Arc<AtomicBool>` to `false` on Drop. Used by the
-/// activation-surface factory to enforce **single-instance per
-/// plugin file**: a second activation while an instance is already
-/// on the stack short-circuits to `None` (no new push); when the
-/// existing component is popped (`win.close()` from handle_event,
-/// or any other path that drops the box), the flag clears and the
-/// next activation can push a fresh instance again.
+/// also drains a shared `close_request` flag on each `poll` tick:
+/// when the setup-state Lua side calls `ttymap.plugin:close()`,
+/// the next `poll` consumes the flag and calls `win.close()`.
 ///
-/// nvim parity: pressing the activation key with the plugin
-/// already open and unfocused does NOT stack a duplicate, even
-/// though the focused component (e.g. another modal) doesn't
-/// know about this plugin.
+/// This is the only Rust-side state in the plugin lifecycle. The
+/// component itself doesn't know about it; the wrapper is what
+/// translates the plugin author's Lua-side `:close()` request
+/// into a stack pop, regardless of which component currently
+/// has focus.
 struct InstanceGuard<C: crate::compositor::Component> {
     inner: C,
-    open: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl<C: crate::compositor::Component> Drop for InstanceGuard<C> {
-    fn drop(&mut self) {
-        self.open.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
+    close_request: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<C: crate::compositor::Component> crate::compositor::Component for InstanceGuard<C> {
@@ -484,7 +493,13 @@ impl<C: crate::compositor::Component> crate::compositor::Component for InstanceG
         self.inner.paint_on_map(p)
     }
     fn poll(&mut self, win: &mut crate::compositor::window::Window) {
-        self.inner.poll(win)
+        self.inner.poll(win);
+        if self
+            .close_request
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            win.close();
+        }
     }
     fn poll_overlay(&mut self, win: &mut crate::compositor::window::OverlayWindow) {
         self.inner.poll_overlay(win)
@@ -498,24 +513,21 @@ impl<C: crate::compositor::Component> crate::compositor::Component for InstanceG
 }
 
 /// Run a captured Lua callback (palette command's invoke or
-/// keybind's callback) and decide whether to push the plugin's
-/// component. Truthy return → push, falsy / nil / error → skip.
-/// Errors are logged with the plugin's name but don't propagate.
-fn lua_callback_gate(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) -> bool {
+/// keybind's callback). The callback's return value is ignored —
+/// it signals open/close intent via `ttymap.plugin:open()` /
+/// `:close()` instead, and the caller drains those atomics after
+/// this returns. Errors are logged with the plugin's name but
+/// don't propagate.
+fn run_lua_callback(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) {
     let f: mlua::Function = match lua.registry_value(key) {
         Ok(f) => f,
         Err(e) => {
             log::warn!("lua[{}]: callback registry lookup failed: {}", name, e);
-            return false;
+            return;
         }
     };
-    match f.call::<mlua::Value>(()) {
-        Ok(mlua::Value::Nil) | Ok(mlua::Value::Boolean(false)) => false,
-        Ok(_) => true,
-        Err(e) => {
-            log::warn!("lua[{}]: callback failed: {}", name, e);
-            false
-        }
+    if let Err(e) = f.call::<mlua::Value>(()) {
+        log::warn!("lua[{}]: callback failed: {}", name, e);
     }
 }
 
@@ -766,7 +778,7 @@ mod tests {
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
         let shared = ttymap::LuaHostShared::empty();
         let (lua, captured, _handles) =
-            bridge::handle::fresh_load(source, name, "lua-test", shared).expect("load");
+            bridge::handle::fresh_load(source, name, "lua-test", shared, None).expect("load");
         (lua, captured)
     }
 

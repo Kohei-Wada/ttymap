@@ -51,4 +51,10 @@ ttymap.register_plugin({
     end,
 })
 
-ttymap.register_palette_command({ label = "Jump to here (current location)", invoke = function() return true end })
+-- One-shot: every palette press opens a fresh component (with a
+-- fresh local `state`), which fires the geoip lookup and
+-- self-closes via `ttymap.window:close()` once the response lands.
+ttymap.register_palette_command({
+    label = "Jump to here (current location)",
+    invoke = function() ttymap.plugin:open() end,
+})

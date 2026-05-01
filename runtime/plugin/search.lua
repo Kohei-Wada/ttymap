@@ -103,8 +103,6 @@ ttymap.register_palette({
     end,
 })
 
-ttymap.register_palette_command({
-    label = "Search location",
-    invoke = function() return true end,
-})
-ttymap.register_keybind("/", function() return true end)
+local function open() ttymap.plugin:open() end
+ttymap.register_palette_command({ label = "Search location", invoke = open })
+ttymap.register_keybind("/", open)

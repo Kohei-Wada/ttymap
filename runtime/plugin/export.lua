@@ -23,4 +23,7 @@ ttymap.register_plugin({
     end,
 })
 
-ttymap.register_palette_command({ label = "Export frame as ANSI", invoke = function() return true end })
+ttymap.register_palette_command({
+    label = "Export frame as ANSI",
+    invoke = function() ttymap.plugin:open() end,
+})

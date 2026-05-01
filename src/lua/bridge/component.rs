@@ -162,7 +162,10 @@ impl LuaComponent {
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
-        let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared)?;
+        // Per-instance Lua state — `ttymap.plugin` is not exposed
+        // here. The component manages its own lifetime via
+        // `ttymap.window:close()`.
+        let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared, None)?;
         // Plugin and Overlay both back into a Component — the
         // distinction (focusable stack vs. always-on chrome) is
         // decided by where the dispatcher routes the resulting

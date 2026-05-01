@@ -51,7 +51,10 @@ impl LuaPaletteProvider {
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Box<Self>> {
-        let (lua, captured, handles) = fresh_load(source, id, "lua-palette", shared)?;
+        // Per-instance Lua state — `ttymap.plugin` is not exposed
+        // here. The provider closes itself by returning a
+        // `PaletteAction::Close` from `execute`.
+        let (lua, captured, handles) = fresh_load(source, id, "lua-palette", shared, None)?;
         // The script self-declares as a palette provider via
         // `ttymap.register_palette(...)`. A `register_plugin` call
         // here is a kind mismatch reported up to the walker.

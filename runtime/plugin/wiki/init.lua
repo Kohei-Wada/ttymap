@@ -287,5 +287,6 @@ ttymap.register_plugin({
     end,
 })
 
-ttymap.register_palette_command({ label = "Toggle wiki", invoke = function() return true end })
-ttymap.register_keybind("i", function() return true end)
+local function open() ttymap.plugin:open() end
+ttymap.register_palette_command({ label = "Toggle wiki", invoke = open })
+ttymap.register_keybind("i", open)

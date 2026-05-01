@@ -167,4 +167,7 @@ ttymap.register_plugin({
     end,
 })
 
-ttymap.register_palette_command({ label = "Toggle aircraft", invoke = function() return true end })
+ttymap.register_palette_command({
+    label = "Toggle aircraft",
+    invoke = function() ttymap.plugin:open() end,
+})
