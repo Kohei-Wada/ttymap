@@ -11,10 +11,16 @@
 -- with the alt accent glyph; below that they get a routine dot.
 -- On first successful fetch the map auto-jumps to the highest-
 -- magnitude quake so the user always lands somewhere meaningful.
+--
+-- No window: visibility is a plugin-internal `enabled` flag flipped
+-- by the activation callbacks. The `loop` short-circuits when off,
+-- which preserves the legacy "no fetch when hidden" budget.
 
 local URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
 local INTERVAL_SEC = 300
 local NOTABLE_MAGNITUDE = 5.0
+
+local enabled = false
 
 local state = {
     quakes = {},
@@ -55,18 +61,11 @@ end
 
 ttymap.register_plugin({
     name = "quakes",
-
-    paint_on_map = function(map)
-        for _, q in ipairs(state.quakes) do
-            if q.mag >= NOTABLE_MAGNITUDE then
-                map:point(q.lon, q.lat, "✸", "accent_alt")
-            else
-                map:point(q.lon, q.lat, "·", "accent")
-            end
-        end
-    end,
-
-    poll = function()
+    -- Per-frame work runs only while the plugin is enabled: drains
+    -- the in-flight fetch, schedules the next, and paints markers.
+    -- Toggling off (`enabled = false`) immediately stops fetching.
+    loop = function(map)
+        if not enabled then return end
         if state.job then
             local body = state.job:try_take()
             if body then
@@ -90,10 +89,21 @@ ttymap.register_plugin({
             state.last_fetch_sec = now
             state.job = ttymap.http:fetch(URL)
         end
+        for _, q in ipairs(state.quakes) do
+            if q.mag >= NOTABLE_MAGNITUDE then
+                map:point(q.lon, q.lat, "✸", "accent_alt")
+            else
+                map:point(q.lon, q.lat, "·", "accent")
+            end
+        end
     end,
 })
 
+local function toggle()
+    enabled = not enabled
+end
+
 ttymap.register_palette_command({
     label = "Toggle quakes",
-    invoke = function() ttymap.plugin:open() end,
+    invoke = toggle,
 })
