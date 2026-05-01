@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// Minimum interval between overlay-driven redraws. ~30Hz balances
 /// animation smoothness against render-thread CPU; the main loop
 /// still polls events at ~60Hz so user input remains responsive.
-const OVERLAY_REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+const OVERLAY_REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
@@ -246,11 +246,12 @@ impl App {
             // real cost is bounded latency for things that aren't
             // event-driven: a freshly produced render frame (we
             // drain those non-blockingly at the top of the loop)
-            // and any plugin whose `poll()` touches render output
-            // (e.g. a counter). 16 ms = 60 Hz, indistinguishable
-            // from instant for human perception, an order of
-            // magnitude less idle CPU than the previous 4 ms.
-            let mut poll_timeout = Duration::from_millis(16);
+            // and any plugin whose `on_tick` touches render output
+            // (e.g. ping animation). 50 ms = 20 Hz, low enough that
+            // per-tick work (`ui::draw`, plugin ticks, ratatui paint)
+            // stays cheap, high enough that input latency is
+            // imperceptible and animations look smooth.
+            let mut poll_timeout = Duration::from_millis(50);
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
                 match event::read()? {
