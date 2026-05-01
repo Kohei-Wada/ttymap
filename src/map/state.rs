@@ -77,6 +77,9 @@ impl MapState {
     pub fn center(&self) -> LonLat {
         self.center
     }
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
     pub fn stop(&mut self) {
         self.running = false;
     }
