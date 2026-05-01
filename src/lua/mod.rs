@@ -345,11 +345,24 @@ fn register_one(
     //   factory always returns `None` (overlay is already on
     //   `r.overlays`, the callback's job is to mutate plugin state
     //   that paint_on_map reads)
+    //
+    // For non-overlay kinds, an `instance_open` Arc<AtomicBool>
+    // tracks whether an instance is currently on the stack. The
+    // [`InstanceGuard`] wrapping the component flips it false on
+    // Drop (= when the component is popped). Subsequent activation
+    // calls see `true` and short-circuit — that's the no-double-
+    // window guarantee, regardless of focus state. Plugins still
+    // self-close via `handle_event` returning `{ close = true }`
+    // on the activation key.
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use crate::compositor::{Activation, Component, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
+    let instance_open = Arc::new(AtomicBool::new(false));
     let build_factory = |gate_key: mlua::RegistryKey,
                          lua_clone: mlua::Lua,
-                         shared_clone: Arc<ttymap::LuaHostShared>|
+                         shared_clone: Arc<ttymap::LuaHostShared>,
+                         instance_open: Arc<AtomicBool>|
      -> crate::compositor::SpawnComponent {
         if is_overlay_kind {
             Box::new(move |_ctx| {
@@ -358,6 +371,9 @@ fn register_one(
             })
         } else if is_palette_kind {
             Box::new(move |_ctx| {
+                if instance_open.load(Ordering::Relaxed) {
+                    return None;
+                }
                 if !lua_callback_gate(&lua_clone, &gate_key, name) {
                     return None;
                 }
@@ -372,20 +388,37 @@ fn register_one(
                         .expect("trivial provider always loads")
                     });
                 let palette = crate::palette::PaletteComponent::with_provider(provider);
-                Some(Box::new(palette) as Box<dyn Component>)
+                instance_open.store(true, Ordering::Relaxed);
+                Some(Box::new(InstanceGuard {
+                    inner: palette,
+                    open: instance_open.clone(),
+                }) as Box<dyn Component>)
             })
         } else {
             Box::new(move |_ctx| {
-                lua_callback_gate(&lua_clone, &gate_key, name).then(|| {
-                    let c = component_or_placeholder(name, source, shared_clone.clone());
-                    Box::new(c) as Box<dyn Component>
-                })
+                if instance_open.load(Ordering::Relaxed) {
+                    return None;
+                }
+                if !lua_callback_gate(&lua_clone, &gate_key, name) {
+                    return None;
+                }
+                let inner = component_or_placeholder(name, source, shared_clone.clone());
+                instance_open.store(true, Ordering::Relaxed);
+                Some(Box::new(InstanceGuard {
+                    inner,
+                    open: instance_open.clone(),
+                }) as Box<dyn Component>)
             })
         }
     };
 
     for cmd in captured.palette_commands {
-        let factory = build_factory(cmd.invoke, lua.clone(), shared.clone());
+        let factory = build_factory(
+            cmd.invoke,
+            lua.clone(),
+            shared.clone(),
+            instance_open.clone(),
+        );
         r.palette_entries.push(PaletteEntry {
             label: cmd.label,
             hint: cmd.hint,
@@ -394,7 +427,12 @@ fn register_one(
         });
     }
     for bind in captured.keybinds {
-        let factory = build_factory(bind.callback, lua.clone(), shared.clone());
+        let factory = build_factory(
+            bind.callback,
+            lua.clone(),
+            shared.clone(),
+            instance_open.clone(),
+        );
         r.activations.push(Activation {
             code: KeyCode::Char(bind.key),
             modifiers: KeyModifiers::NONE,
@@ -405,6 +443,58 @@ fn register_one(
     // `lua` was cloned into each gated factory (clones share the
     // underlying VM, so any one alive keeps callbacks invokable).
     // The original handle goes out of scope here.
+}
+
+/// Wrapper that forwards every [`Component`] call to `inner` and
+/// flips an `Arc<AtomicBool>` to `false` on Drop. Used by the
+/// activation-surface factory to enforce **single-instance per
+/// plugin file**: a second activation while an instance is already
+/// on the stack short-circuits to `None` (no new push); when the
+/// existing component is popped (`win.close()` from handle_event,
+/// or any other path that drops the box), the flag clears and the
+/// next activation can push a fresh instance again.
+///
+/// nvim parity: pressing the activation key with the plugin
+/// already open and unfocused does NOT stack a duplicate, even
+/// though the focused component (e.g. another modal) doesn't
+/// know about this plugin.
+struct InstanceGuard<C: crate::compositor::Component> {
+    inner: C,
+    open: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<C: crate::compositor::Component> Drop for InstanceGuard<C> {
+    fn drop(&mut self) {
+        self.open.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl<C: crate::compositor::Component> crate::compositor::Component for InstanceGuard<C> {
+    fn handle_event(
+        &mut self,
+        event: crossterm::event::KeyEvent,
+        win: &mut crate::compositor::window::Window,
+    ) {
+        self.inner.handle_event(event, win)
+    }
+    fn render(&self, win: &mut crate::compositor::window::RenderWindow) {
+        self.inner.render(win)
+    }
+    fn paint_on_map(&self, p: &mut crate::compositor::MapApi<'_>) {
+        self.inner.paint_on_map(p)
+    }
+    fn poll(&mut self, win: &mut crate::compositor::window::Window) {
+        self.inner.poll(win)
+    }
+    fn poll_overlay(&mut self, win: &mut crate::compositor::window::OverlayWindow) {
+        self.inner.poll_overlay(win)
+    }
+    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
+        self.inner.footer_hints()
+    }
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
 }
 
 /// Run a captured Lua callback (palette command's invoke or
