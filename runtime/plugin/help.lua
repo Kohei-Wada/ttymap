@@ -4,9 +4,16 @@
 -- render time from `ttymap.help:keymap_entries()` (live keymap
 -- actions) and `ttymap.help:palette_entries()` (sibling plugins'
 -- palette hints), so registration order doesn't matter.
+--
+-- No `loop` field — help is a static cheatsheet with no async work
+-- and no map paint. The plugin still registers (so it shows up in
+-- the bundled-script roll call) and uses the standard window.open
+-- pattern for the popup itself.
 
 local URL_MAPSCII = "https://github.com/rastapasta/mapscii"
 local URL_HOME = "https://github.com/Kohei-Wada/ttymap"
+
+local w = nil  -- popup handle while open; nil while closed
 
 -- Pad `s` on the right with spaces so column-aligned cheatsheet
 -- rows line up under each other.
@@ -69,21 +76,31 @@ end
 
 ttymap.register_plugin({
     name = "help",
-    layout = { anchor = "center", width = 64, height = 22 },
-
-    footer_hints = {
-        { "any key", "close" },
-    },
-
-    render = function()
-        return build_lines()
-    end,
-
-    handle_event = function(_)
-        return { close = true }
-    end,
 })
 
-local function open() ttymap.plugin:open() end
-ttymap.register_palette_command({ label = "Toggle help", invoke = open })
-ttymap.register_keybind("?", open)
+local function close()
+    if w then
+        w:close()
+        w = nil
+    end
+end
+
+local function open()
+    if w then return end
+    w = ttymap.api.window.open({
+        layout = { anchor = "center", width = 64, height = 22 },
+        render = build_lines,
+        handle_event = function(_)
+            close()
+            return nil
+        end,
+    })
+end
+
+local function toggle()
+    if w then close() else open() end
+end
+
+ttymap.register_palette_command({ label = "Toggle help", invoke = toggle })
+ttymap.register_keybind("?", toggle)
+ttymap.register_footer_hint({ key = "any key", label = "close" })
