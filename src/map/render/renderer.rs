@@ -1063,6 +1063,11 @@ mod tests {
                      (water fill colour, here {expected_bg}) so OFF subpixels \
                      render against the underlying fill — not the global bg"
                 );
+                assert!(
+                    b.dim,
+                    "combined cell {i} must be marked DIM so the solid-bg fill \
+                     doesn't outshine the surrounding ⣿ dot rendering"
+                );
                 found = true;
                 break;
             }

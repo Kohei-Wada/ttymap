@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 
 use super::frame::MapFrame;
@@ -18,10 +18,14 @@ impl Widget for &MapFrame {
                 let x = area.x + col;
                 let y = area.y + row;
                 if x < area.x + area.width && y < area.y + area.height {
-                    buf[(x, y)]
+                    let target = &mut buf[(x, y)];
+                    target
                         .set_char(cell.ch)
                         .set_fg(xterm_to_color(cell.fg))
                         .set_bg(xterm_to_color(cell.bg));
+                    if cell.dim {
+                        target.modifier.insert(Modifier::DIM);
+                    }
                 }
             }
         }
@@ -57,11 +61,13 @@ mod tests {
                     ch: 'A',
                     fg: 1,
                     bg: 0,
+                    dim: false,
                 },
                 MapCell {
                     ch: 'B',
                     fg: 2,
                     bg: 0,
+                    dim: false,
                 },
             ],
             cols: 2,
@@ -74,5 +80,42 @@ mod tests {
         (&frame).render(area, &mut buf);
         assert_eq!(buf[(0, 0)].symbol(), "A");
         assert_eq!(buf[(1, 0)].symbol(), "B");
+    }
+
+    #[test]
+    fn dim_flag_applies_modifier_dim() {
+        use ratatui::style::Modifier;
+
+        let frame = MapFrame {
+            cells: vec![
+                MapCell {
+                    ch: 'A',
+                    fg: 1,
+                    bg: 0,
+                    dim: false,
+                },
+                MapCell {
+                    ch: 'B',
+                    fg: 2,
+                    bg: 0,
+                    dim: true,
+                },
+            ],
+            cols: 2,
+            rows: 1,
+            center: crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+            zoom: 0.0,
+        };
+        let area = Rect::new(0, 0, 2, 1);
+        let mut buf = Buffer::empty(area);
+        (&frame).render(area, &mut buf);
+        assert!(
+            !buf[(0, 0)].modifier.contains(Modifier::DIM),
+            "dim=false should not add DIM"
+        );
+        assert!(
+            buf[(1, 0)].modifier.contains(Modifier::DIM),
+            "dim=true should add DIM"
+        );
     }
 }
