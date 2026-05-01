@@ -78,18 +78,29 @@ impl BrailleBuffer {
         self.fg_buf[idx] = color;
     }
 
-    /// Variant of [`set_pixel`] for user-overlay drawing: when the
-    /// underlying cell is already fully saturated (`pixel_buf == 0xFF`,
-    /// rendered as `⣿`, e.g. the interior of a water polygon), replace
-    /// the mask with just this single bit instead of OR-ing. This makes
-    /// the overlay show as a thin shape "punching through" the fill, at
-    /// the overlay's colour, on the cell's existing background — without
-    /// it the entire cell would flip foreground to the overlay colour
-    /// while the dot pattern stayed `⣿`, displaying as a 2-column-wide
-    /// solid block (thick line over water / forests / dense fills).
+    /// Variant of [`set_pixel`] for user-overlay drawing. The overlay
+    /// pass always **replaces** the cell's dot mask with just this
+    /// single bit (rather than `|=`-merging) so the overlay shows as a
+    /// thin shape in its own colour and surrounding tile features in
+    /// the cells the overlay crosses don't take on the overlay's
+    /// foreground (which would happen with OR-merge + last-writer-wins
+    /// fg, since one cell can only carry one fg).
     ///
-    /// Sparse cells (anything other than `0xFF`) still OR-merge so a
-    /// road + overlay both contribute their dots to the resulting cell.
+    /// On a fully-saturated cell (`pixel_buf == 0xFF`, e.g. the
+    /// interior of a water polygon) the cell's prior `fg_buf` is also
+    /// transferred into `bg_buf`, so the now-OFF subpixels render
+    /// against the underlying fill colour rather than the global bg.
+    /// Without that transfer the line would float on the global bg
+    /// (typically black) with the fill colour erased — wrong on water,
+    /// where users expect a thin overlay on top of the water tint.
+    ///
+    /// Trade-off: tile-feature dots directly under the overlay's path
+    /// are lost in the cells the line crosses (one-subpixel-wide
+    /// Bresenham, so ~one cell of crossing per cell-width of feature).
+    /// This is intentional: the alternative — OR-merging the dots —
+    /// flips the cell's foreground colour to the overlay's, which
+    /// re-colours the surrounding tile dots and produces a much more
+    /// noticeable visual artefact.
     ///
     /// Out-of-bounds coordinates are silently ignored, matching
     /// [`set_pixel`].
@@ -100,18 +111,9 @@ impl BrailleBuffer {
         let idx = self.cell_index(x, y);
         let bit = BRAILLE_MAP[y & 3][x & 1];
         if self.pixel_buf[idx] == 0xFF {
-            // Saturated cell — replace the mask with just the overlay's
-            // bit so the line shows as a thin shape, AND transfer the
-            // cell's current fg into bg so the now-OFF subpixels render
-            // against the underlying fill colour (water blue, forest
-            // green, …) instead of the global bg (typically black).
-            // Without the bg transfer, the line would float on the
-            // global bg with the fill colour erased.
             self.bg_buf[idx] = self.fg_buf[idx];
-            self.pixel_buf[idx] = bit;
-        } else {
-            self.pixel_buf[idx] |= bit;
         }
+        self.pixel_buf[idx] = bit;
         self.fg_buf[idx] = color;
     }
 
@@ -349,20 +351,50 @@ mod tests {
         );
     }
 
-    /// Sparse cell + `set_pixel_punching` → behaves like `set_pixel`
-    /// (dots OR-merge). Roads, borders, and other thin tile features are
-    /// preserved when an overlay crosses them.
+    /// Sparse non-empty cell + `set_pixel_punching` → mask is replaced
+    /// with just the overlay's bit. Tile-feature dots present in the
+    /// cells the overlay crosses are intentionally dropped to keep the
+    /// surrounding tile colours intact (the alternative — OR-merging
+    /// dots while overwriting fg — would re-colour the surrounding
+    /// tile dots since one cell carries one fg).
     #[test]
-    fn set_pixel_punching_or_merges_on_sparse_cell() {
+    fn set_pixel_punching_replaces_existing_sparse_dots() {
         let mut buf = BrailleBuffer::new(4, 4);
-        buf.set_pixel(0, 0, 3); // tile-feature dot
-        let before = buf.pixel_buf[buf.cell_index(0, 0)];
+        buf.set_pixel(0, 0, 3); // pre-existing tile-feature dot at bit 0x01
+        let idx = buf.cell_index(0, 0);
+        let road_bit = BRAILLE_MAP[0][0];
+        assert_eq!(
+            buf.pixel_buf[idx], road_bit,
+            "fixture: cell has the road dot"
+        );
 
-        buf.set_pixel_punching(1, 0, 9); // overlay dot at a different subpixel
-        let after = buf.pixel_buf[buf.cell_index(0, 0)];
+        // Overlay writes a different subpixel in the same cell.
+        buf.set_pixel_punching(1, 0, 9);
 
         let overlay_bit = BRAILLE_MAP[0][1];
-        assert_eq!(after, before | overlay_bit, "sparse cells must OR-merge");
-        assert_eq!(buf.fg_buf[buf.cell_index(0, 0)], 9, "fg follows overlay");
+        assert_eq!(
+            buf.pixel_buf[idx], overlay_bit,
+            "sparse cells must also be replaced with just the overlay's bit \
+             — the road dot is intentionally dropped where the line crosses"
+        );
+        assert_eq!(buf.fg_buf[idx], 9, "fg follows overlay colour");
+        // bg is unchanged on sparse cells (no fill-colour to preserve).
+        assert_eq!(buf.bg_buf[idx], 0, "bg unchanged on sparse cells");
+    }
+
+    /// Empty cell + `set_pixel_punching` → just sets the overlay's bit
+    /// and fg. No bg side-effect (the cell has no underlying fill to
+    /// preserve).
+    #[test]
+    fn set_pixel_punching_writes_into_empty_cell() {
+        let mut buf = BrailleBuffer::new(4, 4);
+        let idx = buf.cell_index(0, 0);
+
+        buf.set_pixel_punching(0, 0, 7);
+
+        let bit = BRAILLE_MAP[0][0];
+        assert_eq!(buf.pixel_buf[idx], bit);
+        assert_eq!(buf.fg_buf[idx], 7);
+        assert_eq!(buf.bg_buf[idx], 0);
     }
 }

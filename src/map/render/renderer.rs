@@ -1093,18 +1093,17 @@ mod tests {
         );
     }
 
-    /// Regression for the OR-merge guarantee: when a tile feature and a
-    /// user overlay both paint into the same Braille cell, the resulting
-    /// character must carry dots from BOTH (bitwise union), not have one
-    /// overwrite the other. A future change that flipped `set_pixel`'s
-    /// `|=` to `=` would silently break this guarantee.
-    ///
-    /// Geometry: a motorway that runs horizontally across screen y=128
-    /// intersects a vertical overlay polyline at screen x=160.  The
-    /// cell at (col=80, row=32) sits at that crossing and must contain
-    /// the union of both dot masks.
+    /// Overlay polylines always replace the cell's dot mask, never
+    /// OR-merge — see `BrailleBuffer::set_pixel_punching`. So when an
+    /// overlay crosses a tile-feature line, the cells at the crossing
+    /// carry only the overlay's bits in the overlay's colour. Without
+    /// this rule the cells would carry both sets of bits but with the
+    /// overlay's foreground (last-writer-wins on `fg_buf`), tinting the
+    /// tile feature with the overlay colour — visible to users as a
+    /// "halo" of overlay colour around the line wherever it passes
+    /// through tile content.
     #[test]
-    fn overlay_or_blends_with_tile_feature_dots() {
+    fn overlay_replaces_tile_feature_dots_at_crossing() {
         use std::collections::HashMap;
 
         use crate::geo::LonLat;
@@ -1113,160 +1112,90 @@ mod tests {
         use crate::map::tile::decode::{Feature, TilePoint};
         use crate::map::tile::property::PropertyValue;
 
-        // Canvas: 320×320 px → 160 cols × 80 rows of braille cells.
-        // Tile: z=6 tile (32,32) centred at lon=0 lat=0.
-        //   pos_x=0, pos_y=0, tile_size=256, extent=4096
-        //   → scale = 4096/256 = 16 → 1 screen pixel = 16 tile units.
-        //
-        // Road (tile coords):
-        //   Horizontal line at tile y=2048 → screen y = 0 + 2048/16 = 128.
-        //   x spans 0..4096 → screen 0..256, fully inside the 320-wide canvas.
-        //
-        // Overlay (world coords, zoom=6, center=(0,0)):
-        //   Vertical line at lon=0 → screen x = 320/2 = 160.
-        //   Latitude range [0.5°, 0.9°] → screen y ≈ [137, 119],
-        //   bracketing the road's y=128.
-        //
-        // Overlap: screen pixel (160, 128) → cell (col=80, row=32).
-        let vis = VisibleTile {
-            x: 32,
-            y: 32,
-            z: 6,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            size: 256.0,
+        // Horizontal road across the tile centre.
+        let make_tile = || {
+            let mut props: HashMap<Arc<str>, PropertyValue> = HashMap::new();
+            props.insert(
+                Arc::from("class"),
+                PropertyValue::String(Arc::from("motorway")),
+            );
+            let road_feature = Feature {
+                layer_name: Arc::from("road"),
+                properties: Arc::new(props),
+                points: Arc::new(vec![vec![
+                    TilePoint { x: 0, y: 2048 },
+                    TilePoint { x: 4096, y: 2048 },
+                ]]),
+                min_x: 0.0,
+                max_x: 0.0,
+                min_y: 0.0,
+                max_y: 0.0,
+            };
+            TileData {
+                vis: VisibleTile {
+                    x: 32,
+                    y: 32,
+                    z: 6,
+                    pos_x: 0.0,
+                    pos_y: 0.0,
+                    size: 256.0,
+                },
+                layers: vec![LayerData {
+                    name: "road".to_string(),
+                    extent: 4096,
+                    features: vec![road_feature],
+                }],
+            }
         };
 
-        let extent: i32 = 4096;
-        let road_pts = Arc::new(vec![vec![
-            TilePoint {
-                x: 0,
-                y: extent / 2,
-            },
-            TilePoint {
-                x: extent,
-                y: extent / 2,
-            },
-        ]]);
-
-        let mut props: HashMap<Arc<str>, PropertyValue> = HashMap::new();
-        props.insert(
-            Arc::from("class"),
-            PropertyValue::String(Arc::from("motorway")),
-        );
-
-        let road_feature = Feature {
-            layer_name: Arc::from("road"),
-            properties: Arc::new(props),
-            points: road_pts,
-            min_x: 0.0,
-            max_x: 0.0,
-            min_y: 0.0,
-            max_y: 0.0,
-        };
-
-        let tile = TileData {
-            vis,
-            layers: vec![LayerData {
-                name: "road".to_string(),
-                extent: 4096,
-                features: vec![road_feature],
-            }],
-        };
-
-        // Vertical overlay at lon=0, lat ∈ [0.5°, 0.9°].
-        let overlay = UserPolyline {
-            coords: vec![LonLat { lon: 0.0, lat: 0.5 }, LonLat { lon: 0.0, lat: 0.9 }],
-            color: 7,
-        };
-
-        let zoom = 6.0;
         let center = LonLat { lon: 0.0, lat: 0.0 };
+        // Vertical overlay at lon=0, lat ∈ [0.5°, 0.9°] — same range as
+        // the old OR-merge test, which confirmed the geometry intersects.
+        let overlay = UserPolyline {
+            coords: vec![LonLat { lon: 0.0, lat: 0.9 }, LonLat { lon: 0.0, lat: 0.5 }],
+            color: 11,
+        };
+
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
 
-        let frame_t = renderer
-            .draw(&[tile], zoom, center, &[])
+        let tile_only = renderer
+            .draw(&[make_tile()], 6.0, center, &[])
             .expect("tile-only frame");
-
-        // Rebuild tile data (consumed above).
-        let vis2 = VisibleTile {
-            x: 32,
-            y: 32,
-            z: 6,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            size: 256.0,
-        };
-        let road_pts2 = Arc::new(vec![vec![
-            TilePoint {
-                x: 0,
-                y: extent / 2,
-            },
-            TilePoint {
-                x: extent,
-                y: extent / 2,
-            },
-        ]]);
-        let mut props2: HashMap<Arc<str>, PropertyValue> = HashMap::new();
-        props2.insert(
-            Arc::from("class"),
-            PropertyValue::String(Arc::from("motorway")),
-        );
-        let road_feature2 = Feature {
-            layer_name: Arc::from("road"),
-            properties: Arc::new(props2),
-            points: road_pts2,
-            min_x: 0.0,
-            max_x: 0.0,
-            min_y: 0.0,
-            max_y: 0.0,
-        };
-        let tile2 = TileData {
-            vis: vis2,
-            layers: vec![LayerData {
-                name: "road".to_string(),
-                extent: 4096,
-                features: vec![road_feature2],
-            }],
-        };
-
-        let frame_o = renderer
-            .draw(&[], zoom, center, &[overlay.clone()])
+        let overlay_only = renderer
+            .draw(&[], 6.0, center, &[overlay.clone()])
             .expect("overlay-only frame");
-        let frame_b = renderer
-            .draw(&[tile2], zoom, center, &[overlay])
-            .expect("both frame");
+        let combined = renderer
+            .draw(&[make_tile()], 6.0, center, &[overlay])
+            .expect("combined frame");
 
+        // For every cell where both the road and the overlay painted,
+        // verify the combined frame's mask equals the overlay-only mask
+        // (always-replace), not the bitwise union (OR-merge). At least
+        // one such overlap cell must exist to make the test non-vacuous.
         const EMPTY: char = '\u{2800}';
-        let cols = frame_b.cols as usize;
-
-        // Find cells where both T and O painted, then assert union.
         let mut overlap_count = 0usize;
-        for i in 0..frame_b.cells.len() {
-            let ch_t = frame_t.cells[i].ch;
-            let ch_o = frame_o.cells[i].ch;
-            if ch_t == EMPTY || ch_o == EMPTY {
+        for i in 0..tile_only.cells.len() {
+            let t = &tile_only.cells[i];
+            let o = &overlay_only.cells[i];
+            let b = &combined.cells[i];
+            if t.ch == EMPTY || o.ch == EMPTY {
                 continue;
             }
-            overlap_count += 1;
-            let mask_t = ch_t as u32 - 0x2800;
-            let mask_o = ch_o as u32 - 0x2800;
-            let mask_b = frame_b.cells[i].ch as u32 - 0x2800;
-            let col = i % cols;
-            let row = i / cols;
+            let mask_o = (o.ch as u32) - 0x2800;
+            let mask_b = (b.ch as u32) - 0x2800;
             assert_eq!(
-                mask_b,
-                mask_t | mask_o,
-                "cell ({col},{row}) idx={i}: dots must be union of tile ({mask_t:#010b}) \
-                 and overlay ({mask_o:#010b}), got {mask_b:#010b}"
+                mask_b, mask_o,
+                "combined cell {i} must equal overlay-only mask (always-replace), \
+                 got {mask_b:08b}; overlay mask was {mask_o:08b}"
             );
+            assert_eq!(b.fg, 11, "combined cell {i} fg must be the overlay colour");
+            overlap_count += 1;
         }
-
         assert!(
             overlap_count > 0,
-            "expected at least one cell where both the tile road and the overlay \
-             painted, but found none — the geometry may not intersect"
+            "no overlay-on-tile-feature crossing detected — adjust the \
+             overlay's coords or zoom so the line passes through a road cell"
         );
     }
 }
