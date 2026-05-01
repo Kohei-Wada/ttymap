@@ -1055,18 +1055,16 @@ mod tests {
                      got {} dots",
                     mask_b.count_ones()
                 );
-                assert_eq!(b.fg, 11, "combined cell {i} fg must be the overlay colour");
-                let expected_bg = t.fg;
                 assert_eq!(
-                    b.bg, expected_bg,
-                    "combined cell {i} bg must inherit the cell's prior fg \
-                     (water fill colour, here {expected_bg}) so OFF subpixels \
-                     render against the underlying fill — not the global bg"
+                    b.fg,
+                    crate::theme::palette::dim_xterm(11),
+                    "combined cell {i} fg must be dim_xterm(overlay colour)"
                 );
-                assert!(
-                    b.dim,
-                    "combined cell {i} must be marked DIM so the solid-bg fill \
-                     doesn't outshine the surrounding ⣿ dot rendering"
+                assert_eq!(
+                    b.bg,
+                    crate::theme::palette::dim_xterm(t.fg),
+                    "combined cell {i} bg must be dim_xterm(prior tile fg) \
+                     so OFF subpixels render against a darkened fill — not the global bg"
                 );
                 found = true;
                 break;

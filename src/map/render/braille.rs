@@ -27,12 +27,6 @@ pub struct BrailleBuffer {
     char_color_buf: Vec<u8>,
     /// Optional global background color applied when no per-cell bg is set.
     global_bg: Option<u8>,
-    /// Per-cell DIM modifier flag. Set on cells where the user-overlay
-    /// pass replaced a saturated cell — those cells need to render at
-    /// reduced brightness so the solid-bg-fill doesn't outshine the
-    /// surrounding `⣿` glyphs (which are mostly bg with small fg dots,
-    /// perceptually dimmer).
-    dim_buf: Vec<bool>,
 }
 
 impl BrailleBuffer {
@@ -49,7 +43,6 @@ impl BrailleBuffer {
             char_buf: vec![None; cell_count],
             char_color_buf: vec![0u8; cell_count],
             global_bg: None,
-            dim_buf: vec![false; cell_count],
         }
     }
 
@@ -66,7 +59,6 @@ impl BrailleBuffer {
         self.bg_buf.fill(0);
         self.char_buf.fill(None);
         self.char_color_buf.fill(0);
-        self.dim_buf.fill(false);
     }
 
     /// Set the global background color index.
@@ -119,16 +111,28 @@ impl BrailleBuffer {
         let idx = self.cell_index(x, y);
         let bit = BRAILLE_MAP[y & 3][x & 1];
         if self.pixel_buf[idx] == 0xFF {
-            // Saturated cell: transfer prior fg to bg so OFF dots render
-            // against the underlying fill colour. Also mark the cell DIM
-            // so the solid-bg fill doesn't outshine the surrounding `⣿`
-            // cells (which appear perceptually dimmer because the Braille
-            // dots cover only ~30-50 % of the cell area).
-            self.bg_buf[idx] = self.fg_buf[idx];
-            self.dim_buf[idx] = true;
+            // Saturated cell: keep the fill colour as bg (so OFF dots
+            // render against the underlying water/forest/… instead of
+            // the global bg) but darken both bg and fg to match the
+            // perceived brightness of surrounding `⣿` cells. The font
+            // renders Braille dots covering ~30-50% of the cell area,
+            // so a `⣿` cell appears at roughly half the bg colour's
+            // intensity. A line cell with bg = full water-blue would
+            // outshine those neighbours; halving the colour value
+            // (`dim_xterm`) brings them to comparable apparent
+            // brightness. `Modifier::DIM` is the wrong tool here — it's
+            // a foreground-only attribute in every terminal, so the
+            // dominant bg-fill would stay bright.
+            self.bg_buf[idx] = crate::theme::palette::dim_xterm(self.fg_buf[idx]);
+            self.fg_buf[idx] = crate::theme::palette::dim_xterm(color);
+        } else {
+            // Sparse: replace mask, set fg to overlay (full brightness),
+            // leave bg alone. Sparse cells appear mostly dark already
+            // (few dots), so the overlay's full-brightness fg matches
+            // the visual character of their neighbours.
+            self.fg_buf[idx] = color;
         }
         self.pixel_buf[idx] = bit;
-        self.fg_buf[idx] = color;
     }
 
     /// Write a single character at pixel position (x, y), overriding any braille content.
@@ -183,7 +187,6 @@ impl BrailleBuffer {
                             ch: ' ',
                             fg: 0,
                             bg: effective_bg,
-                            dim: false,
                         });
                     } else {
                         let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
@@ -194,7 +197,6 @@ impl BrailleBuffer {
                             ch,
                             fg,
                             bg: effective_bg,
-                            dim: self.dim_buf[idx],
                         });
                     }
                 } else if skip > 0 {
@@ -203,7 +205,6 @@ impl BrailleBuffer {
                         ch: ' ',
                         fg: 0,
                         bg: effective_bg,
-                        dim: false,
                     });
                 } else {
                     let codepoint = 0x2800u32 + self.pixel_buf[idx] as u32;
@@ -212,7 +213,6 @@ impl BrailleBuffer {
                         ch,
                         fg,
                         bg: effective_bg,
-                        dim: self.dim_buf[idx],
                     });
                 }
             }
@@ -243,7 +243,6 @@ mod tests {
         assert_eq!(buf.bg_buf.len(), expected_cells);
         assert_eq!(buf.char_buf.len(), expected_cells);
         assert_eq!(buf.char_color_buf.len(), expected_cells);
-        assert_eq!(buf.dim_buf.len(), expected_cells);
     }
 
     #[test]
@@ -332,12 +331,12 @@ mod tests {
 
     /// Saturated cell + `set_pixel_punching` →
     /// - mask replaced with overlay's bit
-    /// - fg = overlay colour
-    /// - bg = prior fg (preserves underlying fill colour)
-    /// - dim flag = true (the cell renders at reduced brightness so the
-    ///   solid-bg fill doesn't outshine surrounding `⣿` dot rendering).
+    /// - bg = dim_xterm(prior fg) — fill colour darkened to match `⣿` perceived brightness
+    /// - fg = dim_xterm(overlay colour) — overlay dot also darkened so it doesn't pop
     #[test]
-    fn set_pixel_punching_replaces_mask_and_marks_dim_on_saturated_cell() {
+    fn set_pixel_punching_dims_bg_and_fg_on_saturated_cell() {
+        use crate::theme::palette::dim_xterm;
+
         let mut buf = BrailleBuffer::new(4, 4);
         for sx in 0..2 {
             for sy in 0..4 {
@@ -347,15 +346,17 @@ mod tests {
         let idx = buf.cell_index(0, 0);
         assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: cell starts saturated");
         assert_eq!(buf.fg_buf[idx], 5, "fixture: cell fg is the fill colour");
-        assert!(!buf.dim_buf[idx], "fixture: dim starts false");
 
         buf.set_pixel_punching(0, 0, 7);
 
         let bit = BRAILLE_MAP[0][0];
         assert_eq!(buf.pixel_buf[idx], bit, "mask replaced with overlay bit");
-        assert_eq!(buf.fg_buf[idx], 7, "fg = overlay");
-        assert_eq!(buf.bg_buf[idx], 5, "bg = prior fg (fill colour)");
-        assert!(buf.dim_buf[idx], "dim flag set so cell renders dimmed");
+        assert_eq!(buf.bg_buf[idx], dim_xterm(5), "bg = dim_xterm(prior fg)");
+        assert_eq!(
+            buf.fg_buf[idx],
+            dim_xterm(7),
+            "fg = dim_xterm(overlay colour)"
+        );
     }
 
     /// Sparse non-empty cell + `set_pixel_punching` → mask is replaced
@@ -387,7 +388,6 @@ mod tests {
         assert_eq!(buf.fg_buf[idx], 9, "fg follows overlay colour");
         // bg is unchanged on sparse cells (no fill-colour to preserve).
         assert_eq!(buf.bg_buf[idx], 0, "bg unchanged on sparse cells");
-        assert!(!buf.dim_buf[idx], "dim must not be set for sparse cells");
     }
 
     /// Empty cell + `set_pixel_punching` → just sets the overlay's bit
@@ -404,23 +404,5 @@ mod tests {
         assert_eq!(buf.pixel_buf[idx], bit);
         assert_eq!(buf.fg_buf[idx], 7);
         assert_eq!(buf.bg_buf[idx], 0);
-        assert!(!buf.dim_buf[idx], "dim must not be set for empty cells");
-    }
-
-    #[test]
-    fn clear_resets_dim_flag() {
-        let mut buf = BrailleBuffer::new(4, 4);
-        // Saturate then punch to set dim.
-        for sx in 0..2 {
-            for sy in 0..4 {
-                buf.set_pixel(sx, sy, 3);
-            }
-        }
-        buf.set_pixel_punching(0, 0, 9);
-        let idx = buf.cell_index(0, 0);
-        assert!(buf.dim_buf[idx]);
-
-        buf.clear();
-        assert!(!buf.dim_buf[idx], "clear must reset dim back to false");
     }
 }

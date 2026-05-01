@@ -59,6 +59,159 @@ pub struct ColorPalette {
     pub housenum_label: u8,
 }
 
+/// Parse a hex color string (`#RGB` or `#RRGGBB`) into an RGB array.
+/// Returns `[0, 0, 0]` for invalid input.
+#[cfg(test)]
+pub(crate) fn hex2rgb(color: &str) -> [u8; 3] {
+    fn parse(color: &str) -> Option<[u8; 3]> {
+        let s = color.trim_start_matches('#');
+        match s.len() {
+            3 => {
+                let r = u8::from_str_radix(&s[0..1], 16).ok()?;
+                let g = u8::from_str_radix(&s[1..2], 16).ok()?;
+                let b = u8::from_str_radix(&s[2..3], 16).ok()?;
+                Some([r * 17, g * 17, b * 17])
+            }
+            6 => {
+                let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+                Some([r, g, b])
+            }
+            _ => None,
+        }
+    }
+    parse(color).unwrap_or([0, 0, 0])
+}
+
+/// Find the closest xterm-256 color index for a given RGB value.
+/// Considers the 6x6x6 color cube (16..=231) and grayscale ramp (232..=255).
+pub(crate) fn rgb_to_x256(r: u8, g: u8, b: u8) -> u8 {
+    const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+
+    fn nearest_cube_index(v: u8) -> usize {
+        let mut best_idx = 0usize;
+        let mut best_dist = u32::MAX;
+        for (i, &level) in CUBE_LEVELS.iter().enumerate() {
+            let d = (v as i32 - level as i32).unsigned_abs();
+            if d < best_dist {
+                best_dist = d;
+                best_idx = i;
+            }
+        }
+        best_idx
+    }
+
+    let ri = nearest_cube_index(r);
+    let gi = nearest_cube_index(g);
+    let bi = nearest_cube_index(b);
+
+    let cube_r = CUBE_LEVELS[ri] as i32;
+    let cube_g = CUBE_LEVELS[gi] as i32;
+    let cube_b = CUBE_LEVELS[bi] as i32;
+
+    let cube_dist =
+        (r as i32 - cube_r).pow(2) + (g as i32 - cube_g).pow(2) + (b as i32 - cube_b).pow(2);
+    let cube_idx = 16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8;
+
+    fn nearest_gray_index(v: u8) -> usize {
+        let mut best_idx = 0usize;
+        let mut best_dist = u32::MAX;
+        for i in 0..24usize {
+            let level = 8 + 10 * i as i32;
+            let d = (v as i32 - level).unsigned_abs();
+            if d < best_dist {
+                best_dist = d;
+                best_idx = i;
+            }
+        }
+        best_idx
+    }
+
+    let gray_avg = (r as i32 + g as i32 + b as i32) / 3;
+    let gi_idx = nearest_gray_index(gray_avg as u8);
+    let gray_level = 8 + 10 * gi_idx as i32;
+
+    let gray_dist = (r as i32 - gray_level).pow(2)
+        + (g as i32 - gray_level).pow(2)
+        + (b as i32 - gray_level).pow(2);
+    let gray_idx = 232 + gi_idx as u8;
+
+    if gray_dist < cube_dist {
+        gray_idx
+    } else {
+        cube_idx
+    }
+}
+
+/// Approximate the RGB value of an xterm-256 palette index.
+///
+/// Mapping (matches the canonical xterm-256 layout):
+/// - 0..=15: standard colours — uses a fixed table for the 16 base
+///   colours. The exact RGB values are terminal-defined; we use the
+///   widely-shared "VGA-ish" defaults so subsequent darkening
+///   produces predictable results.
+/// - 16..=231: 6×6×6 colour cube. `idx - 16` decodes into r/g/b
+///   indices 0..5, each mapped through `[0, 95, 135, 175, 215, 255]`.
+/// - 232..=255: 24-step grayscale ramp at `8 + 10 * (idx - 232)`.
+pub(crate) fn xterm_to_rgb(idx: u8) -> [u8; 3] {
+    const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    // Standard 16 base colours, VGA-style approximations. Used for
+    // indices 0..=15 (system colours; the exact RGB depends on the
+    // user's terminal palette settings, but this covers the common
+    // case well enough for our darkening lookup).
+    const BASE_16: [[u8; 3]; 16] = [
+        [0, 0, 0],
+        [128, 0, 0],
+        [0, 128, 0],
+        [128, 128, 0],
+        [0, 0, 128],
+        [128, 0, 128],
+        [0, 128, 128],
+        [192, 192, 192],
+        [128, 128, 128],
+        [255, 0, 0],
+        [0, 255, 0],
+        [255, 255, 0],
+        [0, 0, 255],
+        [255, 0, 255],
+        [0, 255, 255],
+        [255, 255, 255],
+    ];
+    let idx = idx as usize;
+    if idx < 16 {
+        BASE_16[idx]
+    } else if idx < 232 {
+        let cube = idx - 16;
+        let r = cube / 36;
+        let g = (cube / 6) % 6;
+        let b = cube % 6;
+        [CUBE_LEVELS[r], CUBE_LEVELS[g], CUBE_LEVELS[b]]
+    } else {
+        let gray = 8u16 + 10 * (idx - 232) as u16;
+        let v = gray.min(255) as u8;
+        [v, v, v]
+    }
+}
+
+/// Halve the brightness of an xterm-256 palette index by round-tripping
+/// through RGB. Used by the user-overlay third pass to render line
+/// cells over saturated tile fills (water, dense forests, …) at a
+/// brightness that matches the surrounding `⣿` glyph cells (which
+/// are perceptually dim because the font's Braille dots cover only
+/// ~30-50% of the cell area).
+///
+/// `Modifier::DIM` (ANSI `\x1b[2m`) doesn't work for this path: that
+/// attribute is foreground-only in essentially every terminal, so
+/// the bg-fill of a saturated punched cell stays at full brightness
+/// and outshines its `⣿` neighbours. Darkening the colour itself
+/// before storing it in `bg_buf` / `fg_buf` is the only portable
+/// way to reduce perceived brightness.
+pub(crate) fn dim_xterm(idx: u8) -> u8 {
+    let [r, g, b] = xterm_to_rgb(idx);
+    rgb_to_x256(r / 2, g / 2, b / 2)
+}
+
 pub const DARK: ColorPalette = ColorPalette {
     background: 16,            // #000
     accent: 226,               // Yellow (#ff0)
@@ -155,97 +308,6 @@ pub const BRIGHT: ColorPalette = ColorPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── Color conversion helpers ─────────────────────────────────────────
-    //
-    // These exist solely to verify that the hard-coded xterm-256 palette
-    // indices above match their intended hex colors. They were previously
-    // in a top-level `color` module but had no non-test callers, so they
-    // live here now as test-only helpers.
-
-    /// Parse a hex color string (`#RGB` or `#RRGGBB`) into an RGB array.
-    /// Returns `[0, 0, 0]` for invalid input.
-    fn hex2rgb(color: &str) -> [u8; 3] {
-        fn parse(color: &str) -> Option<[u8; 3]> {
-            let s = color.trim_start_matches('#');
-            match s.len() {
-                3 => {
-                    let r = u8::from_str_radix(&s[0..1], 16).ok()?;
-                    let g = u8::from_str_radix(&s[1..2], 16).ok()?;
-                    let b = u8::from_str_radix(&s[2..3], 16).ok()?;
-                    Some([r * 17, g * 17, b * 17])
-                }
-                6 => {
-                    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-                    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-                    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-                    Some([r, g, b])
-                }
-                _ => None,
-            }
-        }
-        parse(color).unwrap_or([0, 0, 0])
-    }
-
-    /// Find the closest xterm-256 color index for a given RGB value.
-    /// Considers the 6x6x6 color cube (16..=231) and grayscale ramp (232..=255).
-    fn rgb_to_x256(r: u8, g: u8, b: u8) -> u8 {
-        const CUBE_LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-
-        fn nearest_cube_index(v: u8) -> usize {
-            let mut best_idx = 0usize;
-            let mut best_dist = u32::MAX;
-            for (i, &level) in CUBE_LEVELS.iter().enumerate() {
-                let d = (v as i32 - level as i32).unsigned_abs();
-                if d < best_dist {
-                    best_dist = d;
-                    best_idx = i;
-                }
-            }
-            best_idx
-        }
-
-        let ri = nearest_cube_index(r);
-        let gi = nearest_cube_index(g);
-        let bi = nearest_cube_index(b);
-
-        let cube_r = CUBE_LEVELS[ri] as i32;
-        let cube_g = CUBE_LEVELS[gi] as i32;
-        let cube_b = CUBE_LEVELS[bi] as i32;
-
-        let cube_dist =
-            (r as i32 - cube_r).pow(2) + (g as i32 - cube_g).pow(2) + (b as i32 - cube_b).pow(2);
-        let cube_idx = 16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8;
-
-        fn nearest_gray_index(v: u8) -> usize {
-            let mut best_idx = 0usize;
-            let mut best_dist = u32::MAX;
-            for i in 0..24usize {
-                let level = 8 + 10 * i as i32;
-                let d = (v as i32 - level).unsigned_abs();
-                if d < best_dist {
-                    best_dist = d;
-                    best_idx = i;
-                }
-            }
-            best_idx
-        }
-
-        let gray_avg = (r as i32 + g as i32 + b as i32) / 3;
-        let gi_idx = nearest_gray_index(gray_avg as u8);
-        let gray_level = 8 + 10 * gi_idx as i32;
-
-        let gray_dist = (r as i32 - gray_level).pow(2)
-            + (g as i32 - gray_level).pow(2)
-            + (b as i32 - gray_level).pow(2);
-        let gray_idx = 232 + gi_idx as u8;
-
-        if gray_dist < cube_dist {
-            gray_idx
-        } else {
-            cube_idx
-        }
-    }
 
     fn c(hex: &str) -> u8 {
         let [r, g, b] = hex2rgb(hex);
@@ -366,6 +428,45 @@ mod tests {
         assert!(
             p.admin_level_2 != 231,
             "admin borders should differ from white bg"
+        );
+    }
+
+    #[test]
+    fn xterm_to_rgb_cube_round_trips() {
+        // Picks a known cube colour and verifies the RGB matches the
+        // canonical 6-level encoding.
+        let rgb = xterm_to_rgb(196); // pure red in cube
+        assert_eq!(rgb, [255, 0, 0]);
+        let rgb = xterm_to_rgb(46); // pure green
+        assert_eq!(rgb, [0, 255, 0]);
+        let rgb = xterm_to_rgb(21); // pure blue
+        assert_eq!(rgb, [0, 0, 255]);
+    }
+
+    #[test]
+    fn xterm_to_rgb_grayscale_ramp() {
+        let rgb = xterm_to_rgb(232);
+        assert_eq!(rgb, [8, 8, 8]);
+        let rgb = xterm_to_rgb(255);
+        let expected = (8u16 + 10 * 23) as u8;
+        assert_eq!(rgb, [expected, expected, expected]);
+    }
+
+    #[test]
+    fn dim_xterm_halves_perceived_brightness() {
+        // White -> mid-gray-ish.
+        let dim_white = dim_xterm(231); // white in cube
+        let rgb = xterm_to_rgb(dim_white);
+        assert!(
+            rgb[0] < 200 && rgb[1] < 200 && rgb[2] < 200,
+            "dim white should be visibly darker than 255, got {rgb:?}"
+        );
+        // Pure red darkens toward dark red.
+        let dim_red = dim_xterm(196);
+        let rgb = xterm_to_rgb(dim_red);
+        assert!(
+            rgb[0] < 200 && rgb[1] < 80 && rgb[2] < 80,
+            "dim red should be predominantly darker red, got {rgb:?}"
         );
     }
 }

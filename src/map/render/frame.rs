@@ -10,13 +10,6 @@ pub struct MapCell {
     pub ch: char,
     pub fg: u8,
     pub bg: u8,
-    /// When `true`, the cell should render at reduced brightness (ratatui
-    /// `Modifier::DIM`). Set on saturated overlay cells so the solid-bg
-    /// fill doesn't outshine the surrounding `⣿` dot rendering — those
-    /// cells appear perceptually dimmer because the Braille dots cover
-    /// only ~30-50 % of the cell area; DIM brings the overlay cells to
-    /// a similar apparent brightness.
-    pub dim: bool,
 }
 
 /// A complete rendered map frame (row-major grid of cells). `center` and
@@ -72,12 +65,7 @@ mod tests {
     use super::*;
 
     fn cell(ch: char, fg: u8, bg: u8) -> MapCell {
-        MapCell {
-            ch,
-            fg,
-            bg,
-            dim: false,
-        }
+        MapCell { ch, fg, bg }
     }
 
     fn frame_2x2() -> MapFrame {
