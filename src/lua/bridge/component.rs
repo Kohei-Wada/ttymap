@@ -29,7 +29,7 @@ use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{OverlayWindow, RenderWindow, Window};
 use crate::compositor::{Component, MapApi};
 use crate::geo::LonLat;
-use crate::lua::ttymap::{CapturedRegistration, LuaHostHandles, LuaHostShared};
+use crate::lua::ttymap::{CapturedKind, LuaHostHandles, LuaHostShared};
 use crate::theme::StyleKind;
 
 /// Per-plugin layout knobs read from `module.layout`. Without this,
@@ -167,11 +167,16 @@ impl LuaComponent {
         // distinction (focusable stack vs. always-on chrome) is
         // decided by where the dispatcher routes the resulting
         // Component, not by anything inside this constructor.
-        let module = match captured {
-            CapturedRegistration::Plugin(t) | CapturedRegistration::Overlay(t) => t,
-            CapturedRegistration::Palette(_) => {
+        let module = match captured.kind {
+            Some(CapturedKind::Plugin(t)) | Some(CapturedKind::Overlay(t)) => t,
+            Some(CapturedKind::Palette(_)) => {
                 return Err(mlua::Error::external(
                     "expected ttymap.register_plugin or register_overlay, got ttymap.register_palette",
+                ));
+            }
+            None => {
+                return Err(mlua::Error::external(
+                    "script did not call any ttymap.register_* API",
                 ));
             }
         };

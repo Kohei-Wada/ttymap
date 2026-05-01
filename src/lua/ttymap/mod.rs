@@ -159,34 +159,59 @@ pub struct LuaHostHandles {
 
 // ── Self-registration capture ────────────────────────────────────────
 
-/// What a plugin script declared by calling one of the three
-/// `ttymap.register_*` APIs. The Lua subsystem doesn't know which
-/// kind a given file is until the script tells it. nvim-style: the
-/// runtime just executes the script; the script self-declares.
-pub enum CapturedRegistration {
-    /// Stack-pushed Component plugin (rendered panel, key-activated).
-    /// Spec table from `register_plugin`.
+/// What a plugin script declared by calling `register_plugin /
+/// register_palette / register_overlay`. Exactly one of these per
+/// script — the kind determines what factory the activation
+/// surfaces (`palette_commands` / `keybinds`) push.
+pub enum CapturedKind {
+    /// Stack-pushed Component plugin (rendered panel).
     Plugin(Table),
-    /// Palette provider plugin (`/`-style picker, key-activated).
-    /// Spec table from `register_palette`.
+    /// Palette provider plugin (`/`-style picker).
     Palette(Table),
     /// Always-on overlay (paints every frame, no focus, no key).
-    /// Spec table from `register_overlay`. Used by plugins like
-    /// the info bar / scale bar / attribution that paint chrome
-    /// over the map without ever being focusable.
+    /// Has no activation surface — `palette_commands` / `keybinds`
+    /// are silently ignored when the script registers an overlay.
     Overlay(Table),
 }
 
-/// Slot used by a fresh Lua state to capture exactly one registration
-/// call. `Rc<RefCell<...>>` is fine — the Lua state is single-threaded
-/// and the capture lifetime is bounded by `lua.load(source).exec()`.
-pub type CaptureSlot = Rc<RefCell<Option<CapturedRegistration>>>;
+/// Everything a single plugin file's setup phase declared. nvim-
+/// style explicit opt-in: the Component itself is one call
+/// (`register_plugin`/`register_palette`/`register_overlay`),
+/// and each activation surface (palette row, keybind) is a
+/// **separate** explicit call. Plugins control which surfaces
+/// they want; the host never auto-derives them from a `key` /
+/// `label` field.
+#[derive(Default)]
+pub struct CapturedRegistration {
+    /// The plugin kind itself. `None` means the script never called
+    /// any of `register_plugin / register_palette / register_overlay`
+    /// — the walker logs + skips that file.
+    pub kind: Option<CapturedKind>,
+    /// Each `ttymap.register_palette_command(spec)` call. Spec
+    /// fields: `label` (required), `hint` (optional). Activates the
+    /// `kind` plugin when selected.
+    pub palette_commands: Vec<Table>,
+    /// Each `ttymap.register_keybind(key)` call. The string is
+    /// expected to be a single character; longer strings take only
+    /// the first char (warned). Activates the `kind` plugin on press.
+    pub keybinds: Vec<String>,
+    /// Each `ttymap.register_footer_hint({ key, label })` call,
+    /// surfaced via `ttymap.help:palette_entries()` so the help
+    /// cheatsheet shows in-panel keys per plugin. Empty by default.
+    pub footer_hints: Vec<(String, String)>,
+}
+
+/// Slot used by a fresh Lua state to capture the script's
+/// registration calls. `Rc<RefCell<...>>` is fine — the Lua state
+/// is single-threaded and the capture lifetime is bounded by
+/// `lua.load(source).exec()`.
+pub type CaptureSlot = Rc<RefCell<CapturedRegistration>>;
 
 /// Build an empty capture slot. The caller (typically `fresh_load`)
 /// passes one to [`install`] and reads it back after running the
 /// script.
 pub fn new_capture_slot() -> CaptureSlot {
-    Rc::new(RefCell::new(None))
+    Rc::new(RefCell::new(CapturedRegistration::default()))
 }
 
 // ── Install entry point ─────────────────────────────────────────────
@@ -255,42 +280,74 @@ pub fn install(
     // call lands. A double-call (or a mix of plugin + palette in
     // the same file) is a Lua-side error — surfaced via mlua so the
     // walker logs + skips the script.
+    // Register the Component itself. Exactly one of these three
+    // per script. A second call on any of them is a Lua-side error.
+    fn set_kind(slot: &CaptureSlot, kind: CapturedKind, who: &str) -> mlua::Result<()> {
+        let mut cap = slot.borrow_mut();
+        if cap.kind.is_some() {
+            return Err(mlua::Error::external(format!(
+                "ttymap.{}: a plugin/palette/overlay was already registered in this script",
+                who
+            )));
+        }
+        cap.kind = Some(kind);
+        Ok(())
+    }
     let cap = slot.clone();
     ttymap.set(
         "register_plugin",
-        lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
-            if cap.borrow().is_some() {
-                return Err(mlua::Error::external(
-                    "ttymap.register_plugin: already registered in this script",
-                ));
-            }
-            *cap.borrow_mut() = Some(CapturedRegistration::Plugin(spec));
-            Ok(())
+        lua.create_function(move |_, spec: Table| {
+            set_kind(&cap, CapturedKind::Plugin(spec), "register_plugin")
         })?,
     )?;
     let cap = slot.clone();
     ttymap.set(
         "register_palette",
+        lua.create_function(move |_, spec: Table| {
+            set_kind(&cap, CapturedKind::Palette(spec), "register_palette")
+        })?,
+    )?;
+    let cap = slot.clone();
+    ttymap.set(
+        "register_overlay",
+        lua.create_function(move |_, spec: Table| {
+            set_kind(&cap, CapturedKind::Overlay(spec), "register_overlay")
+        })?,
+    )?;
+
+    // Activation surfaces. Each is opt-in and explicit — the host
+    // never auto-adds a palette row or keybind from the plugin's
+    // `name` / `label` fields. A plugin with no surfaces is
+    // unreachable; that's fine for overlays (always painted) and
+    // for plugins activated by other plugins via `ttymap.window:open`.
+    let cap = slot.clone();
+    ttymap.set(
+        "register_palette_command",
         lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
-            if cap.borrow().is_some() {
-                return Err(mlua::Error::external(
-                    "ttymap.register_palette: already registered in this script",
-                ));
-            }
-            *cap.borrow_mut() = Some(CapturedRegistration::Palette(spec));
+            cap.borrow_mut().palette_commands.push(spec);
+            Ok(())
+        })?,
+    )?;
+    let cap = slot.clone();
+    ttymap.set(
+        "register_keybind",
+        lua.create_function(move |_, key: String| -> mlua::Result<()> {
+            cap.borrow_mut().keybinds.push(key);
             Ok(())
         })?,
     )?;
     let cap = slot;
     ttymap.set(
-        "register_overlay",
+        "register_footer_hint",
         lua.create_function(move |_, spec: Table| -> mlua::Result<()> {
-            if cap.borrow().is_some() {
-                return Err(mlua::Error::external(
-                    "ttymap.register_overlay: already registered in this script",
-                ));
+            let key: String = spec.get("key").or_else(|_| spec.get(1)).unwrap_or_default();
+            let label: String = spec
+                .get("label")
+                .or_else(|_| spec.get(2))
+                .unwrap_or_default();
+            if !key.is_empty() || !label.is_empty() {
+                cap.borrow_mut().footer_hints.push((key, label));
             }
-            *cap.borrow_mut() = Some(CapturedRegistration::Overlay(spec));
             Ok(())
         })?,
     )?;

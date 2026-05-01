@@ -259,10 +259,18 @@ fn register_one(
             }
         };
 
-    let module: &Table = match &captured {
-        ttymap::CapturedRegistration::Plugin(t)
-        | ttymap::CapturedRegistration::Palette(t)
-        | ttymap::CapturedRegistration::Overlay(t) => t,
+    let Some(kind) = captured.kind else {
+        log::warn!(
+            "lua[{}]: script did not call any ttymap.register_* API, skipping",
+            name
+        );
+        drop(lua);
+        return;
+    };
+    let module: &Table = match &kind {
+        ttymap::CapturedKind::Plugin(t)
+        | ttymap::CapturedKind::Palette(t)
+        | ttymap::CapturedKind::Overlay(t) => t,
     };
     if !module_enabled(module) {
         log::info!("lua[{}]: enabled = false, skipping", name);
@@ -271,16 +279,24 @@ fn register_one(
     }
     let label = module_label(module, name);
     let key = module_key(module);
-    let footer_hints = parse_footer_hints(module);
+    // Footer hints are now collected from explicit
+    // `ttymap.register_footer_hint(...)` calls, but for backwards
+    // compatibility we also read the spec table's `footer_hints`
+    // field. The explicit list wins when both are present.
+    let footer_hints = if !captured.footer_hints.is_empty() {
+        captured.footer_hints
+    } else {
+        parse_footer_hints(module)
+    };
 
-    match captured {
-        ttymap::CapturedRegistration::Plugin(_) => {
+    match kind {
+        ttymap::CapturedKind::Plugin(_) => {
             register_component(name, source, label, key, footer_hints, shared, r);
         }
-        ttymap::CapturedRegistration::Palette(_) => {
+        ttymap::CapturedKind::Palette(_) => {
             register_provider(name, source, label, key, footer_hints, shared, r);
         }
-        ttymap::CapturedRegistration::Overlay(_) => {
+        ttymap::CapturedKind::Overlay(_) => {
             register_overlay(name, source, shared, r);
         }
     }
@@ -637,17 +653,17 @@ mod tests {
     }
 
     fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
-        match c {
-            ttymap::CapturedRegistration::Plugin(t)
-            | ttymap::CapturedRegistration::Palette(t)
-            | ttymap::CapturedRegistration::Overlay(t) => t,
+        match c.kind.as_ref().expect("script registered something") {
+            ttymap::CapturedKind::Plugin(t)
+            | ttymap::CapturedKind::Palette(t)
+            | ttymap::CapturedKind::Overlay(t) => t,
         }
     }
 
     #[test]
     fn register_plugin_yields_plugin_variant() {
         let (_lua, c) = parse_spec(r#"ttymap.register_plugin({ name = "x" })"#, "x");
-        assert!(matches!(c, ttymap::CapturedRegistration::Plugin(_)));
+        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Plugin(_))));
         let t = captured_table(&c);
         assert_eq!(module_label(t, "x"), "x");
         assert!(module_key(t).is_none());
@@ -657,13 +673,13 @@ mod tests {
     #[test]
     fn register_palette_yields_palette_variant() {
         let (_lua, c) = parse_spec(r#"ttymap.register_palette({ name = "x" })"#, "x");
-        assert!(matches!(c, ttymap::CapturedRegistration::Palette(_)));
+        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Palette(_))));
     }
 
     #[test]
     fn register_overlay_yields_overlay_variant() {
         let (_lua, c) = parse_spec(r#"ttymap.register_overlay({ name = "x" })"#, "x");
-        assert!(matches!(c, ttymap::CapturedRegistration::Overlay(_)));
+        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Overlay(_))));
     }
 
     #[test]

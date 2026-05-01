@@ -18,7 +18,7 @@ use super::handle::{CallOutcome, LuaHandle, fresh_load};
 use crate::app::AppMsg;
 use crate::compositor::Context;
 use crate::geo::LonLat;
-use crate::lua::ttymap::{CapturedRegistration, LuaHostShared};
+use crate::lua::ttymap::{CapturedKind, LuaHostShared};
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
@@ -55,11 +55,16 @@ impl LuaPaletteProvider {
         // The script self-declares as a palette provider via
         // `ttymap.register_palette(...)`. A `register_plugin` call
         // here is a kind mismatch reported up to the walker.
-        let palette = match captured {
-            CapturedRegistration::Palette(t) => t,
-            CapturedRegistration::Plugin(_) | CapturedRegistration::Overlay(_) => {
+        let palette = match captured.kind {
+            Some(CapturedKind::Palette(t)) => t,
+            Some(CapturedKind::Plugin(_)) | Some(CapturedKind::Overlay(_)) => {
                 return Err(mlua::Error::external(
                     "expected ttymap.register_palette, got ttymap.register_plugin/register_overlay",
+                ));
+            }
+            None => {
+                return Err(mlua::Error::external(
+                    "script did not call any ttymap.register_* API",
                 ));
             }
         };

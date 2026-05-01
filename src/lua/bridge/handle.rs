@@ -141,10 +141,11 @@ pub fn fresh_load(
     let slot = host::new_capture_slot();
     let handles = host::install(&lua, host_tag, shared, slot.clone())?;
     lua.load(source).set_name(chunk_name).exec()?;
-    let captured = slot.borrow_mut().take().ok_or_else(|| {
-        mlua::Error::external(
-            "script did not call ttymap.register_plugin or ttymap.register_palette",
-        )
-    })?;
+    let captured = std::mem::take(&mut *slot.borrow_mut());
+    if captured.kind.is_none() {
+        return Err(mlua::Error::external(
+            "script did not call ttymap.register_plugin / register_palette / register_overlay",
+        ));
+    }
     Ok((lua, captured, handles))
 }
