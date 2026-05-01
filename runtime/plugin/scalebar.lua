@@ -45,9 +45,9 @@ local function clamp(v, lo, hi)
     return v
 end
 
-ttymap.register_overlay({
+ttymap.register_plugin({
     name = "scalebar",
-    paint_on_map = function(map)
+    loop = function(map)
         local _, lat = map:center()
         local zoom = map:zoom()
         local width = map:area_width()

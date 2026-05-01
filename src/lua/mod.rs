@@ -751,11 +751,15 @@ mod tests {
             .iter()
             .map(|e| e.label.to_lowercase())
             .collect();
-        // `r.overlays` doesn't carry a name; we sanity-check the
-        // count of always-on overlays separately (info / scalebar /
-        // attribution are the only three today; any builtin
-        // declaring `activation = "overlay"` would trip this).
-        let overlay_count = r.overlays.len();
+        // `r.overlays` and `r.plugin_loops` don't carry a name; we
+        // sanity-check the total count of always-on plugins
+        // separately. Each one of info / scalebar / attribution /
+        // center registers itself as either an overlay
+        // (`register_overlay` legacy path) or a plugin loop
+        // (`register_plugin` + `loop` field) — the test treats both
+        // as equivalent so a migration in either direction doesn't
+        // require updating magic numbers.
+        let always_on_count = r.overlays.len() + r.plugin_loops.len();
 
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased). `satellite` is the
@@ -777,8 +781,8 @@ mod tests {
             );
         }
         assert_eq!(
-            overlay_count, 4,
-            "info/scalebar/attribution/center overlays"
+            always_on_count, 4,
+            "info/scalebar/attribution/center should be registered as either overlays or plugin loops"
         );
     }
 
