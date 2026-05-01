@@ -429,7 +429,12 @@ fn build_registrar(
     // picks them up. Higher-priority layers shadow lower ones by
     // stem (env > manifest > xdg_config > xdg_data).
     let runtime_path = crate::lua::runtime_path();
-    crate::lua::register_builtin_plugins(runtime_path, shared.clone(), &mut r);
+    crate::lua::register_builtin_plugins(
+        runtime_path,
+        &config.plugins.disable,
+        shared.clone(),
+        &mut r,
+    );
 
     // Plugin metadata for help is published to `shared.palette_entries`
     // directly during registration (see `lua::push_plugin_entry`), so

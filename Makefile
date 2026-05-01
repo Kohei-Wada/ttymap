@@ -49,6 +49,7 @@ install-runtime:
 	mkdir -p $(DATA_DIR)/plugin $(DATA_DIR)/lua
 	cp -r runtime/plugin/. $(DATA_DIR)/plugin/
 	cp -r runtime/lua/. $(DATA_DIR)/lua/
+	cp runtime/init.lua $(DATA_DIR)/init.lua
 
 uninstall:
 	cargo uninstall ttymap || true

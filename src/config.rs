@@ -16,6 +16,17 @@ pub struct Config {
     pub render: RenderConfig,
     pub cache: CacheConfig,
     pub geoip: GeoipConfig,
+    pub plugins: PluginsConfig,
+}
+
+#[derive(Default, Clone)]
+pub struct PluginsConfig {
+    /// User-supplied opt-out list, matched against each plugin's
+    /// stem (file name minus `.lua`). Set via
+    /// `ttymap.opt.plugins.disable = { "wiki", "quake" }` in
+    /// init.lua. Plugins matching any entry are silently skipped at
+    /// registration time.
+    pub disable: Vec<String>,
 }
 
 #[derive(Clone)]

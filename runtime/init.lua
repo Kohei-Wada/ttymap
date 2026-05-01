@@ -1,0 +1,8 @@
+-- Bundled defaults for ttymap. Runs first in the init.lua chain;
+-- the user's `~/.config/ttymap/init.lua` runs after this in the
+-- same Lua state and can override anything set here.
+--
+-- Empty by default — every Config field has its real default in
+-- the Rust struct. This file is the hook for shipping defaults
+-- that are easier to express in Lua than in Rust (e.g.
+-- conditional opt tweaks, a baseline disable list).

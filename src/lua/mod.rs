@@ -154,10 +154,14 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 /// shadows a lower-priority one with the same file name — drop a
 /// `~/.config/ttymap/plugin/wiki.lua` to replace bundled `wiki`.
 ///
-/// Each script's own metadata drives how it's wired — see
+/// `disable` is the user-supplied opt-out list
+/// (`ttymap.opt.plugins.disable`). A plugin whose stem matches any
+/// entry is skipped at registration time. Each script's own
+/// metadata drives how a registered plugin is wired — see
 /// [`register_one`] for the kind dispatch.
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
+    disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
@@ -171,7 +175,7 @@ pub fn register_builtin_plugins(
         if !plugin_dir.is_dir() {
             continue;
         }
-        register_plugins_in(&plugin_dir, Some(&mut seen), shared.clone(), r);
+        register_plugins_in(&plugin_dir, Some(&mut seen), disable, shared.clone(), r);
     }
 }
 
@@ -445,6 +449,7 @@ fn component_or_placeholder(
 fn register_plugins_in(
     dir: &Path,
     mut seen: Option<&mut std::collections::HashSet<String>>,
+    disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
     r: &mut Registrar,
 ) {
@@ -488,6 +493,13 @@ fn register_plugins_in(
                 );
                 continue;
             }
+        }
+        if disable.iter().any(|d| d == &stem) {
+            log::info!(
+                "lua[{}]: disabled via ttymap.opt.plugins.disable, skipping",
+                stem
+            );
+            continue;
         }
         let source = match std::fs::read_to_string(&path) {
             Ok(s) => s,
@@ -552,7 +564,7 @@ mod tests {
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        register_builtin_plugins(&rtp, shared, &mut r);
+        register_builtin_plugins(&rtp, &[], shared, &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -709,7 +721,7 @@ mod tests {
 
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, shared.clone(), &mut r);
+        register_plugins_in(&dir, None, &[], shared.clone(), &mut r);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -760,7 +772,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -775,7 +787,7 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -798,7 +810,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -820,7 +832,7 @@ mod tests {
         .expect("write init.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -844,7 +856,7 @@ mod tests {
         .expect("write fmt.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         assert!(
             !labels(&r).iter().any(|l| l.contains("libonly")),
             "lib-only subdir must not register as a plugin"
@@ -864,7 +876,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         assert!(labels(&r).iter().any(|l| l.contains("explicit")));
     }
 
@@ -879,7 +891,7 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -960,7 +972,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
         assert!(r.palette_entries.is_empty());
     }
 }

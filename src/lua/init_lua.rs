@@ -35,58 +35,111 @@ use mlua::{Lua, Table};
 use crate::config::Config;
 use crate::keymap::KeybindingOverrides;
 
-/// Run `~/.config/ttymap/init.lua` against the supplied `defaults`
-/// and return the resulting `(Config, KeybindingOverrides)`. The
-/// Config carries fields the user mutated via `ttymap.opt.*`; every
-/// other field stays at its default value.
+/// Run the init.lua chain against `defaults` and return the
+/// resulting `(Config, KeybindingOverrides)`. nvim-style sysinit:
+///
+/// 1. Bundled defaults at `<bundled-tier>/init.lua` (first hit
+///    among env / manifest / xdg_data) — ships with ttymap, edits
+///    here would land via PR.
+/// 2. User overrides at `<xdg_config>/init.lua` (e.g.
+///    `~/.config/ttymap/init.lua`).
+///
+/// Both files run in the same Lua state, in that order, so the
+/// user's mutations override the bundled side via simple last-wins
+/// on the shared `ttymap.opt.*` table and `ttymap.keymap` map.
 ///
 /// Failure modes (missing file, IO error, Lua syntax/runtime error)
-/// all log + return the defaults unchanged. Same posture as the
-/// pre-Lua `toml::from_str` recovery path.
+/// all log + leave the prior state intact. A broken bundled init
+/// still lets the user's init.lua run; a broken user init still
+/// lets the bundled defaults take effect.
 pub fn run_init_lua(defaults: Config) -> (Config, KeybindingOverrides) {
-    let Some(path) = init_lua_path() else {
-        return (defaults, KeybindingOverrides::new());
-    };
-    if !path.exists() {
-        log::info!("init.lua: not found at {}, using defaults", path.display());
+    let mut sources: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(p) = bundled_init_path()
+        && let Some(src) = read_init_file(&p)
+    {
+        sources.push((src, p));
+    }
+    if let Some(p) = init_lua_path()
+        && let Some(src) = read_init_file(&p)
+    {
+        sources.push((src, p));
+    }
+
+    if sources.is_empty() {
         return (defaults, KeybindingOverrides::new());
     }
-    let source = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("init.lua: read {} failed: {}", path.display(), e);
-            return (defaults, KeybindingOverrides::new());
-        }
-    };
 
-    match exec(&source, &path, &defaults) {
-        Ok((cfg, km)) => {
-            log::info!("init.lua: loaded {}", path.display());
-            (cfg, km)
-        }
+    match exec(&sources, &defaults) {
+        Ok((cfg, km)) => (cfg, km),
         Err(e) => {
-            log::warn!("init.lua: {} failed: {}", path.display(), e);
+            log::warn!("init.lua: chain failed: {}", e);
             (defaults, KeybindingOverrides::new())
         }
     }
 }
 
+/// Read a single init.lua file, logging IO/missing-file outcomes.
+/// Returns `None` (treated as "skip this layer") for any failure;
+/// the chain keeps walking.
+fn read_init_file(path: &Path) -> Option<String> {
+    if !path.exists() {
+        log::info!("init.lua: not found at {}, skipping", path.display());
+        return None;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            log::info!("init.lua: loaded {}", path.display());
+            Some(s)
+        }
+        Err(e) => {
+            log::warn!("init.lua: read {} failed: {}", path.display(), e);
+            None
+        }
+    }
+}
+
+/// Walk the runtime path looking for the bundled init.lua. Skips
+/// the user tier (xdg_config) — that's loaded separately by
+/// `init_lua_path` so user init runs LAST in the chain. Returns
+/// the first hit so dev manifest beats stale install (matches the
+/// runtime_path priority order).
+fn bundled_init_path() -> Option<PathBuf> {
+    use directories::ProjectDirs;
+    let user = ProjectDirs::from("", "", "ttymap").map(|d| d.config_dir().to_path_buf());
+    for layer in crate::lua::runtime_path() {
+        if user.as_ref() == Some(layer) {
+            continue;
+        }
+        let candidate = layer.join("init.lua");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Inner half of [`run_init_lua`] — pure logic split out so unit
 /// tests can drive Lua source directly without faking the XDG path.
-/// Returns the diff applied to `defaults`; the caller falls back to
-/// `defaults` on error.
+/// Each source in `sources` runs in turn against the same Lua state;
+/// `ttymap.opt.*` mutations and `ttymap.keymap.set/del` calls
+/// accumulate, with the last source winning on conflicts.
 pub(crate) fn exec(
-    source: &str,
-    chunk_name: &Path,
+    sources: &[(String, PathBuf)],
     defaults: &Config,
 ) -> mlua::Result<(Config, KeybindingOverrides)> {
     let lua = crate::lua::new_lua();
     let keymap_state: Rc<RefCell<KeybindingOverrides>> =
         Rc::new(RefCell::new(KeybindingOverrides::new()));
     install_ttymap_global(&lua, defaults, keymap_state.clone())?;
-    lua.load(source)
-        .set_name(chunk_name.to_string_lossy().as_ref())
-        .exec()?;
+    for (source, path) in sources {
+        if let Err(e) = lua
+            .load(source)
+            .set_name(path.to_string_lossy().as_ref())
+            .exec()
+        {
+            log::warn!("init.lua: {} failed: {}", path.display(), e);
+        }
+    }
     let cfg = read_back(&lua, defaults)?;
     // Drop the Lua state so the only surviving Rc clone is ours.
     drop(lua);
@@ -142,6 +195,14 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     geoip.set("endpoint", d.geoip.endpoint.clone())?;
     geoip.set("timeout_ms", d.geoip.timeout_ms)?;
     opt.set("geoip", geoip)?;
+
+    let plugins = lua.create_table()?;
+    let disable = lua.create_table()?;
+    for (i, name) in d.plugins.disable.iter().enumerate() {
+        disable.set(i + 1, name.as_str())?;
+    }
+    plugins.set("disable", disable)?;
+    opt.set("plugins", plugins)?;
 
     Ok(opt)
 }
@@ -244,6 +305,14 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
             cfg.geoip.timeout_ms = v;
         }
     }
+    if let Ok(t) = opt.get::<Table>("plugins")
+        && let Ok(disable) = t.get::<Table>("disable")
+    {
+        cfg.plugins.disable = disable
+            .sequence_values::<String>()
+            .filter_map(Result::ok)
+            .collect();
+    }
 
     Ok(cfg)
 }
@@ -263,7 +332,8 @@ mod tests {
 
     fn run(source: &str) -> (Config, KeybindingOverrides) {
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
-        exec(source, Path::new("test"), &Config::default()).expect("exec init.lua")
+        let sources = vec![(source.to_string(), PathBuf::from("test"))];
+        exec(&sources, &Config::default()).expect("exec init.lua")
     }
 
     #[test]
@@ -355,16 +425,27 @@ mod tests {
     }
 
     #[test]
-    fn syntax_error_surfaces_as_mlua_err() {
-        // Bad syntax → exec returns Err — the public run_init_lua
-        // logs and falls back; here we just assert the inner exec
-        // surfaces the error rather than producing a silent default.
+    fn syntax_error_in_one_source_does_not_break_the_chain() {
+        // Bad syntax in a layer is caught + logged; the rest of the
+        // chain still runs and the surviving Config reflects the
+        // valid mutations from the other layers. Mirrors how
+        // run_init_lua handles a broken bundled init while letting
+        // the user's init.lua take effect.
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
-        let res = exec(
-            "this is not lua syntax !!!",
-            Path::new("bad"),
-            &Config::default(),
+        let sources = vec![
+            (
+                "this is not lua syntax !!!".to_string(),
+                PathBuf::from("bad"),
+            ),
+            (
+                r#"ttymap.opt.render.style = "bright""#.to_string(),
+                PathBuf::from("good"),
+            ),
+        ];
+        let (cfg, _km) = exec(&sources, &Config::default()).expect("exec");
+        assert_eq!(
+            cfg.render.style, "bright",
+            "a broken layer must not stop a later layer's mutations"
         );
-        assert!(res.is_err(), "syntax error should propagate from exec");
     }
 }
