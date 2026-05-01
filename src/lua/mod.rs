@@ -351,6 +351,20 @@ fn register_one(
             log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
             return;
         }
+        // Hand the setup state's `LuaHostHandles` over to the
+        // registrar so the App can drain its receivers per frame.
+        // Non-overlay plugins' setup-state callbacks (palette command
+        // invoke, register_keybind callback, plugin-level `loop`,
+        // and any `ttymap.api.window.open`/`palette.open` spec
+        // callbacks) flip the same setup-state senders that legacy
+        // overlay plugins drained inside `LuaComponent`. Without this
+        // push the receivers would just sit (latent bug pre-A7).
+        //
+        // Overlays don't reach this branch — their handles live
+        // inside `LuaComponent::from_parts` for the program lifetime.
+        // `Receiver` is single-owner; pushing an overlay's handles
+        // here would create a second owner and break `try_recv`.
+        r.lua_host_handles.push(handles);
     }
 
     // Surface plugin metadata to help. Only entries with a key

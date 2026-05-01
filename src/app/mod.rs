@@ -26,6 +26,7 @@ use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
 use crate::keymap::{KeyMap, KeybindingOverrides};
 use crate::lua::LuaPluginRegistry;
+use crate::lua::ttymap::LuaHostHandles;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::RenderHandle;
@@ -53,6 +54,20 @@ pub struct App {
     /// compositor's `paint_on_map`. Empty during Phase A — no
     /// bundled plugin uses `loop` yet.
     plugin_loops: LuaPluginRegistry,
+    /// Setup-state [`LuaHostHandles`] for non-overlay Lua plugins —
+    /// the palette providers, lazily-pushed plugin components, and
+    /// any `ttymap.api.window.open` / `palette.open` callers. Each
+    /// entry's receivers (`push_rx`, `jump_rx`, `close_rx`,
+    /// `export_rx`) are drained once per frame in
+    /// [`Self::drain_lua_host_handles`]: queued components hit
+    /// `compositor.push`, queued map jumps and frame-export requests
+    /// are dispatched as `AppMsg`s, and queued `ttymap.window:close()`
+    /// calls pop the focused stack component.
+    ///
+    /// Overlay plugins drain their own setup-state handles inside
+    /// [`crate::lua::LuaComponent`] (see `from_parts`) — they don't
+    /// appear here. `Receiver` is single-owner.
+    lua_host_handles: Vec<LuaHostHandles>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -87,6 +102,13 @@ impl App {
         // the per-frame `tick` call has direct access without
         // threading the registrar reference through.
         let plugin_loops = std::mem::take(&mut registrar.plugin_loops);
+        // Same pattern for the setup-state handle pool: the App
+        // drains these per frame so non-overlay plugins'
+        // `ttymap.map:jump` / `window:close` / `window:export_frame`
+        // / `api.window.open` / `api.palette.open` calls (all
+        // running on the setup state) reach the compositor and the
+        // app dispatch table.
+        let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         let styler = Arc::new(Styler::new(theme_id));
         let pipeline = RenderPipeline::new(
@@ -145,6 +167,7 @@ impl App {
             theme_id,
             ui_theme,
             plugin_loops,
+            lua_host_handles,
             cursor: None,
         }
     }
@@ -163,6 +186,19 @@ impl App {
             // last one wins (stale ones are discarded).
             while let Some(frame) = self.render_handle.try_recv_frame() {
                 self.map_frame = Some(frame);
+            }
+
+            // Drain per-tick events from non-overlay Lua plugins'
+            // setup-state handles before the compositor poll: any
+            // component queued via `ttymap.api.window.open` or
+            // `ttymap.api.palette.open` lands on the stack first,
+            // so the same tick's `compositor.poll` already sees it
+            // and the user gets one fewer frame of latency on open.
+            // Map jumps / frame exports / setup-state `window:close`
+            // calls fan out through `dispatch` like everything else.
+            let host_msgs = self.drain_lua_host_handles();
+            for msg in host_msgs {
+                self.dispatch(msg);
             }
 
             // Drain per-tick messages from compositor components.
@@ -230,6 +266,49 @@ impl App {
         info!("terminal restored, exiting");
 
         Ok(())
+    }
+
+    /// Drain every non-overlay Lua plugin's setup-state receivers
+    /// once. Components queued via `ttymap.api.window.open` /
+    /// `palette.open` get pushed onto the compositor stack inline;
+    /// `ttymap.map:jump`, `ttymap.window:export_frame` /
+    /// `ttymap.api.frame.export` requests are returned as
+    /// [`AppMsg`]s for the caller to dispatch; legacy
+    /// `ttymap.window:close()` requests pop the focused stack
+    /// component directly.
+    ///
+    /// Overlay plugins drain their own handles inside `LuaComponent`,
+    /// so this method only walks the non-overlay pool — there's no
+    /// double-drain.
+    fn drain_lua_host_handles(&mut self) -> Vec<AppMsg> {
+        let mut msgs = Vec::new();
+        for handles in &self.lua_host_handles {
+            // Push queued components first so the same tick's
+            // compositor.poll already sees them.
+            while let Ok(component) = handles.push_rx.try_recv() {
+                self.compositor.push(component);
+            }
+            while let Ok(ll) = handles.jump_rx.try_recv() {
+                msgs.push(AppMsg::Map(crate::map::Action::Jump(ll)));
+            }
+            while handles.export_rx.try_recv().is_ok() {
+                msgs.push(AppMsg::ExportFrame);
+            }
+            // Setup-state `ttymap.window:close()` — pop whichever
+            // component is currently focused. This is the ambient
+            // legacy alias; new-API callers use a `WindowHandle` /
+            // `PaletteHandle` instead, whose `close()` flips a
+            // per-component `CloseFlag` that the wrapper checks
+            // per-tick, with no host-channel involvement.
+            let mut closed_any = false;
+            while handles.close_rx.try_recv().is_ok() {
+                closed_any = true;
+            }
+            if closed_any {
+                self.compositor.pop_top();
+            }
+        }
+        msgs
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
