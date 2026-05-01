@@ -41,6 +41,10 @@ where
         scope.create_function(|_, args| text_anchored(cell, args))?,
     )?;
     table.set(
+        "polyline",
+        scope.create_function(|_, args| polyline(cell, args))?,
+    )?;
+    table.set(
         "center",
         scope.create_function(|_, _: mlua::Table| {
             let p = cell.borrow();
@@ -91,6 +95,25 @@ fn resolve_color(p: &MapApi<'_>, name: Option<&mlua::String>) -> ratatui::style:
         Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
         Some(s) if &*s == "muted" => p.muted_color(),
         _ => p.accent_color(),
+    }
+}
+
+/// Sibling of `resolve_color` that returns the xterm-256 palette
+/// **index** rather than a `ratatui::style::Color`. The render thread
+/// (Canvas / BrailleBuffer) speaks `u8`, while the ratatui-side
+/// primitives (`point`, `label`) speak `Color`. Unwraps the
+/// `Color::Indexed(u8)` variant the theme already produces; any other
+/// variant falls back to white (xterm 7) — defensive only, the theme
+/// always emits indexed colours today.
+fn resolve_color_xterm(p: &MapApi<'_>, name: Option<&mlua::String>) -> u8 {
+    let color = match name.and_then(|s| s.to_str().ok()) {
+        Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
+        Some(s) if &*s == "muted" => p.muted_color(),
+        _ => p.accent_color(),
+    };
+    match color {
+        ratatui::style::Color::Indexed(i) => i,
+        _ => 7,
     }
 }
 
@@ -157,4 +180,116 @@ fn label(
     let color = resolve_color(&p, color_name.as_ref());
     p.label(LonLat { lon, lat }, &text_str, color);
     Ok(())
+}
+
+// `map:polyline(coords, color?)` — coords is a Lua sequence of
+// `{lon, lat}` pairs; color is one of the theme keywords accepted by
+// `point`/`label`. Length-1 coords are silently dropped (matches
+// `point`/`label`'s off-canvas behaviour). The polyline is queued
+// for the next frame's render task — there is a 1-frame latency.
+fn polyline(
+    cell: &RefCell<&mut MapApi<'_>>,
+    (_self, coords_table, color_name): (mlua::Table, mlua::Table, Option<mlua::String>),
+) -> mlua::Result<()> {
+    let mut coords: Vec<LonLat> = Vec::new();
+    for pair_res in coords_table.sequence_values::<mlua::Table>() {
+        let pair = pair_res?;
+        let lon: f64 = pair.get(1)?;
+        let lat: f64 = pair.get(2)?;
+        coords.push(LonLat { lon, lat });
+    }
+    if coords.len() < 2 {
+        return Ok(());
+    }
+    let mut p = cell.borrow_mut();
+    let color = resolve_color_xterm(&p, color_name.as_ref());
+    p.push_polyline_overlay(coords, color);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compositor::MapApi;
+    use crate::map::render::frame::MapFrame;
+    use crate::map::render::overlay::UserPolyline;
+    use crate::theme::{DARK, UiTheme};
+    use mlua::Lua;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
+        let area = Rect::new(0, 0, area_w, area_h);
+        let buf = Buffer::empty(area);
+        let frame = MapFrame {
+            cells: Vec::new(),
+            cols: area_w,
+            rows: area_h,
+            center: LonLat { lon: 0.0, lat: 0.0 },
+            zoom: 1.0,
+        };
+        let theme = UiTheme::from_palette(&DARK);
+        (buf, area, frame, theme)
+    }
+
+    /// `map:polyline({{0,0},{1,1}}, "accent")` pushes one entry into the
+    /// overlay sink with both points and the resolved accent colour.
+    #[test]
+    fn polyline_pushes_to_sink() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, "accent")"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 1);
+        assert_eq!(sink[0].coords.len(), 2);
+        assert_eq!(sink[0].coords[0], LonLat { lon: 0.0, lat: 0.0 });
+        assert_eq!(sink[0].coords[1], LonLat { lon: 1.0, lat: 1.0 });
+    }
+
+    /// Single-point polyline is a silent drop — sink stays empty.
+    #[test]
+    fn polyline_with_single_point_is_dropped() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0}})"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert!(sink.is_empty());
+    }
+
+    /// Unknown colour keyword falls back to "accent" — same behaviour
+    /// as `resolve_color` for `point`/`label`.
+    #[test]
+    fn polyline_unknown_color_falls_back_to_accent() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let accent_idx = DARK.accent;
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, "zzzz")"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 1);
+        assert_eq!(sink[0].color, accent_idx);
+    }
 }

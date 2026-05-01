@@ -204,6 +204,17 @@ impl App {
                 )
             })?;
 
+            // Plugins push polylines into `overlay_sink` from their `on_tick`
+            // callbacks during `ui::draw`. Drain unconditionally so the next
+            // render task carries them — without this the sink grows every
+            // frame any plugin calls `map:polyline`. The render thread's
+            // `drain_tasks` collapses redundant Draw tasks to the latest, so
+            // this doesn't cause N renders per second; it just guarantees the
+            // freshly-pushed polylines reach the next render.
+            if !self.overlay_sink.is_empty() {
+                self.request_map_redraw();
+            }
+
             // Idle wake rate. crossterm's `event::poll` blocks
             // until an input event arrives or this elapses, so the
             // real cost is bounded latency for things that aren't
