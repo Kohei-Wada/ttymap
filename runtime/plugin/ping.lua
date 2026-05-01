@@ -45,6 +45,30 @@ ttymap.register_palette_command({
   invoke = toggle,
 })
 
+-- Interpolate lon along the shortest-arc path around the globe so
+-- e.g. Tokyo→NY traces over the Pacific (146°) instead of via
+-- Eurasia/Atlantic (213°). Without this, a linearly-interpolated
+-- lon crosses the antimeridian on the *long* side, which projects
+-- as a discontinuous jump in views centred on negative longitudes
+-- (the per-point projection in ll_to_subpixel takes the shortest
+-- path from view centre, so the interpolated tip teleports across
+-- the canvas mid-animation).
+local function interp_lon(src_lon, dst_lon, t)
+  local dlon = dst_lon - src_lon
+  if dlon > 180 then
+    dlon = dlon - 360
+  elseif dlon < -180 then
+    dlon = dlon + 360
+  end
+  local lon = src_lon + dlon * t
+  if lon > 180 then
+    lon = lon - 360
+  elseif lon < -180 then
+    lon = lon + 360
+  end
+  return lon
+end
+
 ttymap.api.frame.on_tick(function(map)
   if not enabled then
     return
@@ -58,7 +82,7 @@ ttymap.api.frame.on_tick(function(map)
       goto continue
     end
     local t   = i / steps
-    local lon = ping.src[1] + (ping.dst[1] - ping.src[1]) * t
+    local lon = interp_lon(ping.src[1], ping.dst[1], t)
     local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
     map:polyline({ ping.src, { lon, lat } }, ping.color)
     ::continue::
