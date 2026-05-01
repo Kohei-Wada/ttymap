@@ -19,6 +19,7 @@ use crate::map::tile::decode::{Feature, TilePoint};
 use crate::map::tile::property::{extract_label, extract_sort};
 
 /// Pre-collected tile data ready for rendering.
+#[derive(Clone)]
 pub struct TileData {
     pub vis: VisibleTile,
     pub layers: Vec<LayerData>,
@@ -29,6 +30,7 @@ pub struct TileData {
 /// across tile sources — `mapscii.me` uses 4096 but other OpenMapTiles
 /// deployments use 2048 / 8192. The draw path needs it to compute the
 /// tile-coord → screen-pixel scale.
+#[derive(Clone)]
 pub struct LayerData {
     pub name: String,
     pub extent: u32,
@@ -131,7 +133,13 @@ impl Renderer {
     /// coords / scale-bar / place overlays keep updating with the new
     /// `center` and `zoom`. Without this, the UI would look frozen while
     /// tiles are in flight.
-    pub fn draw(&mut self, tile_data: &[TileData], zoom: f64) -> Option<MapFrame> {
+    pub fn draw(
+        &mut self,
+        tile_data: &[TileData],
+        zoom: f64,
+        center: crate::geo::LonLat,
+        overlays: &[crate::map::render::overlay::UserPolyline],
+    ) -> Option<MapFrame> {
         // Clear canvas
         self.canvas.clear();
         if let Some(bg) = self.styler.background_color {
@@ -210,6 +218,42 @@ impl Renderer {
             }
             self.draw_symbol(resolved);
         }
+
+        // Third pass: user overlays from Lua plugins. Drawn on the same
+        // canvas as tile features so dots OR-merge / punching applies.
+        // Same render budget applies — pathological coord lists stop
+        // early instead of starving the next frame.
+        //
+        // For each polyline:
+        // 1. Split at antimeridian crossings (segments with |dlon| > 180)
+        //    so each sub-polyline takes the shorter great-circle arc.
+        // 2. Project each sub-polyline continuously (first point centre-
+        //    aware, subsequent points anchored to previous) so adjacent
+        //    points stay near each other in subpixel space — no Bresenham
+        //    "teleport" across the canvas when one point lands on the
+        //    far left and the other on the far right.
+        let mut buf: Vec<(i32, i32)> = std::mem::take(&mut self.scratches.line);
+        for poly in overlays {
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            for sub in crate::map::render::overlay::split_antimeridian(&poly.coords) {
+                if std::time::Instant::now() > deadline {
+                    break;
+                }
+                buf = crate::map::render::overlay::project_polyline_continuous(
+                    &sub,
+                    center,
+                    zoom,
+                    self.width,
+                    self.height,
+                );
+                if buf.len() >= 2 {
+                    self.canvas.polyline_punching(&buf, poly.color);
+                }
+            }
+        }
+        self.scratches.line = buf;
 
         let frame = self.canvas.to_map_frame();
         debug!("draw: frame ready ({}x{})", frame.cols, frame.rows);
@@ -678,7 +722,14 @@ mod tests {
 
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
-        let frame = renderer.draw(&[tile], 14.0).expect("frame");
+        let frame = renderer
+            .draw(
+                &[tile],
+                14.0,
+                crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                &[],
+            )
+            .expect("frame");
 
         // Ring A's screen bbox in pixels: (6,6)..(62,62) → cells
         // (3,1)..(31,15). Ring B's: (125,125)..(187,187) → cells
@@ -710,7 +761,11 @@ mod tests {
         // tiles are in flight. Cf. `draw` doc comment.
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
-        assert!(renderer.draw(&[], 1.0).is_some());
+        assert!(
+            renderer
+                .draw(&[], 1.0, crate::geo::LonLat { lon: 0.0, lat: 0.0 }, &[])
+                .is_some()
+        );
     }
 
     /// Regression test for issue #100. A polygon described in tile-local
@@ -767,7 +822,14 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let cells = |extent: u32| -> Vec<(char, u8, u8)> {
             let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
-            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            let f = r
+                .draw(
+                    &[make(extent)],
+                    14.0,
+                    crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                    &[],
+                )
+                .expect("frame");
             f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
         };
 
@@ -838,7 +900,14 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let cells = |extent: u32| -> Vec<(char, u8, u8)> {
             let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
-            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            let f = r
+                .draw(
+                    &[make(extent)],
+                    14.0,
+                    crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                    &[],
+                )
+                .expect("frame");
             f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
         };
 
@@ -852,5 +921,152 @@ mod tests {
 
         assert_eq!(baseline, cells(2048));
         assert_eq!(baseline, cells(8192));
+    }
+
+    /// User overlay polylines must paint on the *same* BrailleBuffer as
+    /// tile features. Two non-empty cells along the projected polyline is
+    /// the minimum signal that the overlay reached the canvas.
+    #[test]
+    fn user_overlay_polyline_renders_braille_dots() {
+        use crate::geo::LonLat;
+        use crate::map::render::overlay::UserPolyline;
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let overlays = vec![UserPolyline {
+            coords: vec![
+                LonLat {
+                    lon: -1.0,
+                    lat: 1.0,
+                },
+                LonLat {
+                    lon: 1.0,
+                    lat: -1.0,
+                },
+            ],
+            color: 7,
+        }];
+        let frame = renderer.draw(&[], 6.0, center, &overlays).expect("frame");
+
+        const EMPTY: char = '\u{2800}';
+        let drawn = frame.cells.iter().filter(|c| c.ch != EMPTY).count();
+        assert!(
+            drawn >= 2,
+            "overlay polyline must paint at least two non-empty braille cells, got {drawn}"
+        );
+    }
+
+    /// User overlay polylines crossing a saturated tile fill (e.g. the
+    /// interior of a water polygon) replace the cell's `⣿` mask with
+    /// just the overlay's bit. The cell shows as a sparse Braille char
+    /// (single dot or similar) in the overlay's colour, on the cell's
+    /// existing bg (typically the global bg, since punching does not
+    /// transfer fg into bg). Net visual: a one-cell gap in the water
+    /// fill where the line passes through.
+    #[test]
+    fn overlay_polyline_punches_thin_line_through_saturated_cell() {
+        use std::collections::HashMap;
+
+        use crate::geo::LonLat;
+        use crate::map::render::overlay::UserPolyline;
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+
+        let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
+            vec![
+                TilePoint { x: x0, y: y0 },
+                TilePoint { x: x1, y: y0 },
+                TilePoint { x: x1, y: y1 },
+                TilePoint { x: x0, y: y1 },
+            ]
+        };
+        let feature = Feature {
+            layer_name: Arc::from("water"),
+            properties: Arc::new(HashMap::new()),
+            points: Arc::new(vec![cw_square(0, 0, 4096, 4096)]),
+            min_x: 0.0,
+            max_x: 0.0,
+            min_y: 0.0,
+            max_y: 0.0,
+        };
+        let tile = TileData {
+            vis: VisibleTile {
+                x: 0,
+                y: 0,
+                z: 14,
+                pos_x: 0.0,
+                pos_y: 0.0,
+                size: 256.0,
+            },
+            layers: vec![LayerData {
+                name: "water".to_string(),
+                extent: 4096,
+                features: vec![feature],
+            }],
+        };
+
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let overlay = UserPolyline {
+            coords: vec![
+                LonLat {
+                    lon: -0.5,
+                    lat: 0.0,
+                },
+                LonLat { lon: 0.5, lat: 0.0 },
+            ],
+            color: 222,
+        };
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+        let tile_only = renderer
+            .draw(&[tile.clone()], 6.0, center, &[])
+            .expect("frame");
+        let combined = renderer
+            .draw(&[tile], 6.0, center, &[overlay])
+            .expect("frame");
+
+        let mut found = false;
+        for (i, (t, b)) in tile_only
+            .cells
+            .iter()
+            .zip(combined.cells.iter())
+            .enumerate()
+        {
+            if t.ch == '⣿' && b.ch != '⣿' {
+                let mask_b = (b.ch as u32) - 0x2800;
+                assert!(
+                    mask_b.count_ones() < 8,
+                    "cell {i} mask must be replaced with overlay bit (count_ones < 8), got {}",
+                    mask_b.count_ones()
+                );
+                assert_eq!(b.fg, 222, "cell {i} fg = overlay colour");
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "no overlay-on-saturated-cell crossing detected — adjust test geometry"
+        );
+    }
+
+    /// An empty overlays slice produces the same frame as a no-overlay
+    /// baseline. Defensive — guards against accidental side-effects in
+    /// the third pass (e.g. clearing the canvas, mutating shared state).
+    #[test]
+    fn empty_overlays_match_baseline() {
+        use crate::geo::LonLat;
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 80, 40);
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let baseline = r.draw(&[], 4.0, center, &[]).expect("frame");
+        let with_empty = r.draw(&[], 4.0, center, &[]).expect("frame");
+        assert_eq!(
+            baseline.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
+            with_empty.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
+        );
     }
 }

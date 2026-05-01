@@ -7,9 +7,11 @@
 //! ```lua
 //! -- ~/.config/ttymap/init.lua
 //!
-//! ttymap.opt.render.style       = "bright"
-//! ttymap.opt.cache.memory_tiles = 1024
-//! ttymap.opt.geoip.on_startup   = true
+//! ttymap.opt.render.style              = "bright"
+//! ttymap.opt.cache.memory_tiles        = 1024
+//! ttymap.opt.geoip.on_startup          = true
+//! ttymap.opt.runtime.poll_timeout_ms   = 33   -- ~30 Hz
+//! ttymap.opt.runtime.overlay_redraw_ms = 50   -- smoother overlays
 //!
 //! ttymap.keymap.set("zoom_in", { "i", "+" })
 //! ttymap.keymap.del("pan_left")
@@ -202,6 +204,11 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     }
     opt.set("disable", disable)?;
 
+    let runtime = lua.create_table()?;
+    runtime.set("poll_timeout_ms", d.runtime.poll_timeout_ms)?;
+    runtime.set("overlay_redraw_ms", d.runtime.overlay_redraw_ms)?;
+    opt.set("runtime", runtime)?;
+
     Ok(opt)
 }
 
@@ -308,6 +315,14 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
             .sequence_values::<String>()
             .filter_map(Result::ok)
             .collect();
+    }
+    if let Ok(t) = opt.get::<Table>("runtime") {
+        if let Ok(v) = t.get::<u64>("poll_timeout_ms") {
+            cfg.runtime.poll_timeout_ms = v;
+        }
+        if let Ok(v) = t.get::<u64>("overlay_redraw_ms") {
+            cfg.runtime.overlay_redraw_ms = v;
+        }
     }
 
     Ok(cfg)
@@ -418,6 +433,18 @@ mod tests {
         "#;
         let (cfg, _) = run(src);
         assert_eq!(cfg.cache.memory_tiles, 2048);
+    }
+
+    #[test]
+    fn opt_runtime_poll_timeout_overrides_default() {
+        let (cfg, _) = run(r#"ttymap.opt.runtime.poll_timeout_ms = 33"#);
+        assert_eq!(cfg.runtime.poll_timeout_ms, 33);
+    }
+
+    #[test]
+    fn opt_runtime_overlay_redraw_overrides_default() {
+        let (cfg, _) = run(r#"ttymap.opt.runtime.overlay_redraw_ms = 200"#);
+        assert_eq!(cfg.runtime.overlay_redraw_ms, 200);
     }
 
     #[test]

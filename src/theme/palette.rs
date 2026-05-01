@@ -5,6 +5,7 @@
 //! (via [`crate::theme::UiTheme`]) read from here.
 
 /// All colours used by a single theme.
+#[derive(Clone, Copy)]
 pub struct ColorPalette {
     // background
     pub background: u8,
@@ -57,6 +58,31 @@ pub struct ColorPalette {
     pub airport_label: u8,
     pub road_label: u8,
     pub housenum_label: u8,
+}
+
+/// Parse a hex color string (`#RGB` or `#RRGGBB`) into an RGB array.
+/// Returns `[0, 0, 0]` for invalid input.
+#[cfg(test)]
+pub(crate) fn hex2rgb(color: &str) -> [u8; 3] {
+    fn parse(color: &str) -> Option<[u8; 3]> {
+        let s = color.trim_start_matches('#');
+        match s.len() {
+            3 => {
+                let r = u8::from_str_radix(&s[0..1], 16).ok()?;
+                let g = u8::from_str_radix(&s[1..2], 16).ok()?;
+                let b = u8::from_str_radix(&s[2..3], 16).ok()?;
+                Some([r * 17, g * 17, b * 17])
+            }
+            6 => {
+                let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+                Some([r, g, b])
+            }
+            _ => None,
+        }
+    }
+    parse(color).unwrap_or([0, 0, 0])
 }
 
 pub const DARK: ColorPalette = ColorPalette {
@@ -155,37 +181,6 @@ pub const BRIGHT: ColorPalette = ColorPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── Color conversion helpers ─────────────────────────────────────────
-    //
-    // These exist solely to verify that the hard-coded xterm-256 palette
-    // indices above match their intended hex colors. They were previously
-    // in a top-level `color` module but had no non-test callers, so they
-    // live here now as test-only helpers.
-
-    /// Parse a hex color string (`#RGB` or `#RRGGBB`) into an RGB array.
-    /// Returns `[0, 0, 0]` for invalid input.
-    fn hex2rgb(color: &str) -> [u8; 3] {
-        fn parse(color: &str) -> Option<[u8; 3]> {
-            let s = color.trim_start_matches('#');
-            match s.len() {
-                3 => {
-                    let r = u8::from_str_radix(&s[0..1], 16).ok()?;
-                    let g = u8::from_str_radix(&s[1..2], 16).ok()?;
-                    let b = u8::from_str_radix(&s[2..3], 16).ok()?;
-                    Some([r * 17, g * 17, b * 17])
-                }
-                6 => {
-                    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-                    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-                    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-                    Some([r, g, b])
-                }
-                _ => None,
-            }
-        }
-        parse(color).unwrap_or([0, 0, 0])
-    }
 
     /// Find the closest xterm-256 color index for a given RGB value.
     /// Considers the 6x6x6 color cube (16..=231) and grayscale ramp (232..=255).

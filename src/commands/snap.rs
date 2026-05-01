@@ -186,7 +186,7 @@ fn wait_for_stable_frame(
 
     // First render: probably empty (no tiles yet) but kicks off the
     // tile fetches by calling `tile_cache::set_view` internally.
-    let mut last_frame = pipeline.render(viewport);
+    let mut last_frame = pipeline.render(viewport, &[]);
 
     loop {
         if Instant::now() >= deadline {
@@ -194,7 +194,7 @@ fn wait_for_stable_frame(
         }
 
         if pipeline.poll_tiles()
-            && let Some(f) = pipeline.render(viewport)
+            && let Some(f) = pipeline.render(viewport, &[])
         {
             last_frame = Some(f);
         }
@@ -203,7 +203,7 @@ fn wait_for_stable_frame(
             // Drain any tiles that landed between our last poll_tiles
             // and the idle check, then finalise.
             if pipeline.poll_tiles()
-                && let Some(f) = pipeline.render(viewport)
+                && let Some(f) = pipeline.render(viewport, &[])
             {
                 last_frame = Some(f);
             }

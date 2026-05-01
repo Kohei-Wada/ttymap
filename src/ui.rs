@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::compositor::{Compositor, Context, MapApi};
 use crate::lua::LuaTickRegistry;
 use crate::map::render::frame::MapFrame;
+use crate::map::render::overlay::UserPolyline;
 use crate::theme::UiTheme;
 
 /// Draw the full screen. Caller passes the latest map snapshot
@@ -30,6 +31,7 @@ pub fn draw(
     tick_registry: &LuaTickRegistry,
     theme: &UiTheme,
     ctx: &Context,
+    overlay_sink: &mut Vec<UserPolyline>,
 ) {
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
@@ -49,7 +51,14 @@ pub fn draw(
         // the compositor (wiki markers, info bar, scale, attribution).
         // Focus-gated: closing a panel drops the component which drops
         // its paint hook.
-        let mut api = MapApi::new(f.buffer_mut(), map_inner, map_frame, theme, ctx.cursor);
+        let mut api = MapApi::new(
+            f.buffer_mut(),
+            map_inner,
+            map_frame,
+            theme,
+            ctx.cursor,
+            overlay_sink,
+        );
         // Tick every plugin-declared `on_tick` callback against the
         // live MapApi *before* the compositor paints — so any
         // plugin-emitted points lie underneath focused-component

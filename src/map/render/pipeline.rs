@@ -38,16 +38,22 @@ impl RenderPipeline {
 
     /// Process a `Viewport` into a `MapFrame`.
     /// Returns `None` if no tiles are available yet.
-    pub fn render(&mut self, vp: &Viewport) -> Option<MapFrame> {
+    pub fn render(
+        &mut self,
+        vp: &Viewport,
+        overlays: &[crate::map::render::overlay::UserPolyline],
+    ) -> Option<MapFrame> {
         let z = crate::geo::base_zoom(vp.zoom);
         self.tile_cache.set_view(vp.center.lon, vp.center.lat, z);
         let visible = self.visible_tiles_for(vp);
         let tile_data = self.collect_tile_data(&visible, vp.zoom);
-        self.renderer.draw(&tile_data, vp.zoom).map(|mut f| {
-            f.center = vp.center;
-            f.zoom = vp.zoom;
-            f
-        })
+        self.renderer
+            .draw(&tile_data, vp.zoom, vp.center, overlays)
+            .map(|mut f| {
+                f.center = vp.center;
+                f.zoom = vp.zoom;
+                f
+            })
     }
 
     /// Poll for completed tile fetches. Returns true if new tiles arrived.

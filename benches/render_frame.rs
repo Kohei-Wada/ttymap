@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
+use ttymap::geo::LonLat;
 use ttymap::map::render::renderer::{LayerData, Renderer, TileData};
 use ttymap::map::render::view::VisibleTile;
 use ttymap::map::styler::Styler;
@@ -51,7 +52,12 @@ fn bench_render_frame(c: &mut Criterion) {
 
     c.bench_function("render_frame", |b| {
         b.iter(|| {
-            let _ = renderer.draw(black_box(&tile_data), black_box(14.0));
+            let _ = renderer.draw(
+                black_box(&tile_data),
+                black_box(14.0),
+                black_box(LonLat { lon: 0.0, lat: 0.0 }),
+                black_box(&[]),
+            );
         })
     });
 }

@@ -18,7 +18,8 @@ impl Widget for &MapFrame {
                 let x = area.x + col;
                 let y = area.y + row;
                 if x < area.x + area.width && y < area.y + area.height {
-                    buf[(x, y)]
+                    let target = &mut buf[(x, y)];
+                    target
                         .set_char(cell.ch)
                         .set_fg(xterm_to_color(cell.fg))
                         .set_bg(xterm_to_color(cell.bg));

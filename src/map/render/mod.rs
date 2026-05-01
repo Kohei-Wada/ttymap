@@ -7,6 +7,7 @@ pub mod frame;
 pub mod frame_widget;
 mod geom;
 pub mod label;
+pub mod overlay;
 pub mod panic_silence;
 pub mod pipeline;
 pub mod renderer;

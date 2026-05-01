@@ -53,6 +53,12 @@ pub struct App {
     /// frame against the live `MapApi`, before the compositor's
     /// `paint_on_map`.
     tick_registry: LuaTickRegistry,
+    /// Ephemeral polyline overlays pushed by Lua plugins during the
+    /// current frame's `on_tick` pass. Drained into the next
+    /// `RenderTask::Draw` immediately after `ui::draw` returns — so
+    /// the Lua side fire-and-forgets every frame and the render thread
+    /// always gets the freshest set.
+    overlay_sink: Vec<crate::map::render::overlay::UserPolyline>,
     /// Setup-state [`LuaHostHandles`] for every Lua plugin script
     /// (palette providers, plugin components, plugin loops, and any
     /// `ttymap.api.window.open` / `palette.open` callers). Each
@@ -67,6 +73,22 @@ pub struct App {
     /// [`Context`](crate::compositor::Context) so plugins can build
     /// cursor-aware overlays.
     cursor: Option<(u16, u16)>,
+    /// Timestamp of the last overlay-driven `request_map_redraw`. Used
+    /// to rate-limit redraws when a plugin pushes polyline overlays
+    /// every tick — without this, each push triggers a full tile re-
+    /// render at the main loop's ~60Hz cadence (`event::poll(16ms)`),
+    /// which is wasted work since tile data does not change between
+    /// frames. Throttling to ~30Hz halves render-thread CPU while
+    /// keeping animation visually smooth. User-event-driven redraws
+    /// (pan, zoom, resize, theme change) bypass this check and fire
+    /// immediately.
+    last_overlay_redraw: std::time::Instant,
+    /// Main event-loop wake interval. Derived from
+    /// `ttymap.opt.runtime.poll_timeout_ms` at startup.
+    poll_timeout: std::time::Duration,
+    /// Minimum interval between overlay-driven redraws. Derived from
+    /// `ttymap.opt.runtime.overlay_redraw_ms` at startup.
+    overlay_redraw_interval: std::time::Duration,
 }
 
 impl App {
@@ -144,6 +166,12 @@ impl App {
             tick_registry,
             lua_host_handles,
             cursor: None,
+            overlay_sink: Vec::new(),
+            last_overlay_redraw: std::time::Instant::now(),
+            poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
+            overlay_redraw_interval: std::time::Duration::from_millis(
+                config.runtime.overlay_redraw_ms,
+            ),
         }
     }
 
@@ -193,19 +221,42 @@ impl App {
                     &self.tick_registry,
                     &self.ui_theme,
                     &ctx,
+                    &mut self.overlay_sink,
                 )
             })?;
+
+            // Plugins push polylines into `overlay_sink` from their `on_tick`
+            // callbacks during `ui::draw`. Drain unconditionally so the next
+            // render task carries them — without this the sink grows every
+            // frame any plugin calls `map:polyline`. The render thread's
+            // `drain_tasks` collapses redundant Draw tasks to the latest, so
+            // this doesn't cause N renders per second; it just guarantees the
+            // freshly-pushed polylines reach the next render.
+            //
+            // Rate-limited to ~30Hz: plugins can push every tick at 60Hz, but
+            // we only trigger a full tile re-render at most every 33ms. Polylines
+            // accumulate in `overlay_sink` between redraws and are all delivered
+            // in the next triggered Draw. User-event-driven redraws (pan, zoom,
+            // resize, theme change) bypass this check and always fire immediately.
+            if !self.overlay_sink.is_empty() {
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
+                    self.request_map_redraw();
+                    self.last_overlay_redraw = now;
+                }
+            }
 
             // Idle wake rate. crossterm's `event::poll` blocks
             // until an input event arrives or this elapses, so the
             // real cost is bounded latency for things that aren't
             // event-driven: a freshly produced render frame (we
             // drain those non-blockingly at the top of the loop)
-            // and any plugin whose `poll()` touches render output
-            // (e.g. a counter). 16 ms = 60 Hz, indistinguishable
-            // from instant for human perception, an order of
-            // magnitude less idle CPU than the previous 4 ms.
-            let mut poll_timeout = Duration::from_millis(16);
+            // and any plugin whose `on_tick` touches render output
+            // (e.g. ping animation). Configurable via
+            // `ttymap.opt.runtime.poll_timeout_ms`; default 50 ms
+            // (20 Hz) keeps per-tick work cheap while input latency
+            // stays imperceptible.
+            let mut poll_timeout = self.poll_timeout;
             while event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
                 match event::read()? {
@@ -355,7 +406,8 @@ impl App {
             return;
         }
         let viewport = self.map.viewport();
-        self.render_handle.request_draw(viewport);
+        let overlays = std::mem::take(&mut self.overlay_sink);
+        self.render_handle.request_draw(viewport, overlays);
     }
 }
 

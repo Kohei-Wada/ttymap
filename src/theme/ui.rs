@@ -16,6 +16,10 @@ pub struct UiTheme {
     pub fg: Color,
     pub muted_color: Color,
     pub bg: Color,
+    /// Raw palette retained so callers (e.g. the Lua bridge's colour
+    /// resolver) can access palette indices that aren't promoted to
+    /// `Color` fields here.
+    pub palette: ColorPalette,
 }
 
 impl UiTheme {
@@ -26,6 +30,7 @@ impl UiTheme {
             fg: Color::Indexed(p.fg),
             muted_color: Color::Indexed(p.muted),
             bg: Color::Indexed(p.background),
+            palette: ColorPalette { ..*p },
         }
     }
 
