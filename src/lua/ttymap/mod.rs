@@ -51,6 +51,14 @@
 //! ttymap.api.frame.on_tick(callback)        register a per-frame callback
 //!                                            (called with `MapApi`); multiple
 //!                                            calls per script are stacked
+//! ttymap.notify(msg [, opts])               post a transient status message;
+//!                                            opts.level is `info` (default) /
+//!                                            `warn` / `error`. The bundled
+//!                                            `notify` plugin renders recent
+//!                                            entries in a corner.
+//! ttymap.api.notify.recent(ttl_ms) -> list  active notifications (age < ttl)
+//!                                            consumed by the bundled `notify`
+//!                                            plugin's per-frame renderer
 //! ```
 //!
 //! `ttymap.map:jump(...)` is fire-and-forget from the Lua side; the
@@ -70,15 +78,24 @@ pub mod map_api;
 pub mod sgp4;
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use mlua::{Lua, Table, UserData};
 
 use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
+
+/// Maximum number of pending notifications retained in the host's
+/// shared ring buffer. Sized to absorb a brief flurry (a search
+/// returning, a fetch erroring, a file exporting) without needing
+/// per-call resizing — at typical 3-second display TTL the buffer
+/// rarely hits cap, and on overflow we drop the oldest so newer
+/// signals are never starved.
+const NOTIFY_RING_CAP: usize = 16;
 
 // ── Shared snapshot ─────────────────────────────────────────────────
 
@@ -112,6 +129,25 @@ pub struct LuaHostShared {
     /// register time) so it sees every plugin regardless of load
     /// order.
     pub palette_entries: Mutex<Vec<PluginEntry>>,
+    /// Transient status messages posted via `ttymap.notify(msg, opts)`.
+    /// The bundled `notify` plugin reads this each tick via
+    /// `ttymap.api.notify.recent(ttl_ms)` and renders entries that are
+    /// still within their TTL. A small ring (cap [`NOTIFY_RING_CAP`])
+    /// — overflow drops the oldest. Plain `Vec` because the volume is
+    /// tiny and the renderer iterates oldest-first by design.
+    pub notifications: Mutex<VecDeque<NotifyEntry>>,
+}
+
+/// One transient status message awaiting display. Held in
+/// [`LuaHostShared::notifications`]; the bundled `notify` plugin
+/// surfaces these via `ttymap.api.notify.recent(ttl_ms)`. `level` is a
+/// raw string ("info" / "warn" / "error") so renderers can map to
+/// theme colours without the host pre-committing to a palette.
+#[derive(Clone)]
+pub struct NotifyEntry {
+    pub message: String,
+    pub level: String,
+    pub posted_at: Instant,
 }
 
 /// One plugin's help-relevant metadata. Surfaced to Lua via
@@ -137,6 +173,20 @@ impl LuaHostShared {
             geoip_endpoint,
             keymap_entries,
             palette_entries: Mutex::new(Vec::new()),
+            notifications: Mutex::new(VecDeque::with_capacity(NOTIFY_RING_CAP)),
+        }
+    }
+
+    /// Append one notification to the shared ring buffer. Oldest
+    /// entry evicted on overflow so a flurry never starves the most
+    /// recent signal. Poisoned mutex is silently skipped — losing a
+    /// transient message is preferable to crashing the host.
+    pub fn push_notification(&self, entry: NotifyEntry) {
+        if let Ok(mut buf) = self.notifications.lock() {
+            if buf.len() >= NOTIFY_RING_CAP {
+                buf.pop_front();
+            }
+            buf.push_back(entry);
         }
     }
 
@@ -322,7 +372,12 @@ pub fn install(
             shared: shared.clone(),
         })?,
     )?;
-    ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
+    ttymap.set(
+        "help",
+        lua.create_userdata(HostHelp {
+            shared: shared.clone(),
+        })?,
+    )?;
     ttymap.set(
         "log",
         lua.create_userdata(HostLog {
@@ -516,7 +571,66 @@ pub fn install(
     )?;
     api.set("frame", frame_api)?;
 
+    // ── ttymap.api.notify ─────────────────────────────────────────────
+    //
+    // Read-side of the notification ring. The bundled `notify` plugin
+    // walks `recent(ttl_ms)` per frame and renders entries whose age
+    // is below the TTL. Returning age (rather than a wall-clock
+    // timestamp) lets renderers decide on fade / sort policy without
+    // owning a clock.
+    let notify_api = lua.create_table()?;
+    let shared_for_recent = shared.clone();
+    notify_api.set(
+        "recent",
+        lua.create_function(move |lua, ttl_ms: u64| {
+            let table = lua.create_table()?;
+            let now = Instant::now();
+            let buf = match shared_for_recent.notifications.lock() {
+                Ok(g) => g,
+                Err(_) => return Ok(table),
+            };
+            let mut idx = 1;
+            for e in buf.iter() {
+                let age_ms = now.saturating_duration_since(e.posted_at).as_millis() as u64;
+                if age_ms < ttl_ms {
+                    let row = lua.create_table()?;
+                    row.set("message", e.message.as_str())?;
+                    row.set("level", e.level.as_str())?;
+                    row.set("age_ms", age_ms)?;
+                    table.set(idx, row)?;
+                    idx += 1;
+                }
+            }
+            Ok(table)
+        })?,
+    )?;
+    api.set("notify", notify_api)?;
+
     ttymap.set("api", api)?;
+
+    // ── ttymap.notify ────────────────────────────────────────────────
+    //
+    // Top-level write surface for transient status messages. Kept as
+    // a plain function (not method-style) so callers write
+    // `ttymap.notify("ok")` instead of `ttymap.notify:post("ok")` —
+    // the call site is the common one; the read side under
+    // `ttymap.api.notify.recent` is consumed by exactly one plugin
+    // (the bundled renderer).
+    let shared_for_notify = shared.clone();
+    ttymap.set(
+        "notify",
+        lua.create_function(move |_, (msg, opts): (String, Option<Table>)| {
+            let level = opts
+                .and_then(|t| t.get::<String>("level").ok())
+                .unwrap_or_else(|| "info".to_string());
+            shared_for_notify.push_notification(NotifyEntry {
+                message: msg,
+                level,
+                posted_at: Instant::now(),
+            });
+            Ok(())
+        })?,
+    )?;
 
     lua.globals().set("ttymap", ttymap)?;
 
@@ -1078,6 +1192,86 @@ mod tests {
             .eval()
             .expect("eval");
         assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
+    }
+
+    #[test]
+    fn notify_writes_into_shared_ring_and_recent_filters_by_ttl() {
+        // `ttymap.notify(msg, opts)` writes a [`NotifyEntry`] into the
+        // shared ring; `ttymap.api.notify.recent(ttl_ms)` returns the
+        // currently-active subset so the bundled plugin can render.
+        // Default level is "info"; explicit `level = "warn" / "error"`
+        // round-trips. A long ttl shows everything; a zero ttl hides
+        // everything (nothing has age < 0ms).
+        let lua = mlua::Lua::new();
+        let shared = LuaHostShared::empty();
+        let slot = new_capture_slot();
+        let _handles =
+            install(&lua, "lua-test", shared.clone(), slot).expect("install ttymap table");
+
+        lua.load(
+            r#"
+            ttymap.notify("ok")
+            ttymap.notify("watch out", { level = "warn" })
+            ttymap.notify("boom", { level = "error" })
+            "#,
+        )
+        .exec()
+        .expect("notify writes");
+
+        // Direct buffer inspection — independent of the recent()
+        // surface so the test still pinpoints whichever side is wrong.
+        {
+            let buf = shared.notifications.lock().expect("lock");
+            assert_eq!(buf.len(), 3, "three notify calls -> three entries");
+            assert_eq!(buf[0].level, "info");
+            assert_eq!(buf[1].level, "warn");
+            assert_eq!(buf[2].level, "error");
+            assert_eq!(buf[2].message, "boom");
+        }
+
+        // recent() with a generous ttl returns oldest-first; with
+        // zero ttl returns nothing (every entry has age >= 0).
+        let visible: i64 = lua
+            .load(r#"return #ttymap.api.notify.recent(60000)"#)
+            .eval()
+            .expect("recent(60000)");
+        assert_eq!(visible, 3);
+        let none: i64 = lua
+            .load(r#"return #ttymap.api.notify.recent(0)"#)
+            .eval()
+            .expect("recent(0)");
+        assert_eq!(none, 0);
+    }
+
+    #[test]
+    fn notify_ring_evicts_oldest_on_overflow() {
+        // Past `NOTIFY_RING_CAP` writes the oldest entry must be
+        // dropped so a flurry never strands the most recent signal
+        // behind stale ones. Asserts the eviction happens by checking
+        // that the head shifts forward, not that the cap is honoured
+        // (cap is an internal invariant; what plugins observe is
+        // "newest always wins").
+        let lua = mlua::Lua::new();
+        let shared = LuaHostShared::empty();
+        let slot = new_capture_slot();
+        let _handles =
+            install(&lua, "lua-test", shared.clone(), slot).expect("install ttymap table");
+        for i in 0..(NOTIFY_RING_CAP + 4) {
+            lua.load(format!(r#"ttymap.notify("msg-{}")"#, i))
+                .exec()
+                .expect("exec");
+        }
+        let buf = shared.notifications.lock().expect("lock");
+        assert_eq!(
+            buf.len(),
+            NOTIFY_RING_CAP,
+            "buffer must cap at {NOTIFY_RING_CAP}"
+        );
+        assert_eq!(
+            buf.front().expect("non-empty").message,
+            format!("msg-{}", 4),
+            "first 4 entries should have been evicted"
+        );
     }
 
     #[test]
