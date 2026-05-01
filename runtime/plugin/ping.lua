@@ -23,9 +23,15 @@ local pings = {
   { src = {  72.88,  19.08 }, dst = {-118.24,  34.05 }, color = 207, offset = 72 }, -- Mumbai → Los Angeles (magenta)
 }
 
-local steps = 60
-local pause = 30
-local cycle = steps + pause
+-- Animation phases per ping cycle:
+--   [0           , out_steps        ): outbound — line grows from src toward dst
+--   [out_steps   , out_steps+ret    ): return — line shrinks toward dst (tail
+--                                       moves from src toward dst)
+--   [out_steps+ret, cycle           ): pause — nothing drawn
+local out_steps = 45
+local ret_steps = 45
+local pause     = 20
+local cycle     = out_steps + ret_steps + pause
 
 local enabled = false
 local frame   = 0
@@ -75,16 +81,25 @@ ttymap.api.frame.on_tick(function(map)
   end
   frame = frame + 1
   for _, ping in ipairs(pings) do
-    -- Each ping's phase = (frame + offset) mod cycle. The active
-    -- window is i ∈ (0, steps]; outside that the ping is paused.
     local i = (frame + ping.offset) % cycle
-    if i == 0 or i > steps then
+    if i == 0 then
       goto continue
     end
-    local t   = i / steps
-    local lon = interp_lon(ping.src[1], ping.dst[1], t)
-    local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
-    map:polyline({ ping.src, { lon, lat } }, ping.color)
+    if i <= out_steps then
+      -- Outbound: tip interpolates src → dst, line is { src, tip }.
+      local t   = i / out_steps
+      local lon = interp_lon(ping.src[1], ping.dst[1], t)
+      local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
+      map:polyline({ ping.src, { lon, lat } }, ping.color)
+    elseif i <= out_steps + ret_steps then
+      -- Return: tail interpolates src → dst (so the line shrinks
+      -- toward dst as the request "travels back"). Line is { tail, dst }.
+      local t   = (i - out_steps) / ret_steps
+      local lon = interp_lon(ping.src[1], ping.dst[1], t)
+      local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
+      map:polyline({ { lon, lat }, ping.dst }, ping.color)
+    end
+    -- else: pause phase, draw nothing.
     ::continue::
   end
 end)
