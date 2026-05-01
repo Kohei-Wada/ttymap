@@ -32,6 +32,9 @@
 //! ttymap.config :geoip_endpoint() -> string `[geoip].endpoint` value
 //! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
 //! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
+//! ttymap.log    :info(msg) / :warn(msg) / :error(msg)
+//!                                            forward to host log at
+//!                                            target `lua[<plugin>]`
 //! ttymap.api.window.open(spec) -> Handle    push a focused window
 //!                                            (LuaWindowComponent) onto
 //!                                            the stack; handle:close()
@@ -303,6 +306,12 @@ pub fn install(
         })?,
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
+    ttymap.set(
+        "log",
+        lua.create_userdata(HostLog {
+            target: format!("lua[{}]", tag),
+        })?,
+    )?;
 
     // Activation surfaces. Each is opt-in and explicit — the host
     // never auto-adds a palette row or keybind from the plugin's
@@ -716,6 +725,34 @@ impl UserData for HostHelp {
     }
 }
 
+// ── ttymap.log ───────────────────────────────────────────────────────
+
+/// Plugin-side logging sink. `target` is pre-formatted as
+/// `lua[<plugin>]` so callers don't pay for the format on every line
+/// and `RUST_LOG=lua[aircraft]=debug` filters cleanly. Mirrors the
+/// host-side `log::warn!("lua[{tag}]: ...")` convention used elsewhere
+/// in the bridge — same target shape, just opened up to scripts.
+struct HostLog {
+    target: String,
+}
+
+impl UserData for HostLog {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("info", |_, this, msg: String| {
+            log::info!(target: &this.target, "{}", msg);
+            Ok(())
+        });
+        methods.add_method("warn", |_, this, msg: String| {
+            log::warn!(target: &this.target, "{}", msg);
+            Ok(())
+        });
+        methods.add_method("error", |_, this, msg: String| {
+            log::error!(target: &this.target, "{}", msg);
+            Ok(())
+        });
+    }
+}
+
 // ── Job ─────────────────────────────────────────────────────────────
 
 /// One-shot fetch handle. Stays alive in the Lua state until the
@@ -832,7 +869,9 @@ mod tests {
         let (lua, _handles) = install_for_test();
         // Each namespace lookup must return a userdata; the shape
         // confirms the install wired all namespaces in.
-        for ns in ["http", "map", "json", "sgp4", "tile", "config", "help"] {
+        for ns in [
+            "http", "map", "json", "sgp4", "tile", "config", "help", "log",
+        ] {
             let ud: mlua::AnyUserData = lua
                 .load(format!("return ttymap.{ns}"))
                 .eval()
@@ -974,6 +1013,25 @@ mod tests {
             .eval()
             .expect("eval");
         assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
+    }
+
+    #[test]
+    fn log_namespace_methods_round_trip() {
+        // `ttymap.log:info/warn/error` are thin wrappers — no return
+        // value, no error path. The unit test confirms the bindings
+        // exist and accept a string. Anything observable downstream
+        // (target = "lua[<plugin>]") is exercised by integration; here
+        // we just want a panic-free round trip.
+        let (lua, _handles) = install_for_test();
+        lua.load(
+            r#"
+            ttymap.log:info("info-ok")
+            ttymap.log:warn("warn-ok")
+            ttymap.log:error("error-ok")
+            "#,
+        )
+        .exec()
+        .expect("log methods must round-trip");
     }
 
     #[test]
