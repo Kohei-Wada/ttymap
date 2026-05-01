@@ -193,20 +193,6 @@ pub struct LuaHostHandles {
 
 // ── Self-registration capture ────────────────────────────────────────
 
-/// What a plugin script declared by calling `register_plugin`. At
-/// most one of these per script — its presence determines whether
-/// activation surfaces (`palette_commands` / `keybinds`) push a
-/// fresh Component (kind = `Plugin`) or run a fire-and-forget
-/// callback (kind = `None`, "pure-action" plugin). Always-on chrome
-/// uses `register_plugin` + a `loop` callback; palette providers are
-/// pushed dynamically via `ttymap.api.palette.open(spec)` rather than
-/// self-declared at top level. (Legacy `register_overlay` /
-/// `register_palette` surfaces were removed in Phase C.)
-pub enum CapturedKind {
-    /// Stack-pushed Component plugin (rendered panel).
-    Plugin(Table),
-}
-
 /// One palette row declared by a plugin via
 /// `ttymap.register_palette_command(spec)`. The `invoke` callback is
 /// stored as a [`RegistryKey`] so it survives the registration call
@@ -236,11 +222,15 @@ pub struct KeybindSpec {
 /// `ttymap.api.window.open(spec)` / `ttymap.api.palette.open(spec)`.
 #[derive(Default)]
 pub struct CapturedRegistration {
-    /// The plugin kind itself. `None` means the script never called
-    /// `register_plugin` — for a script that only declares activation
-    /// surfaces (a "pure-action" plugin) this is fine; otherwise the
-    /// walker logs + skips that file.
-    pub kind: Option<CapturedKind>,
+    /// The plugin spec table from `ttymap.register_plugin(spec)`.
+    /// `None` means the script never called `register_plugin` — for a
+    /// script that only declares activation surfaces (a "pure-action"
+    /// plugin) this is fine; otherwise the walker logs + skips that
+    /// file. Always-on chrome uses `register_plugin` + a `loop`
+    /// callback; palette providers are pushed dynamically via
+    /// `ttymap.api.palette.open(spec)` rather than self-declared at
+    /// top level.
+    pub spec: Option<Table>,
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
     /// Each `ttymap.register_keybind(key, callback)` call.
@@ -330,23 +320,20 @@ pub fn install(
     // self-register at top level; they're pushed dynamically via
     // `ttymap.api.palette.open(spec)` from inside an activation
     // callback.
-    fn set_kind(slot: &CaptureSlot, kind: CapturedKind, who: &str) -> mlua::Result<()> {
+    fn set_spec(slot: &CaptureSlot, spec: Table) -> mlua::Result<()> {
         let mut cap = slot.borrow_mut();
-        if cap.kind.is_some() {
-            return Err(mlua::Error::external(format!(
-                "ttymap.{}: a plugin was already registered in this script",
-                who
-            )));
+        if cap.spec.is_some() {
+            return Err(mlua::Error::external(
+                "ttymap.register_plugin: a plugin was already registered in this script",
+            ));
         }
-        cap.kind = Some(kind);
+        cap.spec = Some(spec);
         Ok(())
     }
     let cap = slot.clone();
     ttymap.set(
         "register_plugin",
-        lua.create_function(move |_, spec: Table| {
-            set_kind(&cap, CapturedKind::Plugin(spec), "register_plugin")
-        })?,
+        lua.create_function(move |_, spec: Table| set_spec(&cap, spec))?,
     )?;
 
     // Activation surfaces. Each is opt-in and explicit — the host

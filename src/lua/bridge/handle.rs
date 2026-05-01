@@ -121,13 +121,14 @@ pub enum CallOutcome<R> {
 /// The script self-registers by calling at least one
 /// `ttymap.register_*` API. Two valid shapes:
 ///
-/// 1. **Componented plugin**: calls `register_plugin` (sets `kind`),
-///    optionally with activation surfaces (`register_palette_command` /
-///    `register_keybind` / `register_footer_hint`). Palette providers
-///    are *not* declared at top level anymore; they're pushed
-///    dynamically via `ttymap.api.palette.open(spec)` from inside
-///    an activation callback.
-/// 2. **Pure-action plugin**: no `kind`, but at least one activation
+/// 1. **Componented plugin**: calls `register_plugin` (which captures
+///    the spec table), optionally with activation surfaces
+///    (`register_palette_command` / `register_keybind` /
+///    `register_footer_hint`). Palette providers are *not* declared
+///    at top level anymore; they're pushed dynamically via
+///    `ttymap.api.palette.open(spec)` from inside an activation
+///    callback.
+/// 2. **Pure-action plugin**: no spec, but at least one activation
 ///    surface — typically a `register_palette_command` whose
 ///    `invoke` calls a fire-and-forget host API like
 ///    `ttymap.api.frame.export()` or `ttymap.map:jump(...)`.
@@ -153,11 +154,11 @@ pub fn fresh_load(
     let has_surface = !captured.palette_commands.is_empty()
         || !captured.keybinds.is_empty()
         || !captured.footer_hints.is_empty();
-    if captured.kind.is_none() && !has_surface {
+    if captured.spec.is_none() && !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap.register_* API \
-             (register_plugin / register_palette_command / \
-             register_keybind / register_footer_hint)",
+             (register_plugin, register_palette_command, \
+             register_keybind, or register_footer_hint)",
         ));
     }
     Ok((lua, captured, handles))

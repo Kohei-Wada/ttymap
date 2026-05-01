@@ -228,8 +228,10 @@ fn register_one(
     r: &mut Registrar,
 ) {
     // Run the script once to capture its registration call. The
-    // captured variant tells us which kind of plugin it is — Lua
-    // is the source of truth, not file path or table layout.
+    // captured spec tells us whether the script registered a plugin
+    // table (`Some`) or only activation surfaces (`None`, "pure-
+    // action" plugin) — Lua is the source of truth, not file path or
+    // table layout.
     //
     // The `lua` returned here is the **setup state**: it holds the
     // module-level Lua locals from `register_*` setup, plus the
@@ -247,15 +249,11 @@ fn register_one(
             }
         };
 
-    // Take ownership of the spec table when one exists. Scripts
-    // that didn't call `register_plugin` skip this block — there's
-    // no module to read `enabled` / `loop` / `footer_hints` from;
-    // only `captured.footer_hints` (the explicit
-    // `register_footer_hint` calls) applies.
-    let module_opt: Option<Table> = captured.kind.map(|k| match k {
-        ttymap::CapturedKind::Plugin(t) => t,
-    });
-    if let Some(module) = module_opt.as_ref()
+    // Pure-action plugins (no `register_plugin` call) skip the
+    // block that reads `enabled` / `loop` / spec-level `footer_hints`.
+    // Only `captured.footer_hints` (the explicit
+    // `register_footer_hint` calls) applies in that case.
+    if let Some(module) = captured.spec.as_ref()
         && !module_enabled(module)
     {
         log::info!("lua[{}]: enabled = false, skipping", name);
@@ -265,11 +263,11 @@ fn register_one(
 
     // Capture the plugin's per-frame `loop` callback if it declared
     // one. Optional and additive: scripts that don't use this field
-    // continue to work through their existing `paint_on_map` / `poll`
-    // hooks. The setup-state Lua is cloned (cheap Arc bump) into the
-    // registry entry so the closure stays callable for the program's
-    // lifetime. Scripts without a module have no `loop`.
-    if let Some(module) = module_opt.as_ref()
+    // continue to work through their existing hooks. The setup-state
+    // Lua is cloned (cheap Arc bump) into the registry entry so the
+    // closure stays callable for the program's lifetime. Scripts
+    // without a spec have no `loop`.
+    if let Some(module) = captured.spec.as_ref()
         && let Ok(loop_fn) = module.get::<mlua::Function>("loop")
     {
         match lua.create_registry_value(loop_fn) {
@@ -286,13 +284,12 @@ fn register_one(
         }
     }
 
-    // Read footer_hints from the module before it's consumed by
-    // the kind-specific branch below. Spec-level `footer_hints`
-    // is the legacy fallback; explicit
+    // Read footer_hints from the spec table when present. Spec-level
+    // `footer_hints` is the legacy fallback; explicit
     // `ttymap.register_footer_hint(...)` calls win when present.
     let footer_hints = if !captured.footer_hints.is_empty() {
         captured.footer_hints.clone()
-    } else if let Some(module) = module_opt.as_ref() {
+    } else if let Some(module) = captured.spec.as_ref() {
         parse_footer_hints(module)
     } else {
         Vec::new()
@@ -589,9 +586,10 @@ mod tests {
     }
 
     /// Helper for spec-table inspection tests. Runs the source in a
-    /// throwaway Lua state, returns the captured spec table along
-    /// with its variant tag so the test can assert on both. Mirrors
-    /// what `register_one` does at registration time.
+    /// throwaway Lua state and returns the captured registration so
+    /// the test can assert on the captured spec / activation
+    /// surfaces. Mirrors what `register_one` does at registration
+    /// time.
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
         let shared = ttymap::LuaHostShared::empty();
         let (lua, captured, _handles) =
@@ -600,15 +598,13 @@ mod tests {
     }
 
     fn captured_table(c: &ttymap::CapturedRegistration) -> &Table {
-        match c.kind.as_ref().expect("script registered something") {
-            ttymap::CapturedKind::Plugin(t) => t,
-        }
+        c.spec.as_ref().expect("script registered a plugin spec")
     }
 
     #[test]
-    fn register_plugin_yields_plugin_variant() {
+    fn register_plugin_captures_spec_table() {
         let (_lua, c) = parse_spec(r#"ttymap.register_plugin({ name = "x" })"#, "x");
-        assert!(matches!(c.kind, Some(ttymap::CapturedKind::Plugin(_))));
+        assert!(c.spec.is_some());
         let t = captured_table(&c);
         assert!(module_enabled(t));
         // No surfaces declared: empty palette_commands + keybinds.
