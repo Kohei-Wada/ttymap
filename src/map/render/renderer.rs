@@ -238,7 +238,7 @@ impl Renderer {
                 ));
             }
             if buf.len() >= 2 {
-                self.canvas.polyline(&buf, poly.color);
+                self.canvas.polyline_punching(&buf, poly.color);
             }
         }
         self.scratches.line = buf;
@@ -942,6 +942,129 @@ mod tests {
         assert!(
             drawn >= 2,
             "overlay polyline must paint at least two non-empty braille cells, got {drawn}"
+        );
+    }
+
+    /// Bug fix: an overlay polyline crossing a fully-saturated cell
+    /// (e.g. the interior of a water polygon) must render as a thin
+    /// shape, not as a 2-column-wide block of overlay colour.
+    ///
+    /// Probe: render a Fill feature large enough to fully saturate at
+    /// least one cell, then draw an overlay polyline that crosses that
+    /// cell. The combined frame's cell (at the crossing) must NOT be
+    /// `⣿` — its mask must contain only the overlay's subpixel(s),
+    /// strictly fewer than 8 dots.
+    #[test]
+    fn overlay_punches_through_saturated_tile_fills() {
+        use std::collections::HashMap;
+
+        use crate::geo::LonLat;
+        use crate::map::render::overlay::UserPolyline;
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+
+        // Big water rectangle covering the full tile so its interior
+        // cells saturate.
+        let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
+            vec![
+                TilePoint { x: x0, y: y0 },
+                TilePoint { x: x1, y: y0 },
+                TilePoint { x: x1, y: y1 },
+                TilePoint { x: x0, y: y1 },
+            ]
+        };
+        let make_water_tile = || TileData {
+            vis: VisibleTile {
+                x: 0,
+                y: 0,
+                z: 14,
+                pos_x: 0.0,
+                pos_y: 0.0,
+                size: 256.0,
+            },
+            layers: vec![LayerData {
+                name: "water".to_string(),
+                extent: 4096,
+                features: vec![Feature {
+                    layer_name: Arc::from("water"),
+                    properties: Arc::new(HashMap::new()),
+                    points: Arc::new(vec![cw_square(0, 0, 4096, 4096)]),
+                    min_x: 0.0,
+                    max_x: 0.0,
+                    min_y: 0.0,
+                    max_y: 0.0,
+                }],
+            }],
+        };
+
+        // Overlay polyline crossing the centre of the saturated water
+        // area. World coords near (0, 0) at zoom 6 land in the visible
+        // canvas.
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let overlay = UserPolyline {
+            coords: vec![
+                LonLat {
+                    lon: -0.5,
+                    lat: 0.0,
+                },
+                LonLat { lon: 0.5, lat: 0.0 },
+            ],
+            color: 11,
+        };
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+
+        // Tile-only frame: confirm the fixture does saturate at least
+        // one cell (sanity check). Otherwise the test is vacuous.
+        let tile_only = renderer
+            .draw(&[make_water_tile()], 6.0, center, &[])
+            .expect("frame");
+        let saturated_count = tile_only.cells.iter().filter(|c| c.ch == '⣿').count();
+        assert!(
+            saturated_count > 0,
+            "fixture: water fill must produce at least one saturated cell, \
+             got {saturated_count}"
+        );
+
+        // Combined frame: overlay should "punch through" any saturated
+        // cell it crosses.
+        let combined = renderer
+            .draw(&[make_water_tile()], 6.0, center, &[overlay])
+            .expect("frame");
+
+        // Find a cell along the overlay's path where the tile-only
+        // version was saturated. That cell in the combined frame must
+        // have a non-⣿ char with a strict-subset dot mask.
+        let mut found = false;
+        for (i, (t, b)) in tile_only
+            .cells
+            .iter()
+            .zip(combined.cells.iter())
+            .enumerate()
+        {
+            if t.ch == '⣿' && b.ch != '⣿' {
+                let mask_b = (b.ch as u32) - 0x2800;
+                assert!(
+                    mask_b != 0xFF,
+                    "combined cell {i} must not be saturated, got mask 0x{mask_b:02x}"
+                );
+                assert!(
+                    mask_b.count_ones() < 8,
+                    "punching cell {i} must have strictly fewer than 8 dots, \
+                     got {} dots",
+                    mask_b.count_ones()
+                );
+                assert_eq!(b.fg, 11, "combined cell {i} fg must be the overlay colour");
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "no overlay-on-saturated-cell crossing detected — adjust the \
+             overlay's coords or zoom so the line passes through a saturated \
+             interior cell"
         );
     }
 
