@@ -4,8 +4,8 @@
 //! `MapApi` wraps the ratatui buffer, the active `MapProjection`, and
 //! the theme. Two flavours of primitive:
 //!
-//! - **World-space** (`point`, `label`, `line`, ...) — input is a
-//!   `LonLat`; projection + clipping handled internally.
+//! - **World-space** (`point`, `label`, ...) — input is a `LonLat`;
+//!   projection + clipping handled internally.
 //! - **Screen-space** (`text_anchored`, `cursor_ll`, ...) — input is
 //!   anchored to a corner of the visible map area; useful for chrome
 //!   overlays (info bar, scale, attribution) that don't track world
@@ -23,6 +23,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::geo::{LonLat, MapProjection};
 use crate::map::render::frame::MapFrame;
+use crate::map::render::overlay::UserPolyline;
 use crate::theme::UiTheme;
 
 /// Corner-anchor for screen-space primitives like
@@ -54,6 +55,10 @@ pub struct MapApi<'a> {
     /// here (in addition to `Context.cursor`) so paint_on_map can
     /// reach it without the plugin stashing a copy in its own state.
     cursor: Option<(u16, u16)>,
+    /// Polylines pushed by Lua plugins / components this frame.
+    /// Drained by `App` after `ui::draw` returns and bundled into the
+    /// next `RenderTask::Draw`.
+    overlay_sink: &'a mut Vec<UserPolyline>,
 }
 
 impl<'a> MapApi<'a> {
@@ -63,6 +68,7 @@ impl<'a> MapApi<'a> {
         frame: &MapFrame,
         theme: &'a UiTheme,
         cursor: Option<(u16, u16)>,
+        overlay_sink: &'a mut Vec<UserPolyline>,
     ) -> Self {
         let proj = MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows);
         Self {
@@ -73,6 +79,7 @@ impl<'a> MapApi<'a> {
             frame_center: frame.center,
             frame_zoom: frame.zoom,
             cursor,
+            overlay_sink,
         }
     }
 
@@ -135,6 +142,20 @@ impl<'a> MapApi<'a> {
             .set_style(Style::default().fg(fg).bg(self.theme.bg));
     }
 
+    /// Queue a subpixel polyline for the next render frame. The line is
+    /// drawn by the render thread on the same `BrailleBuffer` that holds
+    /// tile features, so dots OR-merge with existing tile pixels and the
+    /// overlay's `fg` wins where they overlap (`BrailleBuffer::set_pixel`
+    /// does `pixel_buf |= bit; fg_buf = color`).
+    ///
+    /// Coords with fewer than 2 points are silently dropped — see the
+    /// Lua-bridge filter in `src/lua/ttymap/map_api.rs::polyline`.
+    /// Off-canvas portions of the projected line are no-ops (Bresenham
+    /// + `set_pixel` bounds check).
+    pub fn push_polyline_overlay(&mut self, coords: Vec<LonLat>, color: u8) {
+        self.overlay_sink.push(UserPolyline { coords, color });
+    }
+
     /// Write `text` starting in the cell to the right of the
     /// projected point. Clips at the map area's right edge. No
     /// collision detection — overlapping labels overwrite each other
@@ -174,50 +195,6 @@ impl<'a> MapApi<'a> {
         }
         self.buf
             .set_stringn(label_start, y, &text[..end], max_cells, style);
-    }
-
-    /// Draw a single-glyph line between two world coordinates at
-    /// terminal-cell granularity (Bresenham). Both endpoints must
-    /// project inside the visible map area; partially-visible
-    /// segments require manual clipping by the caller.
-    #[allow(dead_code)] // plugin-author API; no in-tree consumer yet
-    pub fn line(&mut self, a: LonLat, b: LonLat, glyph: char, fg: Color) {
-        let Some((x0, y0)) = self.cell_for(a) else {
-            return;
-        };
-        let Some((x1, y1)) = self.cell_for(b) else {
-            return;
-        };
-        let style = Style::default().fg(fg).bg(self.theme.bg);
-        let mut x = x0 as i32;
-        let mut y = y0 as i32;
-        let x1 = x1 as i32;
-        let y1 = y1 as i32;
-        let dx = (x1 - x).abs();
-        let dy = -(y1 - y).abs();
-        let sx: i32 = if x < x1 { 1 } else { -1 };
-        let sy: i32 = if y < y1 { 1 } else { -1 };
-        let mut err = dx + dy;
-        loop {
-            // Both x and y are bounded by previously-validated
-            // cell_for results plus a Bresenham step toward another
-            // valid cell, so the cast back to u16 cannot overflow.
-            self.buf[(x as u16, y as u16)]
-                .set_char(glyph)
-                .set_style(style);
-            if x == x1 && y == y1 {
-                break;
-            }
-            let e2 = 2 * err;
-            if e2 >= dy {
-                err += dy;
-                x += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                y += sy;
-            }
-        }
     }
 
     // ── Screen-space primitives ─────────────────────────────────────
@@ -308,6 +285,7 @@ impl<'a> MapApi<'a> {
 mod tests {
     use super::*;
     use crate::map::render::frame::MapFrame;
+    use crate::map::render::overlay::UserPolyline;
     use crate::theme::{DARK, UiTheme};
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
@@ -327,7 +305,8 @@ mod tests {
     #[test]
     fn label_writes_chars_starting_after_marker() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         api.label(LonLat { lon: 0.0, lat: 0.0 }, "AB", Color::Reset);
         // Marker cell stays untouched; label writes the next two cells.
         // We don't know the exact projected column without re-running
@@ -347,7 +326,8 @@ mod tests {
     #[test]
     fn label_off_map_is_noop() {
         let (mut buf, area, frame, theme) = fixture(10, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         // Far-off coordinate that won't project into the canvas.
         api.label(
             LonLat {
@@ -364,44 +344,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn line_draws_connected_cells() {
-        // Larger area at higher zoom keeps the test endpoints inside
-        // the viewport — projection at zoom 1.0 over ±10° drops them
-        // off-canvas.
-        let area = Rect::new(0, 0, 80, 40);
-        let mut buf = Buffer::empty(area);
-        let frame = MapFrame {
-            cells: Vec::new(),
-            cols: 80,
-            rows: 40,
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 4.0,
-        };
-        let theme = UiTheme::from_palette(&DARK);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
-        api.line(
-            LonLat {
-                lon: -1.0,
-                lat: 1.0,
-            },
-            LonLat {
-                lon: 1.0,
-                lat: -1.0,
-            },
-            '*',
-            Color::Reset,
-        );
-        let drawn: usize = (0..area.width)
-            .flat_map(|x| (0..area.height).map(move |y| (x, y)))
-            .filter(|&(x, y)| buf[(x, y)].symbol() == "*")
-            .count();
-        assert!(
-            drawn >= 2,
-            "line should mark at least two cells, got {drawn}"
-        );
-    }
-
     fn text_at_row(buf: &Buffer, area: Rect, row: u16) -> String {
         (0..area.width)
             .map(|x| buf[(area.x + x, area.y + row)].symbol())
@@ -411,7 +353,8 @@ mod tests {
     #[test]
     fn text_anchored_top_right_writes_at_right_edge() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         api.text_anchored(Anchor::TopRight, 0, "ABC", Color::Reset);
         let line = text_at_row(&buf, area, 0);
         assert!(
@@ -427,7 +370,8 @@ mod tests {
     #[test]
     fn text_anchored_bottom_left_writes_at_left_edge_last_row() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         api.text_anchored(Anchor::BottomLeft, 0, "XY", Color::Reset);
         let last_row = text_at_row(&buf, area, area.height - 1);
         assert!(
@@ -439,7 +383,8 @@ mod tests {
     #[test]
     fn text_anchored_rows_in_offsets_from_corner() {
         let (mut buf, area, frame, theme) = fixture(20, 5);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         // Row 2 from the top-left corner should be the third row.
         api.text_anchored(Anchor::TopLeft, 2, "Q", Color::Reset);
         assert_eq!(buf[(area.x, area.y + 2)].symbol(), "Q");
@@ -452,7 +397,8 @@ mod tests {
         // start at column 14, not column 17 (which is what naive
         // chars().count() arithmetic would produce).
         let (mut buf, area, frame, theme) = fixture(20, 1);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         api.text_anchored(Anchor::TopRight, 0, "千代田", Color::Reset);
         assert_eq!(buf[(14, 0)].symbol(), "千");
         assert_eq!(buf[(16, 0)].symbol(), "代");
@@ -462,7 +408,8 @@ mod tests {
     #[test]
     fn text_anchored_too_deep_is_noop() {
         let (mut buf, area, frame, theme) = fixture(20, 3);
-        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
         // rows_in == height should be rejected (no row to land on).
         api.text_anchored(Anchor::TopLeft, 3, "Q", Color::Reset);
         for x in 0..area.width {
@@ -470,5 +417,21 @@ mod tests {
                 assert_eq!(buf[(x, y)].symbol(), " ");
             }
         }
+    }
+
+    #[test]
+    fn push_polyline_overlay_appends_to_sink() {
+        let (mut buf, area, frame, theme) = fixture(20, 5);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        {
+            let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+            api.push_polyline_overlay(
+                vec![LonLat { lon: 0.0, lat: 0.0 }, LonLat { lon: 1.0, lat: 1.0 }],
+                42,
+            );
+        }
+        assert_eq!(sink.len(), 1);
+        assert_eq!(sink[0].coords.len(), 2);
+        assert_eq!(sink[0].color, 42);
     }
 }
