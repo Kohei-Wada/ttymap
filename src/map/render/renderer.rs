@@ -131,7 +131,13 @@ impl Renderer {
     /// coords / scale-bar / place overlays keep updating with the new
     /// `center` and `zoom`. Without this, the UI would look frozen while
     /// tiles are in flight.
-    pub fn draw(&mut self, tile_data: &[TileData], zoom: f64) -> Option<MapFrame> {
+    pub fn draw(
+        &mut self,
+        tile_data: &[TileData],
+        zoom: f64,
+        center: crate::geo::LonLat,
+        overlays: &[crate::map::render::overlay::UserPolyline],
+    ) -> Option<MapFrame> {
         // Clear canvas
         self.canvas.clear();
         if let Some(bg) = self.styler.background_color {
@@ -210,6 +216,32 @@ impl Renderer {
             }
             self.draw_symbol(resolved);
         }
+
+        // Third pass: user overlays from Lua plugins. Drawn on the same
+        // canvas as tile features so dots OR-merge (BrailleBuffer::set_pixel
+        // |= bit) and the overlay's fg wins per-cell (set_pixel overwrites
+        // fg_buf). Same render budget applies — pathological coord lists
+        // stop early instead of starving the next frame.
+        let mut buf: Vec<(i32, i32)> = std::mem::take(&mut self.scratches.line);
+        for poly in overlays {
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            buf.clear();
+            for ll in &poly.coords {
+                buf.push(crate::map::render::overlay::ll_to_subpixel(
+                    *ll,
+                    center,
+                    zoom,
+                    self.width,
+                    self.height,
+                ));
+            }
+            if buf.len() >= 2 {
+                self.canvas.polyline(&buf, poly.color);
+            }
+        }
+        self.scratches.line = buf;
 
         let frame = self.canvas.to_map_frame();
         debug!("draw: frame ready ({}x{})", frame.cols, frame.rows);
@@ -678,7 +710,14 @@ mod tests {
 
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
-        let frame = renderer.draw(&[tile], 14.0).expect("frame");
+        let frame = renderer
+            .draw(
+                &[tile],
+                14.0,
+                crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                &[],
+            )
+            .expect("frame");
 
         // Ring A's screen bbox in pixels: (6,6)..(62,62) → cells
         // (3,1)..(31,15). Ring B's: (125,125)..(187,187) → cells
@@ -710,7 +749,11 @@ mod tests {
         // tiles are in flight. Cf. `draw` doc comment.
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
-        assert!(renderer.draw(&[], 1.0).is_some());
+        assert!(
+            renderer
+                .draw(&[], 1.0, crate::geo::LonLat { lon: 0.0, lat: 0.0 }, &[])
+                .is_some()
+        );
     }
 
     /// Regression test for issue #100. A polygon described in tile-local
@@ -767,7 +810,14 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let cells = |extent: u32| -> Vec<(char, u8, u8)> {
             let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
-            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            let f = r
+                .draw(
+                    &[make(extent)],
+                    14.0,
+                    crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                    &[],
+                )
+                .expect("frame");
             f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
         };
 
@@ -838,7 +888,14 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let cells = |extent: u32| -> Vec<(char, u8, u8)> {
             let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 320, 320);
-            let f = r.draw(&[make(extent)], 14.0).expect("frame");
+            let f = r
+                .draw(
+                    &[make(extent)],
+                    14.0,
+                    crate::geo::LonLat { lon: 0.0, lat: 0.0 },
+                    &[],
+                )
+                .expect("frame");
             f.cells.iter().map(|c| (c.ch, c.fg, c.bg)).collect()
         };
 
@@ -852,5 +909,57 @@ mod tests {
 
         assert_eq!(baseline, cells(2048));
         assert_eq!(baseline, cells(8192));
+    }
+
+    /// User overlay polylines must paint on the *same* BrailleBuffer as
+    /// tile features. Two non-empty cells along the projected polyline is
+    /// the minimum signal that the overlay reached the canvas.
+    #[test]
+    fn user_overlay_polyline_renders_braille_dots() {
+        use crate::geo::LonLat;
+        use crate::map::render::overlay::UserPolyline;
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let overlays = vec![UserPolyline {
+            coords: vec![
+                LonLat {
+                    lon: -1.0,
+                    lat: 1.0,
+                },
+                LonLat {
+                    lon: 1.0,
+                    lat: -1.0,
+                },
+            ],
+            color: 7,
+        }];
+        let frame = renderer.draw(&[], 6.0, center, &overlays).expect("frame");
+
+        const EMPTY: char = '\u{2800}';
+        let drawn = frame.cells.iter().filter(|c| c.ch != EMPTY).count();
+        assert!(
+            drawn >= 2,
+            "overlay polyline must paint at least two non-empty braille cells, got {drawn}"
+        );
+    }
+
+    /// An empty overlays slice produces the same frame as a no-overlay
+    /// baseline. Defensive — guards against accidental side-effects in
+    /// the third pass (e.g. clearing the canvas, mutating shared state).
+    #[test]
+    fn empty_overlays_match_baseline() {
+        use crate::geo::LonLat;
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut r = Renderer::new(Arc::clone(&styler), "en".to_string(), 80, 40);
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+        let baseline = r.draw(&[], 4.0, center, &[]).expect("frame");
+        let with_empty = r.draw(&[], 4.0, center, &[]).expect("frame");
+        assert_eq!(
+            baseline.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
+            with_empty.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
+        );
     }
 }

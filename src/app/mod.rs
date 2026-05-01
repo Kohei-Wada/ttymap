@@ -53,6 +53,12 @@ pub struct App {
     /// frame against the live `MapApi`, before the compositor's
     /// `paint_on_map`.
     tick_registry: LuaTickRegistry,
+    /// Ephemeral polyline overlays pushed by Lua plugins during the
+    /// current frame's `on_tick` pass. Drained into the next
+    /// `RenderTask::Draw` immediately after `ui::draw` returns — so
+    /// the Lua side fire-and-forgets every frame and the render thread
+    /// always gets the freshest set.
+    overlay_sink: Vec<crate::map::render::overlay::UserPolyline>,
     /// Setup-state [`LuaHostHandles`] for every Lua plugin script
     /// (palette providers, plugin components, plugin loops, and any
     /// `ttymap.api.window.open` / `palette.open` callers). Each
@@ -144,6 +150,7 @@ impl App {
             tick_registry,
             lua_host_handles,
             cursor: None,
+            overlay_sink: Vec::new(),
         }
     }
 
@@ -193,6 +200,7 @@ impl App {
                     &self.tick_registry,
                     &self.ui_theme,
                     &ctx,
+                    &mut self.overlay_sink,
                 )
             })?;
 
@@ -355,7 +363,8 @@ impl App {
             return;
         }
         let viewport = self.map.viewport();
-        self.render_handle.request_draw(viewport);
+        let overlays = std::mem::take(&mut self.overlay_sink);
+        self.render_handle.request_draw(viewport, overlays);
     }
 }
 

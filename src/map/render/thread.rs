@@ -21,8 +21,14 @@ use crate::map::Viewport;
 use crate::map::styler::Styler;
 
 pub enum RenderTask {
-    Draw(Viewport),
-    Resize { width: usize, height: usize },
+    Draw {
+        viewport: Viewport,
+        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+    },
+    Resize {
+        width: usize,
+        height: usize,
+    },
     SetStyler(Arc<Styler>),
     Shutdown,
 }
@@ -71,8 +77,16 @@ impl RenderHandle {
         }
     }
 
-    pub fn request_draw(&self, viewport: Viewport) {
-        if self.task_tx.send(RenderTask::Draw(viewport)).is_err() {
+    pub fn request_draw(
+        &self,
+        viewport: Viewport,
+        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+    ) {
+        if self
+            .task_tx
+            .send(RenderTask::Draw { viewport, overlays })
+            .is_err()
+        {
             log::warn!("render thread channel closed on draw");
         }
     }
@@ -128,13 +142,16 @@ impl Drop for RenderHandle {
 /// renders immediately.
 enum TaskOutcome {
     Continue,
-    Draw(Viewport),
+    Draw {
+        viewport: Viewport,
+        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+    },
     Shutdown,
 }
 
 fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
     match task {
-        RenderTask::Draw(viewport) => TaskOutcome::Draw(viewport),
+        RenderTask::Draw { viewport, overlays } => TaskOutcome::Draw { viewport, overlays },
         RenderTask::Resize { width, height } => {
             pipeline.resize(width, height);
             TaskOutcome::Continue
@@ -148,17 +165,19 @@ fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
 }
 
 /// Apply `first` followed by anything else already buffered on
-/// `task_rx`. Returns the latest `Draw` viewport (older ones are
-/// stale) or `Err(())` if a `Shutdown` was seen.
+/// `task_rx`. Returns the latest `Draw` viewport + overlays (older ones
+/// are stale) or `Err(())` if a `Shutdown` was seen.
 fn drain_tasks(
     first: RenderTask,
     task_rx: &cb::Receiver<RenderTask>,
     pipeline: &mut RenderPipeline,
-) -> Result<Option<Viewport>, ()> {
-    let mut latest_draw: Option<Viewport> = None;
+) -> Result<Option<(Viewport, Vec<crate::map::render::overlay::UserPolyline>)>, ()> {
+    let mut latest_draw: Option<(Viewport, Vec<crate::map::render::overlay::UserPolyline>)> = None;
     for task in std::iter::once(first).chain(task_rx.try_iter()) {
         match apply_task(task, pipeline) {
-            TaskOutcome::Draw(viewport) => latest_draw = Some(viewport),
+            TaskOutcome::Draw { viewport, overlays } => {
+                latest_draw = Some((viewport, overlays));
+            }
             TaskOutcome::Continue => {}
             TaskOutcome::Shutdown => return Err(()),
         }
@@ -211,9 +230,9 @@ fn run_loop(
                     Ok(d) => d,
                 };
                 match latest_draw {
-                    Some(viewport) => {
-                        debug!("render: drawing (zoom={:.1})", viewport.zoom);
-                        if !send_frame(&frame_tx, pipeline.render(&viewport)) {
+                    Some((viewport, overlays)) => {
+                        debug!("render: drawing (zoom={:.1}, overlays={})", viewport.zoom, overlays.len());
+                        if !send_frame(&frame_tx, pipeline.render(&viewport, &overlays)) {
                             return;
                         }
                         last_viewport = Some(viewport);
@@ -230,7 +249,7 @@ fn run_loop(
                         // (e.g. theme change should refresh the
                         // visible frame).
                         if let Some(ref vp) = last_viewport
-                            && !send_frame(&frame_tx, pipeline.render(vp))
+                            && !send_frame(&frame_tx, pipeline.render(vp, &[]))
                         {
                             return;
                         }
@@ -243,7 +262,7 @@ fn run_loop(
                 while wake_rx.try_recv().is_ok() {}
                 if let Some(ref viewport) = last_viewport
                     && pipeline.poll_tiles()
-                    && !send_frame(&frame_tx, pipeline.render(viewport))
+                    && !send_frame(&frame_tx, pipeline.render(viewport, &[]))
                 {
                     return;
                 }
