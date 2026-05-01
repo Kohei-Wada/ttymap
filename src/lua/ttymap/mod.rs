@@ -34,12 +34,6 @@
 //! ttymap.config :geoip_endpoint() -> string `[geoip].endpoint` value
 //! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
 //! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
-//! ttymap.plugin :open()                     ask the host to push a fresh
-//!                                            instance of this plugin onto
-//!                                            the compositor stack
-//! ttymap.plugin :close()                    ask the host to close the
-//!                                            currently-open instance of
-//!                                            this plugin (no-op if none)
 //! ttymap.api.window.open(spec) -> Handle    push a focused window
 //!                                            (LuaWindowComponent) onto
 //!                                            the stack; handle:close()
@@ -49,13 +43,6 @@
 //!                                            pops it (idempotent)
 //! ttymap.api.frame.export()                 snapshot the current frame to disk
 //! ```
-//!
-//! `ttymap.plugin` is exposed only on a script's **setup state** — the
-//! Lua state that ran the top-level `ttymap.register_*` calls and
-//! continues to run palette / keybind callbacks for the program
-//! lifetime. Per-instance Lua states (the ones backing each pushed
-//! `LuaComponent`) don't get this userdata; an instance closes itself
-//! via `ttymap.window:close()`.
 //!
 //! `ttymap.map:jump(...)` and `ttymap.window:close()` are
 //! fire-and-forget from the Lua side; the matching `Receiver`s on
@@ -210,18 +197,6 @@ pub struct LuaHostHandles {
     pub push_rx: mpsc::Receiver<Box<dyn crate::compositor::Component>>,
 }
 
-/// Per-plugin-file open/close primitives, exposed to Lua via
-/// `ttymap.plugin:open()` and `ttymap.plugin:close()`. Setup callbacks
-/// (palette command / keybind invoke) flip these atomics; Rust
-/// drains them: `open` after the callback returns (push a fresh
-/// component) and `close` on the next [`Component::poll`] tick of
-/// the [`InstanceGuard`] wrapping the plugin's component.
-#[derive(Clone, Default)]
-pub struct PluginCtl {
-    pub open_request: Arc<std::sync::atomic::AtomicBool>,
-    pub close_request: Arc<std::sync::atomic::AtomicBool>,
-}
-
 // ── Self-registration capture ────────────────────────────────────────
 
 /// What a plugin script declared by calling `register_plugin`. At
@@ -263,8 +238,8 @@ pub struct KeybindSpec {
 /// (`register_plugin`), and each activation surface (palette row,
 /// keybind) is a **separate** explicit call with its own Lua
 /// callback. Plugins own whether/when to push by inspecting their
-/// own state inside the callback and signalling open/close via
-/// `ttymap.plugin:open()` / `:close()`.
+/// own state inside the callback and calling
+/// `ttymap.api.window.open(spec)` / `ttymap.api.palette.open(spec)`.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// The plugin kind itself. `None` means the script never called
@@ -312,7 +287,6 @@ pub fn install(
     tag: &'static str,
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
-    plugin_ctl: Option<PluginCtl>,
 ) -> mlua::Result<LuaHostHandles> {
     let (jump_tx, jump_rx) = mpsc::channel();
     let (close_tx, close_rx) = mpsc::channel();
@@ -364,15 +338,6 @@ pub fn install(
         })?,
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp { shared })?)?;
-
-    // `ttymap.plugin` exists only on setup states (those with a
-    // `plugin_ctl`) — it lets a setup callback signal Rust to
-    // push a fresh instance or close the currently-open one. The
-    // per-instance Component states don't get this userdata; they
-    // close themselves via `ttymap.window:close()`.
-    if let Some(ctl) = plugin_ctl {
-        ttymap.set("plugin", lua.create_userdata(HostPlugin { ctl })?)?;
-    }
 
     // Self-registration entry point. The script calls
     // `register_plugin` (at most once) to declare itself. The Lua
@@ -676,37 +641,6 @@ impl UserData for HostMap {
     }
 }
 
-// ── ttymap.plugin ─────────────────────────────────────────────────────
-
-/// `ttymap.plugin` userdata exposed to setup-phase Lua states only.
-/// Plugin scripts call `ttymap.plugin:open()` from inside a palette /
-/// keybind callback to ask the host to push a fresh component onto
-/// the compositor stack, and `:close()` to ask the host to close
-/// whichever instance is currently on the stack. Both are
-/// fire-and-forget: the request flips an atomic, and Rust drains it
-/// at the next sync point (post-callback for `open`, the next
-/// `Component::poll` for `close`).
-struct HostPlugin {
-    ctl: PluginCtl,
-}
-
-impl UserData for HostPlugin {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("open", |_, this, _: ()| {
-            this.ctl
-                .open_request
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            Ok(())
-        });
-        methods.add_method("close", |_, this, _: ()| {
-            this.ctl
-                .close_request
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            Ok(())
-        });
-    }
-}
-
 // ── ttymap.window ─────────────────────────────────────────────────────
 
 struct HostWindow {
@@ -998,8 +932,8 @@ mod tests {
     fn install_for_test() -> (mlua::Lua, LuaHostHandles) {
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
-        let handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, None)
-            .expect("install ttymap table");
+        let handles =
+            install(&lua, "lua-test", LuaHostShared::empty(), slot).expect("install ttymap table");
         (lua, handles)
     }
 

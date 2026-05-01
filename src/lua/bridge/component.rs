@@ -162,10 +162,7 @@ impl LuaComponent {
         id: &'static str,
         shared: Arc<LuaHostShared>,
     ) -> mlua::Result<Self> {
-        // Per-instance Lua state — `ttymap.plugin` is not exposed
-        // here. The component manages its own lifetime via
-        // `ttymap.window:close()`.
-        let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared, None)?;
+        let (lua, captured, handles) = fresh_load(source, id, "lua-host", shared)?;
         let module = match captured.kind {
             Some(CapturedKind::Plugin(t)) => t,
             None => {

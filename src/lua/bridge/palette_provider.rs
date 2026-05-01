@@ -226,7 +226,7 @@ mod tests {
         let lua = Lua::new();
         let slot = new_capture_slot();
         let _handles =
-            install(&lua, "lua-test", LuaHostShared::empty(), slot, None).expect("install ttymap");
+            install(&lua, "lua-test", LuaHostShared::empty(), slot).expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");
         LuaPaletteProvider::from_spec(lua, spec, "lua-test").expect("from_spec")
     }
