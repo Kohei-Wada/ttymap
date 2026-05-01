@@ -40,6 +40,10 @@
 //! ttymap.plugin :close()                    ask the host to close the
 //!                                            currently-open instance of
 //!                                            this plugin (no-op if none)
+//! ttymap.api.window.open(spec) -> Handle    push a focused window
+//!                                            (LuaWindowComponent) onto
+//!                                            the stack; handle:close()
+//!                                            pops it (idempotent)
 //! ```
 //!
 //! `ttymap.plugin` is exposed only on a script's **setup state** — the
@@ -160,14 +164,46 @@ impl LuaHostShared {
 
 // ── Per-component handles ───────────────────────────────────────────
 
-/// Channels + shared state the `LuaComponent` needs to drive the host
-/// namespaces from outside Lua. Built once per host install and
-/// threaded into the component at construction.
+/// Channels + shared state owned by **the setup state** (the Lua VM
+/// that runs the script's top-level `register_*` calls and continues
+/// to run palette / keybind callbacks for the program lifetime).
+/// `install()` returns this once per state; the App routes the
+/// receivers to the right consumers.
+///
+/// - `jump_rx` / `close_rx` / `export_rx` — drained by the App per
+///   frame and emitted as `AppMsg`s. These fire from inside any setup
+///   callback (palette `invoke`, `register_keybind` callback, and —
+///   once `ttymap.api.window.open` lands — the spec callbacks of
+///   windows opened via `window.open`).
+/// - `center` — shared with `ttymap.map`'s userdata so
+///   `ttymap.map:center()` returns the live centre. Components
+///   refresh it on each dispatch path that carries a `Window`.
+/// - `push_rx` — components queued by `ttymap.api.window.open` (and
+///   later `ttymap.api.palette.open` in A6). Drained by the App per
+///   frame and pushed onto the compositor stack.
+///
+/// `LuaComponent` (the legacy adapter) still receives a
+/// `LuaHostHandles` at construction for the per-component drains —
+/// **that path is being phased out**. Going forward, the setup state
+/// owns the receivers and App drains them centrally (Path 4).
 pub struct LuaHostHandles {
     pub jump_rx: mpsc::Receiver<LonLat>,
     pub close_rx: mpsc::Receiver<()>,
     pub export_rx: mpsc::Receiver<()>,
     pub center: Arc<Mutex<LonLat>>,
+    /// Components queued by `ttymap.api.window.open` (and, in A6,
+    /// `ttymap.api.palette.open`). The App drains this per frame and
+    /// pushes each component onto the compositor stack.
+    ///
+    /// `Box<dyn Component>` is **not** `Send` in general; that's fine
+    /// because the channel never crosses threads — `install()` runs
+    /// on the main thread, every `window.open` call runs on the main
+    /// thread (Lua callbacks dispatched from the App loop), and the
+    /// App drains on the main thread too. `mpsc::channel` accepts
+    /// `!Send` payloads at construction; only `Sender<T>: Send`
+    /// requires `T: Send`, and we never move the sender across
+    /// threads.
+    pub push_rx: mpsc::Receiver<Box<dyn crate::compositor::Component>>,
 }
 
 /// Per-plugin-file open/close primitives, exposed to Lua via
@@ -277,6 +313,12 @@ pub fn install(
     let (jump_tx, jump_rx) = mpsc::channel();
     let (close_tx, close_rx) = mpsc::channel();
     let (export_tx, export_rx) = mpsc::channel();
+    // `Box<dyn Component>` is `!Send`; that's fine — the channel
+    // stays on the main thread (install + every `window.open` Lua
+    // callback + App drain all run on the same thread). `mpsc`
+    // accepts `!Send` payloads at construction; only `Sender<T>: Send`
+    // requires `T: Send`, and the Sender never moves across threads.
+    let (push_tx, push_rx) = mpsc::channel::<Box<dyn crate::compositor::Component>>();
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
 
     let ttymap = lua.create_table()?;
@@ -429,6 +471,69 @@ pub fn install(
         })?,
     )?;
 
+    // ── ttymap.api ────────────────────────────────────────────────
+    //
+    // The new (nvim-style) plugin API surface. Currently hosts:
+    //
+    // - `ttymap.api.window.open(spec) -> WindowHandle` — push a
+    //   focused [`LuaWindowComponent`] onto the compositor stack.
+    //
+    // Future siblings: `ttymap.api.palette.open` (A6),
+    // `ttymap.api.frame.export` (A4). Grouping under `api.*` keeps
+    // the new explicit surface visually distinct from the existing
+    // ambient userdatas (`ttymap.map`, `ttymap.window`, …) while the
+    // legacy ones are phased out.
+    let api = lua.create_table()?;
+
+    let window_api = lua.create_table()?;
+    let push_tx_for_window = push_tx.clone();
+    let center_for_window = center.clone();
+    window_api.set(
+        "open",
+        lua.create_function(
+            move |lua,
+                  spec: Table|
+                  -> mlua::Result<crate::lua::bridge::window_handle::WindowHandle> {
+                use crate::lua::bridge::window_component::LuaWindowComponent;
+                use crate::lua::bridge::window_handle::{CloseFlag, WindowHandle};
+                let flag = CloseFlag::default();
+                // Build the component on the **same** Lua VM that ran
+                // `window.open` — i.e. the setup state. The spec's
+                // callbacks (`render`, `handle_event`, …) capture
+                // upvalues in this state, so the per-window Lua handle
+                // must be a clone of it (cheap Arc bump, no copy of the
+                // VM). When `LuaWindowComponent` later calls into those
+                // callbacks, the same upvalue scope is in scope.
+                let component = LuaWindowComponent::from_spec(
+                    lua.clone(),
+                    spec,
+                    tag,
+                    flag.clone(),
+                    center_for_window.clone(),
+                )?;
+                // Same-thread send: the channel never crosses threads.
+                // `send` returns Err only when the receiver has been
+                // dropped, which happens at App teardown — log + carry
+                // on (the handle the caller gets back is still valid as
+                // a no-op close target). A failed send means the App
+                // dropped the receiver mid-run; that should never happen
+                // in production, hence `error!` rather than `warn!`.
+                if push_tx_for_window
+                    .send(Box::new(component) as Box<dyn crate::compositor::Component>)
+                    .is_err()
+                {
+                    log::error!(
+                        "lua[{}]: ttymap.api.window.open: push channel closed (receiver dropped)",
+                        tag
+                    );
+                }
+                Ok(WindowHandle::new(flag))
+            },
+        )?,
+    )?;
+    api.set("window", window_api)?;
+    ttymap.set("api", api)?;
+
     lua.globals().set("ttymap", ttymap)?;
 
     Ok(LuaHostHandles {
@@ -436,6 +541,7 @@ pub fn install(
         close_rx,
         export_rx,
         center,
+        push_rx,
     })
 }
 
@@ -1007,6 +1113,49 @@ mod tests {
             "altitude {alt} km not LEO-ish",
         );
         assert!((7.0..8.0).contains(&vel), "velocity {vel} not ISS-ish");
+    }
+
+    #[test]
+    fn api_window_open_pushes_component_and_returns_handle() {
+        // `ttymap.api.window.open(spec)` must do two things on the same
+        // call: queue a `LuaWindowComponent` onto `push_rx` so the App
+        // can push it onto the compositor stack, and hand back a
+        // `WindowHandle` whose `:close()` flips a shared flag without
+        // needing the App to be running. Both behaviours are independent
+        // of any `App` plumbing — this is the unit-level proof that the
+        // primitive itself is wired right.
+        let (lua, handles) = install_for_test();
+        lua.load(
+            r#"
+            local h = ttymap.api.window.open({
+                name = "demo",
+                layout = { anchor = "left", width = 30 },
+                render = function() return { "hello" } end,
+            })
+            ttymap_test_handle = h
+            "#,
+        )
+        .exec()
+        .expect("exec");
+        // Exactly one component must be queued — `window.open`
+        // pushes per call, no implicit dedup.
+        assert!(
+            handles.push_rx.try_recv().is_ok(),
+            "push_rx should have received the queued component"
+        );
+        assert!(
+            handles.push_rx.try_recv().is_err(),
+            "push_rx should be drained after a single recv"
+        );
+        // Close the handle from Lua. Without an App-side close drain
+        // the component on `push_rx` would never see the flip; the
+        // flag is shared with that component's `CloseFlag`, but
+        // since we already drained the receiver and dropped the
+        // component, this just confirms the userdata method survives
+        // the call (idempotent close is the WindowHandle contract).
+        lua.load("ttymap_test_handle:close()")
+            .exec()
+            .expect("close");
     }
 
     #[test]

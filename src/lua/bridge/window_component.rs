@@ -1,5 +1,5 @@
 //! [`LuaWindowComponent`] — a focused [`Component`] pushed onto the
-//! compositor stack by `ttymap.api.window.open(spec)` (A3, forthcoming).
+//! compositor stack by `ttymap.api.window.open(spec)` (A3).
 //!
 //! Spec table fields (all optional unless layout dictates):
 //! - `name = "..."` — display label shown in the focused-footer chip
@@ -20,11 +20,21 @@
 //! [`Window::close`]. Idempotent — a flipped-then-flipped flag does
 //! nothing extra.
 //!
+//! Drain plumbing (`ttymap.map:jump`, `ttymap.window:close`,
+//! `ttymap.window:export_frame`) lives in the **setup state** that ran
+//! the script's top-level `register_*` calls — *not* on this
+//! per-window component. Those receivers are returned by
+//! [`crate::lua::ttymap::install`] inside [`LuaHostHandles`] and
+//! drained centrally by `App` per frame. This is by design:
+//! `window.open` runs in the setup state's Lua VM, so its callbacks'
+//! `ttymap.map:jump(...)` calls hit the setup-state senders, not
+//! per-window receivers.
+//!
 //! Per audit §13 (and the existing [`LuaComponent`] precedent):
 //! errors are logged and recovered, never propagated. A buggy plugin
 //! must not take the host down.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, Table};
@@ -33,12 +43,10 @@ use ratatui::widgets::Paragraph;
 
 use super::handle::{CallOutcome, LuaHandle};
 use super::window_handle::CloseFlag;
-use crate::app::AppMsg;
 use crate::compositor::Component;
 use crate::compositor::layout::PanelAnchor;
 use crate::compositor::window::{RenderWindow, Window};
 use crate::geo::LonLat;
-use crate::lua::ttymap::LuaHostHandles;
 use crate::theme::StyleKind;
 
 // ── Layout ─────────────────────────────────────────────────────────
@@ -143,26 +151,11 @@ pub struct LuaWindowComponent {
     /// `&'static str` without leaking per call. Empty when the spec
     /// omits the field.
     footer_hints: Vec<(&'static str, &'static str)>,
-    /// Receiver for `ttymap.map:jump(lon, lat)` requests queued by the
-    /// Lua side during `handle_event` / `poll`. Drained after each
-    /// dispatch and emitted as `AppMsg::Map(Action::Jump)` through the
-    /// host `Window`. Mirrors [`super::component::LuaComponent`]'s
-    /// drain pattern so a window opened via `window.open` still gets
-    /// `ttymap.map:jump` from inside its callbacks.
-    jump_rx: mpsc::Receiver<LonLat>,
-    /// Receiver for the legacy ambient `ttymap.window:close()` requests.
-    /// Phase C will remove this Lua surface, but until then we drain
-    /// it so a script that still calls it pops the component instead
-    /// of leaking into an unbounded channel.
-    close_rx: mpsc::Receiver<()>,
-    /// Receiver for the legacy ambient `ttymap.window:export_frame()`
-    /// requests. Drained alongside jump/close after each callback;
-    /// emits `AppMsg::ExportFrame` through the host `Window`. Removed
-    /// in Phase C once `ttymap.api.frame.export` lands.
-    export_rx: mpsc::Receiver<()>,
-    /// Map centre cell shared with the host so `ttymap.map:center()`
-    /// returns the latest value. Refreshed at the start of every
-    /// dispatch path that carries a `Window`.
+    /// Map centre cell shared with the setup-state `ttymap.map`
+    /// userdata so `ttymap.map:center()` returns the latest value
+    /// from inside this window's callbacks. Refreshed at the start of
+    /// every dispatch path that carries a `Window`. The same Arc the
+    /// setup state holds — `window.open` clones it in.
     center: Arc<Mutex<LonLat>>,
 }
 
@@ -175,12 +168,18 @@ impl LuaWindowComponent {
     /// `log_tag` is the identifier used in `log::warn!` messages
     /// (`lua[<log_tag>]: render() failed: …`) and as the fallback
     /// for [`Component::name`] when `spec.name` is missing.
+    ///
+    /// `center` is the setup state's shared `Arc<Mutex<LonLat>>` —
+    /// refreshed each dispatch so `ttymap.map:center()` works from
+    /// inside the spec callbacks. The setup state owns the Sender /
+    /// Receiver pairs for jump / close / export_frame; this component
+    /// does not drain them (App drains them centrally).
     pub fn from_spec(
         lua: Lua,
         spec: Table,
         log_tag: &'static str,
         flag: CloseFlag,
-        host_handles: LuaHostHandles,
+        center: Arc<Mutex<LonLat>>,
     ) -> mlua::Result<Self> {
         // Display name: spec's `name` if set, else the log tag.
         // Leak once; bounded by the number of windows opened.
@@ -196,12 +195,6 @@ impl LuaWindowComponent {
             Ok(mlua::Value::Function(_))
         );
         let footer_hints = parse_footer_hints(&spec);
-        let LuaHostHandles {
-            jump_rx,
-            close_rx,
-            export_rx,
-            center,
-        } = host_handles;
         let handle = LuaHandle::new(lua, spec, log_tag)?;
         Ok(Self {
             handle,
@@ -210,9 +203,6 @@ impl LuaWindowComponent {
             layout,
             has_render,
             footer_hints,
-            jump_rx,
-            close_rx,
-            export_rx,
             center,
         })
     }
@@ -221,34 +211,9 @@ impl LuaWindowComponent {
     /// every dispatch path that carries a `Window` so
     /// `ttymap.map:center()` returns up-to-date values without each
     /// callback having to take it as an arg.
-    fn update_center(&self, center: LonLat) {
+    fn refresh_center(&self, center: LonLat) {
         if let Ok(mut cell) = self.center.lock() {
             *cell = center;
-        }
-    }
-
-    /// Drain any `ttymap.map:jump(...)` and `ttymap.window:export_frame()`
-    /// requests the Lua side queued during the most recent callback.
-    /// Mirrors [`super::component::LuaComponent::drain_emits`] verbatim
-    /// so a window opened via `window.open` matches the existing
-    /// component's host-API semantics.
-    fn drain_emits(&self, mut emit: impl FnMut(AppMsg)) {
-        while let Ok(ll) = self.jump_rx.try_recv() {
-            emit(AppMsg::Map(crate::map::Action::Jump(ll)));
-        }
-        while self.export_rx.try_recv().is_ok() {
-            emit(AppMsg::ExportFrame);
-        }
-    }
-
-    /// Drain any legacy `ttymap.window:close()` requests the Lua side
-    /// queued and pop the component off the stack. Phase C will remove
-    /// the Lua surface; until then this keeps a `close()` from leaking
-    /// into the next dispatch path.
-    fn drain_close(&self, win: &mut Window) {
-        if self.close_rx.try_recv().is_ok() {
-            while self.close_rx.try_recv().is_ok() {}
-            win.close();
         }
     }
 
@@ -307,15 +272,11 @@ impl LuaWindowComponent {
 
 impl Component for LuaWindowComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-        self.update_center(win.ctx().center);
+        self.refresh_center(win.ctx().center);
         let action = self.dispatch_event(event);
-        // Mirror [`LuaComponent::handle_event`] (src/lua/bridge/component.rs):
-        // drain any host requests the callback queued before honouring
-        // the returned KeyAction, so `ttymap.map:jump`,
-        // `ttymap.window:close`, `ttymap.window:export_frame` from
-        // inside `handle_event` actually take effect.
-        self.drain_emits(|m| win.emit(m));
-        self.drain_close(win);
+        // Host-side jump / close / export_frame the callback queued
+        // hits the setup state's senders, not per-window receivers.
+        // App drains those centrally each frame.
         match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),
@@ -358,7 +319,7 @@ impl Component for LuaWindowComponent {
     }
 
     fn poll(&mut self, win: &mut Window) {
-        self.update_center(win.ctx().center);
+        self.refresh_center(win.ctx().center);
         // The only Lua-facing poll work this Component does is
         // honour the shared close flag. NO callback into the spec —
         // async work belongs on the plugin's `register_plugin({ loop })`
@@ -366,12 +327,6 @@ impl Component for LuaWindowComponent {
         if self.flag.take() {
             win.close();
         }
-        // Drain any host requests still queued from the most recent
-        // `handle_event`. The poll path can also see late arrivals
-        // when a callback fired between dispatches; matches
-        // [`LuaComponent::poll`].
-        self.drain_emits(|m| win.emit(m));
-        self.drain_close(win);
     }
 
     fn name(&self) -> &'static str {
@@ -510,38 +465,24 @@ fn key_code_to_lua(code: KeyCode) -> (&'static str, Option<char>) {
 mod tests {
     use super::*;
 
-    /// Throwaway [`LuaHostHandles`] for tests that don't care about
-    /// the host-API drain. Channels' senders are dropped immediately
-    /// so `try_recv` always sees `Empty` (no spurious emits leaking
-    /// into the assertion path).
-    fn dummy_host_handles() -> LuaHostHandles {
-        let (_, jump_rx) = mpsc::channel();
-        let (_, close_rx) = mpsc::channel();
-        let (_, export_rx) = mpsc::channel();
-        LuaHostHandles {
-            jump_rx,
-            close_rx,
-            export_rx,
-            center: Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 })),
-        }
+    /// Throwaway centre cell for tests that don't care about the
+    /// host-API drain. The setup state owns the channels in
+    /// production; per-window tests build a fresh Arc<Mutex<LonLat>>
+    /// each call so dispatch refresh has somewhere to write.
+    fn dummy_center() -> Arc<Mutex<LonLat>> {
+        Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }))
     }
 
     /// Minimal helper: build a `LuaWindowComponent` from a Lua source
     /// snippet that returns the spec table directly. `window.open`
-    /// (A3) will get its spec the same way — caller-side `eval`,
-    /// resulting Table handed in. We bypass the whole `register_*`
-    /// dance because A2 is not bound to a registration phase.
+    /// gets its spec the same way — caller-side `eval`, resulting
+    /// Table handed in. Bypasses the whole `register_*` dance because
+    /// these tests exercise component behaviour, not registration.
     fn make(source: &str, log_tag: &'static str) -> LuaWindowComponent {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(source).eval().expect("eval spec");
-        LuaWindowComponent::from_spec(
-            lua,
-            spec,
-            log_tag,
-            CloseFlag::default(),
-            dummy_host_handles(),
-        )
-        .expect("from_spec")
+        LuaWindowComponent::from_spec(lua, spec, log_tag, CloseFlag::default(), dummy_center())
+            .expect("from_spec")
     }
 
     #[test]
@@ -725,8 +666,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
         let mut c =
-            LuaWindowComponent::from_spec(lua, spec, "win", flag.clone(), dummy_host_handles())
-                .unwrap();
+            LuaWindowComponent::from_spec(lua, spec, "win", flag.clone(), dummy_center()).unwrap();
 
         const CTX: Context = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
@@ -750,8 +690,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
         let mut c =
-            LuaWindowComponent::from_spec(lua, spec, "win", flag.clone(), dummy_host_handles())
-                .unwrap();
+            LuaWindowComponent::from_spec(lua, spec, "win", flag.clone(), dummy_center()).unwrap();
 
         const CTX: Context = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
@@ -773,66 +712,5 @@ mod tests {
             c.poll(&mut win);
         }
         assert!(!ops.close);
-    }
-
-    // ── host-API drain (jump / close / export from inside callbacks) ──
-
-    #[test]
-    fn handle_event_drains_jump_emitted_from_lua() {
-        // Mirrors the LuaComponent test `host_jump_drains_into_window_emit`
-        // (src/lua/bridge/component.rs): a handler that calls
-        // `ttymap.map:jump(...)` from inside `handle_event` must surface
-        // the request as `AppMsg::Map(Action::Jump)` on the same
-        // dispatch tick. Without the drain in `handle_event`, the
-        // request would sit in `jump_rx` forever and the map would
-        // silently fail to recenter — the regression this test pins.
-        use crate::compositor::Context;
-        use crate::compositor::window::WindowOps;
-        use crate::lua::ttymap::{LuaHostShared, install, new_capture_slot};
-
-        let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
-        let host_handles =
-            install(&lua, "win", LuaHostShared::empty(), slot, None).expect("install");
-        // The script returns the spec directly — same shape `window.open`
-        // (A3) will use. The Lua VM has been wired with `ttymap.map`,
-        // so `ttymap.map:jump(lon, lat)` queues onto `jump_tx`.
-        let spec: Table = lua
-            .load(
-                r#"return {
-                    name = "jumper",
-                    handle_event = function(key)
-                        ttymap.map:jump(139.7595, 35.6828)
-                        return nil
-                    end,
-                }"#,
-            )
-            .eval()
-            .expect("eval spec");
-        let mut c =
-            LuaWindowComponent::from_spec(lua, spec, "jumper", CloseFlag::default(), host_handles)
-                .expect("from_spec");
-
-        const CTX: Context = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            theme_id: crate::theme::ThemeId::Dark,
-            cursor: None,
-        };
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX);
-            c.handle_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut win);
-        }
-        let jumps: Vec<&LonLat> = ops
-            .msgs
-            .iter()
-            .filter_map(|m| match m {
-                AppMsg::Map(crate::map::Action::Jump(ll)) => Some(ll),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(jumps.len(), 1, "exactly one jump should surface");
-        assert!((jumps[0].lon - 139.7595).abs() < 1e-9);
-        assert!((jumps[0].lat - 35.6828).abs() < 1e-9);
     }
 }

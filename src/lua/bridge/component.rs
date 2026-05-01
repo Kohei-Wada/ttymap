@@ -216,11 +216,17 @@ impl LuaComponent {
         );
         let footer_hints = parse_footer_hints(&module);
 
+        // The legacy `LuaComponent` adapter only consumes the
+        // per-component drain channels. The new `push_rx` (used by
+        // `ttymap.api.window.open` to queue components for the App
+        // to push) is owned by the App-side caller, not by this
+        // adapter — explicitly ignore it here.
         let LuaHostHandles {
             jump_rx,
             close_rx,
             export_rx,
             center,
+            push_rx: _,
         } = handles;
         let handle = LuaHandle::new(lua, module, id)?;
         Ok(Self {
