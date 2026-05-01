@@ -78,38 +78,6 @@ impl BrailleBuffer {
         self.fg_buf[idx] = color;
     }
 
-    /// Variant of [`set_pixel`] for the user-overlay third pass that
-    /// **preserves the dot pattern** in saturated cells. Behaviour
-    /// depends on the cell's current saturation:
-    ///
-    /// - **Saturated (`pixel_buf == 0xFF`)** — leave `pixel_buf` and
-    ///   `fg_buf` untouched, set `bg_buf = color`. The cell still
-    ///   renders as `⣿` in its original fill colour (water blue,
-    ///   forest green, …), but the inter-dot subpixel gaps render in
-    ///   `color` rather than the global bg. Net visual: a tinted halo
-    ///   showing the line's path through fully-filled tile features
-    ///   without breaking the dot pattern.
-    /// - **Sparse (`pixel_buf < 0xFF`)** — OR-merge as standard
-    ///   [`set_pixel`]: `pixel_buf |= bit`, `fg_buf = color`. The
-    ///   overlay's dot adds to existing tile dots, fg flips to overlay
-    ///   colour. (Same behaviour as a tile-feature line drawn over
-    ///   sparse cells.)
-    ///
-    /// Out-of-bounds coordinates are silently ignored.
-    pub fn set_pixel_overlay_tint(&mut self, x: usize, y: usize, color: u8) {
-        if x >= self.width || y >= self.height {
-            return;
-        }
-        let idx = self.cell_index(x, y);
-        let bit = BRAILLE_MAP[y & 3][x & 1];
-        if self.pixel_buf[idx] == 0xFF {
-            self.bg_buf[idx] = color;
-        } else {
-            self.pixel_buf[idx] |= bit;
-            self.fg_buf[idx] = color;
-        }
-    }
-
     /// Write a single character at pixel position (x, y), overriding any braille content.
     /// Out-of-bounds coordinates are silently ignored.
     pub fn set_char(&mut self, ch: char, x: usize, y: usize, color: u8) {
@@ -302,60 +270,5 @@ mod tests {
         let mut buf = BrailleBuffer::new(4, 4);
         buf.set_global_background(9);
         assert_eq!(buf.global_bg, Some(9));
-    }
-
-    /// Saturated cell + `set_pixel_overlay_tint` keeps the dot pattern
-    /// (mask + fg) untouched and only paints bg. The line shows as a
-    /// background tint visible through the cell's subpixel gaps.
-    #[test]
-    fn set_pixel_overlay_tint_paints_bg_on_saturated_cell() {
-        let mut buf = BrailleBuffer::new(4, 4);
-        for sx in 0..2 {
-            for sy in 0..4 {
-                buf.set_pixel(sx, sy, 5);
-            }
-        }
-        let idx = buf.cell_index(0, 0);
-        assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: saturated");
-        assert_eq!(buf.fg_buf[idx], 5, "fixture: fg = fill colour");
-
-        buf.set_pixel_overlay_tint(0, 0, 7);
-
-        assert_eq!(buf.pixel_buf[idx], 0xFF, "mask preserved");
-        assert_eq!(buf.fg_buf[idx], 5, "fg preserved");
-        assert_eq!(buf.bg_buf[idx], 7, "bg painted with overlay colour");
-    }
-
-    /// Sparse non-empty cell + `set_pixel_overlay_tint` does an OR-merge
-    /// (matches `set_pixel`): adds the overlay's bit, last-writer-wins on
-    /// fg. Existing tile dots are preserved.
-    #[test]
-    fn set_pixel_overlay_tint_or_merges_on_sparse_cell() {
-        let mut buf = BrailleBuffer::new(4, 4);
-        buf.set_pixel(0, 0, 3); // tile-feature dot at bit 0x01
-        let idx = buf.cell_index(0, 0);
-        let pre = buf.pixel_buf[idx];
-
-        buf.set_pixel_overlay_tint(1, 0, 9);
-
-        let overlay_bit = BRAILLE_MAP[0][1];
-        assert_eq!(buf.pixel_buf[idx], pre | overlay_bit, "OR-merged");
-        assert_eq!(buf.fg_buf[idx], 9, "fg = overlay (last writer)");
-        assert_eq!(buf.bg_buf[idx], 0, "bg untouched on sparse cells");
-    }
-
-    /// Empty cell + `set_pixel_overlay_tint` writes the overlay's dot
-    /// and fg, leaves bg at default.
-    #[test]
-    fn set_pixel_overlay_tint_writes_into_empty_cell() {
-        let mut buf = BrailleBuffer::new(4, 4);
-        let idx = buf.cell_index(0, 0);
-
-        buf.set_pixel_overlay_tint(0, 0, 7);
-
-        let bit = BRAILLE_MAP[0][0];
-        assert_eq!(buf.pixel_buf[idx], bit);
-        assert_eq!(buf.fg_buf[idx], 7);
-        assert_eq!(buf.bg_buf[idx], 0);
     }
 }

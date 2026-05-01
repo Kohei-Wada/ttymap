@@ -217,12 +217,11 @@ impl Renderer {
             self.draw_symbol(resolved);
         }
 
-        // Third pass: user overlays from Lua plugins. Uses
-        // `polyline_overlay_tint` so that saturated cells (fully-filled tile
-        // fills such as water) keep their dot pattern and fg colour intact —
-        // only `bg` is painted with the overlay colour, producing a subtle
-        // tint visible through the inter-dot subpixel gaps. Sparse cells
-        // receive the standard OR-merge. Same render budget applies.
+        // Third pass: user overlays from Lua plugins. Drawn on the same
+        // canvas as tile features so dots OR-merge (BrailleBuffer::set_pixel
+        // |= bit) and the overlay's fg wins per-cell (set_pixel overwrites
+        // fg_buf). Same render budget applies — pathological coord lists
+        // stop early instead of starving the next frame.
         let mut buf: Vec<(i32, i32)> = std::mem::take(&mut self.scratches.line);
         for poly in overlays {
             if std::time::Instant::now() > deadline {
@@ -239,7 +238,7 @@ impl Renderer {
                 ));
             }
             if buf.len() >= 2 {
-                self.canvas.polyline_overlay_tint(&buf, poly.color);
+                self.canvas.polyline(&buf, poly.color);
             }
         }
         self.scratches.line = buf;
@@ -947,12 +946,12 @@ mod tests {
     }
 
     /// User overlay polylines crossing a saturated tile fill (e.g. the
-    /// interior of a water polygon) preserve the dot pattern and fg colour
-    /// (water blue) while painting `bg` with the overlay colour. The water
-    /// still looks like water along the line; only a subtle bg tint signals
-    /// the line's path through the saturated fill.
+    /// interior of a water polygon) keep the cell saturated but flip
+    /// the foreground to the overlay's colour. Reads as "the line goes
+    /// through water" — using a road colour as the overlay makes the
+    /// flipped cell visually consistent with how roads render on land.
     #[test]
-    fn overlay_polyline_tints_bg_of_saturated_cell() {
+    fn overlay_polyline_repaints_saturated_cell_in_overlay_color() {
         use std::collections::HashMap;
 
         use crate::geo::LonLat;
@@ -1014,15 +1013,22 @@ mod tests {
             .expect("frame");
 
         let mut found = false;
-        for (t, b) in tile_only.cells.iter().zip(combined.cells.iter()) {
-            if t.ch == '⣿' && b.ch == '⣿' && t.bg != b.bg {
-                assert_eq!(b.fg, t.fg, "fg preserved (water colour)");
-                assert_eq!(b.bg, 222, "bg painted with overlay colour");
+        for (i, (t, b)) in tile_only
+            .cells
+            .iter()
+            .zip(combined.cells.iter())
+            .enumerate()
+        {
+            if t.ch == '⣿' && b.ch == '⣿' && t.fg != b.fg {
+                assert_eq!(b.fg, 222, "combined cell {i} fg must be the overlay colour");
                 found = true;
                 break;
             }
         }
-        assert!(found, "no saturated cell tinted with overlay bg detected");
+        assert!(
+            found,
+            "no saturated cell repainted with overlay fg detected — overlay coords missed the saturated water region"
+        );
     }
 
     /// An empty overlays slice produces the same frame as a no-overlay
