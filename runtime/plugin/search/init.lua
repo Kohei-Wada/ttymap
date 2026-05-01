@@ -10,12 +10,10 @@
 --     `execute` self-closes via `w:close(); w = nil` so the next
 --     activation pushes a fresh palette.
 --
--- Debounce 400 ms keeps Nominatim's free endpoint from being
--- hammered while the user types.
+-- The Nominatim REST client (URL builder + result parser) lives in
+-- `search.nominatim`.
 
-local SEARCH_URL = "https://nominatim.openstreetmap.org/search"
-local LIMIT = 5
-local DEBOUNCE_MS = 400
+local nominatim = require("search.nominatim")
 
 local state = {
     job = nil,
@@ -25,33 +23,6 @@ local state = {
 }
 local w = nil  -- palette handle while open; nil while closed
 
-local function search_url(query)
-    return string.format("%s?q=%s&format=json&limit=%d",
-        SEARCH_URL, ttymap.http:url_encode(query), LIMIT)
-end
-
-local function parse_results(payload)
-    local out = {}
-    if type(payload) ~= "table" then return out end
-    for _, item in ipairs(payload) do
-        if type(item) == "table"
-            and type(item.display_name) == "string"
-            and type(item.lat) == "string"
-            and type(item.lon) == "string" then
-            local lat = tonumber(item.lat)
-            local lon = tonumber(item.lon)
-            if lat and lon then
-                table.insert(out, {
-                    name = item.display_name,
-                    lon = lon,
-                    lat = lat,
-                })
-            end
-        end
-    end
-    return out
-end
-
 -- Per-frame async drain. Runs whether or not the palette is open —
 -- the in-flight job outlives a re-open if the user dismisses and
 -- reopens the palette mid-fetch (state is module-scoped).
@@ -59,7 +30,7 @@ ttymap.api.frame.on_tick(function()
     if state.job then
         local body = state.job:try_take()
         if body then
-            state.candidates = parse_results(ttymap.json:parse(body))
+            state.candidates = nominatim.parse(ttymap.json:parse(body))
             state.pending = false
             state.job = nil
         end
@@ -70,7 +41,7 @@ local function open()
     if w then return end
     w = ttymap.api.palette.open({
         prompt = "/",
-        submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
+        submit_mode = { kind = "debounced", ms = nominatim.DEBOUNCE_MS },
 
         filter = function(query)
             local trimmed = query:match("^%s*(.-)%s*$") or ""
@@ -86,7 +57,7 @@ local function open()
             end
             state.last_query = trimmed
             state.candidates = {}
-            state.job = ttymap.http:fetch(search_url(trimmed))
+            state.job = ttymap.http:fetch(nominatim.url(trimmed))
             state.pending = true
         end,
 
