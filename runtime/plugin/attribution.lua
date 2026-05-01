@@ -6,9 +6,9 @@
 -- provider returns nil/empty (custom backends without OSM data),
 -- nothing is painted.
 
-ttymap.register_overlay({
+ttymap.register_plugin({
     name = "attribution",
-    paint_on_map = function(map)
+    loop = function(map)
         local text = ttymap.tile:attribution()
         if text and #text > 0 then
             map:text_anchored("bottom-left", 0, text, "muted")
