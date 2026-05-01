@@ -277,7 +277,6 @@ mod tests {
             lua.load(r#"map:polyline({{0,0},{1,1}}, "accent")"#).exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(sink[0].coords.len(), 2);
         assert_eq!(sink[0].coords[0], LonLat { lon: 0.0, lat: 0.0 });
@@ -298,7 +297,6 @@ mod tests {
             lua.load(r#"map:polyline({{0,0}})"#).exec()
         })
         .expect("scope");
-        drop(api);
         assert!(sink.is_empty());
     }
 
@@ -318,7 +316,6 @@ mod tests {
             lua.load(r#"map:polyline({{0,0},{1,1}}, "road")"#).exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(
             sink[0].color, road_idx,
@@ -342,7 +339,6 @@ mod tests {
             lua.load(r#"map:polyline({{0,0},{1,1}}, "zzzz")"#).exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(sink[0].color, accent_idx);
     }
@@ -362,7 +358,6 @@ mod tests {
             lua.load(r#"map:polyline({{0,0},{1,1}}, 222)"#).exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(
             sink[0].color, 222,
@@ -385,7 +380,6 @@ mod tests {
                 .exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 2);
         assert_eq!(sink[0].color, 0, "negative integer clamps to 0");
         assert_eq!(sink[1].color, 255, ">255 integer clamps to 255");
@@ -407,7 +401,6 @@ mod tests {
                 lua.load(r#"return map:road_color()"#).eval::<u8>()
             })
             .expect("scope");
-        drop(api);
         assert_eq!(result, DARK.road_motorway, "matches DARK.road_motorway");
     }
 
@@ -426,7 +419,6 @@ mod tests {
                 .exec()
         })
         .expect("scope");
-        drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(sink[0].color, DARK.road_motorway);
     }
@@ -446,7 +438,6 @@ mod tests {
             lua.load(r#"map:point(0, 0, "x", 196)"#).exec()
         })
         .expect("scope");
-        drop(api);
         let mut found = false;
         for x in 0..area.width {
             for y in 0..area.height {
@@ -479,7 +470,6 @@ mod tests {
             lua.load(r#"map:label(0, 0, "hi", 214)"#).exec()
         })
         .expect("scope");
-        drop(api);
         let mut found = false;
         for x in 0..area.width {
             for y in 0..area.height {

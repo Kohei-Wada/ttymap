@@ -380,15 +380,15 @@ fn register_plugins_in(
     plugins.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     for (stem, path) in plugins {
-        if let Some(seen) = seen.as_deref_mut() {
-            if !seen.insert(stem.clone()) {
-                log::info!(
-                    "lua[{}]: shadowed by higher-priority runtime layer, skipping {}",
-                    stem,
-                    path.display()
-                );
-                continue;
-            }
+        if let Some(seen) = seen.as_deref_mut()
+            && !seen.insert(stem.clone())
+        {
+            log::info!(
+                "lua[{}]: shadowed by higher-priority runtime layer, skipping {}",
+                stem,
+                path.display()
+            );
+            continue;
         }
         if disable.iter().any(|d| d == &stem) {
             log::info!("lua[{}]: disabled via ttymap.opt.disable, skipping", stem);

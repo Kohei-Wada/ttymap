@@ -101,7 +101,7 @@ mod tests {
     fn lua_with_counter(global: &str) -> (Lua, RegistryKey) {
         let lua = Lua::new();
         // Counter starts at 0; each call bumps it by 1.
-        lua.load(&format!(
+        lua.load(format!(
             r#"
             {global} = 0
             function tick_{global}(_map)

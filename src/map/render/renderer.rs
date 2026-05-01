@@ -1021,7 +1021,7 @@ mod tests {
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
         let tile_only = renderer
-            .draw(&[tile.clone()], 6.0, center, &[])
+            .draw(std::slice::from_ref(&tile), 6.0, center, &[])
             .expect("frame");
         let combined = renderer
             .draw(&[tile], 6.0, center, &[overlay])

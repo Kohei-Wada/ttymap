@@ -407,7 +407,7 @@ mod tests {
         // Clip first, then polygon — should be fast
         let clipped = canvas.clip_polygon(&[ring]);
         for r in &clipped {
-            canvas.polygon(&[r.clone()], 7);
+            canvas.polygon(std::slice::from_ref(r), 7);
         }
         // Should complete without hanging
     }
@@ -444,7 +444,7 @@ mod tests {
         }
         let clipped = canvas.clip_polygon(&rings);
         for r in &clipped {
-            canvas.polygon(&[r.clone()], 7);
+            canvas.polygon(std::slice::from_ref(r), 7);
         }
         // Should complete without hanging
     }
