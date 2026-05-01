@@ -19,6 +19,11 @@ pub use msg::AppMsg;
 use std::io;
 use std::sync::Arc;
 
+/// Minimum interval between overlay-driven redraws. ~30Hz balances
+/// animation smoothness against render-thread CPU; the main loop
+/// still polls events at ~60Hz so user input remains responsive.
+const OVERLAY_REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
@@ -73,6 +78,16 @@ pub struct App {
     /// [`Context`](crate::compositor::Context) so plugins can build
     /// cursor-aware overlays.
     cursor: Option<(u16, u16)>,
+    /// Timestamp of the last overlay-driven `request_map_redraw`. Used
+    /// to rate-limit redraws when a plugin pushes polyline overlays
+    /// every tick — without this, each push triggers a full tile re-
+    /// render at the main loop's ~60Hz cadence (`event::poll(16ms)`),
+    /// which is wasted work since tile data does not change between
+    /// frames. Throttling to ~30Hz halves render-thread CPU while
+    /// keeping animation visually smooth. User-event-driven redraws
+    /// (pan, zoom, resize, theme change) bypass this check and fire
+    /// immediately.
+    last_overlay_redraw: std::time::Instant,
 }
 
 impl App {
@@ -151,6 +166,7 @@ impl App {
             lua_host_handles,
             cursor: None,
             overlay_sink: Vec::new(),
+            last_overlay_redraw: std::time::Instant::now(),
         }
     }
 
@@ -211,8 +227,18 @@ impl App {
             // `drain_tasks` collapses redundant Draw tasks to the latest, so
             // this doesn't cause N renders per second; it just guarantees the
             // freshly-pushed polylines reach the next render.
+            //
+            // Rate-limited to ~30Hz: plugins can push every tick at 60Hz, but
+            // we only trigger a full tile re-render at most every 33ms. Polylines
+            // accumulate in `overlay_sink` between redraws and are all delivered
+            // in the next triggered Draw. User-event-driven redraws (pan, zoom,
+            // resize, theme change) bypass this check and always fire immediately.
             if !self.overlay_sink.is_empty() {
-                self.request_map_redraw();
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_overlay_redraw) >= OVERLAY_REDRAW_INTERVAL {
+                    self.request_map_redraw();
+                    self.last_overlay_redraw = now;
+                }
             }
 
             // Idle wake rate. crossterm's `event::poll` blocks
