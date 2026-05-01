@@ -294,13 +294,30 @@ impl App {
     }
 
     /// Drain every Lua plugin's setup-state receivers once.
+    ///
+    /// Before draining, refreshes the host-shared `center` / `zoom`
+    /// cells each plugin's `ttymap.map:center()` / `:zoom()` reads
+    /// from. Doing this once at the App level — instead of from
+    /// inside each `LuaWindowComponent` dispatch — means the values
+    /// are correct for *every* callback path (palette invoke,
+    /// register_keybind, on_tick), not just paths that go through
+    /// an active window.
+    ///
     /// Components queued via `ttymap.api.window.open` /
     /// `palette.open` get pushed onto the compositor stack inline;
     /// `ttymap.map:jump` and `ttymap.api.frame.export` requests are
     /// returned as [`AppMsg`]s for the caller to dispatch.
     fn drain_lua_host_handles(&mut self) -> Vec<AppMsg> {
+        let center = self.map.center();
+        let zoom = self.map.zoom();
         let mut msgs = Vec::new();
         for handles in &self.lua_host_handles {
+            if let Ok(mut cell) = handles.center.lock() {
+                *cell = center;
+            }
+            if let Ok(mut cell) = handles.zoom.lock() {
+                *cell = zoom;
+            }
             // Push queued components first so the same tick's
             // compositor.poll already sees them.
             while let Ok(component) = handles.push_rx.try_recv() {
@@ -332,8 +349,6 @@ impl App {
 
     fn context(&self) -> Context {
         Context {
-            center: self.map.center(),
-            zoom: self.map.zoom(),
             theme_id: self.theme_id,
             cursor: self.cursor,
         }

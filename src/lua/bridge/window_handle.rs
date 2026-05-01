@@ -136,7 +136,6 @@ mod tests {
         use crate::compositor::Component;
         use crate::compositor::Context;
         use crate::compositor::window::{Window, WindowOps};
-        use crate::geo::LonLat;
 
         /// Inert inner component — no-op for every method so the
         /// wrapper's behaviour is the only thing under test.
@@ -144,8 +143,6 @@ mod tests {
         impl Component for Inert {}
 
         const CTX: Context = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 0.0,
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };

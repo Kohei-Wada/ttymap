@@ -457,8 +457,6 @@ pub fn install(
 
     let window_api = lua.create_table()?;
     let push_tx_for_window = push_tx.clone();
-    let center_for_window = center.clone();
-    let zoom_for_window = zoom.clone();
     window_api.set(
         "open",
         lua.create_function(
@@ -475,14 +473,8 @@ pub fn install(
                 // must be a clone of it (cheap Arc bump, no copy of the
                 // VM). When `LuaWindowComponent` later calls into those
                 // callbacks, the same upvalue scope is in scope.
-                let component = LuaWindowComponent::from_spec(
-                    lua.clone(),
-                    spec,
-                    tag,
-                    flag.clone(),
-                    center_for_window.clone(),
-                    zoom_for_window.clone(),
-                )?;
+                let component =
+                    LuaWindowComponent::from_spec(lua.clone(), spec, tag, flag.clone())?;
                 // Same-thread send: the channel never crosses threads.
                 // `send` returns Err only when the receiver has been
                 // dropped, which happens at App teardown — log + carry

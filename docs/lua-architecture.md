@@ -178,9 +178,12 @@ via OR-merge into existing braille cells).
 ## Live host-state read-back
 
 `ttymap.map:center()` and `ttymap.map:zoom()` (no-arg getter) read
-shared `Arc<Mutex<...>>` cells. The host refreshes them on dispatch
-paths that carry a `Window` (handled in `LuaWindowComponent`); cells
-are kept in sync via the same Arc held by `HostMap` userdata.
+shared `Arc<Mutex<...>>` cells. The host refreshes them once per
+loop iteration in `App::drain_lua_host_handles`, before draining each
+plugin's setup-state channels. That means the values are correct in
+**every** callback path — palette `invoke`, `register_keybind`
+callbacks, `on_tick` — not just inside an active window's dispatch.
+Cells are shared with `HostMap` userdata via the same Arc.
 
 ## Runtime path resolution
 

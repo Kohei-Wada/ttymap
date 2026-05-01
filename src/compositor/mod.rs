@@ -40,7 +40,6 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app::AppMsg;
-use crate::geo::LonLat;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -72,8 +71,6 @@ fn intercept_focus_key(event: KeyEvent) -> Option<AppMsg> {
 /// [`Window::ctx`](window::Window::ctx).
 #[derive(Debug, Clone, Copy)]
 pub struct Context {
-    pub center: LonLat,
-    pub zoom: f64,
     pub theme_id: ThemeId,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
@@ -592,8 +589,6 @@ mod tests {
     #[test]
     fn push_always_stacks_new_instance() {
         let ctx = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 0.0,
             theme_id: ThemeId::Dark,
             cursor: None,
         };
@@ -640,8 +635,6 @@ mod tests {
         }
 
         let ctx = Context {
-            center: LonLat { lon: 0.0, lat: 0.0 },
-            zoom: 0.0,
             theme_id: ThemeId::Dark,
             cursor: None,
         };
