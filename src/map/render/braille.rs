@@ -78,6 +78,49 @@ impl BrailleBuffer {
         self.fg_buf[idx] = color;
     }
 
+    /// Variant of [`set_pixel`] for the user-overlay third pass.
+    ///
+    /// Two regimes:
+    ///
+    /// - **Saturated cell (`pixel_buf == 0xFF`)** — the cell is fully
+    ///   covered by a Fill polygon (water, dense forest, …). Replace
+    ///   the mask with just the overlay's single bit; set fg to the
+    ///   overlay colour. The cell loses its `⣿` rendering and shows
+    ///   as a sparse-pattern Braille char in the overlay colour against
+    ///   the global bg, i.e. "the water is interrupted by a thin line
+    ///   for one cell".
+    /// - **Sparse cell (`pixel_buf < 0xFF`)** — the cell has empty or
+    ///   sparse tile dots. OR-merge as standard `set_pixel`: add the
+    ///   bit, set fg to the overlay colour. Existing tile dots persist
+    ///   (their fg is overwritten to the overlay colour, but for the
+    ///   common case where the overlay colour matches the existing
+    ///   road colour, this is a no-op).
+    ///
+    /// We intentionally do NOT transfer the prior fg into bg or dim the
+    /// colour — both proved problematic in earlier iterations:
+    /// - bg transfer + plain colour: solid bg outshone surrounding `⣿`
+    ///   cells (different perceived brightness).
+    /// - bg = overlay (tint approach): inter-dot bg shows through the
+    ///   `⣿` glyph, mixing badly with the cell's fg colour.
+    ///
+    /// The cleanest visual is just "punch a single overlay-coloured dot through
+    /// saturated cells, accept the 1-cell-wide gap in the fill".
+    ///
+    /// Out-of-bounds coordinates are silently ignored.
+    pub fn set_pixel_punching(&mut self, x: usize, y: usize, color: u8) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let idx = self.cell_index(x, y);
+        let bit = BRAILLE_MAP[y & 3][x & 1];
+        if self.pixel_buf[idx] == 0xFF {
+            self.pixel_buf[idx] = bit;
+        } else {
+            self.pixel_buf[idx] |= bit;
+        }
+        self.fg_buf[idx] = color;
+    }
+
     /// Write a single character at pixel position (x, y), overriding any braille content.
     /// Out-of-bounds coordinates are silently ignored.
     pub fn set_char(&mut self, ch: char, x: usize, y: usize, color: u8) {
@@ -270,5 +313,59 @@ mod tests {
         let mut buf = BrailleBuffer::new(4, 4);
         buf.set_global_background(9);
         assert_eq!(buf.global_bg, Some(9));
+    }
+
+    /// Saturated cell + `set_pixel_punching` → mask is replaced with
+    /// just the overlay's bit (the cell's prior `⣿` rendering is
+    /// dropped at this cell), fg = overlay colour, bg untouched.
+    #[test]
+    fn set_pixel_punching_replaces_mask_on_saturated_cell() {
+        let mut buf = BrailleBuffer::new(4, 4);
+        for sx in 0..2 {
+            for sy in 0..4 {
+                buf.set_pixel(sx, sy, 5);
+            }
+        }
+        let idx = buf.cell_index(0, 0);
+        assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: saturated");
+
+        buf.set_pixel_punching(0, 0, 7);
+
+        let bit = BRAILLE_MAP[0][0];
+        assert_eq!(buf.pixel_buf[idx], bit, "mask replaced with overlay bit");
+        assert_eq!(buf.fg_buf[idx], 7, "fg = overlay");
+        assert_eq!(buf.bg_buf[idx], 0, "bg untouched on punch");
+    }
+
+    /// Sparse non-empty cell + `set_pixel_punching` → mask OR-merges
+    /// the overlay's bit into existing dots, fg = overlay colour.
+    /// Pre-existing tile dots are preserved.
+    #[test]
+    fn set_pixel_punching_or_merges_on_sparse_cell() {
+        let mut buf = BrailleBuffer::new(4, 4);
+        buf.set_pixel(0, 0, 3); // pre-existing tile-feature dot
+        let idx = buf.cell_index(0, 0);
+        let pre = buf.pixel_buf[idx];
+
+        buf.set_pixel_punching(1, 0, 9);
+
+        let overlay_bit = BRAILLE_MAP[0][1];
+        assert_eq!(buf.pixel_buf[idx], pre | overlay_bit, "OR-merged");
+        assert_eq!(buf.fg_buf[idx], 9, "fg = overlay");
+    }
+
+    /// Empty cell + `set_pixel_punching` → just adds the overlay's
+    /// dot and fg.
+    #[test]
+    fn set_pixel_punching_writes_into_empty_cell() {
+        let mut buf = BrailleBuffer::new(4, 4);
+        let idx = buf.cell_index(0, 0);
+
+        buf.set_pixel_punching(0, 0, 7);
+
+        let bit = BRAILLE_MAP[0][0];
+        assert_eq!(buf.pixel_buf[idx], bit);
+        assert_eq!(buf.fg_buf[idx], 7);
+        assert_eq!(buf.bg_buf[idx], 0);
     }
 }
