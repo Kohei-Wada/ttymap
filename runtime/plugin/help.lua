@@ -69,8 +69,6 @@ end
 
 ttymap.register_plugin({
     name = "help",
-    label = "Toggle help",
-    key = "?",
     layout = { anchor = "center", width = 64, height = 22 },
 
     footer_hints = {
@@ -85,3 +83,6 @@ ttymap.register_plugin({
         return { close = true }
     end,
 })
+
+ttymap.register_palette_command({ label = "Toggle help", invoke = function() return true end })
+ttymap.register_keybind("?", function() return true end)

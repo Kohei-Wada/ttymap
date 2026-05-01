@@ -19,8 +19,6 @@ local state = {
 
 ttymap.register_plugin({
     name = "here",
-    label = "Jump to here (current location)",
-
     handle_event = function(_)
         -- Non-modal: never consume keys. Lets the user keep panning
         -- while the lookup runs (typically <1s).
@@ -52,3 +50,5 @@ ttymap.register_plugin({
         end
     end,
 })
+
+ttymap.register_palette_command({ label = "Jump to here (current location)", invoke = function() return true end })

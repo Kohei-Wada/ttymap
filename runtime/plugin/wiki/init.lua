@@ -165,8 +165,6 @@ end
 
 ttymap.register_plugin({
     name = "wiki",
-    label = "Toggle wiki",
-    key = "i",
     layout = { anchor = "right", width = 56 },
 
     footer_hints = {
@@ -288,3 +286,6 @@ ttymap.register_plugin({
         end
     end,
 })
+
+ttymap.register_palette_command({ label = "Toggle wiki", invoke = function() return true end })
+ttymap.register_keybind("i", function() return true end)

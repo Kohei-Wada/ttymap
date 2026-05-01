@@ -11,8 +11,6 @@ local state = { fired = false }
 
 ttymap.register_plugin({
     name = "export",
-    label = "Export frame as ANSI",
-
     handle_event = function(_)
         return { ignore = true }
     end,
@@ -24,3 +22,5 @@ ttymap.register_plugin({
         ttymap.window:close()
     end,
 })
+
+ttymap.register_palette_command({ label = "Export frame as ANSI", invoke = function() return true end })

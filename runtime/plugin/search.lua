@@ -49,8 +49,6 @@ end
 
 ttymap.register_palette({
     name = "search",
-    key = "/",
-    label = "Search location",
 
     prompt = "/",
     submit_mode = { kind = "debounced", ms = DEBOUNCE_MS },
@@ -104,3 +102,9 @@ ttymap.register_palette({
         return state.pending
     end,
 })
+
+ttymap.register_palette_command({
+    label = "Search location",
+    invoke = function() return true end,
+})
+ttymap.register_keybind("/", function() return true end)

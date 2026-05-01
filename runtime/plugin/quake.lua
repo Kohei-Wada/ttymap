@@ -92,3 +92,5 @@ ttymap.register_plugin({
         end
     end,
 })
+
+ttymap.register_palette_command({ label = "Toggle quakes", invoke = function() return true end })

@@ -32,3 +32,8 @@ ttymap.register_plugin(require("satellite.satellites").make({
     -- a different rhythm to the LEO sats.
     { display = "GPS",      norad_id = 26360, color = "highlight",  key = "G" },
 }))
+
+ttymap.register_palette_command({
+    label = "Toggle satellite",
+    invoke = function() return true end,
+})

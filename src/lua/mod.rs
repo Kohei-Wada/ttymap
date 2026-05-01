@@ -352,19 +352,47 @@ fn register_one(
     // register_keybind from the script gets its own gated factory.
     // The factory calls the captured Lua callback in the persistent
     // Lua state; truthy return means "push a fresh component", falsy
-    // means "no-op" (palette closes, key consumed without push).
+    // means "no-op" (palette closes, key consumed without push). The
+    // built component varies by `kind`: register_plugin → LuaComponent,
+    // register_palette → PaletteComponent wrapping a LuaPaletteProvider.
+    // Overlays don't take activation surfaces (warned above).
     use crate::compositor::{Activation, Component, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
-    for cmd in captured.palette_commands {
-        let lua_clone = lua.clone();
-        let shared_for_factory = shared.clone();
-        let invoke = cmd.invoke;
-        let factory: crate::compositor::SpawnComponent = Box::new(move |_ctx| {
-            lua_callback_gate(&lua_clone, &invoke, name).then(|| {
-                let c = component_or_placeholder(name, source, shared_for_factory.clone());
-                Box::new(c) as Box<dyn Component>
+    let is_palette_kind = matches!(kind, ttymap::CapturedKind::Palette(_));
+    let build_factory = |gate_key: mlua::RegistryKey,
+                         lua_clone: mlua::Lua,
+                         shared_clone: Arc<ttymap::LuaHostShared>|
+     -> crate::compositor::SpawnComponent {
+        if is_palette_kind {
+            Box::new(move |_ctx| {
+                if !lua_callback_gate(&lua_clone, &gate_key, name) {
+                    return None;
+                }
+                let provider = LuaPaletteProvider::from_source(source, name, shared_clone.clone())
+                    .unwrap_or_else(|e| {
+                        log::warn!("lua[{}]: re-load failed: {}", name, e);
+                        LuaPaletteProvider::from_source(
+                            "ttymap.register_palette({})",
+                            "lua-fallback",
+                            shared_clone.clone(),
+                        )
+                        .expect("trivial provider always loads")
+                    });
+                let palette = crate::palette::PaletteComponent::with_provider(provider);
+                Some(Box::new(palette) as Box<dyn Component>)
             })
-        });
+        } else {
+            Box::new(move |_ctx| {
+                lua_callback_gate(&lua_clone, &gate_key, name).then(|| {
+                    let c = component_or_placeholder(name, source, shared_clone.clone());
+                    Box::new(c) as Box<dyn Component>
+                })
+            })
+        }
+    };
+
+    for cmd in captured.palette_commands {
+        let factory = build_factory(cmd.invoke, lua.clone(), shared.clone());
         r.palette_entries.push(PaletteEntry {
             label: cmd.label,
             hint: cmd.hint,
@@ -373,15 +401,7 @@ fn register_one(
         });
     }
     for bind in captured.keybinds {
-        let lua_clone = lua.clone();
-        let shared_for_factory = shared.clone();
-        let callback = bind.callback;
-        let factory: crate::compositor::SpawnComponent = Box::new(move |_ctx| {
-            lua_callback_gate(&lua_clone, &callback, name).then(|| {
-                let c = component_or_placeholder(name, source, shared_for_factory.clone());
-                Box::new(c) as Box<dyn Component>
-            })
-        });
+        let factory = build_factory(bind.callback, lua.clone(), shared.clone());
         r.activations.push(Activation {
             code: KeyCode::Char(bind.key),
             modifiers: KeyModifiers::NONE,
