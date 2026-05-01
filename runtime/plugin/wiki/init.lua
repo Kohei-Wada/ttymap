@@ -27,6 +27,7 @@ local state = {
     pending_pages = nil,    -- titles + coords + dist between geosearch and extracts
     needs_refresh = false,  -- true on (re)open and on 'r'
 }
+local w = nil  -- window handle while open; nil while closed (also acts as enabled flag)
 
 local function geosearch_url(lat, lon)
     return string.format(
@@ -163,130 +164,146 @@ local function move_selection(direction)
     if a then ttymap.map:jump(a.lon, a.lat) end
 end
 
-ttymap.register_plugin({
-    name = "wiki",
-    layout = { anchor = "right", width = 56 },
-
-    footer_hints = {
-        { "C-n/C-p", "select" },
-        { "Enter",   "open" },
-        { "Esc",     "back" },
-        { "r",       "refresh" },
-        { "i",       "close wiki" },
-    },
-
-    render = function()
-        if state.detail then
-            local d = state.detail
-            local lines = {
-                {{ text = d.title, style = "highlight" }},
-                {{ text = fmt.distance(d.dist_m) .. "  ", style = "muted" }},
-            }
-            if d.extract and #d.extract > 0 then
-                table.insert(lines, "")
-                for line in d.extract:gmatch("[^\r\n]+") do
-                    table.insert(lines, line)
-                end
-            else
-                table.insert(lines, {{ text = "(no summary available)", style = "muted" }})
+local function build_lines()
+    if state.detail then
+        local d = state.detail
+        local lines = {
+            {{ text = d.title, style = "highlight" }},
+            {{ text = fmt.distance(d.dist_m) .. "  ", style = "muted" }},
+        }
+        if d.extract and #d.extract > 0 then
+            table.insert(lines, "")
+            for line in d.extract:gmatch("[^\r\n]+") do
+                table.insert(lines, line)
             end
-            return lines
-        end
-
-        if #state.articles == 0 then
-            return { { { text = "Loading...", style = "muted" } } }
-        end
-
-        local lines = {}
-        for i, a in ipairs(state.articles) do
-            local title_style = (i == state.selected) and "highlight" or "accent"
-            table.insert(lines, {
-                { text = a.title,                              style = title_style },
-                { text = "  " .. fmt.distance(a.dist_m),    style = "muted" },
-            })
+        else
+            table.insert(lines, {{ text = "(no summary available)", style = "muted" }})
         end
         return lines
-    end,
+    end
 
-    paint_on_map = function(map)
-        for i, a in ipairs(state.articles) do
-            local color = (i == state.selected) and "accent_alt" or "accent"
-            map:point(a.lon, a.lat, "●", color)
-        end
-    end,
+    if #state.articles == 0 then
+        return { { { text = "Loading...", style = "muted" } } }
+    end
 
-    handle_event = function(key)
-        local code = key.code
-        local ch = key.char
-        local ctrl = key.ctrl
+    local lines = {}
+    for i, a in ipairs(state.articles) do
+        local title_style = (i == state.selected) and "highlight" or "accent"
+        table.insert(lines, {
+            { text = a.title,                              style = title_style },
+            { text = "  " .. fmt.distance(a.dist_m),    style = "muted" },
+        })
+    end
+    return lines
+end
 
-        -- Self-toggle on the activation key.
-        if code == "Char" and ch == "i" and not ctrl then
-            return { close = true }
-        end
-
-        -- Refresh always available.
-        if code == "Char" and ch == "r" and not ctrl then
-            state.needs_refresh = true
-            return nil
-        end
-
-        local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
-        local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
-        local exit_detail = code == "Esc" or code == "Backspace" or code == "Enter"
-
-        if state.detail then
-            if exit_detail then
-                state.detail = nil
-                return nil
-            end
-            if up or down then
-                move_selection(up and -1 or 1)
-                local a = state.articles[state.selected]
-                if a then state.detail = a end
-            end
-            return nil
-        end
-
-        if #state.articles == 0 then
-            -- Pre-data: still consume widget-control keys so they
-            -- don't fall through, but let everything else pass.
-            if up or down or exit_detail then return nil end
-            return { ignore = true }
-        end
-
-        if code == "Enter" then
-            local a = state.articles[state.selected]
-            if a then
-                state.detail = a
-                ttymap.map:jump(a.lon, a.lat)
-            end
-            return nil
-        end
-        if up or down then
-            move_selection(up and -1 or 1)
-            return nil
-        end
-        if code == "Esc" or code == "Backspace" then
-            return nil
-        end
-        return { ignore = true }
-    end,
-
-    poll = function()
+ttymap.register_plugin({
+    name = "wiki",
+    -- Per-frame work runs only while the panel is open: drives the
+    -- geosearch → extracts state machine, kicks the initial fetch,
+    -- and paints article markers. Closing the panel (`w = nil`)
+    -- immediately stops the pipeline and the markers vanish.
+    loop = function(map)
+        if not w then return end
         if state.needs_refresh and not state.job then
             state.needs_refresh = false
             start_refresh()
         end
         step_state_machine()
-        -- Initial fetch after first poll: if articles are empty and
-        -- we haven't kicked off a job yet, do so now.
+        -- Initial fetch on first tick after open.
         if #state.articles == 0 and not state.job and state.phase == "idle" then
             start_refresh()
+        end
+        for i, a in ipairs(state.articles) do
+            local color = (i == state.selected) and "accent_alt" or "accent"
+            map:point(a.lon, a.lat, "●", color)
         end
     end,
 })
 
-local function open() ttymap.plugin:open() end
-ttymap.register_palette_command({ label = "Toggle wiki", invoke = open })
-ttymap.register_keybind("i", open)
+local function close()
+    if w then
+        w:close()
+        w = nil
+    end
+end
+
+local function open()
+    if w then return end
+    -- Trigger a fresh fetch on (re)open.
+    state.needs_refresh = true
+    w = ttymap.api.window.open({
+        layout = { anchor = "right", width = 56 },
+        render = build_lines,
+        handle_event = function(key)
+            local code = key.code
+            local ch = key.char
+            local ctrl = key.ctrl
+
+            -- Self-toggle on the activation key.
+            if code == "Char" and ch == "i" and not ctrl then
+                close()
+                return nil
+            end
+
+            -- Refresh always available.
+            if code == "Char" and ch == "r" and not ctrl then
+                state.needs_refresh = true
+                return nil
+            end
+
+            local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
+            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
+            local exit_detail = code == "Esc" or code == "Backspace" or code == "Enter"
+
+            if state.detail then
+                if exit_detail then
+                    state.detail = nil
+                    return nil
+                end
+                if up or down then
+                    move_selection(up and -1 or 1)
+                    local a = state.articles[state.selected]
+                    if a then state.detail = a end
+                end
+                return nil
+            end
+
+            if #state.articles == 0 then
+                -- Pre-data: still consume widget-control keys so they
+                -- don't fall through, but let everything else pass.
+                if up or down or exit_detail then return nil end
+                return { ignore = true }
+            end
+
+            if code == "Enter" then
+                local a = state.articles[state.selected]
+                if a then
+                    state.detail = a
+                    ttymap.map:jump(a.lon, a.lat)
+                end
+                return nil
+            end
+            if up or down then
+                move_selection(up and -1 or 1)
+                return nil
+            end
+            if code == "Esc" or code == "Backspace" then
+                return nil
+            end
+            return { ignore = true }
+        end,
+    })
+end
+
+local function toggle()
+    if w then close() else open() end
+end
+
+ttymap.register_palette_command({ label = "Toggle wiki", invoke = toggle })
+ttymap.register_keybind("i", toggle)
+ttymap.register_footer_hint({ key = "C-n/C-p", label = "select" })
+ttymap.register_footer_hint({ key = "Enter",   label = "open" })
+ttymap.register_footer_hint({ key = "Esc",     label = "back" })
+ttymap.register_footer_hint({ key = "r",       label = "refresh" })
+ttymap.register_footer_hint({ key = "i",       label = "close wiki" })
