@@ -54,12 +54,13 @@ pub fn new_lua() -> Lua {
         log::warn!("lua: failed to install builtin searcher: {}", e);
     }
     // Higher-priority layers first — `package.path` is searched in
-    // order, so the user-tier `lua/` wins over bundled.
+    // order. Each layer contributes both its `lua/` (libs reachable
+    // via `require "ttymap.fmt"` etc.) and its `plugin/` (so a
+    // directory plugin like `plugin/satellite/init.lua` can
+    // `require "satellite.satellites"`).
     for layer in runtime_path() {
         prepend_package_path(&lua, &layer.join("lua"));
-    }
-    if let Some(dir) = user_plugins_dir() {
-        prepend_package_path(&lua, &dir);
+        prepend_package_path(&lua, &layer.join("plugin"));
     }
     lua
 }
@@ -132,30 +133,29 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 
 // ── Bundled plugin discovery ────────────────────────────────────────
 //
-// Bundled Lua plugins live on disk under `<layer>/lua/*.lua`,
-// alongside lib scripts under `<layer>/lua/ttymap/*.lua`. Adding a
-// new builtin = drop a `.lua` file under `runtime/lua/` and `make
-// install`. There is no Rust array to keep in sync — `register_one`
-// reads each file's own metadata (`activation`, `kind`, `key`,
-// `label`, `enabled`) to decide how to wire it.
+// nvim-style two-tier layout per runtime layer:
+//
+// - `<layer>/plugin/*.lua` — auto-discovered plugins. Each script
+//   self-registers via `ttymap.register_plugin / register_palette /
+//   register_overlay` at top level.
+// - `<layer>/lua/<name>.lua` — `require`-able lib scripts. NOT
+//   auto-discovered. Plugins reach them via `require "<name>"`.
+//
+// Adding a new builtin = drop a `.lua` file under `runtime/plugin/`
+// and `make install`. There is no Rust array to keep in sync.
 //
 // The runtime path itself is discovered at startup via
 // [`runtimepath::resolve_runtime_path`]; see that module for the
 // resolution order.
 
 /// Register every bundled Lua plugin with the registrar by walking
-/// `<layer>/lua/*.lua` for each layer in `runtime_path`, in priority
-/// order. Stem dedup means a higher-priority layer's plugin shadows
-/// a lower-priority one with the same file name — drop a
-/// `~/.config/ttymap/lua/wiki.lua` to replace bundled `wiki`.
+/// `<layer>/plugin/*.lua` for each layer in `runtime_path`, in
+/// priority order. Stem dedup means a higher-priority layer's plugin
+/// shadows a lower-priority one with the same file name — drop a
+/// `~/.config/ttymap/plugin/wiki.lua` to replace bundled `wiki`.
 ///
 /// Each script's own metadata drives how it's wired — see
-/// [`register_one`] for the activation / kind dispatch.
-///
-/// Subdirectories (notably `ttymap/` for lib scripts) are skipped by
-/// the walker's `.extension() == Some("lua")` filter. Lib scripts are
-/// reached via the [`install_builtin_searcher`] hook from `require`,
-/// not from this walk.
+/// [`register_one`] for the kind dispatch.
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     shared: Arc<ttymap::LuaHostShared>,
@@ -167,11 +167,11 @@ pub fn register_builtin_plugins(
     }
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for layer in runtime_path {
-        let lua_dir = layer.join("lua");
-        if !lua_dir.is_dir() {
+        let plugin_dir = layer.join("plugin");
+        if !plugin_dir.is_dir() {
             continue;
         }
-        register_plugins_in(&lua_dir, Some(&mut seen), shared.clone(), r);
+        register_plugins_in(&plugin_dir, Some(&mut seen), shared.clone(), r);
     }
 }
 
@@ -418,32 +418,6 @@ fn component_or_placeholder(
     })
 }
 
-/// Scan `~/.config/ttymap/plugins/` for plugin files / dirs and
-/// register each. Two layouts are accepted:
-/// - flat file: `my.lua` → plugin `my`
-/// - directory: `my/init.lua` → plugin `my`, with siblings
-///   (`my/state.lua`, …) reachable via `require "my.state"`
-///
-/// Whether a plugin is *active* is decided by the script itself
-/// via the optional `enabled` field on its returned module table
-/// — `enabled = false` keeps the file in place but skips
-/// registration, which is the natural shape for user-edited
-/// scripts (the file *is* the config).
-///
-/// A read / parse failure on a single file logs a warning and
-/// skips it — the rest of the directory still loads. Files are
-/// loaded in alphabetical order so palette entries surface in a
-/// predictable order across runs.
-pub fn register_user_plugins(shared: Arc<ttymap::LuaHostShared>, r: &mut Registrar) {
-    let Some(dir) = user_plugins_dir() else {
-        return;
-    };
-    if !dir.is_dir() {
-        return;
-    }
-    register_plugins_in(&dir, None, shared, r);
-}
-
 /// Walk `dir` and route each plugin through the same [`register_one`]
 /// dispatcher used by both bundled and user plugins. Two layouts
 /// are accepted, both produce the same `<stem>` plugin id:
@@ -531,17 +505,6 @@ fn register_plugins_in(
     }
 }
 
-/// Resolve `~/.config/ttymap/plugins/` (or the platform-specific
-/// equivalent). `None` only when the host doesn't expose a config
-/// dir at all — a corner case worth surfacing as "no user plugins"
-/// rather than panicking.
-fn user_plugins_dir() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    Some(dirs.config_dir().join("plugins"))
-}
-
-/// Validate + register one bundled script as a palette toggle.
 #[cfg(test)]
 mod tests {
     use super::*;

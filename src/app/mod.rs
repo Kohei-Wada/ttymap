@@ -404,8 +404,8 @@ fn build_registrar(
     // (bundled and user) sees the same `ttymap.*` accessor surface;
     // there is no per-plugin Rust glue, no per-plugin upvalue
     // injection. Adding a new bundled plugin is one file under
-    // `runtime/lua/`; adding a user plugin is one file in
-    // `~/.config/ttymap/plugins/`.
+    // `runtime/plugin/`; adding a user plugin is one file in
+    // `~/.config/ttymap/plugin/`.
     let shared = Arc::new(crate::lua::LuaHostShared::new(
         attribution,
         config.geoip.endpoint.clone(),
@@ -413,24 +413,23 @@ fn build_registrar(
     ));
 
     // Bundled plugins (every `*.lua` under each runtime layer's
-    // `lua/`) always register — disabling one is an edit to the
-    // script itself (`module.enabled = false`). Higher-priority
+    // `plugin/`) always register — disabling one is an edit to the
+    // script itself (`enabled = false` in the spec). Higher-priority
     // layers shadow lower ones by stem, so a user's
-    // `~/.config/ttymap/lua/wiki.lua` replaces the bundled `wiki`.
+    // `~/.config/ttymap/plugin/wiki.lua` replaces the bundled `wiki`.
     // The dispatcher reads each script's own activation/kind/key/label
     // metadata, so chrome overlays, palette toggles, key binds, and
     // the search palette provider all flow through one path.
     //
     // `runtime_path()` was set once at startup by `main.rs` (or the
     // test harness via `ensure_runtime_path_for_tests`).
+    //
+    // User plugins live in `~/.config/ttymap/plugin/` — that's just
+    // the xdg_config layer of `runtime_path()`, so the same walker
+    // picks them up. Higher-priority layers shadow lower ones by
+    // stem (env > manifest > xdg_config > xdg_data).
     let runtime_path = crate::lua::runtime_path();
     crate::lua::register_builtin_plugins(runtime_path, shared.clone(), &mut r);
-
-    // User plugins from `~/.config/ttymap/plugins/*.lua`. Same
-    // dispatcher, same host accessors. Each script controls its own
-    // activation via `module.enabled` — drop a file in, flip a
-    // boolean, no rebuild and no TOML.
-    crate::lua::register_user_plugins(shared.clone(), &mut r);
 
     // Plugin metadata for help is published to `shared.palette_entries`
     // directly during registration (see `lua::push_plugin_entry`), so

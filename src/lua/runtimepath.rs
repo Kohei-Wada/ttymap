@@ -120,13 +120,14 @@ pub fn ensure_runtime_path_for_tests() {
     let _ = RUNTIME_PATH.set(vec![dev]);
 }
 
-/// `true` iff `dir` exists and contains a `lua/` subdirectory — the
-/// minimum shape every layer in the resolution order has to satisfy
-/// for the lookup to consider it a runtime tier. Without the `lua/`
-/// check, a bare directory would be accepted and the next
-/// `register_builtin_plugins` call would silently load zero plugins.
+/// `true` iff `dir` exists and looks like a ttymap runtime layer —
+/// it contains a `plugin/` subdir (auto-discovered plugins) or a
+/// `lua/` subdir (require'd libs). nvim convention: a layer can
+/// host either tier independently. A bare dir without either is
+/// rejected so the manifest path baked at compile time (which
+/// doesn't exist on user machines) and stale dirs filter out.
 fn is_valid(dir: &Path) -> bool {
-    dir.is_dir() && dir.join("lua").is_dir()
+    dir.is_dir() && (dir.join("plugin").is_dir() || dir.join("lua").is_dir())
 }
 
 /// `$XDG_CONFIG_HOME/ttymap` (default `~/.config/ttymap`). Holds
@@ -151,7 +152,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_valid_requires_lua_subdir() {
+    fn is_valid_requires_plugin_or_lua_subdir() {
         let dir = std::env::temp_dir().join("ttymap-runtimepath-test-empty");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -159,6 +160,13 @@ mod tests {
 
         std::fs::create_dir(dir.join("lua")).unwrap();
         assert!(is_valid(&dir), "dir with lua/ subdir validates");
+
+        // Either tier alone is enough — a layer hosting only auto-
+        // discovered plugins (no libs) is legitimate.
+        let dir2 = std::env::temp_dir().join("ttymap-runtimepath-test-plugin-only");
+        let _ = std::fs::remove_dir_all(&dir2);
+        std::fs::create_dir_all(dir2.join("plugin")).unwrap();
+        assert!(is_valid(&dir2), "dir with plugin/ subdir validates");
     }
 
     #[test]
