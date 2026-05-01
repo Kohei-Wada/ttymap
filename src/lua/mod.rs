@@ -759,6 +759,11 @@ mod tests {
         // (`register_plugin` + `loop` field) — the test treats both
         // as equivalent so a migration in either direction doesn't
         // require updating magic numbers.
+        //
+        // Phase B migrations (aircraft / quake / wiki / …) also
+        // register a `loop` callback that runs only while their panel
+        // is open; those land in `plugin_loops` too, so the count is
+        // a lower bound rather than an equality.
         let always_on_count = r.overlays.len() + r.plugin_loops.len();
 
         // Toggles + spawns: each leaves a palette entry whose label
@@ -780,9 +785,9 @@ mod tests {
                 "expected `{stem}` palette entry, got {palette:?}",
             );
         }
-        assert_eq!(
-            always_on_count, 4,
-            "info/scalebar/attribution/center should be registered as either overlays or plugin loops"
+        assert!(
+            always_on_count >= 4,
+            "info/scalebar/attribution/center should each be registered as either an overlay or a plugin loop (got {always_on_count})"
         );
     }
 
