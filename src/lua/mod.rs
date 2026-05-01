@@ -262,24 +262,30 @@ fn register_one(
         }
     };
 
-    let Some(kind) = captured.kind else {
-        log::warn!(
-            "lua[{}]: script did not call any ttymap.register_* API, skipping",
-            name
-        );
-        drop(lua);
-        return;
-    };
-    let is_overlay_kind = matches!(kind, ttymap::CapturedKind::Overlay(_));
-    let is_palette_kind = matches!(kind, ttymap::CapturedKind::Palette(_));
+    // `kind == None` is the **pure-action plugin** shape: the script
+    // declared one or more activation surfaces (palette command /
+    // keybind / footer hint) but no `register_plugin / _palette /
+    // _overlay`, so there's no Component to push. `fresh_load` already
+    // rejected the truly-empty case (no kind AND no surfaces); reaching
+    // here with `None` means surfaces exist. Their `invoke` / callback
+    // closures fire fire-and-forget host APIs (`ttymap.api.frame.export`,
+    // `ttymap.map:jump`, …) that flow through `LuaHostHandles`.
+    let is_pure_action_kind = captured.kind.is_none();
+    let is_overlay_kind = matches!(captured.kind, Some(ttymap::CapturedKind::Overlay(_)));
+    let is_palette_kind = matches!(captured.kind, Some(ttymap::CapturedKind::Palette(_)));
 
-    // Take ownership of the spec table for kind-specific setup.
-    let module: Table = match kind {
+    // Take ownership of the spec table when one exists. Pure-action
+    // plugins skip this block — there's no module to read `enabled` /
+    // `loop` / `footer_hints` from; only `captured.footer_hints` (the
+    // explicit `register_footer_hint` calls) applies.
+    let module_opt: Option<Table> = captured.kind.map(|k| match k {
         ttymap::CapturedKind::Plugin(t)
         | ttymap::CapturedKind::Palette(t)
         | ttymap::CapturedKind::Overlay(t) => t,
-    };
-    if !module_enabled(&module) {
+    });
+    if let Some(module) = module_opt.as_ref()
+        && !module_enabled(module)
+    {
         log::info!("lua[{}]: enabled = false, skipping", name);
         drop(lua);
         return;
@@ -290,8 +296,10 @@ fn register_one(
     // continue to work through their existing `paint_on_map` / `poll`
     // hooks. The setup-state Lua is cloned (cheap Arc bump) into the
     // registry entry so the closure stays callable for the program's
-    // lifetime.
-    if let Ok(loop_fn) = module.get::<mlua::Function>("loop") {
+    // lifetime. Pure-action plugins have no module, so no `loop`.
+    if let Some(module) = module_opt.as_ref()
+        && let Ok(loop_fn) = module.get::<mlua::Function>("loop")
+    {
         match lua.create_registry_value(loop_fn) {
             Ok(loop_key) => {
                 r.plugin_loops.register(crate::lua::registry::PluginLoop {
@@ -312,8 +320,10 @@ fn register_one(
     // `ttymap.register_footer_hint(...)` calls win when present.
     let footer_hints = if !captured.footer_hints.is_empty() {
         captured.footer_hints.clone()
+    } else if let Some(module) = module_opt.as_ref() {
+        parse_footer_hints(module)
     } else {
-        parse_footer_hints(&module)
+        Vec::new()
     };
 
     // Overlays install once at app init and stay for the program
@@ -322,6 +332,7 @@ fn register_one(
     // see the same module-level Lua locals. That's how
     // `enabled = not enabled` in a callback flips the next paint.
     if is_overlay_kind {
+        let module = module_opt.expect("overlay kind always carries a module");
         let component = match LuaComponent::from_parts(lua.clone(), module, handles, name) {
             Ok(c) => c,
             Err(e) => {
@@ -342,7 +353,12 @@ fn register_one(
         // surfaces as one log line instead of a noisy first-
         // activation failure later. The validation state is
         // throwaway; activation rebuilds a fresh state per push.
-        let valid = if is_palette_kind {
+        // Pure-action plugins have nothing to pre-build (no Component
+        // is ever pushed), so skip validation — `fresh_load` already
+        // confirmed the script parses and registered surfaces.
+        let valid = if is_pure_action_kind {
+            Ok(())
+        } else if is_palette_kind {
             LuaPaletteProvider::from_source(source, name, shared.clone()).map(|_| ())
         } else {
             LuaComponent::from_source(source, name, shared.clone()).map(|_| ())
@@ -359,6 +375,11 @@ fn register_one(
         // callbacks) flip the same setup-state senders that legacy
         // overlay plugins drained inside `LuaComponent`. Without this
         // push the receivers would just sit (latent bug pre-A7).
+        //
+        // Pure-action plugins also need this — their palette `invoke`
+        // callbacks fire fire-and-forget APIs (`ttymap.map:jump`,
+        // `ttymap.api.frame.export`) that flow through these very
+        // channels.
         //
         // Overlays don't reach this branch — their handles live
         // inside `LuaComponent::from_parts` for the program lifetime.
@@ -416,13 +437,18 @@ fn register_one(
                          shared_clone: Arc<ttymap::LuaHostShared>,
                          ctl: ttymap::PluginCtl|
      -> crate::compositor::SpawnComponent {
-        if is_overlay_kind {
+        if is_overlay_kind || is_pure_action_kind {
+            // Overlays and pure-action plugins both run the callback
+            // for its side effects and never push a Component:
+            // - overlays already live on `r.overlays` for the program
+            //   lifetime; the callback only mutates Lua-side state.
+            // - pure-action plugins have no Component to build at all;
+            //   their `invoke` fires fire-and-forget host APIs.
+            // Either way, drain both atomics so a stray `ttymap.plugin:
+            // open()/close()` from one of these callbacks is swallowed
+            // cleanly.
             Box::new(move |_ctx| {
                 run_lua_callback(&lua_clone, &gate_key, name);
-                // Reading drains either flag — overlays never
-                // push or close anything from here, but if a
-                // plugin author misuses `ttymap.plugin:open()`
-                // from an overlay's callback, swallow it cleanly.
                 ctl.open_request
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 ctl.close_request

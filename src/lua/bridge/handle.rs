@@ -118,11 +118,22 @@ pub enum CallOutcome<R> {
 /// hand back the captured registration spec for the caller to inspect
 /// before constructing a [`LuaHandle`].
 ///
-/// The script self-registers by calling `ttymap.register_plugin(...)`
-/// or `ttymap.register_palette(...)`. The Lua subsystem doesn't know
-/// kind from path or content — it just runs the script and reads
-/// what the script declared. A script that doesn't register anything
-/// surfaces as an `mlua::Error` here.
+/// The script self-registers by calling at least one
+/// `ttymap.register_*` API. Two valid shapes:
+///
+/// 1. **Componented plugin**: calls
+///    `register_plugin` / `register_palette` / `register_overlay`
+///    (sets `kind`), optionally with activation surfaces
+///    (`register_palette_command` / `register_keybind` /
+///    `register_footer_hint`).
+/// 2. **Pure-action plugin**: no `kind`, but at least one activation
+///    surface — typically a `register_palette_command` whose
+///    `invoke` calls a fire-and-forget host API like
+///    `ttymap.api.frame.export()` or `ttymap.map:jump(...)`.
+///    `export.lua` is the canonical example.
+///
+/// A script that calls *none* of the registration APIs surfaces as
+/// an `mlua::Error` here.
 ///
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
@@ -149,9 +160,14 @@ pub fn fresh_load(
     let handles = host::install(&lua, host_tag, shared, slot.clone(), plugin_ctl)?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
-    if captured.kind.is_none() {
+    let has_surface = !captured.palette_commands.is_empty()
+        || !captured.keybinds.is_empty()
+        || !captured.footer_hints.is_empty();
+    if captured.kind.is_none() && !has_surface {
         return Err(mlua::Error::external(
-            "script did not call ttymap.register_plugin / register_palette / register_overlay",
+            "script did not call any ttymap.register_* API \
+             (register_plugin / register_palette / register_overlay / \
+             register_palette_command / register_keybind / register_footer_hint)",
         ));
     }
     Ok((lua, captured, handles))
