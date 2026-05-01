@@ -85,6 +85,22 @@ impl Canvas {
         }
     }
 
+    /// Overlay variant of [`polyline`] that uses
+    /// [`BrailleBuffer::set_pixel_overlay_tint`] at the leaf. Saturated
+    /// cells (fully-filled tile fills) have only their `bg` painted —
+    /// the dot pattern and `fg` (fill colour) are preserved. Sparse
+    /// cells receive the normal OR-merge.
+    pub fn polyline_overlay_tint(&mut self, points: &[(i32, i32)], color: u8) {
+        if points.len() < 2 {
+            return;
+        }
+        for i in 0..points.len() - 1 {
+            let (x0, y0) = points[i];
+            let (x1, y1) = points[i + 1];
+            self.draw_line_clipped_overlay_tint(x0, y0, x1, y1, color);
+        }
+    }
+
     pub fn polygon(&mut self, rings: &[Vec<(i32, i32)>], color: u8) {
         if rings.is_empty() || rings[0].len() < 3 {
             return;
@@ -240,6 +256,21 @@ impl Canvas {
         for (x, y) in BresenhamIter::new(x0, y0, x1, y1) {
             if x >= 0 && y >= 0 {
                 self.buffer.set_pixel(x as usize, y as usize, color);
+            }
+        }
+    }
+
+    fn draw_line_clipped_overlay_tint(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u8) {
+        if let Some((cx0, cy0, cx1, cy1)) = clip_line(self.clip_bounds(), x0, y0, x1, y1) {
+            self.line_bresenham_overlay_tint(cx0, cy0, cx1, cy1, color);
+        }
+    }
+
+    fn line_bresenham_overlay_tint(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u8) {
+        for (x, y) in BresenhamIter::new(x0, y0, x1, y1) {
+            if x >= 0 && y >= 0 {
+                self.buffer
+                    .set_pixel_overlay_tint(x as usize, y as usize, color);
             }
         }
     }
