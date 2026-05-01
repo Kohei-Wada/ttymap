@@ -1,9 +1,11 @@
 //! Lua-side bridge for [`MapApi`].
 //!
 //! Plugin authors call `map:point(lon, lat, glyph, color)` from Lua.
-//! `color` is a theme-aware string keyword today (`"accent"` |
-//! `"accent_alt"`); raw integer / RGB support comes later if a
-//! plugin actually needs it.
+//! For `map:polyline`, `color` accepts either a theme-aware string
+//! keyword (`"accent"` | `"accent_alt"` | `"muted"` | `"road"`) or a
+//! direct xterm-256 integer index (0..=255). Palette accessor methods
+//! (`map:accent_color()`, `map:road_color()`, etc.) return xterm indices
+//! so plugins can feed them back into `map:polyline`.
 //!
 //! `MapApi` carries a non-`'static` lifetime (it borrows the
 //! ratatui buffer for one frame), so we can't use mlua's
@@ -71,6 +73,25 @@ where
             None => Ok((None, None)),
         })?,
     )?;
+    // Palette colour accessors — return the active theme's colour as an
+    // xterm-256 index so plugins can pass them back into `map:polyline`
+    // or compare colours at runtime.
+    table.set(
+        "accent_color",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().accent_color_xterm()))?,
+    )?;
+    table.set(
+        "accent_alt_color",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().accent_alt_color_xterm()))?,
+    )?;
+    table.set(
+        "muted_color",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().muted_color_xterm()))?,
+    )?;
+    table.set(
+        "road_color",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().road_color_xterm()))?,
+    )?;
     Ok(table)
 }
 
@@ -98,30 +119,35 @@ fn resolve_color(p: &MapApi<'_>, name: Option<&mlua::String>) -> ratatui::style:
     }
 }
 
-/// Sibling of `resolve_color` that returns the xterm-256 palette
-/// **index** rather than a `ratatui::style::Color`. The render thread
-/// (Canvas / BrailleBuffer) speaks `u8`, while the ratatui-side
-/// primitives (`point`, `label`) speak `Color`. Unwraps the
-/// `Color::Indexed(u8)` variant the theme already produces; any other
-/// variant falls back to white (xterm 7) — defensive only, the theme
-/// always emits indexed colours today.
+/// Resolve a Lua-side colour argument for `map:polyline`.
 ///
-/// Supported keywords:
-/// - `"road"` → `palette.road_motorway` (blends naturally with map road rendering)
-/// - `"accent_alt"` → secondary accent
-/// - `"muted"` → muted foreground
-/// - anything else (including `"accent"`) → primary accent
-fn resolve_color_xterm(p: &MapApi<'_>, name: Option<&mlua::String>) -> u8 {
-    if let Some(s) = name.and_then(|s| s.to_str().ok()) {
-        if &*s == "road" {
-            return p.road_color_xterm();
-        }
+/// Accepts:
+/// - **`nil`** → default to the theme's accent colour.
+/// - **String keyword** → `"accent"` / `"accent_alt"` / `"muted"` /
+///   `"road"`, resolved through the active palette. Unknown keywords
+///   fall back to accent.
+/// - **Integer** → used as a raw xterm-256 palette index (0..=255).
+///   Out-of-range values are clamped (negative → 0, >255 → 255).
+///
+/// Anything else (table, function, …) falls back to accent.
+fn resolve_color_arg(p: &MapApi<'_>, arg: Option<&mlua::Value>) -> u8 {
+    match arg {
+        Some(mlua::Value::Integer(n)) => (*n).clamp(0, 255) as u8,
+        Some(mlua::Value::String(s)) => resolve_keyword(p, s),
+        _ => xterm_index(p.accent_color()),
     }
-    let color = match name.and_then(|s| s.to_str().ok()) {
-        Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
-        Some(s) if &*s == "muted" => p.muted_color(),
-        _ => p.accent_color(),
-    };
+}
+
+fn resolve_keyword(p: &MapApi<'_>, keyword: &mlua::String) -> u8 {
+    match keyword.to_str().as_deref() {
+        Ok("road") => p.road_color_xterm(),
+        Ok("accent_alt") => xterm_index(p.accent_alt_color()),
+        Ok("muted") => xterm_index(p.muted_color()),
+        _ => xterm_index(p.accent_color()),
+    }
+}
+
+fn xterm_index(color: ratatui::style::Color) -> u8 {
     match color {
         ratatui::style::Color::Indexed(i) => i,
         _ => 7,
@@ -194,13 +220,15 @@ fn label(
 }
 
 // `map:polyline(coords, color?)` — coords is a Lua sequence of
-// `{lon, lat}` pairs; color is one of the theme keywords accepted by
-// `point`/`label`. Length-1 coords are silently dropped (matches
-// `point`/`label`'s off-canvas behaviour). The polyline is queued
-// for the next frame's render task — there is a 1-frame latency.
+// `{lon, lat}` pairs; color is either a theme keyword string
+// (`"accent"` / `"accent_alt"` / `"muted"` / `"road"`) or a direct
+// xterm-256 integer index (0..=255). Length-1 coords are silently
+// dropped (matches `point`/`label`'s off-canvas behaviour). The
+// polyline is queued for the next frame's render task — there is a
+// 1-frame latency.
 fn polyline(
     cell: &RefCell<&mut MapApi<'_>>,
-    (_self, coords_table, color_name): (mlua::Table, mlua::Table, Option<mlua::String>),
+    (_self, coords_table, color_arg): (mlua::Table, mlua::Table, Option<mlua::Value>),
 ) -> mlua::Result<()> {
     let mut coords: Vec<LonLat> = Vec::new();
     for pair_res in coords_table.sequence_values::<mlua::Table>() {
@@ -213,7 +241,7 @@ fn polyline(
         return Ok(());
     }
     let mut p = cell.borrow_mut();
-    let color = resolve_color_xterm(&p, color_name.as_ref());
+    let color = resolve_color_arg(&p, color_arg.as_ref());
     p.push_polyline_overlay(coords, color);
     Ok(())
 }
@@ -326,5 +354,89 @@ mod tests {
         drop(api);
         assert_eq!(sink.len(), 1);
         assert_eq!(sink[0].color, accent_idx);
+    }
+
+    /// `map:polyline({coords}, 222)` accepts an integer as a direct
+    /// xterm-256 index.
+    #[test]
+    fn polyline_accepts_integer_xterm_index() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, 222)"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 1);
+        assert_eq!(
+            sink[0].color, 222,
+            "integer arg used as direct xterm-256 index"
+        );
+    }
+
+    /// Out-of-range integer arguments clamp into 0..=255.
+    #[test]
+    fn polyline_clamps_out_of_range_integer_color() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, -50); map:polyline({{0,0},{1,1}}, 500)"#)
+                .exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 2);
+        assert_eq!(sink[0].color, 0, "negative integer clamps to 0");
+        assert_eq!(sink[1].color, 255, ">255 integer clamps to 255");
+    }
+
+    /// `map:road_color()` returns the active palette's road_motorway
+    /// xterm-256 index. Verified against `DARK.road_motorway` (= 222).
+    #[test]
+    fn road_color_accessor_returns_palette_road_motorway() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        let result: u8 = lua
+            .scope(|scope| {
+                let map_table = make_map_table(&lua, scope, &cell)?;
+                lua.globals().set("map", map_table)?;
+                lua.load(r#"return map:road_color()"#).eval::<u8>()
+            })
+            .expect("scope");
+        drop(api);
+        assert_eq!(result, DARK.road_motorway, "matches DARK.road_motorway");
+    }
+
+    /// Plugins can chain accessor → polyline call.
+    #[test]
+    fn polyline_accepts_road_color_accessor_result() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, map:road_color())"#)
+                .exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 1);
+        assert_eq!(sink[0].color, DARK.road_motorway);
     }
 }

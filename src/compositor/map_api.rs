@@ -138,6 +138,32 @@ impl<'a> MapApi<'a> {
         self.theme.palette.road_motorway
     }
 
+    /// Active palette's `accent` colour as an xterm-256 index. Useful
+    /// for plugins that want to feed the same colour into `map:polyline`
+    /// or other APIs that take xterm indices.
+    pub fn accent_color_xterm(&self) -> u8 {
+        match self.accent_color() {
+            ratatui::style::Color::Indexed(i) => i,
+            _ => 7,
+        }
+    }
+
+    /// Active palette's `accent_alt` colour as an xterm-256 index.
+    pub fn accent_alt_color_xterm(&self) -> u8 {
+        match self.accent_alt_color() {
+            ratatui::style::Color::Indexed(i) => i,
+            _ => 7,
+        }
+    }
+
+    /// Active palette's `muted` colour as an xterm-256 index.
+    pub fn muted_color_xterm(&self) -> u8 {
+        match self.muted_color() {
+            ratatui::style::Color::Indexed(i) => i,
+            _ => 7,
+        }
+    }
+
     // ── Drawing primitives ──────────────────────────────────────────
 
     /// Plot a single-cell glyph at the given world coordinate. No-op
