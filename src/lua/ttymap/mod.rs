@@ -24,6 +24,8 @@
 //! ttymap.map    :jump(lon, lat)             recentre the map (fire-and-forget)
 //! ttymap.map    :zoom(level)                set zoom directly (clamped to map's
 //!                                            allowed range; fire-and-forget)
+//! ttymap.map    :zoom() -> level             current zoom (no-arg getter form),
+//!                                            refreshed per dispatch
 //! ttymap.map    :fly_to(lon, lat, zoom)     composite recenter + zoom in one
 //!                                            dispatch (avoids the intermediate
 //!                                            new-centre / old-zoom frame)
@@ -242,6 +244,12 @@ pub struct LuaHostHandles {
     pub fly_to_rx: mpsc::Receiver<(LonLat, f64)>,
     pub export_rx: mpsc::Receiver<()>,
     pub center: Arc<Mutex<LonLat>>,
+    /// Latest zoom level mirrored from the host so
+    /// `ttymap.map:zoom()` (no-arg getter form) returns the current
+    /// zoom from any callback context. Same Arc held by the
+    /// [`HostMap`] userdata; refreshed on the dispatch paths that
+    /// also refresh `center`.
+    pub zoom: Arc<Mutex<f64>>,
     /// Components queued by `ttymap.api.window.open` (and, in A6,
     /// `ttymap.api.palette.open`). The App drains this per frame and
     /// pushes each component onto the compositor stack.
@@ -341,6 +349,7 @@ pub fn install(
     // requires `T: Send`, and the Sender never moves across threads.
     let (push_tx, push_rx) = mpsc::channel::<Box<dyn crate::compositor::Component>>();
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
+    let zoom = Arc::new(Mutex::new(0.0_f64));
 
     let ttymap = lua.create_table()?;
     ttymap.set(
@@ -356,6 +365,7 @@ pub fn install(
             zoom_tx,
             fly_to_tx,
             center: center.clone(),
+            zoom: zoom.clone(),
         })?,
     )?;
     ttymap.set("json", lua.create_userdata(HostJson)?)?;
@@ -448,6 +458,7 @@ pub fn install(
     let window_api = lua.create_table()?;
     let push_tx_for_window = push_tx.clone();
     let center_for_window = center.clone();
+    let zoom_for_window = zoom.clone();
     window_api.set(
         "open",
         lua.create_function(
@@ -470,6 +481,7 @@ pub fn install(
                     tag,
                     flag.clone(),
                     center_for_window.clone(),
+                    zoom_for_window.clone(),
                 )?;
                 // Same-thread send: the channel never crosses threads.
                 // `send` returns Err only when the receiver has been
@@ -640,6 +652,7 @@ pub fn install(
         fly_to_rx,
         export_rx,
         center,
+        zoom,
         push_rx,
     })
 }
@@ -691,6 +704,7 @@ struct HostMap {
     zoom_tx: mpsc::Sender<f64>,
     fly_to_tx: mpsc::Sender<(LonLat, f64)>,
     center: Arc<Mutex<LonLat>>,
+    zoom: Arc<Mutex<f64>>,
 }
 
 impl UserData for HostMap {
@@ -706,13 +720,23 @@ impl UserData for HostMap {
             Ok(())
         });
 
-        // `ttymap.map:zoom(level)` — request the map zoom directly.
-        // Clamping to the map's `[min_zoom, max_zoom]` happens host-
-        // side in `MapState::process_action` so plugins don't need to
-        // know the bounds. Fire-and-forget; symmetric with `jump`.
-        methods.add_method("zoom", |_, this, level: f64| {
-            let _ = this.zoom_tx.send(level);
-            Ok(())
+        // `ttymap.map:zoom([level])` — overloaded:
+        //   `:zoom(level)` queues a zoom request (clamped host-side
+        //   in `MapState::process_action`). Fire-and-forget.
+        //   `:zoom()` (no arg) returns the current zoom level read
+        //   from the shared `Arc<Mutex<f64>>` the host refreshes on
+        //   the same dispatch paths it refreshes `:center()` on.
+        // mlua dispatches by the supplied argument signature: nil →
+        // `None` (getter), number → `Some(level)` (setter).
+        methods.add_method("zoom", |_, this, level: Option<f64>| match level {
+            Some(z) => {
+                let _ = this.zoom_tx.send(z);
+                Ok(mlua::Value::Nil)
+            }
+            None => {
+                let z = *this.zoom.lock().expect("zoom mutex poisoned");
+                Ok(mlua::Value::Number(z))
+            }
         });
 
         // `ttymap.map:fly_to(lon, lat, zoom)` — composite recenter +
@@ -1057,6 +1081,23 @@ mod tests {
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let z = handles.zoom_rx.try_recv().expect("zoom must be queued");
         assert!((z - 7.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn host_map_zoom_getter_reads_shared_cell() {
+        // `ttymap.map:zoom()` (no args) reads the host-mirrored zoom
+        // cell. The host writes via the same Arc the userdata holds,
+        // so simulate a dispatch refresh by writing to `handles.zoom`
+        // directly and assert Lua sees the new value. Symmetric with
+        // the `:center()` pattern. Confirms (a) no-arg call doesn't
+        // accidentally fall through to the setter and (b) the value
+        // round-trips as a Lua number.
+        let (lua, handles) = install_for_test();
+        *handles.zoom.lock().unwrap() = 9.25;
+        let z: f64 = lua.load("return ttymap.map:zoom()").eval().expect("eval");
+        assert!((z - 9.25).abs() < 1e-9);
+        // Calling the getter must not enqueue a setter request.
+        assert!(handles.zoom_rx.try_recv().is_err());
     }
 
     #[test]

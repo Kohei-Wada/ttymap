@@ -333,6 +333,7 @@ impl App {
     fn context(&self) -> Context {
         Context {
             center: self.map.center(),
+            zoom: self.map.zoom(),
             theme_id: self.theme_id,
             cursor: self.cursor,
         }

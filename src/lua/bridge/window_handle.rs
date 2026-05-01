@@ -145,6 +145,7 @@ mod tests {
 
         const CTX: Context = Context {
             center: LonLat { lon: 0.0, lat: 0.0 },
+            zoom: 0.0,
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };
