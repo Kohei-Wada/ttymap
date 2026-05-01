@@ -44,6 +44,7 @@
 //!                                            (LuaWindowComponent) onto
 //!                                            the stack; handle:close()
 //!                                            pops it (idempotent)
+//! ttymap.api.frame.export()                 snapshot the current frame to disk
 //! ```
 //!
 //! `ttymap.plugin` is exposed only on a script's **setup state** — the
@@ -335,6 +336,9 @@ pub fn install(
             center: center.clone(),
         })?,
     )?;
+    // Clone `export_tx` for the new `ttymap.api.frame.export` entry
+    // point further down — both surfaces drive the same `export_rx`.
+    let export_tx_for_api = export_tx.clone();
     ttymap.set(
         "window",
         lua.create_userdata(HostWindow {
@@ -532,6 +536,25 @@ pub fn install(
         )?,
     )?;
     api.set("window", window_api)?;
+
+    // ── ttymap.api.frame ─────────────────────────────────────────────
+    //
+    // Reuses the same `export_tx` channel that `ttymap.window:export_frame`
+    // already drains. The new dot-call surface is the nvim-style entry
+    // point; `ttymap.window:export_frame()` stays as the legacy alias
+    // until callers migrate.
+    let frame_api = lua.create_table()?;
+    frame_api.set(
+        "export",
+        lua.create_function(move |_, _: ()| {
+            if export_tx_for_api.send(()).is_err() {
+                log::error!("lua-host: ttymap.api.frame.export: export channel closed");
+            }
+            Ok(())
+        })?,
+    )?;
+    api.set("frame", frame_api)?;
+
     ttymap.set("api", api)?;
 
     lua.globals().set("ttymap", ttymap)?;
@@ -988,6 +1011,13 @@ mod tests {
         lua.load("ttymap.window:export_frame()")
             .exec()
             .expect("exec");
+        assert!(handles.export_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn api_frame_export_pushes_to_export_channel() {
+        let (lua, handles) = install_for_test();
+        lua.load("ttymap.api.frame.export()").exec().expect("exec");
         assert!(handles.export_rx.try_recv().is_ok());
     }
 
