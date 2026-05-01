@@ -105,7 +105,18 @@ fn resolve_color(p: &MapApi<'_>, name: Option<&mlua::String>) -> ratatui::style:
 /// `Color::Indexed(u8)` variant the theme already produces; any other
 /// variant falls back to white (xterm 7) — defensive only, the theme
 /// always emits indexed colours today.
+///
+/// Supported keywords:
+/// - `"road"` → `palette.road_motorway` (blends naturally with map road rendering)
+/// - `"accent_alt"` → secondary accent
+/// - `"muted"` → muted foreground
+/// - anything else (including `"accent"`) → primary accent
 fn resolve_color_xterm(p: &MapApi<'_>, name: Option<&mlua::String>) -> u8 {
+    if let Some(s) = name.and_then(|s| s.to_str().ok()) {
+        if &*s == "road" {
+            return p.road_color_xterm();
+        }
+    }
     let color = match name.and_then(|s| s.to_str().ok()) {
         Some(s) if &*s == "accent_alt" => p.accent_alt_color(),
         Some(s) if &*s == "muted" => p.muted_color(),
@@ -270,6 +281,30 @@ mod tests {
         .expect("scope");
         drop(api);
         assert!(sink.is_empty());
+    }
+
+    /// `"road"` keyword resolves to `palette.road_motorway` — the same
+    /// colour the map renderer uses for motorway-class roads.
+    #[test]
+    fn polyline_road_keyword_resolves_to_road_motorway() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let road_idx = DARK.road_motorway;
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:polyline({{0,0},{1,1}}, "road")"#).exec()
+        })
+        .expect("scope");
+        drop(api);
+        assert_eq!(sink.len(), 1);
+        assert_eq!(
+            sink[0].color, road_idx,
+            "the \"road\" keyword must resolve to palette.road_motorway"
+        );
     }
 
     /// Unknown colour keyword falls back to "accent" — same behaviour

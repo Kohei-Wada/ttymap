@@ -129,6 +129,15 @@ impl<'a> MapApi<'a> {
         self.theme.muted_color
     }
 
+    /// Active palette's "motorway" road colour as an xterm-256 index.
+    /// Surfaced for the Lua bridge so plugins can request the same
+    /// colour the map uses for major roads — useful for overlay
+    /// polylines that should blend visually with the map's existing
+    /// line features.
+    pub fn road_color_xterm(&self) -> u8 {
+        self.theme.palette.road_motorway
+    }
+
     // ── Drawing primitives ──────────────────────────────────────────
 
     /// Plot a single-cell glyph at the given world coordinate. No-op

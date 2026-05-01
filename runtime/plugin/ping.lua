@@ -10,6 +10,10 @@
 -- map:label. The polyline appears in the *next* frame after the push
 -- (ephemeral re-submit + 1-frame transport lag), which is invisible
 -- at the timescales of typical ping animations.
+--
+-- Uses the "road" colour keyword so the line renders in the same
+-- hue as motorway roads — blends naturally with the map's visual
+-- language on both DARK and BRIGHT themes.
 
 local src   = { 139.76, 35.68 }   -- Tokyo (lon, lat)
 local dst   = { -74.01, 40.71 }   -- New York
@@ -25,5 +29,5 @@ ttymap.api.frame.on_tick(function(map)
   local t   = i / steps
   local lon = src[1] + (dst[1] - src[1]) * t
   local lat = src[2] + (dst[2] - src[2]) * t
-  map:polyline({ src, { lon, lat } }, "accent")
+  map:polyline({ src, { lon, lat } }, "road")
 end)

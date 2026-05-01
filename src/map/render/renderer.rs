@@ -238,7 +238,7 @@ impl Renderer {
                 ));
             }
             if buf.len() >= 2 {
-                self.canvas.polyline_punching(&buf, poly.color);
+                self.canvas.polyline(&buf, poly.color);
             }
         }
         self.scratches.line = buf;
@@ -945,17 +945,13 @@ mod tests {
         );
     }
 
-    /// Bug fix: an overlay polyline crossing a fully-saturated cell
-    /// (e.g. the interior of a water polygon) must render as a thin
-    /// shape, not as a 2-column-wide block of overlay colour.
-    ///
-    /// Probe: render a Fill feature large enough to fully saturate at
-    /// least one cell, then draw an overlay polyline that crosses that
-    /// cell. The combined frame's cell (at the crossing) must NOT be
-    /// `⣿` — its mask must contain only the overlay's subpixel(s),
-    /// strictly fewer than 8 dots.
+    /// User overlay polylines crossing a saturated tile fill (e.g. the
+    /// interior of a water polygon) keep the cell saturated but flip
+    /// the foreground to the overlay's colour. Reads as "the line goes
+    /// through water" — using a road colour as the overlay makes the
+    /// flipped cell visually consistent with how roads render on land.
     #[test]
-    fn overlay_punches_through_saturated_tile_fills() {
+    fn overlay_polyline_repaints_saturated_cell_in_overlay_color() {
         use std::collections::HashMap;
 
         use crate::geo::LonLat;
@@ -963,43 +959,39 @@ mod tests {
         use crate::map::render::view::VisibleTile;
         use crate::map::tile::decode::{Feature, TilePoint};
 
-        // Big water rectangle covering the full tile so its interior
-        // cells saturate.
-        let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
-            vec![
-                TilePoint { x: x0, y: y0 },
-                TilePoint { x: x1, y: y0 },
-                TilePoint { x: x1, y: y1 },
-                TilePoint { x: x0, y: y1 },
-            ]
-        };
-        let make_water_tile = || TileData {
-            vis: VisibleTile {
-                x: 0,
-                y: 0,
-                z: 14,
-                pos_x: 0.0,
-                pos_y: 0.0,
-                size: 256.0,
-            },
-            layers: vec![LayerData {
-                name: "water".to_string(),
-                extent: 4096,
-                features: vec![Feature {
-                    layer_name: Arc::from("water"),
-                    properties: Arc::new(HashMap::new()),
-                    points: Arc::new(vec![cw_square(0, 0, 4096, 4096)]),
-                    min_x: 0.0,
-                    max_x: 0.0,
-                    min_y: 0.0,
-                    max_y: 0.0,
+        let make_water_tile = || {
+            let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
+                vec![
+                    TilePoint { x: x0, y: y0 },
+                    TilePoint { x: x1, y: y0 },
+                    TilePoint { x: x1, y: y1 },
+                    TilePoint { x: x0, y: y1 },
+                ]
+            };
+            TileData {
+                vis: VisibleTile {
+                    x: 0,
+                    y: 0,
+                    z: 14,
+                    pos_x: 0.0,
+                    pos_y: 0.0,
+                    size: 256.0,
+                },
+                layers: vec![LayerData {
+                    name: "water".to_string(),
+                    extent: 4096,
+                    features: vec![Feature {
+                        layer_name: Arc::from("water"),
+                        properties: Arc::new(HashMap::new()),
+                        points: Arc::new(vec![cw_square(0, 0, 4096, 4096)]),
+                        min_x: 0.0,
+                        max_x: 0.0,
+                        min_y: 0.0,
+                        max_y: 0.0,
+                    }],
                 }],
-            }],
+            }
         };
-
-        // Overlay polyline crossing the centre of the saturated water
-        // area. World coords near (0, 0) at zoom 6 land in the visible
-        // canvas.
         let center = LonLat { lon: 0.0, lat: 0.0 };
         let overlay = UserPolyline {
             coords: vec![
@@ -1009,33 +1001,17 @@ mod tests {
                 },
                 LonLat { lon: 0.5, lat: 0.0 },
             ],
-            color: 11,
+            color: 222, // DARK road_motorway colour
         };
-
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
-
-        // Tile-only frame: confirm the fixture does saturate at least
-        // one cell (sanity check). Otherwise the test is vacuous.
         let tile_only = renderer
             .draw(&[make_water_tile()], 6.0, center, &[])
             .expect("frame");
-        let saturated_count = tile_only.cells.iter().filter(|c| c.ch == '⣿').count();
-        assert!(
-            saturated_count > 0,
-            "fixture: water fill must produce at least one saturated cell, \
-             got {saturated_count}"
-        );
-
-        // Combined frame: overlay should "punch through" any saturated
-        // cell it crosses.
         let combined = renderer
             .draw(&[make_water_tile()], 6.0, center, &[overlay])
             .expect("frame");
 
-        // Find a cell along the overlay's path where the tile-only
-        // version was saturated. That cell in the combined frame must
-        // have a non-⣿ char with a strict-subset dot mask.
         let mut found = false;
         for (i, (t, b)) in tile_only
             .cells
@@ -1043,38 +1019,15 @@ mod tests {
             .zip(combined.cells.iter())
             .enumerate()
         {
-            if t.ch == '⣿' && b.ch != '⣿' {
-                let mask_b = (b.ch as u32) - 0x2800;
-                assert!(
-                    mask_b != 0xFF,
-                    "combined cell {i} must not be saturated, got mask 0x{mask_b:02x}"
-                );
-                assert!(
-                    mask_b.count_ones() < 8,
-                    "punching cell {i} must have strictly fewer than 8 dots, \
-                     got {} dots",
-                    mask_b.count_ones()
-                );
-                assert_eq!(
-                    b.fg,
-                    crate::theme::palette::dim_xterm(11),
-                    "combined cell {i} fg must be dim_xterm(overlay colour)"
-                );
-                assert_eq!(
-                    b.bg,
-                    crate::theme::palette::dim_xterm(t.fg),
-                    "combined cell {i} bg must be dim_xterm(prior tile fg) \
-                     so OFF subpixels render against a darkened fill — not the global bg"
-                );
+            if t.ch == '⣿' && b.ch == '⣿' && t.fg != b.fg {
+                assert_eq!(b.fg, 222, "combined cell {i} fg must be the overlay colour");
                 found = true;
                 break;
             }
         }
         assert!(
             found,
-            "no overlay-on-saturated-cell crossing detected — adjust the \
-             overlay's coords or zoom so the line passes through a saturated \
-             interior cell"
+            "no saturated cell repainted with overlay fg detected — overlay coords missed the saturated water region"
         );
     }
 
@@ -1093,112 +1046,6 @@ mod tests {
         assert_eq!(
             baseline.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
             with_empty.cells.iter().map(|c| c.ch).collect::<Vec<_>>(),
-        );
-    }
-
-    /// Overlay polylines always replace the cell's dot mask, never
-    /// OR-merge — see `BrailleBuffer::set_pixel_punching`. So when an
-    /// overlay crosses a tile-feature line, the cells at the crossing
-    /// carry only the overlay's bits in the overlay's colour. Without
-    /// this rule the cells would carry both sets of bits but with the
-    /// overlay's foreground (last-writer-wins on `fg_buf`), tinting the
-    /// tile feature with the overlay colour — visible to users as a
-    /// "halo" of overlay colour around the line wherever it passes
-    /// through tile content.
-    #[test]
-    fn overlay_replaces_tile_feature_dots_at_crossing() {
-        use std::collections::HashMap;
-
-        use crate::geo::LonLat;
-        use crate::map::render::overlay::UserPolyline;
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::{Feature, TilePoint};
-        use crate::map::tile::property::PropertyValue;
-
-        // Horizontal road across the tile centre.
-        let make_tile = || {
-            let mut props: HashMap<Arc<str>, PropertyValue> = HashMap::new();
-            props.insert(
-                Arc::from("class"),
-                PropertyValue::String(Arc::from("motorway")),
-            );
-            let road_feature = Feature {
-                layer_name: Arc::from("road"),
-                properties: Arc::new(props),
-                points: Arc::new(vec![vec![
-                    TilePoint { x: 0, y: 2048 },
-                    TilePoint { x: 4096, y: 2048 },
-                ]]),
-                min_x: 0.0,
-                max_x: 0.0,
-                min_y: 0.0,
-                max_y: 0.0,
-            };
-            TileData {
-                vis: VisibleTile {
-                    x: 32,
-                    y: 32,
-                    z: 6,
-                    pos_x: 0.0,
-                    pos_y: 0.0,
-                    size: 256.0,
-                },
-                layers: vec![LayerData {
-                    name: "road".to_string(),
-                    extent: 4096,
-                    features: vec![road_feature],
-                }],
-            }
-        };
-
-        let center = LonLat { lon: 0.0, lat: 0.0 };
-        // Vertical overlay at lon=0, lat ∈ [0.5°, 0.9°] — same range as
-        // the old OR-merge test, which confirmed the geometry intersects.
-        let overlay = UserPolyline {
-            coords: vec![LonLat { lon: 0.0, lat: 0.9 }, LonLat { lon: 0.0, lat: 0.5 }],
-            color: 11,
-        };
-
-        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
-        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
-
-        let tile_only = renderer
-            .draw(&[make_tile()], 6.0, center, &[])
-            .expect("tile-only frame");
-        let overlay_only = renderer
-            .draw(&[], 6.0, center, &[overlay.clone()])
-            .expect("overlay-only frame");
-        let combined = renderer
-            .draw(&[make_tile()], 6.0, center, &[overlay])
-            .expect("combined frame");
-
-        // For every cell where both the road and the overlay painted,
-        // verify the combined frame's mask equals the overlay-only mask
-        // (always-replace), not the bitwise union (OR-merge). At least
-        // one such overlap cell must exist to make the test non-vacuous.
-        const EMPTY: char = '\u{2800}';
-        let mut overlap_count = 0usize;
-        for i in 0..tile_only.cells.len() {
-            let t = &tile_only.cells[i];
-            let o = &overlay_only.cells[i];
-            let b = &combined.cells[i];
-            if t.ch == EMPTY || o.ch == EMPTY {
-                continue;
-            }
-            let mask_o = (o.ch as u32) - 0x2800;
-            let mask_b = (b.ch as u32) - 0x2800;
-            assert_eq!(
-                mask_b, mask_o,
-                "combined cell {i} must equal overlay-only mask (always-replace), \
-                 got {mask_b:08b}; overlay mask was {mask_o:08b}"
-            );
-            assert_eq!(b.fg, 11, "combined cell {i} fg must be the overlay colour");
-            overlap_count += 1;
-        }
-        assert!(
-            overlap_count > 0,
-            "no overlay-on-tile-feature crossing detected — adjust the \
-             overlay's coords or zoom so the line passes through a road cell"
         );
     }
 }
