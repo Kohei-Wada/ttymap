@@ -78,35 +78,29 @@ impl BrailleBuffer {
         self.fg_buf[idx] = color;
     }
 
-    /// Variant of [`set_pixel`] for user-overlay drawing.
+    /// Variant of [`set_pixel`] for user-overlay drawing. The overlay
+    /// pass always **replaces** the cell's dot mask with just this
+    /// single bit (rather than `|=`-merging) so the overlay shows as a
+    /// thin shape in its own colour and surrounding tile features in
+    /// the cells the overlay crosses don't take on the overlay's
+    /// foreground (which would happen with OR-merge + last-writer-wins
+    /// fg, since one cell can only carry one fg).
     ///
-    /// Two regimes depending on the cell's saturation:
+    /// On a fully-saturated cell (`pixel_buf == 0xFF`, e.g. the
+    /// interior of a water polygon) the cell's prior `fg_buf` is also
+    /// transferred into `bg_buf`, so the now-OFF subpixels render
+    /// against the underlying fill colour rather than the global bg.
+    /// Without that transfer the line would float on the global bg
+    /// (typically black) with the fill colour erased — wrong on water,
+    /// where users expect a thin overlay on top of the water tint.
     ///
-    /// - **Saturated cell (`pixel_buf == 0xFF`)** — the cell visually
-    ///   reads as a solid block in its current `fg` (e.g. the interior
-    ///   of a water polygon: `⣿` in water_blue). To paint a thin
-    ///   overlay through it without disturbing the surrounding fill,
-    ///   we *invert*: turn OFF only the overlay's subpixel, leave the
-    ///   other 7 ON, keep `fg` unchanged, and put the overlay colour in
-    ///   `bg`. When ratatui renders the cell, the 7 ON dots paint in
-    ///   the original fill colour (matching the `⣿` neighbours) and
-    ///   the single OFF position shows the bg = overlay colour. Net
-    ///   effect: a mostly-fill cell with a single overlay-coloured dot
-    ///   "punched through" — visually a thin line cutting through the
-    ///   fill, preserving the surface.
-    ///
-    /// - **Sparse cell (`pixel_buf != 0xFF`)** — replace the mask with
-    ///   just the overlay's bit, set fg to the overlay colour, leave bg
-    ///   alone (so OFF dots render against the global bg). Pre-existing
-    ///   tile dots (roads, labels, …) are dropped in cells the line
-    ///   crosses; surrounding cells keep their tile features intact.
-    ///   This is the only viable approach in sparse cells: OR-merging
-    ///   the overlay's bit + last-writer-wins on `fg` would tint the
-    ///   cell's existing tile dots with the overlay colour, which the
-    ///   user perceives as "brightening" the surrounding terrain.
-    ///
-    /// Empty cells (`pixel_buf == 0`) follow the sparse branch — the
-    /// cell becomes a single overlay-coloured dot on the global bg.
+    /// Trade-off: tile-feature dots directly under the overlay's path
+    /// are lost in the cells the line crosses (one-subpixel-wide
+    /// Bresenham, so ~one cell of crossing per cell-width of feature).
+    /// This is intentional: the alternative — OR-merging the dots —
+    /// flips the cell's foreground colour to the overlay's, which
+    /// re-colours the surrounding tile dots and produces a much more
+    /// noticeable visual artefact.
     ///
     /// Out-of-bounds coordinates are silently ignored, matching
     /// [`set_pixel`].
@@ -117,17 +111,10 @@ impl BrailleBuffer {
         let idx = self.cell_index(x, y);
         let bit = BRAILLE_MAP[y & 3][x & 1];
         if self.pixel_buf[idx] == 0xFF {
-            // Saturated: invert. Keep fg, put overlay colour in bg, and
-            // turn OFF only the overlay's subpixel.
-            self.pixel_buf[idx] = !bit; // 7 dots ON, the overlay's position OFF
-            self.bg_buf[idx] = color;
-            // fg stays as it was (e.g. water_blue) — the 7 ON dots paint
-            // in the original fill colour, matching surrounding ⣿ cells.
-        } else {
-            // Sparse: replace mask, set fg, leave bg alone.
-            self.pixel_buf[idx] = bit;
-            self.fg_buf[idx] = color;
+            self.bg_buf[idx] = self.fg_buf[idx];
         }
+        self.pixel_buf[idx] = bit;
+        self.fg_buf[idx] = color;
     }
 
     /// Write a single character at pixel position (x, y), overriding any braille content.
@@ -324,18 +311,21 @@ mod tests {
         assert_eq!(buf.global_bg, Some(9));
     }
 
-    /// Saturated cell + `set_pixel_punching` → mask is inverted (only
-    /// the overlay's bit OFF, the other 7 stay ON), fg is **kept**, bg
-    /// becomes the overlay colour. This is the load-bearing trick that
-    /// keeps a polyline through water/forest/dense fill looking like a
-    /// thin line "cutting through" the fill: ratatui paints the 7 ON
-    /// dots in the cell's original fg (matching surrounding `⣿` cells)
-    /// and the single OFF position shows the bg = overlay colour.
+    /// Saturated cell + `set_pixel_punching` → mask is replaced with
+    /// just the overlay's bit (cell becomes a thin shape on the existing
+    /// background), `fg` is updated to the overlay colour, and the
+    /// cell's prior fg is transferred into `bg` so the OFF subpixels
+    /// render against the underlying fill colour (water blue, forest
+    /// green, …) rather than the global bg (typically black).
+    /// This is the load-bearing behaviour for the user-overlay third
+    /// pass: a polyline over water must not show as a thick block of
+    /// overlay colour, and the water fill colour must remain visible.
     #[test]
-    fn set_pixel_punching_inverts_saturated_cell() {
+    fn set_pixel_punching_replaces_mask_on_saturated_cell() {
         let mut buf = BrailleBuffer::new(4, 4);
-        // Saturate cell (0, 0) with all 8 subpixels at fg colour 5
-        // (the "fill" colour the saturated cell will keep as fg).
+        // Saturate cell (0, 0) by setting all 8 subpixels at fg colour 5
+        // (the "fill" colour the saturated cell will keep as bg after
+        // punching).
         for sx in 0..2 {
             for sy in 0..4 {
                 buf.set_pixel(sx, sy, 5);
@@ -345,22 +335,19 @@ mod tests {
         assert_eq!(buf.pixel_buf[idx], 0xFF, "fixture: cell starts saturated");
         assert_eq!(buf.fg_buf[idx], 5, "fixture: cell fg is the fill colour");
 
+        // Punch a single subpixel from the overlay at (0, 0) with colour 7.
         buf.set_pixel_punching(0, 0, 7);
 
         let bit = BRAILLE_MAP[0][0];
         assert_eq!(
-            buf.pixel_buf[idx], !bit,
-            "saturated cell mask must be inverted (only the overlay bit OFF)"
+            buf.pixel_buf[idx], bit,
+            "saturated cell must be replaced with just the overlay's bit"
         );
+        assert_eq!(buf.fg_buf[idx], 7, "fg follows the overlay colour");
         assert_eq!(
-            buf.fg_buf[idx], 5,
-            "fg must be preserved as the underlying fill colour — \
-             the 7 ON dots paint in this colour, matching neighbour cells"
-        );
-        assert_eq!(
-            buf.bg_buf[idx], 7,
-            "bg must hold the overlay colour — the OFF position renders \
-             this colour, surfacing as a single overlay-coloured dot"
+            buf.bg_buf[idx], 5,
+            "bg must inherit the cell's prior fg so OFF dots render \
+             against the underlying fill, not the global bg"
         );
     }
 

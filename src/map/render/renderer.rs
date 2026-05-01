@@ -1055,16 +1055,13 @@ mod tests {
                      got {} dots",
                     mask_b.count_ones()
                 );
+                assert_eq!(b.fg, 11, "combined cell {i} fg must be the overlay colour");
+                let expected_bg = t.fg;
                 assert_eq!(
-                    b.fg, t.fg,
-                    "combined cell {i} fg must keep the underlying fill colour ({}) \
-                     so the 7 ON dots match neighbour cells visually",
-                    t.fg
-                );
-                assert_eq!(
-                    b.bg, 11,
-                    "combined cell {i} bg must hold the overlay colour — the \
-                     single OFF dot surfaces this colour as the visible line"
+                    b.bg, expected_bg,
+                    "combined cell {i} bg must inherit the cell's prior fg \
+                     (water fill colour, here {expected_bg}) so OFF subpixels \
+                     render against the underlying fill — not the global bg"
                 );
                 found = true;
                 break;
