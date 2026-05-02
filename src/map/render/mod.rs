@@ -10,6 +10,8 @@ pub mod label;
 pub mod overlay;
 pub mod panic_silence;
 pub mod pipeline;
+mod polygon;
+mod project;
 pub mod renderer;
 pub mod thread;
 pub mod view;

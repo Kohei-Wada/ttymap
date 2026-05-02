@@ -13,9 +13,11 @@ use log::debug;
 
 use super::canvas::Canvas;
 use super::frame::MapFrame;
+use super::polygon::classify_polygon_groups;
+use super::project::scale_ring_into;
 use super::view::VisibleTile;
 use crate::map::styler::{StyleRule, StyleType, Styler};
-use crate::map::tile::decode::{Feature, TilePoint};
+use crate::map::tile::decode::Feature;
 use crate::map::tile::property::{extract_label, extract_sort};
 
 /// Pre-collected tile data ready for rendering.
@@ -260,109 +262,7 @@ impl Renderer {
         Some(frame)
     }
 
-    // ── Polygon multi-ring classification (issue #101) ────────────────
-
-    /// Surveyor's-formula signed area of a closed ring, accumulated in
-    /// `i64` to avoid overflow at typical screen-pixel magnitudes.
-    /// In MVT tile coords (Y-down) and screen coords (also Y-down), a
-    /// CW ring has positive signed area and is the **exterior**; CCW
-    /// (negative area) is a **hole**.
-    fn signed_area(ring: &[(i32, i32)]) -> i64 {
-        if ring.len() < 3 {
-            return 0;
-        }
-        let mut acc: i64 = 0;
-        for i in 0..ring.len() {
-            let (x0, y0) = ring[i];
-            let (x1, y1) = ring[(i + 1) % ring.len()];
-            acc += (x0 as i64) * (y1 as i64) - (x1 as i64) * (y0 as i64);
-        }
-        acc
-    }
-
-    /// Group a flat ring list into polygon groups. Each group starts
-    /// at an exterior ring (signed area > 0) and runs through any
-    /// following interior rings until the next exterior. Leading
-    /// interior rings (malformed input) are dropped. Returns
-    /// half-open ranges into the input slice.
-    fn classify_polygon_groups(rings: &[Vec<(i32, i32)>]) -> Vec<std::ops::Range<usize>> {
-        let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
-        for (i, ring) in rings.iter().enumerate() {
-            if Self::signed_area(ring) > 0 {
-                if let Some(last) = groups.last_mut() {
-                    last.end = i;
-                }
-                groups.push(i..i + 1);
-            }
-        }
-        if let Some(last) = groups.last_mut() {
-            last.end = rings.len();
-        }
-        groups
-    }
-
     // ── Feature drawing ───────────────────────────────────────────────────
-
-    /// Project tile-local points into integer screen pixels and append
-    /// them to `out`, optionally clipping against the padded viewport.
-    ///
-    /// Coordinate pipeline for each point: `TilePoint` (i32, 0..extent)
-    /// → f64 screen offset relative to `vis.pos_{x,y}` → final screen
-    /// pixel (i32). The f64 step is where we spend precision for the
-    /// divide; the final `as i32` rounds toward zero, matching the
-    /// tolerance of the braille pixel grid. `inv_scale = 1.0 / scale`
-    /// is precomputed so each point needs a multiply rather than a
-    /// divide.
-    fn scale_ring_into(
-        out: &mut Vec<(i32, i32)>,
-        vis: &VisibleTile,
-        ring: &[TilePoint],
-        scale: f64,
-        width: usize,
-        height: usize,
-        clip: bool,
-    ) {
-        out.clear();
-        let pad = super::VIEWPORT_PADDING;
-        let min_x = -pad;
-        let min_y = -pad;
-        let max_x = width as i32 + pad;
-        let max_y = height as i32 + pad;
-        let inv_scale = 1.0 / scale;
-
-        let mut last = (i32::MIN, i32::MIN);
-        let mut outside = false;
-
-        for p in ring {
-            let pt = (
-                (vis.pos_x + p.x as f64 * inv_scale) as i32,
-                (vis.pos_y + p.y as f64 * inv_scale) as i32,
-            );
-            if pt == last {
-                continue;
-            }
-            // Capture the previous processed point *before* advancing
-            // `last`, so the re-entry branch below can emit the actual
-            // last-outside point (the kink the polyline turns at)
-            // rather than the current inside point.
-            let prev = last;
-            last = pt;
-
-            if clip {
-                let is_out = pt.0 < min_x || pt.0 > max_x || pt.1 < min_y || pt.1 > max_y;
-                if is_out {
-                    if outside {
-                        continue;
-                    }
-                    outside = true;
-                } else if outside {
-                    outside = false;
-                    out.push(prev);
-                }
-            }
-            out.push(pt);
-        }
-    }
 
     /// Draw Line / Fill features. `StyleType::Symbol` is handled separately.
     fn draw_non_symbol(
@@ -379,7 +279,7 @@ impl Renderer {
         match rule.style_type {
             StyleType::Line => {
                 for ring in feature.points.iter() {
-                    Self::scale_ring_into(
+                    scale_ring_into(
                         &mut ctx.scratches.line,
                         vis,
                         ring,
@@ -403,7 +303,7 @@ impl Renderer {
                 }
                 let mut kept = 0;
                 for (i, ring) in feature.points.iter().enumerate() {
-                    Self::scale_ring_into(&mut rings[i], vis, ring, scale, width, height, false);
+                    scale_ring_into(&mut rings[i], vis, ring, scale, width, height, false);
                     if rings[i].len() >= 3 {
                         if kept != i {
                             rings.swap(kept, i);
@@ -421,7 +321,7 @@ impl Renderer {
                 // outer-with-its-holes independently — otherwise
                 // earcut treats the second outer as a hole of the
                 // first, mangling the fill.
-                for group in Self::classify_polygon_groups(&rings[..kept]) {
+                for group in classify_polygon_groups(&rings[..kept]) {
                     let clipped_count = ctx.canvas.clip_polygon_into(
                         &rings[group.start..group.end],
                         &mut ctx.scratches.clipped,
@@ -502,167 +402,10 @@ mod tests {
         assert!(order.len() >= 18);
     }
 
-    /// Regression for issue #103. `scale_ring_into` collapses runs of
-    /// consecutive outside points into a single emitted point, but on
-    /// re-entry it must emit the *last* outside point (so the renderer
-    /// draws the segment from there to the inside re-entry point). The
-    /// pre-fix code reassigned `last` before the clip check and ended
-    /// up pushing the *current* (inside) point twice — producing a
-    /// straight chord across the viewport instead of following the
-    /// off-screen geometry.
-    #[test]
-    fn scale_ring_into_preserves_last_outside_point_on_reentry() {
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::TilePoint;
-
-        // Canvas 100×100 px with VIEWPORT_PADDING=64 → clip box
-        // [-64, 164] × [-64, 164]. scale=1.0 → tile coords map 1:1
-        // to screen pixels.
-        let vis = VisibleTile {
-            x: 0,
-            y: 0,
-            z: 0,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            size: 256.0,
-        };
-        let ring = vec![
-            TilePoint { x: 50, y: 50 },  // inside
-            TilePoint { x: 200, y: 50 }, // outside (x > 164)
-            TilePoint { x: 250, y: 50 }, // outside
-            TilePoint { x: 50, y: 80 },  // inside (re-entry)
-        ];
-        let mut out: Vec<(i32, i32)> = Vec::new();
-        Renderer::scale_ring_into(&mut out, &vis, &ring, 1.0, 100, 100, true);
-
-        // Expected: emit first-inside, first-outside (so the in→out
-        // segment renders), last-outside (so the out→in segment
-        // renders correctly), and the re-entry inside point. No
-        // duplicates.
-        assert_eq!(
-            out,
-            vec![(50, 50), (200, 50), (250, 50), (50, 80)],
-            "re-entry must preserve the last outside point as the kink \
-             before resuming inside, not duplicate the inside point"
-        );
-    }
-
-    /// All-inside path is unaffected: every point is emitted in order,
-    /// with consecutive duplicates collapsed.
-    #[test]
-    fn scale_ring_into_all_inside_emits_every_point() {
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::TilePoint;
-
-        let vis = VisibleTile {
-            x: 0,
-            y: 0,
-            z: 0,
-            pos_x: 0.0,
-            pos_y: 0.0,
-            size: 256.0,
-        };
-        let ring = vec![
-            TilePoint { x: 10, y: 10 },
-            TilePoint { x: 20, y: 20 },
-            TilePoint { x: 30, y: 30 },
-        ];
-        let mut out: Vec<(i32, i32)> = Vec::new();
-        Renderer::scale_ring_into(&mut out, &vis, &ring, 1.0, 100, 100, true);
-        assert_eq!(out, vec![(10, 10), (20, 20), (30, 30)]);
-    }
-
-    // ── Multi-polygon ring classification (issue #101) ────────────────
-
-    /// MVT spec: in tile (Y-down) coords, a CW ring has positive
-    /// signed area and is the **exterior**; CCW (negative area) is a
-    /// hole.
-    #[test]
-    fn signed_area_positive_for_clockwise_ring_in_y_down() {
-        // Square traversed top-left → top-right → bottom-right →
-        // bottom-left → close. CW visually in Y-down (screen) coords.
-        let ring = vec![(0, 0), (10, 0), (10, 10), (0, 10)];
-        assert!(
-            Renderer::signed_area(&ring) > 0,
-            "CW ring in Y-down coords must report positive signed area"
-        );
-    }
-
-    #[test]
-    fn signed_area_negative_for_counterclockwise_ring_in_y_down() {
-        // Same square, reversed → CCW in Y-down.
-        let ring = vec![(0, 0), (0, 10), (10, 10), (10, 0)];
-        assert!(
-            Renderer::signed_area(&ring) < 0,
-            "CCW ring in Y-down coords must report negative signed area"
-        );
-    }
-
-    #[test]
-    fn signed_area_zero_for_degenerate_ring() {
-        let ring = vec![(0, 0), (10, 0)]; // < 3 points
-        assert_eq!(Renderer::signed_area(&ring), 0);
-    }
-
-    /// Empty input → no groups.
-    #[test]
-    fn classify_polygon_groups_empty_input_yields_no_groups() {
-        let rings: Vec<Vec<(i32, i32)>> = Vec::new();
-        assert!(Renderer::classify_polygon_groups(&rings).is_empty());
-    }
-
-    /// Single outer ring → one group spanning the whole slice.
-    #[test]
-    fn classify_polygon_groups_single_outer() {
-        let rings = vec![vec![(0, 0), (10, 0), (10, 10), (0, 10)]];
-        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..1]);
-    }
-
-    /// Outer + hole → one group [0..2].
-    #[test]
-    fn classify_polygon_groups_outer_with_hole() {
-        let rings = vec![
-            vec![(0, 0), (100, 0), (100, 100), (0, 100)], // CW = outer
-            vec![(20, 20), (20, 40), (40, 40), (40, 20)], // CCW = hole
-        ];
-        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..2]);
-    }
-
-    /// Two disjoint outer rings (multi-polygon) → two separate
-    /// groups. This is the case the pre-fix renderer mishandled — it
-    /// treated the second outer as a hole of the first.
-    #[test]
-    fn classify_polygon_groups_two_outers_are_two_groups() {
-        let rings = vec![
-            vec![(0, 0), (10, 0), (10, 10), (0, 10)],
-            vec![(50, 50), (60, 50), (60, 60), (50, 60)],
-        ];
-        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..1, 1..2]);
-    }
-
-    /// Mixed: outer, hole, outer, hole → two groups, each [outer,
-    /// hole].
-    #[test]
-    fn classify_polygon_groups_outer_hole_outer_hole() {
-        let rings = vec![
-            vec![(0, 0), (100, 0), (100, 100), (0, 100)], // outer A
-            vec![(20, 20), (20, 40), (40, 40), (40, 20)], // hole of A
-            vec![(200, 0), (300, 0), (300, 100), (200, 100)], // outer B
-            vec![(220, 20), (220, 40), (240, 40), (240, 20)], // hole of B
-        ];
-        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![0..2, 2..4]);
-    }
-
-    /// Leading hole (malformed input) is skipped; valid outer behind
-    /// it still becomes a group.
-    #[test]
-    fn classify_polygon_groups_drops_leading_holes() {
-        let rings = vec![
-            vec![(0, 0), (0, 10), (10, 10), (10, 0)], // CCW: hole, no parent
-            vec![(50, 50), (60, 50), (60, 60), (50, 60)], // CW: outer
-        ];
-        assert_eq!(Renderer::classify_polygon_groups(&rings), vec![1..2]);
-    }
+    // `signed_area`, `classify_polygon_groups`, and `scale_ring_into`
+    // now live in `super::polygon` and `super::project`; their unit
+    // tests moved with them. The renderer-side tests below cover the
+    // integration of those primitives with the actual draw path.
 
     /// Regression for issue #101. A POLYGON feature that packs two
     /// disjoint outer rings (multi-polygon, common for "all lakes /
