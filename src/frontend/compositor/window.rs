@@ -40,7 +40,7 @@
 use std::sync::mpsc;
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{
     Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
@@ -231,10 +231,15 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         self.frame.render_stateful_widget(t, clamped, state);
     }
 
-    /// Draw a vertical scrollbar on the right edge of `rect`. Use
-    /// the panel's outer rect so the bar sits on the border. No-op
-    /// when content fits (content_length <= viewport_length): no
-    /// reason to draw an indicator that says "you've seen
+    /// Draw a vertical scrollbar on the right edge of `rect`. Pass
+    /// the panel's *outer* rect — the rail is shrunk vertically by
+    /// one row on each side internally so it spans the inner
+    /// content area (matching `viewport_length`). The right border
+    /// column of the panel is replaced by the rail, which is the
+    /// idiomatic ratatui pattern.
+    ///
+    /// No-op when content fits (`content_length <= viewport_length`):
+    /// no reason to draw an indicator that says "you've seen
     /// everything".
     pub fn scrollbar(
         &mut self,
@@ -247,11 +252,28 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
             return;
         }
         let clamped = clamp(rect, self.area);
+        // Without this margin the rail height = outer (= inner+2)
+        // but `viewport_length` is inner, so the thumb size and
+        // position are computed against the wrong rail length.
+        // Shrinking by 1 each side aligns rail = viewport.
+        let rail = clamped.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+        if rail.height == 0 {
+            return;
+        }
         let mut state = ScrollbarState::new(content_length as usize)
             .position(position as usize)
             .viewport_content_length(viewport_length as usize);
-        let bar = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
-        self.frame.render_stateful_widget(bar, clamped, &mut state);
+        // Disable ▲ / ▼ caps. They eat 2 rows of rail and overlap
+        // the panel's border corners ugly-ly. The track itself is
+        // a sufficient affordance.
+        let bar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        self.frame.render_stateful_widget(bar, rail, &mut state);
     }
 
     /// Resolve a semantic [`StyleKind`] to a concrete `ratatui::Style`
