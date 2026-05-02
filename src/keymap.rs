@@ -4,7 +4,7 @@
 //!
 //! The keymap speaks the same `AppMsg` vocabulary as the palette
 //! and plugins — every key binding resolves to an `AppMsg` that
-//! rides through [`App::dispatch`](crate::app::App). Today all
+//! rides through [`Frontend::dispatch`](crate::frontend::Frontend). Today all
 //! defaults are `AppMsg::Map` wrappers, but nothing prevents binding
 //! a key to `AppMsg::SetTheme(...)` or `AppMsg::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::app::AppMsg;
+use crate::frontend::AppMsg;
 use crate::map::Action;
 
 /// A key binding: a key code + optional modifiers.

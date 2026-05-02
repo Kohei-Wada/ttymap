@@ -647,9 +647,9 @@ mod tests {
 
     #[test]
     fn poll_does_nothing_until_flag_is_flipped() {
-        use crate::app::AppEvent;
         use crate::compositor::Context;
         use crate::compositor::window::WindowOps;
+        use crate::frontend::AppEvent;
 
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
@@ -671,9 +671,9 @@ mod tests {
 
     #[test]
     fn poll_honours_flag_and_closes_window() {
-        use crate::app::AppEvent;
         use crate::compositor::Context;
         use crate::compositor::window::WindowOps;
+        use crate::frontend::AppEvent;
 
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();

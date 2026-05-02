@@ -29,7 +29,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
-use crate::app::AppMsg;
+use crate::frontend::AppMsg;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 
@@ -151,7 +151,7 @@ mod tests {
     use super::super::Context;
     use super::super::window::WindowOps;
     use super::*;
-    use crate::app::AppEvent;
+    use crate::frontend::AppEvent;
     use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;

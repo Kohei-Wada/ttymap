@@ -1,12 +1,18 @@
-//! Application event loop and central message dispatcher.
+//! Frontend layer — receives [`AppEvent`]s, mutates state, and
+//! draws.
 //!
-//! [`App`] is the sole **Receiver** in the GoF Command pattern: every
-//! invoker (keymap, palette, plugins, mouse adapter, render thread,
-//! input thread, frame timer) emits onto the unified [`AppEvent`]
-//! bus, and only `App::dispatch` executes the resulting `AppMsg`s.
-//! Component hooks express intent through `Window::emit(msg)` which
-//! routes onto the same bus — no synchronous "return `Vec<AppMsg>`"
-//! path remains.
+//! [`Frontend`] is the sole **Receiver** in the GoF Command pattern:
+//! every invoker (keymap, palette, plugins, mouse adapter, render
+//! thread, input thread, frame timer) emits onto the unified
+//! [`AppEvent`] bus, and only `Frontend::dispatch` executes the
+//! resulting `AppMsg`s. Component hooks express intent through
+//! `Window::emit(msg)` which routes onto the same bus — no
+//! synchronous "return `Vec<AppMsg>`" path remains.
+//!
+//! `Frontend` doesn't own subsystems. Threads (render / input /
+//! frame timer), the bus, and the channel are constructed by `main`
+//! at the composition root and handed in. The Frontend just runs
+//! the per-iteration handler the loop calls into.
 //!
 //! Focus/modal state lives on [`Compositor`] — a stack of
 //! [`Component`]s that replaced the old `FocusManager` + `Plugin`
@@ -20,6 +26,7 @@ pub mod frame_timer;
 pub mod input_thread;
 mod mouse;
 pub mod msg;
+pub mod ui;
 
 pub use event::AppEvent;
 pub use msg::AppMsg;
@@ -45,7 +52,7 @@ use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 use mouse::MouseAdapter;
 
-pub struct App {
+pub struct Frontend {
     map: MapState,
     /// Cheap-clone command channel for the render thread. The thread
     /// itself (and its `Drop`-driven join) is owned by `main` as a
@@ -97,7 +104,7 @@ pub struct App {
     overlay_redraw_interval: std::time::Duration,
 }
 
-impl App {
+impl Frontend {
     /// Build the app state and the Lua event bus.
     ///
     /// The unified [`AppEvent`] channel is constructed by the caller
@@ -181,7 +188,7 @@ impl App {
             plugin_hints,
         )));
 
-        let app = App {
+        let app = Frontend {
             map,
             render_client,
             map_frame: None,
@@ -389,7 +396,7 @@ impl App {
     ) -> io::Result<()> {
         let ctx = self.context();
         terminal.draw(|f| {
-            crate::ui::draw(
+            crate::frontend::ui::draw(
                 f,
                 self.map_frame.as_ref(),
                 &self.compositor,

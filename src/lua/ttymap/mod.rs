@@ -88,7 +88,7 @@ use std::time::{Instant, SystemTime};
 
 use mlua::{Lua, Table, UserData};
 
-use crate::app::{AppEvent, AppMsg};
+use crate::frontend::{AppEvent, AppMsg};
 use crate::geo::LonLat;
 use crate::map::Action;
 use crate::shared::http::HttpClient;
@@ -104,7 +104,7 @@ const NOTIFY_RING_CAP: usize = 16;
 // ── Shared snapshot ─────────────────────────────────────────────────
 
 /// Shared, mostly-immutable runtime data that every Lua plugin can
-/// query via the `ttymap` global. Built once in [`crate::app::App::new`]
+/// query via the `ttymap` global. Built once in [`crate::frontend::App::new`]
 /// and Arc-cloned into each namespace userdata that reads from it.
 ///
 /// Why not upvalue prepend? With ~10 builtin plugins each needing

@@ -1,9 +1,9 @@
 use clap::Parser;
-use ttymap::app::frame_timer::FrameTimer;
-use ttymap::app::input_thread::InputHandle;
-use ttymap::app::{App, KeybindingOverrides};
 use ttymap::commands::Command as Subcommand;
 use ttymap::config::Config;
+use ttymap::frontend::frame_timer::FrameTimer;
+use ttymap::frontend::input_thread::InputHandle;
+use ttymap::frontend::{Frontend, KeybindingOverrides};
 
 #[derive(Parser)]
 #[command(
@@ -66,7 +66,7 @@ fn main() {
     ttymap::lua::set_runtime_path(runtime_path);
 
     // Subcommands run a single task and exit without booting the full
-    // interactive app.
+    // interactive frontend.
     if let Some(cmd) = cli.command {
         if let Err(e) = cmd.run() {
             eprintln!("error: {e}");
@@ -76,7 +76,7 @@ fn main() {
     }
 
     // Run init.lua first, then override with CLI args. `keymap_overrides`
-    // travels to App::new alongside Config because the keymap is
+    // travels to Frontend::new alongside Config because the keymap is
     // scripted at the same place but lives in its own data shape.
     let (mut config, keymap_overrides) = ttymap::lua::run_init_lua(Config::default());
 
@@ -124,58 +124,60 @@ fn main() {
 }
 
 /// The composition root: builds the event channel and the Lua bus,
-/// constructs `App` + every off-thread subsystem (render / input /
-/// frame timer), then drives the per-iteration loop. App is just a
-/// state-mutating handler invoked by the loop; the bus, channels,
-/// and threads are peer participants on the same bus, all wired up
-/// here in `main` rather than implicitly inside `App`.
+/// constructs `Frontend` + every off-thread subsystem (render /
+/// input / frame timer), then drives the per-iteration loop.
+/// `Frontend` is just a state-mutating handler invoked by the loop;
+/// the bus, channels, and threads are peer participants on the same
+/// bus, all wired up here in `main` rather than implicitly inside
+/// the frontend.
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let (mut app, render_handle, event_bus) = App::new(config, keymap_overrides, event_tx.clone());
+    let (mut frontend, render_handle, event_bus) =
+        Frontend::new(config, keymap_overrides, event_tx.clone());
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
 
-    // Subsystems are peers to the App on the same bus — main spawns
+    // Subsystems are peers to the Frontend on the same bus — main spawns
     // each with its own `event_tx` clone. `Drop` order here matters
     // for clean teardown: input thread / frame timer first (they
     // read from a still-live receiver), then `render_handle` after
     // the loop has stopped consuming frames.
-    let _input = InputHandle::spawn(event_tx.clone(), app.poll_timeout());
-    let _frame_timer = FrameTimer::spawn(event_tx.clone(), app.poll_timeout());
+    let _input = InputHandle::spawn(event_tx.clone(), frontend.poll_timeout());
+    let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
 
     log::info!("event loop started");
-    app.dispatch_initial_redraw();
+    frontend.dispatch_initial_redraw();
 
-    while app.is_running() {
+    while frontend.is_running() {
         // Per-plugin housekeeping before the event drain — Lua plugins
         // queue components via `ttymap.api.window.open` here and the
         // current iteration's `poll_compositor` already sees them.
-        app.refresh_lua_host_state_per_tick();
+        frontend.refresh_lua_host_state_per_tick();
 
         // Park on the unified bus until any source produces an
         // event; drain any further buffered events non-blockingly
         // so a burst doesn't push the paint behind.
         match event_rx.recv() {
-            Ok(event) => app.handle_event(event, &event_bus, &event_tx),
+            Ok(event) => frontend.handle_event(event, &event_bus, &event_tx),
             Err(_) => break,
         }
         while let Ok(event) = event_rx.try_recv() {
-            app.handle_event(event, &event_bus, &event_tx);
+            frontend.handle_event(event, &event_bus, &event_tx);
         }
 
         // Component poll: any `win.emit(msg)` inside fires onto the
         // bus directly. Same-iteration `try_recv` ran above already;
         // an emission here will be picked up next iteration.
-        app.poll_compositor(&event_tx);
+        frontend.poll_compositor(&event_tx);
 
         // Render a frame. Inside `ui::draw`, the per-frame Lua
         // `tick` event fires against the live MapApi.
-        app.render_into(&mut terminal, &event_bus)?;
+        frontend.render_into(&mut terminal, &event_bus)?;
 
         // If plugin `on_tick` callbacks pushed polylines, throttle
         // the redraw request to the configured interval.
-        app.tick_overlay_redraw();
+        frontend.tick_overlay_redraw();
     }
 
     log::info!("event loop ended");

@@ -36,7 +36,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// Set once at startup by [`crate::app`] after [`resolve_runtime_path`]
+/// Set once at startup by [`crate::frontend`] after [`resolve_runtime_path`]
 /// returns at least one valid layer. [`crate::lua::new_lua`] reads this
 /// to wire the disk-based lib-script searcher and to extend
 /// `package.path` with each layer's `lua/`.

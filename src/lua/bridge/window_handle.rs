@@ -133,10 +133,10 @@ mod tests {
     /// [`super::window_component::LuaWindowComponent`].
     #[test]
     fn close_flag_wrapper_polls_close_when_flag_set() {
-        use crate::app::AppEvent;
         use crate::compositor::Component;
         use crate::compositor::Context;
         use crate::compositor::window::{Window, WindowOps};
+        use crate::frontend::AppEvent;
 
         /// Inert inner component — no-op for every method so the
         /// wrapper's behaviour is the only thing under test.

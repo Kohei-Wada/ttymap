@@ -14,7 +14,7 @@ use std::thread;
 
 use crossbeam_channel as cb;
 
-use crate::app::AppEvent;
+use crate::frontend::AppEvent;
 use log::{debug, error, info};
 
 use super::frame::MapFrame;

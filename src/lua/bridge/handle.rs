@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 
 use mlua::{Lua, RegistryKey, Table};
 
-use crate::app::AppEvent;
+use crate::frontend::AppEvent;
 use crate::lua::new_lua;
 use crate::lua::ttymap as host;
 

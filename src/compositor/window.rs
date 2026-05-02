@@ -44,8 +44,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Table, TableState};
 
-use crate::app::{AppEvent, AppMsg};
 use crate::compositor::{Component, Context};
+use crate::frontend::{AppEvent, AppMsg};
 use crate::theme::{StyleKind, UiTheme};
 
 /// Queue of stack-mutation actions a [`Component`] hook recorded

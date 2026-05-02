@@ -39,7 +39,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app::{AppEvent, AppMsg};
+use crate::frontend::{AppEvent, AppMsg};
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -404,7 +404,7 @@ pub struct Registrar {
     pub event_bus: crate::lua::LuaEventBus,
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
-    /// in [`crate::app::App::new`] and drains each handle's receivers
+    /// in [`crate::frontend::App::new`] and drains each handle's receivers
     /// (`push_rx` / `app_msg_rx`) once per frame so callbacks running
     /// in the setup state can request map jumps, frame exports, or
     /// component pushes without sitting on a dead receiver.

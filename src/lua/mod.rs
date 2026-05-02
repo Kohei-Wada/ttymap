@@ -30,8 +30,8 @@ use std::sync::{Arc, mpsc};
 
 use mlua::{Lua, Table};
 
-use crate::app::AppEvent;
 use crate::compositor::Registrar;
+use crate::frontend::AppEvent;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM with

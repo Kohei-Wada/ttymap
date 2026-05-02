@@ -238,7 +238,7 @@ pub fn install(keymap: &KeyMap, r: &mut Registrar) {
 mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
-    use crate::app::AppMsg;
+    use crate::frontend::AppMsg;
     use crate::map::Action;
     use crate::theme::ThemeId;
 
@@ -315,8 +315,8 @@ mod tests {
             .collect()
     }
 
-    use crate::app::AppEvent;
     use crate::compositor::window::WindowOps;
+    use crate::frontend::AppEvent;
 
     /// Dispatch a key into the palette and return the queued stack
     /// ops + the `AppMsg`s the hook emitted onto a disposable bus.

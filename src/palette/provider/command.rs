@@ -13,8 +13,8 @@
 
 use std::rc::Rc;
 
-use crate::app::AppMsg;
 use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
+use crate::frontend::AppMsg;
 use crate::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::ThemeId;

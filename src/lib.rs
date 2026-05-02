@@ -10,8 +10,8 @@
 /// Application event loop and central message dispatcher. Also home
 /// of the [`AppMsg`](app::AppMsg) vocabulary — the single enum every
 /// emission site (palette, plugins, mouse, future RPC) speaks and that
-/// [`App::dispatch`](app::App) interprets.
-pub mod app;
+/// [`Frontend::dispatch`](app::Frontend) interprets.
+pub mod frontend;
 
 /// CLI subcommand implementations. Each subcommand lives in its own
 /// submodule; `main.rs` just parses the top-level enum and calls
@@ -73,4 +73,3 @@ pub mod lua;
 pub mod geo;
 #[doc(hidden)]
 pub mod shared;
-pub(crate) mod ui;
