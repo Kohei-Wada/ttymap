@@ -11,6 +11,12 @@ use crate::theme::StyleKind;
 
 use super::PaletteComponent;
 
+/// Hard cap on visible candidate rows. Keeps the popup compact even
+/// on large terminals and turns the table into a fixed-height
+/// scrollable viewport — ratatui's `Table` auto-scrolls to keep the
+/// selected row in view when items overflow this window.
+const MAX_VISIBLE_ROWS: u16 = 10;
+
 pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     let map_inner = win.area();
     if map_inner.width < 30 || map_inner.height < 6 {
@@ -20,7 +26,10 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     let items = provider.items();
 
     let popup_width = (map_inner.width * 2 / 3).max(40).min(map_inner.width - 2);
-    let max_rows = map_inner.height.saturating_sub(6).max(3);
+    let max_rows = map_inner
+        .height
+        .saturating_sub(6)
+        .clamp(3, MAX_VISIBLE_ROWS);
     let loading = widget.is_loading();
     let visible = items.len() as u16 + u16::from(loading && items.is_empty());
     let rows = visible.max(1).min(max_rows);
