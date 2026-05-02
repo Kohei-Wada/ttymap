@@ -236,7 +236,7 @@ local function open()
             { key = "Enter",   label = "open" },
             { key = "Esc",     label = "back" },
             { key = "r",       label = "refresh" },
-            { key = "i",       label = "close wiki" },
+            { key = "q / i",   label = "close wiki" },
         },
         render = build_lines,
         handle_event = function(key)
@@ -244,8 +244,11 @@ local function open()
             local ch = key.char
             local ctrl = key.ctrl
 
-            -- Self-toggle on the activation key.
-            if code == "Char" and ch == "i" and not ctrl then
+            -- Self-toggle on the activation key. `q` mirrors the
+            -- universal "close focused panel" key the user expects
+            -- across plugins; the activation key (`i`) stays so the
+            -- keybind that opened the panel also closes it.
+            if code == "Char" and not ctrl and (ch == "i" or ch == "q") then
                 close()
                 return nil
             end

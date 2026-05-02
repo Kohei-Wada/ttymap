@@ -86,11 +86,13 @@ local function open()
         layout = { kind = "sidebar" },
         footer_hints = {
             { key = "↑↓ PgUp PgDn", label = "scroll" },
-            { key = "Esc",          label = "close" },
+            { key = "q / Esc",      label = "close" },
         },
         render = build_lines,
         handle_event = function(key)
-            if key.code == "Esc" then
+            if key.code == "Esc"
+                or (key.code == "Char" and key.char == "q" and not key.ctrl)
+            then
                 close()
                 return nil
             end

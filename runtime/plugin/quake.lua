@@ -178,7 +178,7 @@ local function open_panel()
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "jump" },
-            { key = "Esc",     label = "close" },
+            { key = "q / Esc", label = "close" },
         },
         render = build_lines,
         handle_event = function(key)
@@ -207,7 +207,7 @@ local function open_panel()
                 if q then ttymap.map:jump(q.lon, q.lat) end
                 return nil
             end
-            if code == "Esc" then
+            if code == "Esc" or (code == "Char" and ch == "q" and not ctrl) then
                 close_panel()
                 return nil
             end

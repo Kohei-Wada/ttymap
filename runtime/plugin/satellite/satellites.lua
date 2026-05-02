@@ -339,9 +339,16 @@ function M.make(specs)
                     return nil
                 end
 
-                -- Esc closes the panel; q is left to fall through so
-                -- the base layer's quit binding keeps working.
-                if code == "Esc" then
+                -- Esc / q close the panel. `q` doesn't fall through
+                -- because user expectation is "q dismisses the
+                -- focused panel" — letting it leak to the base layer
+                -- and quit the app while a sidebar is in front of
+                -- the user is the wrong default.
+                if code == "Esc" or (code == "Char" and ch == "q" and not ctrl) then
+                    -- But beware: a sat config might bind `q` as its
+                    -- visibility key, in which case the per-sat
+                    -- toggle above already handled it. We're past
+                    -- that branch here, so it's safe.
                     close()
                     return nil
                 end
