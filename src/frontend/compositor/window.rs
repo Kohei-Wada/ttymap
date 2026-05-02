@@ -8,7 +8,7 @@
 //!     if ev.code == KeyCode::Esc {
 //!         win.close();
 //!     } else if enter_with_selection {
-//!         win.emit(AppMsg::Map(Action::Jump(loc)));
+//!         win.emit(UserIntent::Map(Action::Jump(loc)));
 //!         win.close();
 //!     } else if ev.code == KeyCode::Char('/') {
 //!         win.close();
@@ -20,7 +20,7 @@
 //! Stack-mutation methods (`close`, `open`, `ignore`) queue into
 //! [`WindowOps`]; the compositor drains the queue after the hook
 //! returns and applies them in a deterministic order (`close` →
-//! `opens`). `emit` is *not* queued — it routes the [`AppMsg`]
+//! `opens`). `emit` is *not* queued — it routes the [`UserIntent`]
 //! straight onto the App-level [`AppEvent`] channel, so every
 //! intent (whether produced by the keymap, a Lua palette callback,
 //! or a panel hook) flows through the same bus the render thread,
@@ -45,7 +45,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Table, TableState};
 
 use crate::frontend::compositor::{Component, Context};
-use crate::frontend::{AppEvent, AppMsg};
+use crate::frontend::{AppEvent, UserIntent};
 use crate::theme::{StyleKind, UiTheme};
 
 /// Queue of stack-mutation actions a [`Component`] hook recorded
@@ -138,7 +138,7 @@ impl<'a> Window<'a> {
     /// dispatched (against the post-pop state). A failed send means
     /// the bus receiver has been dropped (App teardown) — silently
     /// ignored.
-    pub fn emit(&mut self, msg: AppMsg) {
+    pub fn emit(&mut self, msg: UserIntent) {
         self.ops.did_emit = true;
         let _ = self.event_tx.send(AppEvent::Intent(msg));
     }

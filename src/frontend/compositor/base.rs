@@ -29,7 +29,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
-use crate::frontend::AppMsg;
+use crate::frontend::UserIntent;
 use crate::input::keymap::KeyMap;
 use crate::map::Action;
 
@@ -76,11 +76,11 @@ impl BaseLayer {
     /// Advance the `gg` state machine and resolve via the keymap.
     /// Called unconditionally so any non-`g` keypress resets
     /// `pending_g`.
-    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppMsg> {
+    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserIntent> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Some(AppMsg::Map(Action::ZoomToWorld));
+                return Some(UserIntent::Map(Action::ZoomToWorld));
             }
             self.pending_g = true;
             return None;
@@ -166,8 +166,8 @@ mod tests {
 
     /// Dispatch a key into `bg` against a disposable bus. Returns
     /// the queued stack ops (close / opens / ignored) plus every
-    /// `AppMsg` the hook emitted onto the bus, drained in order.
-    fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> (WindowOps, Vec<AppMsg>) {
+    /// `UserIntent` the hook emitted onto the bus, drained in order.
+    fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> (WindowOps, Vec<UserIntent>) {
         let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
         let mut ops = WindowOps::default();
         {
@@ -194,7 +194,7 @@ mod tests {
         assert!(ops.opens.is_empty());
         // 2nd g: ZoomToWorld.
         let (_ops, msgs) = dispatch(&mut bg, KeyCode::Char('g'));
-        assert_eq!(msgs, vec![AppMsg::Map(Action::ZoomToWorld)]);
+        assert_eq!(msgs, vec![UserIntent::Map(Action::ZoomToWorld)]);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! channel that every off-main-thread (or deferred main-thread)
 //! source pushes into. Four variants:
 //!
-//! - [`AppEvent::Intent`] — wraps an [`AppMsg`]: every fire-and-forget
+//! - [`AppEvent::Intent`] — wraps an [`UserIntent`]: every fire-and-forget
 //!   user-intent emitter (Lua plugins via the host channel,
 //!   keymap/mouse when the dispatch can't run inline) goes through
 //!   this. Synchronous emitters (compositor.poll, palette.execute)
@@ -13,12 +13,12 @@
 //!   completed [`MapFrame`] for the App to display next paint cycle.
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
-//!   on it and dispatches the appropriate downstream `AppMsg`s.
+//!   on it and dispatches the appropriate downstream `UserIntent`s.
 //! - [`AppEvent::LuaIntent`] — a Lua-originated intent emitted via
 //!   `ttymap.*` host bindings. Carries [`crate::lua::intent::LuaIntent`]
-//!   and is translated to the matching [`AppMsg`] inside the
+//!   and is translated to the matching [`UserIntent`] inside the
 //!   frontend's `handle_event` arm. The Lua subsystem doesn't import
-//!   `AppMsg` / `Action` — the translation lives at this boundary so
+//!   `UserIntent` / `Action` — the translation lives at this boundary so
 //!   the lua module stays bounded to its own intent vocabulary.
 //! - [`AppEvent::Wake`] — periodic wake-up from the frame timer
 //!   thread. Replaces the old `recv_timeout` polling: the main loop
@@ -31,27 +31,27 @@
 //!   against a live `MapApi`. They're aligned in cadence (one per
 //!   draw) but live at different layers.
 //!
-//! The split (rather than adding `FrameReady` directly to [`AppMsg`])
-//! is intentional: `AppMsg` derives `PartialEq` for keymap binding
+//! The split (rather than adding `FrameReady` directly to [`UserIntent`])
+//! is intentional: `UserIntent` derives `PartialEq` for keymap binding
 //! lookups, and `MapFrame` is a per-frame grid buffer whose equality
-//! is meaningless and expensive. Wrapping keeps `AppMsg`'s vocabulary
+//! is meaningless and expensive. Wrapping keeps `UserIntent`'s vocabulary
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
 
 use crate::lua::intent::LuaIntent;
 use crate::map::render::frame::MapFrame;
 
-use super::AppMsg;
+use super::UserIntent;
 
 /// Unified event payload drained from the App-level `mpsc` channel.
 ///
 /// See module-level docs for the rationale behind the variant split.
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A user-intent [`AppMsg`] emitted off-thread or deferred from
+    /// A user-intent [`UserIntent`] emitted off-thread or deferred from
     /// inside a Lua callback. Dispatched through
     /// [`super::App::dispatch`] in arrival order.
-    Intent(AppMsg),
+    Intent(UserIntent),
     /// A freshly rendered [`MapFrame`] from the render thread. Stored
     /// on the App as the next paint snapshot; multiple in flight =>
     /// last one wins, matching the prior dedicated-channel behaviour.
@@ -63,9 +63,9 @@ pub enum AppEvent {
     /// unified queue.
     Input(crossterm::event::Event),
     /// Lua-originated intent emitted by a `ttymap.*` host method.
-    /// The frontend translates it to the matching [`AppMsg`] in
+    /// The frontend translates it to the matching [`UserIntent`] in
     /// `handle_event`. Carrying it as a separate variant (rather
-    /// than wrapping `AppMsg` directly inside the lua module) keeps
+    /// than wrapping `UserIntent` directly inside the lua module) keeps
     /// the lua subsystem's import surface bounded — see
     /// [`crate::lua::sender::LuaSender`] for the boundary type.
     LuaIntent(LuaIntent),
@@ -78,8 +78,8 @@ pub enum AppEvent {
     Wake,
 }
 
-impl From<AppMsg> for AppEvent {
-    fn from(msg: AppMsg) -> Self {
+impl From<UserIntent> for AppEvent {
+    fn from(msg: UserIntent) -> Self {
         AppEvent::Intent(msg)
     }
 }

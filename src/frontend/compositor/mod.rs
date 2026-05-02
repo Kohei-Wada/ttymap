@@ -39,7 +39,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::frontend::{AppEvent, AppMsg};
+use crate::frontend::{AppEvent, UserIntent};
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -52,14 +52,14 @@ use crate::theme::UiTheme;
 /// Intercepting here — rather than at `BaseLayer` — means no
 /// component on the stack can accidentally absorb Tab. Focus cycling
 /// is a property of the framework, not of any plugin's correctness.
-fn intercept_focus_key(event: KeyEvent) -> Option<AppMsg> {
+fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
     if event.code == KeyCode::Tab && event.modifiers == KeyModifiers::NONE {
-        return Some(AppMsg::CycleFocus(true));
+        return Some(UserIntent::CycleFocus(true));
     }
     if event.code == KeyCode::BackTab
         || (event.code == KeyCode::Tab && event.modifiers.contains(KeyModifiers::SHIFT))
     {
-        return Some(AppMsg::CycleFocus(false));
+        return Some(UserIntent::CycleFocus(false));
     }
     None
 }
@@ -405,7 +405,7 @@ pub struct Registrar {
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::frontend::App::new`] and drains each handle's receivers
-    /// (`push_rx` / `app_msg_rx`) once per frame so callbacks running
+    /// (`push_rx` / `intent_rx`) once per frame so callbacks running
     /// in the setup state can request map jumps, frame exports, or
     /// component pushes without sitting on a dead receiver.
     pub lua_host_handles: Vec<crate::lua::ttymap::LuaHostHandles>,
@@ -597,11 +597,11 @@ mod tests {
     }
 
     /// Drain every `AppEvent::Intent` from `rx` and return the
-    /// underlying `AppMsg`s in arrival order. Other variants — none
+    /// underlying `UserIntent`s in arrival order. Other variants — none
     /// of which the compositor produces today — are surfaced as a
     /// panic so a future variant addition doesn't silently slip
     /// through.
-    fn drain_intents(rx: &std::sync::mpsc::Receiver<AppEvent>) -> Vec<AppMsg> {
+    fn drain_intents(rx: &std::sync::mpsc::Receiver<AppEvent>) -> Vec<UserIntent> {
         let mut out = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             match ev {
@@ -668,7 +668,7 @@ mod tests {
         struct SwallowsAll;
         impl Component for SwallowsAll {
             fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
-                win.emit(AppMsg::Map(crate::map::Action::None));
+                win.emit(UserIntent::Map(crate::map::Action::None));
             }
             fn render(&self, _: &mut window::RenderWindow) {}
         }
@@ -683,13 +683,13 @@ mod tests {
         c.push(Box::new(SwallowsAll));
 
         c.handle_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &ctx, &tx);
-        assert_eq!(drain_intents(&rx), vec![AppMsg::CycleFocus(true)]);
+        assert_eq!(drain_intents(&rx), vec![UserIntent::CycleFocus(true)]);
 
         c.handle_event(
             KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
             &ctx,
             &tx,
         );
-        assert_eq!(drain_intents(&rx), vec![AppMsg::CycleFocus(false)]);
+        assert_eq!(drain_intents(&rx), vec![UserIntent::CycleFocus(false)]);
     }
 }

@@ -3,7 +3,7 @@
 //! Reached from [`CommandProvider`](super::CommandProvider) via the
 //! "Theme" entry.
 
-use crate::frontend::AppMsg;
+use crate::frontend::UserIntent;
 use crate::frontend::compositor::Context;
 use crate::theme::ThemeId;
 
@@ -60,7 +60,7 @@ impl PaletteProvider for ThemeProvider {
 
     fn execute(&mut self, idx: usize, _ctx: &Context) -> PaletteAction {
         match self.filtered_theme_ids.get(idx) {
-            Some(&t) => PaletteAction::Run(vec![AppMsg::SetTheme(t)]),
+            Some(&t) => PaletteAction::Run(vec![UserIntent::SetTheme(t)]),
             None => PaletteAction::Close,
         }
     }

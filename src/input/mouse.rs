@@ -1,9 +1,9 @@
 //! Mouse adapter — translates raw crossterm `MouseEvent`s into a
-//! sequence of `AppMsg`s for the main loop to dispatch.
+//! sequence of `UserIntent`s for the main loop to dispatch.
 //!
 //! *Adapter* (not a router): wraps a device API
 //! (`crossterm::MouseEvent`) and produces a different shape
-//! (`AppMsg`), in the GoF sense. It does not decide where the
+//! (`UserIntent`), in the GoF sense. It does not decide where the
 //! output goes — every message flows straight to `App::dispatch`.
 //! Hit-testing against individual surfaces (click inside palette
 //! popup vs. click on the map) is future work; when added, a
@@ -23,15 +23,15 @@
 //!
 //! Key and mouse paths are intentionally not symmetric: keyboard
 //! routes through the [`compositor`](crate::frontend::compositor) for focus
-//! delivery before producing an `AppMsg`, while mouse is a pure
-//! translator with no focus involvement. Both emit the same `AppMsg`
+//! delivery before producing a `UserIntent`, while mouse is a pure
+//! translator with no focus involvement. Both emit the same `UserIntent`
 //! vocabulary on the output side: every event emits a leading
 //! `CursorMoved`; drag additionally emits `Map(PanCells)`; scroll
 //! emits `Map(ZoomAt { ... })`.
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::frontend::AppMsg;
+use crate::frontend::UserIntent;
 use crate::map::Action;
 
 #[derive(Default)]
@@ -40,19 +40,19 @@ pub struct MouseAdapter {
 }
 
 impl MouseAdapter {
-    /// Translate a raw mouse event into zero or more `AppMsg`s.
+    /// Translate a raw mouse event into zero or more `UserIntent`s.
     /// Every event emits a leading `Ui(CursorMoved)` for the overlay
     /// readout; the `resolve` stage appends any additional message
     /// (drag → pan, scroll → zoom).
-    pub fn translate(&mut self, event: MouseEvent) -> Vec<AppMsg> {
-        let mut msgs = vec![AppMsg::CursorMoved(event.column, event.row)];
+    pub fn translate(&mut self, event: MouseEvent) -> Vec<UserIntent> {
+        let mut msgs = vec![UserIntent::CursorMoved(event.column, event.row)];
         if let Some(msg) = self.resolve(event) {
             msgs.push(msg);
         }
         msgs
     }
 
-    fn resolve(&mut self, event: MouseEvent) -> Option<AppMsg> {
+    fn resolve(&mut self, event: MouseEvent) -> Option<UserIntent> {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let anchor_dx = event.column as f64 - cols as f64 / 2.0;
         let anchor_dy = event.row as f64 - rows as f64 / 2.0;
@@ -69,7 +69,7 @@ impl MouseAdapter {
                     let dy = event.row as i16 - prev_y as i16;
                     self.drag_from = Some((event.column, event.row));
                     if dx != 0 || dy != 0 {
-                        return Some(AppMsg::Map(Action::PanCells(dx, dy)));
+                        return Some(UserIntent::Map(Action::PanCells(dx, dy)));
                     }
                 }
                 None
@@ -78,12 +78,12 @@ impl MouseAdapter {
                 self.drag_from = None;
                 None
             }
-            MouseEventKind::ScrollUp => Some(AppMsg::Map(Action::ZoomAt {
+            MouseEventKind::ScrollUp => Some(UserIntent::Map(Action::ZoomAt {
                 anchor_dx,
                 anchor_dy,
                 zoom_in: true,
             })),
-            MouseEventKind::ScrollDown => Some(AppMsg::Map(Action::ZoomAt {
+            MouseEventKind::ScrollDown => Some(UserIntent::Map(Action::ZoomAt {
                 anchor_dx,
                 anchor_dy,
                 zoom_in: false,

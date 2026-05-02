@@ -5,9 +5,9 @@
 //! every invoker (keymap, palette, plugins, mouse adapter, render
 //! thread, input thread, frame timer) emits onto the unified
 //! [`AppEvent`] bus, and only `Frontend::dispatch` executes the
-//! resulting `AppMsg`s. Component hooks express intent through
+//! resulting `UserIntent`s. Component hooks express intent through
 //! `Window::emit(msg)` which routes onto the same bus — no
-//! synchronous "return `Vec<AppMsg>`" path remains.
+//! synchronous "return `Vec<UserIntent>`" path remains.
 //!
 //! `Frontend` doesn't own subsystems. Threads (render / input /
 //! frame timer), the bus, and the channel are constructed by `main`
@@ -24,12 +24,12 @@
 pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
-pub mod msg;
+pub mod intent;
 pub(crate) mod palette;
 pub mod ui;
 
 pub use event::AppEvent;
-pub use msg::AppMsg;
+pub use intent::UserIntent;
 
 use std::io;
 use std::sync::Arc;
@@ -292,9 +292,9 @@ impl Frontend {
             AppEvent::LuaIntent(intent) => {
                 // Translate Lua-originated intents to the App's own
                 // imperative vocabulary. The lua subsystem doesn't
-                // import `AppMsg` / `Action`; the boundary lives
+                // import `UserIntent` / `Action`; the boundary lives
                 // here.
-                let msg = lua_intent_to_app_msg(intent);
+                let msg = lua_intent_to_user_intent(intent);
                 let snapshot = msg.clone();
                 self.dispatch(msg);
                 self.notify_post_intent(&snapshot, event_bus);
@@ -313,25 +313,25 @@ impl Frontend {
     /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
     /// surface stays meaningful — bus events are "something
     /// observable happened to the app", not "every state mutation".
-    fn notify_post_intent(&self, msg: &AppMsg, event_bus: &LuaEventBus) {
+    fn notify_post_intent(&self, msg: &UserIntent, event_bus: &LuaEventBus) {
         use crate::lua::registry::names;
         match msg {
-            AppMsg::Map(Action::Jump(ll)) => {
+            UserIntent::Map(Action::Jump(ll)) => {
                 event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
             }
-            AppMsg::Map(Action::SetZoom(z)) => {
+            UserIntent::Map(Action::SetZoom(z)) => {
                 event_bus.dispatch(names::MAP_ZOOM_SET, *z);
             }
-            AppMsg::Map(Action::FlyTo { center, zoom }) => {
+            UserIntent::Map(Action::FlyTo { center, zoom }) => {
                 event_bus.dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
             }
-            AppMsg::SetTheme(new_id) => {
+            UserIntent::SetTheme(new_id) => {
                 event_bus.dispatch(names::THEME_CHANGED, new_id.name());
             }
-            AppMsg::Resize(cols, rows) => {
+            UserIntent::Resize(cols, rows) => {
                 event_bus.dispatch(names::RESIZED, (*cols, *rows));
             }
-            AppMsg::ExportFrame => {
+            UserIntent::ExportFrame => {
                 event_bus.dispatch(names::FRAME_EXPORTED, ());
             }
             // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
@@ -352,7 +352,7 @@ impl Frontend {
                     && key_event.code == KeyCode::Char('c')
                 {
                     info!("Ctrl-C received, quitting");
-                    let _ = event_tx.send(AppEvent::Intent(AppMsg::Map(Action::Quit)));
+                    let _ = event_tx.send(AppEvent::Intent(UserIntent::Map(Action::Quit)));
                 } else {
                     debug!("key event: {:?}", key_event.code);
                     let ctx = self.context();
@@ -361,7 +361,7 @@ impl Frontend {
             }
             Event::Resize(cols, rows) => {
                 info!("resize: {}x{}", cols, rows);
-                let _ = event_tx.send(AppEvent::Intent(AppMsg::Resize(cols, rows)));
+                let _ = event_tx.send(AppEvent::Intent(UserIntent::Resize(cols, rows)));
             }
             Event::Mouse(mouse) => {
                 for msg in self.mouse.translate(mouse) {
@@ -440,25 +440,25 @@ impl Frontend {
     /// the loop — kicks off the very first render task so the
     /// terminal isn't blank waiting for input.
     pub fn dispatch_initial_redraw(&mut self) {
-        self.dispatch(AppMsg::Map(Action::Redraw));
+        self.dispatch(UserIntent::Map(Action::Redraw));
     }
 
-    fn dispatch(&mut self, msg: AppMsg) {
+    fn dispatch(&mut self, msg: UserIntent) {
         match msg {
-            AppMsg::Map(action) => {
+            UserIntent::Map(action) => {
                 if self.map.process_action(&action) {
                     self.request_map_redraw();
                 }
             }
-            AppMsg::SetTheme(new_id) => self.apply_theme(new_id),
-            AppMsg::CursorMoved(col, row) => {
+            UserIntent::SetTheme(new_id) => self.apply_theme(new_id),
+            UserIntent::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
             }
-            AppMsg::CycleFocus(forward) => {
+            UserIntent::CycleFocus(forward) => {
                 self.compositor.cycle(forward);
             }
-            AppMsg::Resize(cols, rows) => self.handle_resize(cols, rows),
-            AppMsg::ExportFrame => self.export_current_frame(),
+            UserIntent::Resize(cols, rows) => self.handle_resize(cols, rows),
+            UserIntent::ExportFrame => self.export_current_frame(),
         }
     }
 
@@ -517,17 +517,17 @@ impl Frontend {
 }
 
 /// Translate a Lua-originated [`LuaIntent`] into the App's own
-/// [`AppMsg`] vocabulary. Lives in the frontend (not the lua
+/// [`UserIntent`] vocabulary. Lives in the frontend (not the lua
 /// module) because the lua module deliberately doesn't import
-/// `AppMsg` / `Action` — the lua subsystem brokers events; this
+/// `UserIntent` / `Action` — the lua subsystem brokers events; this
 /// function is the boundary that interprets them.
-fn lua_intent_to_app_msg(intent: crate::lua::intent::LuaIntent) -> AppMsg {
+fn lua_intent_to_user_intent(intent: crate::lua::intent::LuaIntent) -> UserIntent {
     use crate::lua::intent::LuaIntent;
     match intent {
-        LuaIntent::MapJump(ll) => AppMsg::Map(Action::Jump(ll)),
-        LuaIntent::MapZoomSet(z) => AppMsg::Map(Action::SetZoom(z)),
-        LuaIntent::MapFlyTo { center, zoom } => AppMsg::Map(Action::FlyTo { center, zoom }),
-        LuaIntent::FrameExport => AppMsg::ExportFrame,
+        LuaIntent::MapJump(ll) => UserIntent::Map(Action::Jump(ll)),
+        LuaIntent::MapZoomSet(z) => UserIntent::Map(Action::SetZoom(z)),
+        LuaIntent::MapFlyTo { center, zoom } => UserIntent::Map(Action::FlyTo { center, zoom }),
+        LuaIntent::FrameExport => UserIntent::ExportFrame,
     }
 }
 
@@ -638,7 +638,7 @@ fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
     Action::all_listed()
         .iter()
         .filter_map(|action| {
-            let keys = keymap.keys_for(&AppMsg::Map(action.clone()));
+            let keys = keymap.keys_for(&UserIntent::Map(action.clone()));
             if keys.is_empty() {
                 None
             } else {

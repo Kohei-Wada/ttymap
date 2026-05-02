@@ -13,7 +13,7 @@
 
 use std::rc::Rc;
 
-use crate::frontend::AppMsg;
+use crate::frontend::UserIntent;
 use crate::frontend::compositor::{Context, PaletteEntry as RegistrarEntry};
 use crate::input::keymap::KeyMap;
 use crate::map::Action;
@@ -34,7 +34,7 @@ impl CommandSeed {
         let map_actions = Action::all_listed()
             .iter()
             .map(|a| {
-                let hint = keymap.keys_for(&AppMsg::Map(a.clone())).join(", ");
+                let hint = keymap.keys_for(&UserIntent::Map(a.clone())).join(", ");
                 (a.clone(), hint)
             })
             .collect();
@@ -47,7 +47,7 @@ impl CommandSeed {
 
 #[derive(Clone)]
 enum Kind {
-    /// Plain map action — selecting runs `AppMsg::Map(action)`.
+    /// Plain map action — selecting runs `UserIntent::Map(action)`.
     MapAction(Action),
     /// Plugin-registered Spawn / Run entry — selecting invokes the
     /// closure in `CommandSeed::plugin_entries[idx]`.
@@ -149,7 +149,7 @@ impl PaletteProvider for CommandProvider {
             return PaletteAction::Close;
         };
         match &self.all[entry_idx].kind {
-            Kind::MapAction(a) => PaletteAction::Run(vec![AppMsg::Map(a.clone())]),
+            Kind::MapAction(a) => PaletteAction::Run(vec![UserIntent::Map(a.clone())]),
             Kind::PluginEntry(i) => {
                 let entry = &self.seed.plugin_entries[*i];
                 // Factory may decline (Lua plugin returned falsy);

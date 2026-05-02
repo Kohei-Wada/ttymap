@@ -12,7 +12,7 @@ decisions again.
 flow does not.**
 
 Anything that's "we want to do X in response to an event" becomes an
-`AppMsg` variant and flows through `App::dispatch(msg)` on the single
+`UserIntent` variant and flows through `App::dispatch(msg)` on the single
 `App` receiver. Anything that's "a worker finished its job and handed
 us the result" stays as a direct method call.
 
@@ -20,7 +20,7 @@ us the result" stays as a direct method call.
 
 `App::dispatch` is the **single side-effect boundary** for app-level
 state changes. `App` is the Receiver (GoF): every invoker (keymap,
-palette, plugins, mouse) returns `Vec<AppMsg>` and never executes
+palette, plugins, mouse) returns `Vec<UserIntent>` and never executes
 anything itself. Each match arm either delegates to a method on the
 domain type that owns the relevant state (`MapState`) or — for
 cross-cutting transitions — to a method on `App` itself
@@ -31,19 +31,19 @@ frame and notify passive widgets. This gives us:
 - One place to audit what can happen to app state
 - One place where the redraw-after-map-change invariant lives
 - A shared vocabulary for keymap, palette providers, plugin async
-  callbacks, mouse — they all emit the same `AppMsg` enum
+  callbacks, mouse — they all emit the same `UserIntent` enum
 
 Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
 CLI subcommand under `src/commands/` and the palette entries under
-`src/frontend/palette/`. The internal intent type is `AppMsg` so those three
+`src/frontend/palette/`. The internal intent type is `UserIntent` so those three
 layers stay unambiguous.
 
-### When to emit an `AppMsg`
+### When to emit a `UserIntent`
 
-Emit an `AppMsg` if **all** of the following are true:
+Emit a `UserIntent` if **all** of the following are true:
 
 1. It represents an **intent** (user action, OS event, plugin wanting
    something to happen). It's not a completion notification.
@@ -53,7 +53,7 @@ Emit an `AppMsg` if **all** of the following are true:
 
 Current examples:
 
-| AppMsg              | Source                          | Why it is an AppMsg                    |
+| UserIntent              | Source                          | Why it is a UserIntent                    |
 | ------------------- | ------------------------------- | -------------------------------------- |
 | `Map(Action::Pan…)` | keymap, mouse drag              | User intent → map state change         |
 | `Map(Action::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
@@ -65,12 +65,12 @@ Current examples:
 | `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
 
 Surface activations (palette open, plugin activate) deliberately do
-*not* go through `AppMsg` — they're expressed as a `Component` push
+*not* go through `UserIntent` — they're expressed as a `Component` push
 onto the compositor stack, queued through `Window::open` /
 `Window::toggle` from the `BaseLayer`'s activation table and applied
-atomically after the hook returns. Routing focus through `AppMsg`
+atomically after the hook returns. Routing focus through `UserIntent`
 would force the dispatch table to know which surfaces exist; keeping
-it on the compositor side means new plugins add zero `AppMsg`
+it on the compositor side means new plugins add zero `UserIntent`
 variants.
 
 ### When to use a direct method / setter instead
@@ -91,19 +91,19 @@ Current examples:
 | -------------------------------------- | ------------------------------------------- |
 | `render_handle.try_recv_frame()` loop  | Every tick, pulls completed MapFrames       |
 | `Component::poll(&mut win)`            | Every tick, every component on the stack    |
-| `Task::poll() -> Vec<AppMsg>`          | Every tick, headless plugins (here, …)      |
+| `Task::poll() -> Vec<UserIntent>`          | Every tick, headless plugins (here, …)      |
 | `render_handle.request_draw(…)`        | Sending to another thread (not app state)   |
 
 ### The infinite-loop trap
 
-Naively wrapping "frame arrived" as `AppMsg::FrameArrived(frame)` is
+Naively wrapping "frame arrived" as `UserIntent::FrameArrived(frame)` is
 tempting — everything goes through the same pipeline, right? It breaks:
 
 ```
-frame arrives → AppMsg::FrameArrived
+frame arrives → UserIntent::FrameArrived
              → dispatch → map_frame = Some(f)
              → request_map_redraw → render thread renders a frame
-             → frame arrives → AppMsg::FrameArrived
+             → frame arrives → UserIntent::FrameArrived
              → dispatch → map_frame = Some(f)
              → request_map_redraw → …
 ```
@@ -119,9 +119,9 @@ When unsure, ask:
 
 > "If this happens, should **other state also change** in response?"
 
-- **YES** → probably an `AppMsg`. The pipeline ensures the related
+- **YES** → probably a `UserIntent`. The pipeline ensures the related
   changes fire consistently.
-- **NO** → direct method. An `AppMsg` just adds ceremony without
+- **NO** → direct method. An `UserIntent` just adds ceremony without
   earning anything.
 
 ## Controller split: by feature, not by domain
@@ -134,7 +134,7 @@ blocks (file names illustrative):
 ```
 app/
   mod.rs          # App struct + top-level run/dispatch
-  msg.rs          # AppMsg enum definition
+  msg.rs          # UserIntent enum definition
   map_msg.rs      # impl App for Map / Jump
   theme.rs        # impl App for apply_theme
   resize.rs       # impl App for handle_resize

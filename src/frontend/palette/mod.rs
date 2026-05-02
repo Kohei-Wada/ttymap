@@ -238,7 +238,7 @@ pub fn install(keymap: &KeyMap, r: &mut Registrar) {
 mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
-    use crate::frontend::AppMsg;
+    use crate::frontend::UserIntent;
     use crate::map::Action;
     use crate::theme::ThemeId;
 
@@ -299,7 +299,7 @@ mod tests {
             &self.items
         }
         fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
-            PaletteAction::Run(vec![AppMsg::Map(Action::None)])
+            PaletteAction::Run(vec![UserIntent::Map(Action::None)])
         }
     }
 
@@ -319,14 +319,14 @@ mod tests {
     use crate::frontend::compositor::window::WindowOps;
 
     /// Dispatch a key into the palette and return the queued stack
-    /// ops + the `AppMsg`s the hook emitted onto a disposable bus.
+    /// ops + the `UserIntent`s the hook emitted onto a disposable bus.
     /// Tests that only care about ops can ignore the second tuple
     /// element via `let (ops, _) = ...;`.
     fn dispatch(
         p: &mut PaletteComponent,
         code: KeyCode,
         mods: KeyModifiers,
-    ) -> (WindowOps, Vec<AppMsg>) {
+    ) -> (WindowOps, Vec<UserIntent>) {
         let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
         let mut ops = WindowOps::default();
         {
@@ -343,7 +343,7 @@ mod tests {
         (ops, msgs)
     }
 
-    fn expect_consumed((ops, msgs): (WindowOps, Vec<AppMsg>)) {
+    fn expect_consumed((ops, msgs): (WindowOps, Vec<UserIntent>)) {
         assert!(!ops.close);
         assert!(ops.opens.is_empty());
         assert!(msgs.is_empty());
@@ -425,7 +425,7 @@ mod tests {
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
         let (ops, msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
         assert!(ops.close);
-        assert_eq!(msgs, vec![AppMsg::Map(Action::None)]);
+        assert_eq!(msgs, vec![UserIntent::Map(Action::None)]);
         assert!(ops.opens.is_empty());
     }
 

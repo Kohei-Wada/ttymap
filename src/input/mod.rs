@@ -8,10 +8,10 @@
 //! - [`keymap`] holds the static [`KeyMap`] table + the
 //!   [`KeybindingOverrides`] shape Lua's `keymap.set` populates.
 //!   The frontend resolves a raw [`crossterm::event::KeyEvent`]
-//!   against this table to produce an [`AppMsg`](crate::frontend::AppMsg).
+//!   against this table to produce an [`UserIntent`](crate::frontend::UserIntent).
 //! - [`mouse`] holds the [`MouseAdapter`] that translates raw
 //!   `crossterm::event::MouseEvent`s — drag, scroll, click — into
-//!   `AppMsg`s using the current viewport for screen → world
+//!   `UserIntent`s using the current viewport for screen → world
 //!   projection.
 //!
 //! The subsystem doesn't own state across frames; it's a pure
@@ -28,7 +28,7 @@
 //!                            ▼                           ▼
 //!                       input::KeyMap                input::MouseAdapter
 //!                            │                           │
-//!                            └────────► AppMsg ◄─────────┘
+//!                            └────────► UserIntent ◄─────────┘
 //! ```
 
 pub mod keymap;

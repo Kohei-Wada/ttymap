@@ -3,12 +3,12 @@
 //! [`LuaIntent`] is what fires when a Lua plugin calls a host method
 //! that wants to mutate app state — `ttymap.map:jump`, `:zoom`,
 //! `:fly_to`, `ttymap.api.frame.export`. The Lua subsystem doesn't
-//! know about [`crate::frontend::AppMsg`] / [`crate::map::Action`];
+//! know about [`crate::frontend::UserIntent`] / [`crate::map::Action`];
 //! it only emits its own intent variants. The frontend layer
 //! translates them on the way through `handle_event`, so the Lua
 //! module stays bounded to its own vocabulary.
 //!
-//! Why a separate enum (rather than reusing `AppMsg` directly):
+//! Why a separate enum (rather than reusing `UserIntent` directly):
 //! the lua module is otherwise a peer subsystem to render / input /
 //! frame timer — it should mediate events on the bus, not import
 //! the app's imperative vocabulary. Modelling Lua-originated intents
@@ -18,7 +18,7 @@ use crate::geo::LonLat;
 
 /// One Lua-originated intent, fired through [`super::sender::LuaSender`]
 /// from `ttymap.*` host bindings. The frontend translates each
-/// variant to the matching [`crate::frontend::AppMsg`] inside its
+/// variant to the matching [`crate::frontend::UserIntent`] inside its
 /// `handle_event` arm — the lua module never spells those types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LuaIntent {

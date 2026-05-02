@@ -49,8 +49,8 @@ impl LuaPaletteProvider {
     /// installed on `lua` by the prior [`crate::lua::ttymap::install`]
     /// call that produced the setup state. `ttymap.map:jump` inside
     /// this provider's `execute` callback hits the setup state's
-    /// shared `app_msg_tx` — drained centrally by [`crate::frontend::App`]
-    /// per frame and dispatched as `AppMsg::Map(Action::Jump)`.
+    /// shared `intent_tx` — drained centrally by [`crate::frontend::App`]
+    /// per frame and dispatched as `UserIntent::Map(Action::Jump)`.
     /// `execute` returns purely structural [`PaletteAction`] variants
     /// (`Close`, future `Push` / `SwitchProvider`); map intents leave
     /// through the host channel, not the action return value.
@@ -190,8 +190,8 @@ impl LuaPaletteProvider {
     ///
     /// Map intents (`ttymap.map:jump` inside `execute`) take a
     /// different path: they push onto the setup state's shared
-    /// `app_msg_tx`, which the App drains centrally and dispatches.
-    /// `Run([AppMsg::*])` therefore has no return-value form — Lua
+    /// `intent_tx`, which the App drains centrally and dispatches.
+    /// `Run([UserIntent::*])` therefore has no return-value form — Lua
     /// emits map intents through the host channel, not the action.
     /// `Push` similarly is reachable today via `ttymap.api.window.open`
     /// inside the callback (1 frame of layout latency vs. an in-band

@@ -67,7 +67,7 @@ src/
 ├── lib.rs               crate root
 ├── logging.rs           XDG state log
 ├── config.rs            Config struct + Default impls (loaded from init.lua)
-├── keymap.rs            KeyBinding → AppMsg table + user overrides
+├── keymap.rs            KeyBinding → UserIntent table + user overrides
 ├── geo.rs               Web Mercator, projection, distance
 │
 ├── theme/                colour palette + ratatui adapter
@@ -77,8 +77,8 @@ src/
 │
 ├── app/                 App struct + event loop + message dispatch
 │   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
-│   ├── msg.rs           AppMsg enum (Map / Jump / SetTheme / CycleFocus / …)
-│   └── mouse.rs         MouseAdapter: MouseEvent → Vec<AppMsg>
+│   ├── msg.rs           UserIntent enum (Map / Jump / SetTheme / CycleFocus / …)
+│   └── mouse.rs         MouseAdapter: MouseEvent → Vec<UserIntent>
 │
 ├── commands/            one file per CLI subcommand (main.rs stays thin)
 │   ├── mod.rs           Command enum + run() dispatch
@@ -141,9 +141,9 @@ runtime/
 ### Layering
 
 - **`map/`** — domain. Knows nothing about UI, plugins, or focus. `Action` carries every map-level mutation, including mouse-continuous variants (`PanCells`, `ZoomAt`).
-- **`app/`** — the **controller**. `AppMsg` (in `app/msg.rs`) is the closed enum every input source (keymap, palette, compositor components, mouse adapter, async tasks) emits; `App::dispatch` in `app/mod.rs` is the sole place that executes them. Command pattern with `App` as the Receiver — see [`docs/design.md`](docs/design.md) for the AppMsg-vs-direct-call judgment rules.
+- **`app/`** — the **controller**. `UserIntent` (in `frontend/intent.rs`) is the closed enum every input source (keymap, palette, compositor components, mouse adapter, async tasks) emits; `App::dispatch` in `app/mod.rs` is the sole place that executes them. Command pattern with `App` as the Receiver — see [`docs/design.md`](docs/design.md) for the UserIntent-vs-direct-call judgment rules.
 - **`compositor/`** — focus and modal state. A stack of `Component`s; the top is focused. No `is_visible` / `activate` / `deactivate` contract — presence on the stack *is* the lifecycle. `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted before any component sees them).
-- **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<AppMsg>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
+- **`app/mouse.rs`** — pure adapter. `MouseEvent → Vec<UserIntent>` (`CursorMoved` on every event; drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation. Lives under `app/` because it's part of the dispatch pipeline, not a UI concern.
 - **`ui.rs`** — non-modal shell. `draw()` paints the latest `MapFrame`, lets every Component on the stack stamp its `paint_on_map` markers, then forwards modal rendering to the Compositor. Always-on overlays (info, attribution, scale bar) are themselves Components registered via `Registrar::add_overlay` — they paint after the regular stack but never receive key events.
 - **`palette/`** — `:`-triggered universal picker. Itself a `Component`; its provider table is harvested from the `Registrar` at boot so plugins' palette entries appear automatically. Palette installs last so it sees everyone else's entries.
 - **`lua/`** — every in-tree plugin. `BUILTIN_SCRIPTS` lists `(stem, include_str!(...))` pairs; one dispatcher (`register_one`) reads each script's module metadata (`kind` / `activation` / `key` / `label` / `enabled`) and wires it. User plugins under `~/.config/ttymap/plugins/` flow through the same dispatcher. Runtime data (attribution, geoip endpoint, live keymap, palette hints) is exposed via `host:*` accessors backed by `Arc<LuaHostShared>`. The compositor never names a concrete plugin type; Rust never knows a specific plugin's name. Drawing primitives (`MapApi`) and layout vocabulary (`PanelAnchor`) live under `compositor/` — the Lua bridge thin-wraps them on each `paint_on_map` call.
@@ -154,36 +154,36 @@ runtime/
 ```
 raw event
   ↓ keyboard / mouse / async poll / tile arrival
-  ↓ produces 0..N AppMsg (pure translation)
+  ↓ produces 0..N UserIntent (pure translation)
   ↓
 App::dispatch(msg)
   ↓
-    AppMsg::Map(action)      → MapState::process_action(&action)
-    AppMsg::Jump(loc)        → MapState::jump_to(loc)
-    AppMsg::SetTheme(id)     → App::apply_theme (rebuilds styler + UI theme)
-    AppMsg::CursorMoved(c,r) → overlay.set_cursor
-    AppMsg::CycleFocus(fwd)  → Compositor::cycle
-    AppMsg::Resize(cols,rows)→ App::handle_resize
+    UserIntent::Map(action)      → MapState::process_action(&action)
+    UserIntent::Jump(loc)        → MapState::jump_to(loc)
+    UserIntent::SetTheme(id)     → App::apply_theme (rebuilds styler + UI theme)
+    UserIntent::CursorMoved(c,r) → overlay.set_cursor
+    UserIntent::CycleFocus(fwd)  → Compositor::cycle
+    UserIntent::Resize(cols,rows)→ App::handle_resize
 ```
 
-Keyboard and mouse take different paths to `AppMsg` — keys go through the Compositor; mouse events go through a pure adapter:
+Keyboard and mouse take different paths to `UserIntent` — keys go through the Compositor; mouse events go through a pure adapter:
 
 ```
 key event
   ↓ Compositor::handle_event(event, ctx):
-    [reserved]  Tab / Shift-Tab   → AppMsg::CycleFocus(…)
+    [reserved]  Tab / Shift-Tab   → UserIntent::CycleFocus(…)
     [focused]   focused component's handle_event(event, &mut win)
                   ↓ win.emit / win.open / win.close / win.ignore
     [fallback]  only if the focused component called win.ignore()
                 and focus isn't already on BaseLayer
                 → re-deliver to BaseLayer (keymap + activation table)
-  ↓ Vec<AppMsg>
+  ↓ Vec<UserIntent>
 
 mouse event
-  ↓ MouseAdapter::translate(event) → Vec<AppMsg>:
-    every event   → AppMsg::CursorMoved(col, row)
-    drag (left)   → AppMsg::Map(Action::PanCells(dx, dy))
-    scroll        → AppMsg::Map(Action::ZoomAt { anchor_*, zoom_in })
+  ↓ MouseAdapter::translate(event) → Vec<UserIntent>:
+    every event   → UserIntent::CursorMoved(col, row)
+    drag (left)   → UserIntent::Map(Action::PanCells(dx, dy))
+    scroll        → UserIntent::Map(Action::ZoomAt { anchor_*, zoom_in })
 ```
 
 ### Render flow

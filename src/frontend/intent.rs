@@ -1,6 +1,6 @@
-//! App-level message vocabulary consumed by [`Frontend::dispatch`](super::Frontend::dispatch).
+//! User-intent vocabulary consumed by [`Frontend::dispatch`](super::Frontend::dispatch).
 //!
-//! `AppMsg` is the **single enum** that anything inside the app can
+//! `UserIntent` is the **single enum** that anything inside the app can
 //! emit to request a state change — palette providers, plugins' key
 //! handlers, plugins' async pending output, the mouse adapter, and
 //! (one day) external control surfaces like an HTTP/JSON-RPC front.
@@ -10,11 +10,11 @@
 //! as a closed algebraic type: each variant is an imperative intent
 //! (`Map`, `CycleFocus`, `SetTheme`) that the Receiver ([`super::Frontend`])
 //! executes in [`Frontend::dispatch`](super::Frontend::dispatch). Invokers
-//! (keymap, palette, plugins) **return `Vec<AppMsg>`** and never
+//! (keymap, palette, plugins) **return `Vec<UserIntent>`** and never
 //! execute anything themselves — the dispatcher is the sole
 //! side-effect boundary. Note the naming split: "command" is reserved
 //! for user-facing concepts (the CLI subcommand in `crate::commands`
-//! and the `:`-palette entries), while internal intent is `AppMsg`.
+//! and the `:`-palette entries), while internal intent is `UserIntent`.
 //!
 //! Surface activation (palette open, plugin activate) intentionally
 //! does *not* live here — those are focus transitions, handled
@@ -23,7 +23,7 @@
 //! [`Window::open`](crate::frontend::compositor::window::Window::open) /
 //! [`Window::close`](crate::frontend::compositor::window::Window::close) calls
 //! from a [`Component`](crate::frontend::compositor::Component). Keeping them
-//! off `AppMsg` means the focus state machine isn't coupled to the
+//! off `UserIntent` means the focus state machine isn't coupled to the
 //! dispatch table.
 
 use crate::map::Action;
@@ -33,7 +33,7 @@ use crate::theme::ThemeId;
 /// providers, plugin handlers, and async plugin polling; interpreted
 /// by [`Frontend::dispatch`](super::Frontend::dispatch) inside the event loop.
 ///
-/// Map-level intents are nested under [`AppMsg::Map`] because
+/// Map-level intents are nested under [`UserIntent::Map`] because
 /// [`MapState`](crate::map::MapState) owns its own command vocabulary
 /// ([`Action`]) and consumes it through a single entry
 /// ([`MapState::process_action`](crate::map::MapState::process_action)).
@@ -41,7 +41,7 @@ use crate::theme::ThemeId;
 /// an `Frontend::dispatch` arm and there is no intermediate sub-system to
 /// delegate to.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AppMsg {
+pub enum UserIntent {
     /// Dispatch a map-state action (pan, zoom, reset, quit, jump, ...).
     Map(Action),
     /// Switch the running theme. Cross-cutting: rebuilds the styler

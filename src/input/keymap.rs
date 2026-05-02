@@ -1,14 +1,14 @@
-//! Key binding table — the `key → AppMsg` data used by the keyboard
+//! Key binding table — the `key → UserIntent` data used by the keyboard
 //! handler, plus the TOML-deserialisable `KeybindingOverrides` shape
 //! used by config to customise it.
 //!
-//! The keymap speaks the same `AppMsg` vocabulary as the palette
-//! and plugins — every key binding resolves to an `AppMsg` that
+//! The keymap speaks the same `UserIntent` vocabulary as the palette
+//! and plugins — every key binding resolves to a `UserIntent` that
 //! rides through [`Frontend::dispatch`](crate::frontend::Frontend). Today all
-//! defaults are `AppMsg::Map` wrappers, but nothing prevents binding
-//! a key to `AppMsg::SetTheme(...)` or `AppMsg::CycleFocus(...)` in
+//! defaults are `UserIntent::Map` wrappers, but nothing prevents binding
+//! a key to `UserIntent::SetTheme(...)` or `UserIntent::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
-//! are *not* `AppMsg`s — those go through the compositor's
+//! are *not* `UserIntent`s — those go through the compositor's
 //! [`Window::open`](crate::frontend::compositor::window::Window) / `toggle`
 //! queue, applied atomically after the `BaseLayer` hook returns.)
 
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::frontend::AppMsg;
+use crate::frontend::UserIntent;
 use crate::map::Action;
 
 /// A key binding: a key code + optional modifiers.
@@ -55,14 +55,14 @@ impl KeyBinding {
 }
 
 pub struct KeyMap {
-    pub bindings: Vec<(KeyBinding, AppMsg)>,
+    pub bindings: Vec<(KeyBinding, UserIntent)>,
 }
 
 impl KeyMap {
     /// Look up the command for a key event. Returns `None` if no
     /// binding matches. Stateless — multi-key sequences (e.g. `gg`)
     /// are owned by the keyboard handler, not the keymap.
-    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&AppMsg> {
+    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&UserIntent> {
         let clean_mods = modifiers & !KeyModifiers::SHIFT;
         self.bindings
             .iter()
@@ -70,19 +70,19 @@ impl KeyMap {
             .map(|(_, c)| c)
     }
 
-    /// Resolve a key event to a `AppMsg`. Stateless wrapper around
+    /// Resolve a key event to a `UserIntent`. Stateless wrapper around
     /// [`lookup`] that clones for ownership. Plugin activation (e.g.
     /// `/` opens search) is **not** handled here — widgets own their
     /// activation keys and the keyboard handler checks them before
     /// falling through to this resolver.
-    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<AppMsg> {
+    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserIntent> {
         self.lookup(code, modifiers).cloned()
     }
 
     /// Every key string currently bound to `cmd`, in registration
     /// order. Used by the command palette and help overlay to show
     /// "this command is invocable via these keys" hints.
-    pub fn keys_for(&self, cmd: &AppMsg) -> Vec<String> {
+    pub fn keys_for(&self, cmd: &UserIntent) -> Vec<String> {
         self.bindings
             .iter()
             .filter(|(_, c)| c == cmd)
@@ -93,7 +93,7 @@ impl KeyMap {
     /// Replace every existing binding for `cmd` with the supplied list
     /// of key strings (e.g. `["h", "Left"]`). Invalid key strings are
     /// logged and skipped.
-    pub fn set_bindings(&mut self, cmd: AppMsg, keys: &[String]) {
+    pub fn set_bindings(&mut self, cmd: UserIntent, keys: &[String]) {
         self.bindings.retain(|(_, c)| c != &cmd);
         for key_str in keys {
             if let Some(binding) = parse_key_binding(key_str) {
@@ -112,7 +112,7 @@ impl KeyMap {
         let mut km = Self::default();
         for (name, keys) in overrides {
             match Action::from_config_name(name) {
-                Some(action) => km.set_bindings(AppMsg::Map(action), keys),
+                Some(action) => km.set_bindings(UserIntent::Map(action), keys),
                 None => log::warn!("unknown [keymap] entry: {:?}", name),
             }
         }
@@ -123,8 +123,8 @@ impl KeyMap {
 impl Default for KeyMap {
     fn default() -> Self {
         use Action::*;
-        let b = |key: &str, action: Action| -> (KeyBinding, AppMsg) {
-            (parse_key_binding(key).unwrap(), AppMsg::Map(action))
+        let b = |key: &str, action: Action| -> (KeyBinding, UserIntent) {
+            (parse_key_binding(key).unwrap(), UserIntent::Map(action))
         };
         Self {
             bindings: vec![
@@ -154,7 +154,7 @@ impl Default for KeyMap {
 /// Raw keybinding overrides from the `[keymap]` section of
 /// `config.toml`. Keys are `Action::config_name` strings (e.g.
 /// `"pan_left"`); values replace the default bindings for that
-/// action (wrapped as `AppMsg::Map` internally). Applied via
+/// action (wrapped as `UserIntent::Map` internally). Applied via
 /// `KeyMap::with_overrides`. Adding a new bindable `Action` only
 /// requires extending `Action::all_listed` + `Action::config_name`
 /// — the data shape here is unchanged.
@@ -205,8 +205,8 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
 mod tests {
     use super::*;
 
-    fn map(action: Action) -> AppMsg {
-        AppMsg::Map(action)
+    fn map(action: Action) -> UserIntent {
+        UserIntent::Map(action)
     }
 
     #[test]

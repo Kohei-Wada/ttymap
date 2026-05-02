@@ -220,10 +220,10 @@ impl LuaHostShared {
 /// `install()` returns this once per state; the App routes the
 /// receivers to the right consumers.
 ///
-/// - **AppMsg sender** (not part of these handles) — every
+/// - **UserIntent sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
 ///   `:fly_to` / `ttymap.api.frame.export`) is pre-built into an
-///   [`AppMsg`] on the Lua side and pushed through a `Sender<AppMsg>`
+///   [`UserIntent`] on the Lua side and pushed through a `Sender<UserIntent>`
 ///   that every plugin clones from the **single** App-level channel.
 ///   The receiver lives directly on `App`; a single drain per frame
 ///   covers every plugin's intents.
@@ -346,7 +346,7 @@ pub fn install(
 ) -> mlua::Result<LuaHostHandles> {
     // `sender` is a [`LuaSender`] handed in from the composition
     // root; it wraps the App's `Sender<AppEvent>` so the lua module
-    // never imports `AppEvent` / `AppMsg` directly. Fire-and-forget
+    // never imports `AppEvent` / `UserIntent` directly. Fire-and-forget
     // Lua intents (`map:jump`, `:zoom`, `:fly_to`, `frame.export`)
     // emit [`crate::lua::intent::LuaIntent`] values; the frontend
     // translates them on the way through `handle_event`.
@@ -592,8 +592,8 @@ pub fn install(
     // Per-frame primitives:
     //
     // - `export()`     fire-and-forget request to snapshot the current
-    //                  frame to disk; pushes `AppMsg::ExportFrame` onto
-    //                  the shared `app_msg_tx`, drained per frame.
+    //                  frame to disk; pushes `UserIntent::ExportFrame` onto
+    //                  the shared `intent_tx`, drained per frame.
     // - `on_tick(fn)`  subscribe a callback to per-frame dispatch. The
     //                  host walks the captured registry keys after the
     //                  script runs and pushes one [`TickEntry`] per
@@ -750,7 +750,7 @@ struct HostMap {
     /// Boundary type around the App-level event channel. Fire-and-
     /// forget Lua intents (`jump` / `zoom` / `fly_to`) emit the
     /// matching [`LuaIntent`] through it; the lua module doesn't
-    /// import `AppMsg` / `AppEvent` directly.
+    /// import `UserIntent` / `AppEvent` directly.
     sender: LuaSender,
     center: Arc<Mutex<LonLat>>,
     zoom: Arc<Mutex<f64>>,
@@ -760,7 +760,7 @@ impl UserData for HostMap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.map:jump(lon, lat)` — request the map recentre on
         // the given coordinate. Emits a `LuaIntent::MapJump`; the
-        // frontend translates to `AppMsg::Map(Action::Jump(...))` on
+        // frontend translates to `UserIntent::Map(Action::Jump(...))` on
         // the way through `handle_event`.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             this.sender.emit(LuaIntent::MapJump(LonLat { lon, lat }));
@@ -1126,7 +1126,7 @@ mod tests {
     #[test]
     fn host_map_jump_pushes_appmsg_jump() {
         // `ttymap.map:jump(lon, lat)` lands on the shared `event_rx`
-        // as a fully-formed `AppMsg::Map(Action::Jump(LonLat))`; the
+        // as a fully-formed `UserIntent::Map(Action::Jump(LonLat))`; the
         // App's central drain forwards it to dispatch unchanged.
         let (lua, _handles, event_rx) = install_for_test();
 
@@ -1149,7 +1149,7 @@ mod tests {
     fn host_map_zoom_setter_pushes_appmsg_set_zoom() {
         // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side —
         // the level lands on `event_rx` as
-        // `AppMsg::Map(Action::SetZoom(level))`.
+        // `UserIntent::Map(Action::SetZoom(level))`.
         let (lua, _handles, event_rx) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let ev = event_rx.try_recv().expect("zoom must be queued");
@@ -1179,7 +1179,7 @@ mod tests {
     #[test]
     fn host_map_fly_to_pushes_appmsg_fly_to() {
         // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
-        // `AppMsg::Map(Action::FlyTo)` so the host can emit one
+        // `UserIntent::Map(Action::FlyTo)` so the host can emit one
         // dispatch per call (single redraw, no intermediate frame).
         let (lua, _handles, event_rx) = install_for_test();
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")

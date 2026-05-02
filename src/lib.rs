@@ -8,7 +8,7 @@
 // of items used by main.rs, so everything else is `pub(crate)`.
 
 /// Application event loop and central message dispatcher. Also home
-/// of the [`AppMsg`](app::AppMsg) vocabulary — the single enum every
+/// of the [`UserIntent`](app::UserIntent) vocabulary — the single enum every
 /// emission site (palette, plugins, mouse, future RPC) speaks and that
 /// [`Frontend::dispatch`](app::Frontend) interprets.
 pub mod frontend;
@@ -38,7 +38,7 @@ pub mod theme;
 
 /// Input subsystem — raw-terminal-event ingest and translation
 /// (input thread, keymap table, mouse adapter). Sits as a peer of
-/// `map/` and `lua/`; the frontend pulls translated [`AppMsg`]s
+/// `map/` and `lua/`; the frontend pulls translated [`UserIntent`]s
 /// out of it for each `AppEvent::Input`. `pub` so `main` can name
 /// the [`input::thread::InputHandle`] it spawns at the composition
 /// root.

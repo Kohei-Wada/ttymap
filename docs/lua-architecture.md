@@ -159,10 +159,10 @@ a handle) and `:close()` (idempotent flip).
 Lua side is fire-and-forget; App drains per tick. Senders held by the
 setup state:
 
-- `jump_tx` — `ttymap.map:jump` → `AppMsg::Map(Action::Jump)`
+- `jump_tx` — `ttymap.map:jump` → `UserIntent::Map(Action::Jump)`
 - `zoom_tx` — `ttymap.map:zoom(level)` setter → `Action::SetZoom`
 - `fly_to_tx` — `ttymap.map:fly_to` → `Action::FlyTo`
-- `export_tx` — `ttymap.api.frame.export` → `AppMsg::ExportFrame`
+- `export_tx` — `ttymap.api.frame.export` → `UserIntent::ExportFrame`
 - `push_tx` — `Box<dyn Component>` queued by `api.window.open` /
   `api.palette.open` → pushed onto the compositor stack
 
