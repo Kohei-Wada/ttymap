@@ -70,27 +70,46 @@ local function open()
     if w then return end
     w = ttymap.api.window.open({
         layout = { kind = "sidebar" },
+        footer_hints = {
+            { key = "C-n/C-p", label = "select" },
+            { key = "Enter",   label = "jump" },
+            { key = "Esc",     label = "close" },
+        },
         render = build_lines,
         handle_event = function(key)
-            if key.code == "Esc" or (key.code == "Char" and key.char == "q") then
-                close()
-                return nil
-            end
+            local code = key.code
+            local ch = key.char
+            local ctrl = key.ctrl
+
+            local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
+            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
+
             local n = #state.aircraft
-            if key.code == "Up" or (key.code == "Char" and key.char == "k") then
+            if up then
                 if n > 0 then
                     state.selected = state.selected > 1 and state.selected - 1 or n
                 end
-            elseif key.code == "Down" or (key.code == "Char" and key.char == "j") then
+                return nil
+            end
+            if down then
                 if n > 0 then
                     state.selected = state.selected < n and state.selected + 1 or 1
                 end
-            elseif key.code == "Enter" then
+                return nil
+            end
+            if code == "Enter" then
                 local a = state.aircraft[state.selected]
                 if a then ttymap.map:jump(a.lon, a.lat) end
+                return nil
             end
-            -- Modal feel: consume otherwise.
-            return nil
+            if code == "Esc" then
+                close()
+                return nil
+            end
+            -- Anything else (j/k, q, hjkl, +/-, …) passes through to
+            -- the base layer so map pan / zoom / quit keep working
+            -- while the section is focused.
+            return { ignore = true }
         end,
     })
 end
