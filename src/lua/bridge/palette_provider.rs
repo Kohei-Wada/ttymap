@@ -177,19 +177,46 @@ impl PaletteProvider for LuaPaletteProvider {
 }
 
 impl LuaPaletteProvider {
-    /// Translate a Lua-returned execute() value into a PaletteAction.
-    /// Two accepted forms today:
-    /// - `nil` → Close
-    /// - `{ close = true }` → Close
+    /// Translate a Lua-returned execute() / cancel() value into a
+    /// [`PaletteAction`]. Recognised table shapes:
+    ///
+    /// - `nil` / `{ close = true }` / unrecognised → `Close`
+    /// - `{ switch = spec_table }` → `SwitchProvider` with a new
+    ///   [`LuaPaletteProvider`] built from `spec_table` (same shape as
+    ///   the spec passed to `ttymap.api.palette.open`). Lets a Lua
+    ///   plugin do an in-place sub-mode transition (palette stays open,
+    ///   prompt + filter + items swap) without close-then-open
+    ///   stacking. Invalid spec → warn + `Close`.
     ///
     /// Map intents (`ttymap.map:jump` inside `execute`) take a
     /// different path: they push onto the setup state's shared
     /// `app_msg_tx`, which the App drains centrally and dispatches.
-    /// Future structural variants (Push / Toggle / SwitchProvider) can
-    /// branch on the table shape here without affecting that intent
-    /// path.
+    /// `Run([AppMsg::*])` therefore has no return-value form — Lua
+    /// emits map intents through the host channel, not the action.
+    /// `Push` similarly is reachable today via `ttymap.api.window.open`
+    /// inside the callback (1 frame of layout latency vs. an in-band
+    /// return).
     fn action_from_lua(&self, value: mlua::Value) -> PaletteAction {
-        let _ = value;
+        let mlua::Value::Table(t) = &value else {
+            return PaletteAction::Close;
+        };
+        if let Ok(mlua::Value::Table(spec)) = t.get::<mlua::Value>("switch") {
+            return match LuaPaletteProvider::from_spec(
+                self.handle.lua().clone(),
+                spec,
+                self.handle.log_tag(),
+            ) {
+                Ok(provider) => PaletteAction::SwitchProvider(Box::new(provider)),
+                Err(e) => {
+                    log::warn!(
+                        "lua[{}]: palette execute returned invalid switch spec, closing: {}",
+                        self.handle.log_tag(),
+                        e
+                    );
+                    PaletteAction::Close
+                }
+            };
+        }
         PaletteAction::Close
     }
 }
@@ -337,5 +364,65 @@ mod tests {
     fn is_loading_reads_spec_function() {
         let p = build_provider(r#"return { is_loading = function() return true end }"#);
         assert!(p.is_loading());
+    }
+
+    #[test]
+    fn execute_switch_table_returns_switch_provider_with_new_prompt() {
+        // `{ switch = spec }` lets a Lua plugin swap its provider in
+        // place — the palette stays open and adopts the new prompt /
+        // filter / items pipeline. Verifies the spec is parsed enough
+        // to round-trip a basic field (`prompt`).
+        let mut p = build_provider(
+            r#"
+            return {
+                execute = function(_)
+                    return { switch = { prompt = "theme>" } }
+                end,
+            }
+            "#,
+        );
+        match p.execute(0, &ctx()) {
+            PaletteAction::SwitchProvider(next) => assert_eq!(next.prompt(), "theme>"),
+            PaletteAction::Close => panic!("expected SwitchProvider, got Close"),
+            PaletteAction::Run(_) => panic!("expected SwitchProvider, got Run"),
+            PaletteAction::Push(_) => panic!("expected SwitchProvider, got Push"),
+        }
+    }
+
+    #[test]
+    fn execute_switch_with_non_table_spec_falls_back_to_close() {
+        // `switch` value must itself be a table (the new provider's
+        // spec). Anything else is malformed — falls through to Close
+        // rather than crashing the host.
+        let mut p = build_provider(
+            r#"
+            return {
+                execute = function(_) return { switch = "not a table" } end,
+            }
+            "#,
+        );
+        assert!(matches!(p.execute(0, &ctx()), PaletteAction::Close));
+    }
+
+    #[test]
+    fn execute_switch_carries_submit_mode_through_to_new_provider() {
+        // The new provider goes through the same `from_spec` path, so
+        // its `submit_mode` is read from the switch spec. Confirms the
+        // switch path doesn't accidentally drop spec fields.
+        let mut p = build_provider(
+            r#"
+            return {
+                execute = function(_)
+                    return { switch = { submit_mode = "on_enter" } }
+                end,
+            }
+            "#,
+        );
+        match p.execute(0, &ctx()) {
+            PaletteAction::SwitchProvider(next) => {
+                assert!(matches!(next.submit_mode(), SubmitMode::OnEnter));
+            }
+            _ => panic!("expected SwitchProvider"),
+        }
     }
 }

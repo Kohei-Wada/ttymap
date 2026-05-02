@@ -451,7 +451,9 @@ pub fn install(
     //   focused [`LuaWindowComponent`] onto the compositor stack.
     // - `ttymap.api.palette.open(spec) -> PaletteHandle` — push a
     //   palette provider (a `PaletteComponent` wrapping a
-    //   [`LuaPaletteProvider`]) onto the stack.
+    //   [`LuaPaletteProvider`]) onto the stack. Returning
+    //   `{ switch = sub_spec }` from the provider's `execute` swaps
+    //   the provider in place (sub-mode transition, no stacking).
     // - `ttymap.api.frame.export()` — request the current frame be
     //   snapshotted to disk.
     let api = lua.create_table()?;

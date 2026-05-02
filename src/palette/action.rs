@@ -17,6 +17,22 @@ use super::provider::PaletteProvider;
 /// What a provider wants the host to do when the user activates an
 /// item. Translated by the palette Component into the equivalent
 /// `win.*` calls.
+///
+/// Lua-side reachability of each variant:
+///
+/// | Variant            | Rust provider | Lua provider                     |
+/// |--------------------|---------------|----------------------------------|
+/// | `Close`            | return        | `nil` / `{close=true}` (default) |
+/// | `Run(msgs)`        | return        | side channel (`ttymap.map:*`)    |
+/// | `Push(component)`  | return        | side channel (`api.window.open`) |
+/// | `SwitchProvider`   | return        | `{switch = spec}` from execute   |
+///
+/// `Run` and `Push` are reachable from Lua only via the host
+/// `app_msg_tx` / `push_tx` channels — Lua cannot construct an
+/// `AppMsg` enum or a `Box<dyn Component>` directly. `SwitchProvider`
+/// has no equivalent side channel (provider swap on a *running*
+/// palette must be atomic) so it's the one structural verb exposed in
+/// the Lua return shape.
 pub enum PaletteAction {
     /// Close the palette with no side effect.
     Close,
