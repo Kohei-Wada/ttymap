@@ -30,28 +30,26 @@ use crate::map::render::thread::{RenderClient, RenderHandle};
 use crate::map::styler::Styler;
 use crate::theme::ThemeId;
 
-/// Initialised map subsystem handed to `Frontend::new`.
+/// Map-subsystem handle owned by `Frontend`.
 ///
 /// `RenderHandle` is **not** in here — it is the owning thread guard
 /// and lives in `main`'s scope so its `Drop` (Shutdown + join) fires
 /// at the composition root, peer to `InputHandle` / `FrameTimer`. The
-/// fields below are everything Frontend needs to know about the map
-/// once construction is done: a cheap-clone task sender, the data
-/// the Lua subsystem reads at register time (attribution), the
-/// canvas dimensions used by `MapState` and the render pipeline, and
-/// the active theme id.
+/// fields below are everything Frontend works with at runtime:
+/// the dispatch state (`MapState`), the render-task sender, the
+/// active theme id, and the attribution string the Lua subsystem
+/// reads once at register time.
 pub struct MapHandle {
+    pub state: MapState,
     pub render_client: RenderClient,
     pub attribution: Option<String>,
-    pub width: usize,
-    pub height: usize,
     pub theme_id: ThemeId,
 }
 
 /// Build the map subsystem: tile cache + render pipeline + render
-/// thread. Returns `(RenderHandle, MapHandle)` — main holds the
-/// owning handle for `Drop`-driven shutdown, and hands the rest to
-/// `Frontend::new`.
+/// thread + initial `MapState`. Returns `(RenderHandle, MapHandle)` —
+/// main holds the owning thread guard for `Drop`-driven shutdown,
+/// and hands the handle to `Frontend::new`.
 pub fn build(config: &Config, event_tx: mpsc::Sender<AppEvent>) -> (RenderHandle, MapHandle) {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let (width, height) = render::canvas_size(cols, rows);
@@ -80,13 +78,24 @@ pub fn build(config: &Config, event_tx: mpsc::Sender<AppEvent>) -> (RenderHandle
     let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx);
     let render_client = render_handle.client();
 
+    let state = MapState::new(
+        MapStateOptions {
+            initial_lon: config.map.lon,
+            initial_lat: config.map.lat,
+            initial_zoom: config.map.zoom,
+            zoom_step: config.map.zoom_step,
+            max_zoom: config.map.max_zoom,
+        },
+        width,
+        height,
+    );
+
     (
         render_handle,
         MapHandle {
+            state,
             render_client,
             attribution,
-            width,
-            height,
             theme_id,
         },
     )

@@ -43,27 +43,26 @@ pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaEventBus;
 use crate::lua::ttymap::LuaHostHandles;
+use crate::map::Action;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
-use crate::map::render::thread::RenderClient;
 use crate::map::styler::Styler;
-use crate::map::{Action, MapState, MapStateOptions};
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
 pub struct Frontend {
-    map: MapState,
-    /// Cheap-clone command channel for the render thread. The owning
-    /// `RenderHandle` lives in `main`'s scope as a peer subsystem,
-    /// alongside `InputHandle` and `FrameTimer`.
-    render_client: RenderClient,
+    /// Map subsystem handle: dispatch state + render-task sender +
+    /// theme id + attribution. Built by [`crate::map::build`] in
+    /// `main` and handed in. The owning `RenderHandle` lives in
+    /// `main`'s scope as a peer subsystem alongside `InputHandle`
+    /// and `FrameTimer`.
+    map: MapHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
     map_frame: Option<MapFrame>,
     mouse: MouseAdapter,
     compositor: Compositor,
-    theme_id: ThemeId,
     ui_theme: UiTheme,
     /// Ephemeral polyline overlays pushed by Lua plugins during the
     /// current frame's `on_tick` pass. Drained into the next
@@ -123,16 +122,8 @@ impl Frontend {
         config: Config,
         keymap_overrides: KeybindingOverrides,
         event_tx: std::sync::mpsc::Sender<AppEvent>,
-        map_handle: MapHandle,
+        map: MapHandle,
     ) -> (Self, LuaEventBus) {
-        let MapHandle {
-            render_client,
-            attribution,
-            width,
-            height,
-            theme_id,
-        } = map_handle;
-
         let keymap = KeyMap::with_overrides(&keymap_overrides);
 
         // Boundary type around the App-level event channel — the
@@ -145,7 +136,7 @@ impl Frontend {
         let BuiltRegistrar {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, attribution, &keymap, lua_sender);
+        } = build_registrar(&config, map.attribution.clone(), &keymap, lua_sender);
         // Lift the Lua event bus off the registrar before the rest
         // is consumed (activations / palette_entries move into the
         // compositor below). Returned by value so the caller (main)
@@ -157,19 +148,7 @@ impl Frontend {
         // compositor and the app dispatch table.
         let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
 
-        let ui_theme = UiTheme::from_palette(theme_id.palette());
-
-        let map = MapState::new(
-            MapStateOptions {
-                initial_lon: config.map.lon,
-                initial_lat: config.map.lat,
-                initial_zoom: config.map.zoom,
-                zoom_step: config.map.zoom_step,
-                max_zoom: config.map.max_zoom,
-            },
-            width,
-            height,
-        );
+        let ui_theme = UiTheme::from_palette(map.theme_id.palette());
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -183,11 +162,9 @@ impl Frontend {
 
         let app = Frontend {
             map,
-            render_client,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
-            theme_id,
             ui_theme,
             lua_host_handles,
             cursor: None,
@@ -264,7 +241,7 @@ impl Frontend {
     /// Whether the map state machine still wants the loop to keep
     /// running. Checked at the top of each `run` iteration.
     fn is_running(&self) -> bool {
-        self.map.is_running()
+        self.map.state.is_running()
     }
 
     /// Drain every Lua plugin's setup-state receivers once.
@@ -288,8 +265,8 @@ impl Frontend {
     /// Intent flow (`map:jump`, `frame.export`, …) is **not** drained
     /// here — those reach the App through the unified `event_rx`.
     fn refresh_lua_host_state(&mut self) {
-        let center = self.map.center();
-        let zoom = self.map.zoom();
+        let center = self.map.state.center();
+        let zoom = self.map.state.zoom();
         for handles in &self.lua_host_handles {
             if let Ok(mut cell) = handles.center.lock() {
                 *cell = center;
@@ -417,7 +394,7 @@ impl Frontend {
 
     fn context(&self) -> Context {
         Context {
-            theme_id: self.theme_id,
+            theme_id: self.map.theme_id,
             cursor: self.cursor,
         }
     }
@@ -476,7 +453,7 @@ impl Frontend {
     fn dispatch(&mut self, msg: UserIntent) {
         match msg {
             UserIntent::Map(action) => {
-                if self.map.process_action(&action) {
+                if self.map.state.process_action(&action) {
                     self.request_map_redraw();
                 }
             }
@@ -522,27 +499,28 @@ impl Frontend {
     }
 
     fn switch_theme(&mut self, new_id: ThemeId) {
-        self.theme_id = new_id;
+        self.map.theme_id = new_id;
         let styler = Arc::new(Styler::new(new_id));
         self.ui_theme = UiTheme::from_palette(styler.palette());
-        self.render_client.set_styler(styler);
+        self.map.render_client.set_styler(styler);
         self.request_map_redraw();
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        self.map.resize(cols, rows);
-        self.render_client
-            .request_resize(self.map.width(), self.map.height());
+        self.map.state.resize(cols, rows);
+        self.map
+            .render_client
+            .request_resize(self.map.state.width(), self.map.state.height());
         self.request_map_redraw();
     }
 
     fn request_map_redraw(&mut self) {
-        if !self.map.is_running() {
+        if !self.map.state.is_running() {
             return;
         }
-        let viewport = self.map.viewport();
+        let viewport = self.map.state.viewport();
         let overlays = std::mem::take(&mut self.overlay_sink);
-        self.render_client.request_draw(viewport, overlays);
+        self.map.render_client.request_draw(viewport, overlays);
     }
 }
 
