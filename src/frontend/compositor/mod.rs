@@ -335,18 +335,13 @@ impl Compositor {
             c.render(&mut win);
         }
 
-        // Sidebar components: equal vertical split, with a sliding
-        // window when more cards are open than fit at the per-card
-        // minimum height (recomputed every frame from the current
-        // `side_area`, so resizing the terminal smoothly grows or
-        // shrinks the visible count). A sidebar-level scrollbar on
-        // the left edge surfaces the windowing when more cards are
-        // off-screen than fit.
-        //
-        // Below this minimum we'd only be drawing border frames with
-        // a row or two of content — bumping the cap up loses more
-        // than scrolling does.
-        const PER_CARD_MIN_HEIGHT: u16 = 12;
+        // Sidebar components: equal vertical split, hard-capped at
+        // 3 visible cards. Beyond that each section becomes too
+        // small to be useful even with within-card scrolling. A
+        // sidebar-level scrollbar on the left edge surfaces the
+        // windowing when more cards are open than fit; Tab cycles
+        // focus across the off-screen ones.
+        const MAX_VISIBLE_SIDEBAR_SECTIONS: usize = 3;
         if let Some(side_area) = sidebar_area {
             // Walk the stack once to collect sidebar refs alongside
             // the focused-in-sidebar index (counted within the
@@ -364,11 +359,7 @@ impl Compositor {
 
             let total = sidebar_components.len();
             if total > 0 {
-                // Adaptive visible count: divide the available height
-                // by `PER_CARD_MIN_HEIGHT`, clamped to [1, total].
-                // Bigger terminals → more cards visible at once.
-                let max_fit = (side_area.height / PER_CARD_MIN_HEIGHT).max(1) as usize;
-                let visible = total.min(max_fit);
+                let visible = total.min(MAX_VISIBLE_SIDEBAR_SECTIONS);
 
                 // Pick the first visible index. Centre on the focused
                 // section when possible; otherwise pin to the bottom
