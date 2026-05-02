@@ -320,9 +320,13 @@ fn register_one(
     // clones of it in every closure that fires later so module-level
     // vars (e.g. an `enabled` flag) survive across the program's
     // lifetime — that's the hook for plugin-side toggle state.
-    let shared_for_meta = shared.clone();
+    let shared_for_plugin = shared.clone();
+    // `name` is passed twice: as `chunk_name` (Lua stack-trace label)
+    // and as `host_tag` (HTTP UA suffix, log target, fallback window
+    // display name). Same value — the file stem is the plugin's
+    // canonical identifier on every surface.
     let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta, sender) {
+        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, sender) {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
