@@ -426,7 +426,15 @@ impl Compositor {
                         horizontal: 0,
                     });
                     if rail.height > 0 {
-                        let mut state = ScrollbarState::new(total)
+                        // See window::RenderWindow::scrollbar for
+                        // the full explanation: ratatui treats
+                        // `position` as [0, content-1] where max
+                        // means "last item at top of viewport", but
+                        // we use position for top-of-window with
+                        // max = total - visible. Lie about content
+                        // so ratatui's range matches ours.
+                        let scaled_total = total - visible + 1;
+                        let mut state = ScrollbarState::new(scaled_total)
                             .position(start)
                             .viewport_content_length(visible);
                         let bar = Scrollbar::default()

@@ -263,7 +263,21 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         if rail.height == 0 {
             return;
         }
-        let mut state = ScrollbarState::new(content_length as usize)
+        // ratatui's Scrollbar treats `position` as
+        // [0, content_length - 1] where the *max* means "the last
+        // item is at the *top* of the viewport". We use position
+        // for top-of-viewport, max = content - viewport (showing
+        // the last viewport-sized window). Without translation,
+        // even at our max position the thumb stops `viewport - 1`
+        // rows above the rail bottom — the user's complaint.
+        //
+        // Map by lying about the content length: pass
+        // `content_length' = content - viewport + 1`. Then
+        // ratatui's `max_position = content' - 1` = our max
+        // position, and the thumb travels to the rail bottom
+        // exactly when we're showing the last window.
+        let scaled_content = content_length - viewport_length + 1;
+        let mut state = ScrollbarState::new(scaled_content as usize)
             .position(position as usize)
             .viewport_content_length(viewport_length as usize);
         // Disable ▲ / ▼ caps. They eat 2 rows of rail and overlap
