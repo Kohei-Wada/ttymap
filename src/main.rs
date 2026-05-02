@@ -123,14 +123,20 @@ fn main() {
     }
 }
 
-/// Composition root: builds the event channel + Lua bus, constructs
-/// `Frontend`, spawns the off-thread input / frame-timer subsystems,
-/// then hands control to `Frontend::run`. Every thread handle joins
-/// in its `Drop` impl, so teardown is just RAII at end of scope —
-/// no manual `drop()` orchestration needed.
+/// Composition root: builds the event channel + map subsystem +
+/// Frontend (which builds the Lua subsystem), spawns the off-thread
+/// input / frame-timer peers, then hands control to `Frontend::run`.
+/// Every thread handle joins in its `Drop` impl, so teardown is just
+/// RAII at end of scope — no manual `drop()` orchestration needed.
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let (mut frontend, event_bus) = Frontend::new(config, keymap_overrides, event_tx.clone());
+
+    // Map subsystem: tile cache + render pipeline + render thread.
+    // `_render_handle` is a peer to `_input` / `_frame_timer` — held
+    // here for `Drop`-driven shutdown, not used otherwise.
+    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone());
+
+    let (mut frontend, event_bus) = Frontend::new(config, keymap_overrides, event_tx.clone(), map);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;

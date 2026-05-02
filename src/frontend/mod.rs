@@ -43,9 +43,9 @@ pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaEventBus;
 use crate::lua::ttymap::LuaHostHandles;
+use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
-use crate::map::render::pipeline::RenderPipeline;
-use crate::map::render::thread::{RenderClient, RenderHandle};
+use crate::map::render::thread::RenderClient;
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
 use crate::theme::ThemeId;
@@ -53,13 +53,10 @@ use crate::theme::UiTheme;
 
 pub struct Frontend {
     map: MapState,
-    /// Cheap-clone command channel for the render thread.
+    /// Cheap-clone command channel for the render thread. The owning
+    /// `RenderHandle` lives in `main`'s scope as a peer subsystem,
+    /// alongside `InputHandle` and `FrameTimer`.
     render_client: RenderClient,
-    /// Owning handle to the render thread. Built inside [`Frontend::new`]
-    /// (it needs the tile cache, styler, and canvas dims) and held
-    /// here so its `Drop` impl (`Shutdown` send + thread join) fires
-    /// when `Frontend` is dropped.
-    _render_handle: RenderHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -108,42 +105,39 @@ pub struct Frontend {
 impl Frontend {
     /// Build the app state and the Lua event bus.
     ///
-    /// The unified [`AppEvent`] channel is constructed by the caller
-    /// (typically `main`) so the bus stays a wiring concern at the
-    /// composition root. Each off-thread subsystem (render thread /
-    /// Lua plugins / input thread / frame timer) gets its own clone
-    /// of `event_tx`; Frontend takes one too because
+    /// `main` (the composition root) builds the map subsystem
+    /// upstream and hands it in as a [`MapHandle`]. The unified
+    /// [`AppEvent`] channel is also owned by `main`; every subsystem
+    /// (render thread, input thread, frame timer, Lua plugins) gets
+    /// its own clone, and `Frontend` takes one because
     /// [`Compositor::poll`] / `Compositor::handle_event` pass it to
     /// `Window::emit`.
     ///
-    /// The render thread is spawned here (it needs the tile cache,
-    /// styler, and canvas dims) and its handle is stored on Frontend
-    /// so `Drop` cleans it up automatically.
-    ///
-    /// Returns `(Self, LuaEventBus)` because the event bus is built
-    /// during plugin registration but consumed across both the
-    /// per-frame `dispatch_tick` path and the post-effect
-    /// notification path.
+    /// The Lua subsystem (plugin scripts + the [`LuaEventBus`]) is
+    /// still built here because plugin registration is woven into
+    /// the compositor (activations + footer hints) and the palette
+    /// installer; the bus is returned to `main` only so the
+    /// post-effect notification path can run from inside
+    /// [`Self::run`].
     pub fn new(
         config: Config,
         keymap_overrides: KeybindingOverrides,
         event_tx: std::sync::mpsc::Sender<AppEvent>,
+        map_handle: MapHandle,
     ) -> (Self, LuaEventBus) {
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let (width, height) = crate::map::render::canvas_size(cols, rows);
+        let MapHandle {
+            render_client,
+            attribution,
+            width,
+            height,
+            theme_id,
+        } = map_handle;
 
-        info!(
-            "terminal size: {}x{}, canvas: {}x{}",
-            cols, rows, width, height
-        );
-
-        let (tile_cache, wake_rx) = crate::map::tile::build(&config);
         let keymap = KeyMap::with_overrides(&keymap_overrides);
-        let theme_id = ThemeId::from_name(&config.render.style);
 
         // Boundary type around the App-level event channel — the
         // lua subsystem only sees `LuaSender`, never `AppEvent`.
-        let lua_sender = crate::lua::sender::LuaSender::new(event_tx.clone());
+        let lua_sender = crate::lua::sender::LuaSender::new(event_tx);
 
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
@@ -151,28 +145,20 @@ impl Frontend {
         let BuiltRegistrar {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, tile_cache.attribution(), &keymap, lua_sender);
+        } = build_registrar(&config, attribution, &keymap, lua_sender);
         // Lift the Lua event bus off the registrar before the rest
         // is consumed (activations / palette_entries move into the
         // compositor below). Returned by value so the caller (main)
-        // owns it — the App is one of multiple parties that fires
-        // events on it, no longer the bus's owner.
+        // owns it.
         let event_bus = std::mem::take(&mut registrar.event_bus);
-        // Same pattern for the setup-state handle pool: the App
-        // drains these per frame so plugins' `ttymap.map:jump` /
-        // `api.frame.export` / `api.window.open` / `api.palette.open`
-        // calls (all running on the setup state) reach the compositor
-        // and the app dispatch table.
+        // Drain per-plugin setup-state handles. The App drains these
+        // per tick so plugins' `ttymap.map:jump` / `api.frame.export`
+        // / `api.window.open` / `api.palette.open` calls reach the
+        // compositor and the app dispatch table.
         let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
+
         let ui_theme = UiTheme::from_palette(theme_id.palette());
-        let styler = Arc::new(Styler::new(theme_id));
-        let pipeline = RenderPipeline::new(
-            tile_cache,
-            styler,
-            config.render.language.clone(),
-            width,
-            height,
-        );
+
         let map = MapState::new(
             MapStateOptions {
                 initial_lon: config.map.lon,
@@ -184,8 +170,6 @@ impl Frontend {
             width,
             height,
         );
-        let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx.clone());
-        let render_client = render_handle.client();
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -200,7 +184,6 @@ impl Frontend {
         let app = Frontend {
             map,
             render_client,
-            _render_handle: render_handle,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
