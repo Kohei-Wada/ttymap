@@ -129,6 +129,12 @@ pub struct RuntimeConfig {
     /// higher render-thread CPU. 100 ms (10 Hz) is enough for typical
     /// growing-line animations.
     pub overlay_redraw_ms: u64,
+    /// Width (terminal cells) of the left sidebar when toggled
+    /// visible. Default 56 matches the bundled `wiki` / `aircraft`
+    /// modal panel widths so sidebar-hosted plugin sections look
+    /// the same as their floating-panel counterparts. Configurable
+    /// from Lua: `ttymap.opt.runtime.sidebar_width = 60`.
+    pub sidebar_width: u16,
 }
 
 impl Default for RuntimeConfig {
@@ -136,6 +142,7 @@ impl Default for RuntimeConfig {
         Self {
             poll_timeout_ms: 50,
             overlay_redraw_ms: 100,
+            sidebar_width: 56,
         }
     }
 }
@@ -152,5 +159,6 @@ mod tests {
         assert_eq!(cfg.cache.memory_tiles, 512);
         assert_eq!(cfg.runtime.poll_timeout_ms, 50);
         assert_eq!(cfg.runtime.overlay_redraw_ms, 100);
+        assert_eq!(cfg.runtime.sidebar_width, 56);
     }
 }

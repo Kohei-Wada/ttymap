@@ -207,6 +207,7 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     let runtime = lua.create_table()?;
     runtime.set("poll_timeout_ms", d.runtime.poll_timeout_ms)?;
     runtime.set("overlay_redraw_ms", d.runtime.overlay_redraw_ms)?;
+    runtime.set("sidebar_width", d.runtime.sidebar_width)?;
     opt.set("runtime", runtime)?;
 
     Ok(opt)
@@ -322,6 +323,9 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
         }
         if let Ok(v) = t.get::<u64>("overlay_redraw_ms") {
             cfg.runtime.overlay_redraw_ms = v;
+        }
+        if let Ok(v) = t.get::<u16>("sidebar_width") {
+            cfg.runtime.sidebar_width = v;
         }
     }
 

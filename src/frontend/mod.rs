@@ -48,11 +48,6 @@ use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
-/// Width (terminal cells) of the left sidebar when [`Frontend::sidebar_open`]
-/// is true. Includes the bordered block, so the inner content area is
-/// `SIDEBAR_WIDTH - 2`.
-pub const SIDEBAR_WIDTH: u16 = 30;
-
 pub struct Frontend {
     /// Map subsystem handle: dispatch state + render-task sender +
     /// theme id + attribution. Built by [`crate::map::build`] in
@@ -69,6 +64,9 @@ pub struct Frontend {
     /// [`UserIntent::ToggleSidebar`]; flipping it shrinks/expands the
     /// map canvas as a follow-up resize.
     sidebar_open: bool,
+    /// Sidebar width in terminal cells when visible. Sourced from
+    /// `ttymap.opt.runtime.sidebar_width` at startup.
+    sidebar_width: u16,
     /// Active theme id. Crosses both UI chrome (drives `ui_theme`)
     /// and map rendering (drives the styler the render thread uses);
     /// owned here because the choice is an app concern, not a
@@ -155,6 +153,7 @@ impl Frontend {
             map,
             running: true,
             sidebar_open: false,
+            sidebar_width: config.runtime.sidebar_width,
             theme_id,
             lua,
             map_frame: None,
@@ -364,6 +363,7 @@ impl Frontend {
         let lua = &self.lua;
         let ui_theme = &self.ui_theme;
         let sidebar_open = self.sidebar_open;
+        let sidebar_width = self.sidebar_width;
         let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
             crate::frontend::ui::draw(
@@ -376,6 +376,7 @@ impl Frontend {
                     ctx: &ctx,
                     overlay_sink,
                     sidebar_open,
+                    sidebar_width,
                 },
             )
         })?;
@@ -482,8 +483,8 @@ impl Frontend {
     /// fallback: very narrow terminals skip the sidebar entirely so
     /// the map keeps a usable width.
     fn effective_map_cols(&self, full_cols: u16) -> u16 {
-        if self.sidebar_open && full_cols > SIDEBAR_WIDTH + 4 {
-            full_cols.saturating_sub(SIDEBAR_WIDTH)
+        if self.sidebar_open && full_cols > self.sidebar_width + 4 {
+            full_cols.saturating_sub(self.sidebar_width)
         } else {
             full_cols
         }

@@ -12,7 +12,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::frontend::SIDEBAR_WIDTH;
 use crate::frontend::compositor::{Compositor, Context, MapApi};
 use crate::lua::LuaHandle;
 use crate::map::render::frame::MapFrame;
@@ -36,6 +35,7 @@ pub struct DrawInputs<'a> {
     pub ctx: &'a Context,
     pub overlay_sink: &'a mut Vec<UserPolyline>,
     pub sidebar_open: bool,
+    pub sidebar_width: u16,
 }
 
 pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
@@ -47,6 +47,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         ctx,
         overlay_sink,
         sidebar_open,
+        sidebar_width,
     } = inputs;
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
@@ -56,8 +57,8 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
     // Left sidebar (when toggled on) takes a fixed width; remaining
     // columns go to the world block. When closed, the world fills
     // the full width as before.
-    let map_area = if sidebar_open && main_area.width > SIDEBAR_WIDTH + 4 {
-        let cols = Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
+    let map_area = if sidebar_open && main_area.width > sidebar_width + 4 {
+        let cols = Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)])
             .split(main_area);
         let side_area = cols[0];
         let map_area = cols[1];
