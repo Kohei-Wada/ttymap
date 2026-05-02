@@ -55,17 +55,6 @@ pub struct App {
     compositor: Compositor,
     theme_id: ThemeId,
     ui_theme: UiTheme,
-    /// Lua-side pub/sub registry. Populated at startup from
-    /// `Registrar.event_bus`: every `ttymap.on_event(name, fn)` (and
-    /// its `ttymap.api.frame.on_tick(fn)` sugar) capture lands as a
-    /// `Subscriber` keyed by event name. Two emit sites today:
-    /// - `dispatch_tick` from inside `ui::draw` against a live
-    ///   `MapApi` (before `paint_on_map`)
-    /// - `dispatch(name, args)` from `handle_event`'s post-effect
-    ///   notification path (`frame_ready`, `map_jumped`, etc.) —
-    ///   see `notify_post_intent` and the `lua::registry::names`
-    ///   module for the canonical event vocabulary.
-    event_bus: LuaEventBus,
     /// Ephemeral polyline overlays pushed by Lua plugins during the
     /// current frame's `on_tick` pass. Drained into the next
     /// `RenderTask::Draw` immediately after `ui::draw` returns — so
@@ -79,19 +68,6 @@ pub struct App {
     /// components reach `compositor.push`. `Box<dyn Component>` is
     /// `!Send`, hence one channel per plugin (kept on main thread).
     lua_host_handles: Vec<LuaHostHandles>,
-    /// Unified [`AppEvent`] receiver. Every fire-and-forget Lua intent
-    /// (wrapped as [`AppEvent::Intent`]), every completed render frame
-    /// from the render thread (wrapped as [`AppEvent::FrameReady`]),
-    /// and every terminal event from the input thread (wrapped as
-    /// [`AppEvent::Input`]) arrives here. Drained once per main-loop
-    /// iteration; the loop parks on this channel so idle CPU is
-    /// dominated by `poll_timeout` rather than per-tick polling.
-    event_rx: std::sync::mpsc::Receiver<AppEvent>,
-    /// Sender side of the unified queue. Cloned into the input thread
-    /// at `run()` time. Render thread + Lua plugins received their
-    /// own clones at construction; this one stays on the App so the
-    /// input thread can be (re)spawned without re-plumbing.
-    event_tx: std::sync::mpsc::Sender<AppEvent>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -117,7 +93,25 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, keymap_overrides: KeybindingOverrides) -> Self {
+    /// Build the app state and the Lua event bus.
+    ///
+    /// The unified [`AppEvent`] channel is constructed by the caller
+    /// (typically `main`) so the bus stays a wiring concern at the
+    /// composition root rather than something `App` "owns". Each
+    /// subsystem (render thread / Lua plugins / future input thread /
+    /// frame timer) gets its own clone of `event_tx`; the App takes
+    /// one too only because [`Compositor::poll`] / `Compositor::handle_event`
+    /// pass it to `Window::emit` — same role as any other source.
+    ///
+    /// Returns `(App, LuaEventBus)` because the event bus is built
+    /// during plugin registration but drained from outside the App
+    /// (`ui::draw` for `dispatch_tick`, the run loop for the post-
+    /// effect notification path).
+    pub fn new(
+        config: Config,
+        keymap_overrides: KeybindingOverrides,
+        event_tx: std::sync::mpsc::Sender<AppEvent>,
+    ) -> (Self, LuaEventBus) {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::map::render::canvas_size(cols, rows);
 
@@ -130,15 +124,6 @@ impl App {
         let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
 
-        // Unified [`AppEvent`] channel shared by every Lua plugin and
-        // the render thread. Each plugin's `HostMap` / export closure
-        // clones `event_tx` and pushes fire-and-forget intents wrapped
-        // as `AppEvent::Intent(...)`; the render thread pushes
-        // `AppEvent::FrameReady(frame)` once a render completes. The
-        // App holds the matching Receiver and drains everything in
-        // arrival order through a single loop per frame.
-        let (event_tx, event_rx) = std::sync::mpsc::channel::<AppEvent>();
-
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
@@ -146,11 +131,11 @@ impl App {
             mut registrar,
             plugin_hints,
         } = build_registrar(&config, tile_cache.attribution(), &keymap, event_tx.clone());
-        // Lift the per-frame tick dispatcher off the registrar before
-        // the rest is consumed (activations / palette_entries move
-        // into the compositor below). Owned on App so the per-frame
-        // `tick` call has direct access without threading the
-        // registrar reference through.
+        // Lift the Lua event bus off the registrar before the rest
+        // is consumed (activations / palette_entries move into the
+        // compositor below). Returned by value so the caller (main)
+        // owns it — the App is one of multiple parties that fires
+        // events on it, no longer the bus's owner.
         let event_bus = std::mem::take(&mut registrar.event_bus);
         // Same pattern for the setup-state handle pool: the App
         // drains these per frame so plugins' `ttymap.map:jump` /
@@ -190,7 +175,7 @@ impl App {
             plugin_hints,
         )));
 
-        App {
+        let app = App {
             map,
             render_handle,
             map_frame: None,
@@ -198,10 +183,7 @@ impl App {
             compositor,
             theme_id,
             ui_theme,
-            event_bus,
             lua_host_handles,
-            event_rx,
-            event_tx,
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
@@ -209,110 +191,21 @@ impl App {
             overlay_redraw_interval: std::time::Duration::from_millis(
                 config.runtime.overlay_redraw_ms,
             ),
-        }
+        };
+        (app, event_bus)
     }
 
-    pub fn run(&mut self) -> io::Result<()> {
-        let mut terminal = ratatui::init();
-        crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+    /// The configured idle wake-up interval — `main` reads this when
+    /// spinning up the input thread / frame timer so they share the
+    /// same cadence.
+    pub fn poll_timeout(&self) -> std::time::Duration {
+        self.poll_timeout
+    }
 
-        // Spawn the input thread *after* terminal setup so it never
-        // reads from a non-raw stdin. The handle's `Drop` joins on
-        // shutdown — it's tied to this scope so the thread is cleaned
-        // up before `ratatui::restore` runs at the end of the function.
-        let _input = input_thread::InputHandle::spawn(self.event_tx.clone(), self.poll_timeout);
-
-        // Frame timer: pushes `AppEvent::Wake` at the configured
-        // interval so the main loop can `recv()` blocking and still
-        // wake reliably for per-iteration work (animation plugins,
-        // overlay redrawn rate-check) when no other event is arriving.
-        // Same cadence as the previous `recv_timeout` polling.
-        let _frame_timer = frame_timer::FrameTimer::spawn(self.event_tx.clone(), self.poll_timeout);
-
-        info!("event loop started");
-        self.dispatch(AppMsg::Map(Action::Redraw));
-
-        while self.map.is_running() {
-            // Refresh per-plugin getter mirrors and drain `push_rx`
-            // (which carries `Box<dyn Component>`, kept off the unified
-            // queue because `Component` is `!Send`). Components queued
-            // via `ttymap.api.window.open` / `palette.open` land on
-            // the compositor stack here so the same tick's
-            // `compositor.poll` already sees them.
-            self.refresh_lua_host_state();
-
-            // Park on the unified queue until any source produces an
-            // event — input thread, render thread, Lua intent, or the
-            // frame timer's periodic Tick. The first event is processed
-            // inline; subsequent buffered events drain non-blockingly
-            // so a burst doesn't push the paint behind. A `Disconnected`
-            // result means every `Sender` clone has been dropped (App
-            // teardown) and the loop exits cleanly.
-            match self.event_rx.recv() {
-                Ok(event) => self.handle_event(event),
-                Err(_) => break,
-            }
-            while let Ok(event) = self.event_rx.try_recv() {
-                self.handle_event(event);
-            }
-
-            // Component poll: any `win.emit(msg)` inside fires
-            // directly onto the unified event bus. Same-iteration
-            // `try_recv` below picks them up and dispatches them
-            // — no synchronous return path remains.
-            let ctx = self.context();
-            self.compositor.poll(&ctx, &self.event_tx);
-
-            let ctx = self.context();
-            terminal.draw(|f| {
-                crate::ui::draw(
-                    f,
-                    self.map_frame.as_ref(),
-                    &self.compositor,
-                    &self.event_bus,
-                    &self.ui_theme,
-                    &ctx,
-                    &mut self.overlay_sink,
-                )
-            })?;
-
-            // Plugins push polylines into `overlay_sink` from their `on_tick`
-            // callbacks during `ui::draw`. Drain unconditionally so the next
-            // render task carries them — without this the sink grows every
-            // frame any plugin calls `map:polyline`. The render thread's
-            // `drain_tasks` collapses redundant Draw tasks to the latest, so
-            // this doesn't cause N renders per second; it just guarantees the
-            // freshly-pushed polylines reach the next render.
-            //
-            // Rate-limited to ~30Hz: plugins can push every tick at 60Hz, but
-            // we only trigger a full tile re-render at most every 33ms. Polylines
-            // accumulate in `overlay_sink` between redraws and are all delivered
-            // in the next triggered Draw. User-event-driven redraws (pan, zoom,
-            // resize, theme change) bypass this check and always fire immediately.
-            if !self.overlay_sink.is_empty() {
-                let now = std::time::Instant::now();
-                if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
-                    self.request_map_redraw();
-                    self.last_overlay_redraw = now;
-                }
-            }
-        }
-
-        info!("event loop ended");
-        // Stop background threads *before* restoring the terminal —
-        // the input thread shouldn't poll against a cooked stdin
-        // during teardown, and the frame timer shouldn't keep firing
-        // Tick events into a Receiver that's about to be dropped.
-        // Default Drop ordering (locals dropped after the cleanup
-        // below) would otherwise leave both running for the join
-        // window.
-        drop(_input);
-        drop(_frame_timer);
-        crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
-        ratatui::restore();
-        info!("terminal restored, exiting");
-
-        Ok(())
+    /// Whether the map state machine still wants the loop to keep
+    /// running. The run loop checks this at the top of each iteration.
+    pub fn is_running(&self) -> bool {
+        self.map.is_running()
     }
 
     /// Drain every Lua plugin's setup-state receivers once.
@@ -363,19 +256,23 @@ impl App {
     /// notification path; they read the resulting state through the
     /// usual `ttymap.map:*` accessors. Intent flow stays single-
     /// executor; the bus is observation only.
-    fn handle_event(&mut self, event: AppEvent) {
+    pub fn handle_event(
+        &mut self,
+        event: AppEvent,
+        event_bus: &LuaEventBus,
+        event_tx: &std::sync::mpsc::Sender<AppEvent>,
+    ) {
         match event {
             AppEvent::Intent(msg) => {
                 let snapshot = msg.clone();
                 self.dispatch(msg);
-                self.notify_post_intent(&snapshot);
+                self.notify_post_intent(&snapshot, event_bus);
             }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
-                self.event_bus
-                    .dispatch(crate::lua::registry::names::FRAME_READY, ());
+                event_bus.dispatch(crate::lua::registry::names::FRAME_READY, ());
             }
-            AppEvent::Input(input) => self.handle_input(input),
+            AppEvent::Input(input) => self.handle_input(input, event_tx),
             // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
             // already does whatever per-frame work is needed; no
@@ -390,27 +287,26 @@ impl App {
     /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
     /// surface stays meaningful — bus events are "something
     /// observable happened to the app", not "every state mutation".
-    fn notify_post_intent(&self, msg: &AppMsg) {
+    fn notify_post_intent(&self, msg: &AppMsg, event_bus: &LuaEventBus) {
         use crate::lua::registry::names;
         match msg {
             AppMsg::Map(Action::Jump(ll)) => {
-                self.event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
+                event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
             }
             AppMsg::Map(Action::SetZoom(z)) => {
-                self.event_bus.dispatch(names::MAP_ZOOM_SET, *z);
+                event_bus.dispatch(names::MAP_ZOOM_SET, *z);
             }
             AppMsg::Map(Action::FlyTo { center, zoom }) => {
-                self.event_bus
-                    .dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
+                event_bus.dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
             }
             AppMsg::SetTheme(new_id) => {
-                self.event_bus.dispatch(names::THEME_CHANGED, new_id.name());
+                event_bus.dispatch(names::THEME_CHANGED, new_id.name());
             }
             AppMsg::Resize(cols, rows) => {
-                self.event_bus.dispatch(names::RESIZED, (*cols, *rows));
+                event_bus.dispatch(names::RESIZED, (*cols, *rows));
             }
             AppMsg::ExportFrame => {
-                self.event_bus.dispatch(names::FRAME_EXPORTED, ());
+                event_bus.dispatch(names::FRAME_EXPORTED, ());
             }
             // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
             // `CycleFocus`, the discrete `Pan*` keymap actions, and
@@ -423,32 +319,27 @@ impl App {
     /// Classify a raw terminal event and dispatch downstream messages.
     /// Same logic as the prior inline `crossterm::event::poll` block —
     /// just relocated so it can run from the unified-queue drain.
-    fn handle_input(&mut self, event: Event) {
+    fn handle_input(&mut self, event: Event, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
             Event::Key(key_event) => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL)
                     && key_event.code == KeyCode::Char('c')
                 {
                     info!("Ctrl-C received, quitting");
-                    let _ = self
-                        .event_tx
-                        .send(AppEvent::Intent(AppMsg::Map(Action::Quit)));
+                    let _ = event_tx.send(AppEvent::Intent(AppMsg::Map(Action::Quit)));
                 } else {
                     debug!("key event: {:?}", key_event.code);
                     let ctx = self.context();
-                    self.compositor
-                        .handle_event(key_event, &ctx, &self.event_tx);
+                    self.compositor.handle_event(key_event, &ctx, event_tx);
                 }
             }
             Event::Resize(cols, rows) => {
                 info!("resize: {}x{}", cols, rows);
-                let _ = self
-                    .event_tx
-                    .send(AppEvent::Intent(AppMsg::Resize(cols, rows)));
+                let _ = event_tx.send(AppEvent::Intent(AppMsg::Resize(cols, rows)));
             }
             Event::Mouse(mouse) => {
                 for msg in self.mouse.translate(mouse) {
-                    let _ = self.event_tx.send(AppEvent::Intent(msg));
+                    let _ = event_tx.send(AppEvent::Intent(msg));
                 }
             }
             _ => {}
@@ -460,6 +351,73 @@ impl App {
             theme_id: self.theme_id,
             cursor: self.cursor,
         }
+    }
+
+    /// Run the main event loop until the map state machine signals
+    /// quit. Owns `terminal.draw` / `ratatui::init` / `ratatui::restore`
+    /// plus the input thread and frame timer subsystems for the
+    /// lifetime of the loop. Bus and channel infrastructure are
+    /// owned by the caller (typically `main`), so the App is one of
+    /// multiple participants on the bus rather than its proprietor.
+    pub fn run(
+        &mut self,
+        event_rx: std::sync::mpsc::Receiver<AppEvent>,
+        event_tx: std::sync::mpsc::Sender<AppEvent>,
+        event_bus: &LuaEventBus,
+    ) -> io::Result<()> {
+        let mut terminal = ratatui::init();
+        crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+
+        let _input = input_thread::InputHandle::spawn(event_tx.clone(), self.poll_timeout);
+        let _frame_timer = frame_timer::FrameTimer::spawn(event_tx.clone(), self.poll_timeout);
+
+        info!("event loop started");
+        self.dispatch(AppMsg::Map(Action::Redraw));
+
+        while self.map.is_running() {
+            self.refresh_lua_host_state();
+
+            match event_rx.recv() {
+                Ok(event) => self.handle_event(event, event_bus, &event_tx),
+                Err(_) => break,
+            }
+            while let Ok(event) = event_rx.try_recv() {
+                self.handle_event(event, event_bus, &event_tx);
+            }
+
+            let ctx = self.context();
+            self.compositor.poll(&ctx, &event_tx);
+
+            let ctx = self.context();
+            terminal.draw(|f| {
+                crate::ui::draw(
+                    f,
+                    self.map_frame.as_ref(),
+                    &self.compositor,
+                    event_bus,
+                    &self.ui_theme,
+                    &ctx,
+                    &mut self.overlay_sink,
+                )
+            })?;
+
+            if !self.overlay_sink.is_empty() {
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
+                    self.request_map_redraw();
+                    self.last_overlay_redraw = now;
+                }
+            }
+        }
+
+        info!("event loop ended");
+        drop(_input);
+        drop(_frame_timer);
+        crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
+        ratatui::restore();
+        info!("terminal restored, exiting");
+
+        Ok(())
     }
 
     fn dispatch(&mut self, msg: AppMsg) {

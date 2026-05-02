@@ -116,8 +116,14 @@ fn main() {
         config.map.lon
     );
 
-    let mut app = App::new(config, keymap_overrides);
-    if let Err(e) = app.run() {
+    // Build the event channel + bus + App as separate concerns at
+    // the composition root. The bus is no longer something `App`
+    // owns — App is one participant on it (state mutation +
+    // notification emit), peer to the Lua plugin subscribers and
+    // the off-thread sources (render / input / frame timer).
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let (mut app, event_bus) = App::new(config, keymap_overrides, event_tx.clone());
+    if let Err(e) = app.run(event_rx, event_tx, &event_bus) {
         eprintln!("Error: {e}");
     }
 }
