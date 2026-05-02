@@ -54,9 +54,13 @@ pub struct App {
     /// Lua-side pub/sub registry. Populated at startup from
     /// `Registrar.event_bus`: every `ttymap.on_event(name, fn)` (and
     /// its `ttymap.api.frame.on_tick(fn)` sugar) capture lands as a
-    /// `Subscriber` keyed by event name. Today only `"tick"` is
-    /// fired — `dispatch_tick` runs once per frame against the live
-    /// `MapApi`, before the compositor's `paint_on_map`.
+    /// `Subscriber` keyed by event name. Two emit sites today:
+    /// - `dispatch_tick` from inside `ui::draw` against a live
+    ///   `MapApi` (before `paint_on_map`)
+    /// - `dispatch(name, args)` from `handle_event`'s post-effect
+    ///   notification path (`frame_ready`, `map_jumped`, etc.) —
+    ///   see `notify_post_intent` and the `lua::registry::names`
+    ///   module for the canonical event vocabulary.
     event_bus: LuaEventBus,
     /// Ephemeral polyline overlays pushed by Lua plugins during the
     /// current frame's `on_tick` pass. Drained into the next
@@ -214,11 +218,11 @@ impl App {
         // up before `ratatui::restore` runs at the end of the function.
         let _input = input_thread::InputHandle::spawn(self.event_tx.clone(), self.poll_timeout);
 
-        // Frame timer: pushes `AppEvent::Tick` at the configured
+        // Frame timer: pushes `AppEvent::Wake` at the configured
         // interval so the main loop can `recv()` blocking and still
-        // wake reliably for animation plugins / overlay redraws when
-        // no other event is arriving. Same cadence as the previous
-        // `recv_timeout` polling.
+        // wake reliably for per-iteration work (animation plugins,
+        // overlay redrawn rate-check) when no other event is arriving.
+        // Same cadence as the previous `recv_timeout` polling.
         let _frame_timer = frame_timer::FrameTimer::spawn(self.event_tx.clone(), self.poll_timeout);
 
         info!("event loop started");
@@ -349,18 +353,68 @@ impl App {
     /// has a small fixed handler and the work is bounded — long Lua
     /// callbacks notwithstanding, the loop never sits inside this
     /// for more than the time a single dispatch needs.
+    ///
+    /// Two-stage shape per variant: **execute** (state mutation —
+    /// `dispatch`, `map_frame = ...`, etc.) followed by **notify**
+    /// (broadcast a post-effect notification on the Lua event bus).
+    /// Subscribers (Lua plugins via `ttymap.on_event`) only see the
+    /// notification path; they read the resulting state through the
+    /// usual `ttymap.map:*` accessors. Intent flow stays single-
+    /// executor; the bus is observation only.
     fn handle_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::Intent(msg) => self.dispatch(msg),
+            AppEvent::Intent(msg) => {
+                let snapshot = msg.clone();
+                self.dispatch(msg);
+                self.notify_post_intent(&snapshot);
+            }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
+                self.event_bus
+                    .dispatch(crate::lua::registry::names::FRAME_READY, ());
             }
             AppEvent::Input(input) => self.handle_input(input),
-            // `Tick` exists purely to unblock `event_rx.recv()`. The
+            // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
             // already does whatever per-frame work is needed; no
-            // extra handler logic belongs here.
-            AppEvent::Tick => {}
+            // extra handler logic belongs here. Distinct from the
+            // Lua-side `"tick"` event which fires from inside draw.
+            AppEvent::Wake => {}
+        }
+    }
+
+    /// Broadcast post-effect notifications for the variants that
+    /// plugins want to observe. Skips noisy / internal intents
+    /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
+    /// surface stays meaningful — bus events are "something
+    /// observable happened to the app", not "every state mutation".
+    fn notify_post_intent(&self, msg: &AppMsg) {
+        use crate::lua::registry::names;
+        match msg {
+            AppMsg::Map(Action::Jump(ll)) => {
+                self.event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
+            }
+            AppMsg::Map(Action::SetZoom(z)) => {
+                self.event_bus.dispatch(names::MAP_ZOOM_SET, *z);
+            }
+            AppMsg::Map(Action::FlyTo { center, zoom }) => {
+                self.event_bus
+                    .dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
+            }
+            AppMsg::SetTheme(new_id) => {
+                self.event_bus.dispatch(names::THEME_CHANGED, new_id.name());
+            }
+            AppMsg::Resize(cols, rows) => {
+                self.event_bus.dispatch(names::RESIZED, (*cols, *rows));
+            }
+            AppMsg::ExportFrame => {
+                self.event_bus.dispatch(names::FRAME_EXPORTED, ());
+            }
+            // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
+            // `CycleFocus`, the discrete `Pan*` keymap actions, and
+            // `Quit` (the App is tearing down anyway) are deliberately
+            // not broadcast. Adding them later is one match arm.
+            _ => {}
         }
     }
 

@@ -1,4 +1,4 @@
-//! Background thread that emits [`AppEvent::Tick`] on the unified
+//! Background thread that emits [`AppEvent::Wake`] on the unified
 //! event queue at a fixed cadence.
 //!
 //! Replaces the old `event_rx.recv_timeout(poll_timeout)` pattern in
@@ -32,7 +32,7 @@ impl FrameTimer {
     /// Spawn the timer.
     ///
     /// `event_tx` is a clone of the App-level [`AppEvent`] sender;
-    /// each tick arrives wrapped as [`AppEvent::Tick`]. `interval`
+    /// each tick arrives wrapped as [`AppEvent::Wake`]. `interval`
     /// is the cadence — typically the same `poll_timeout_ms` value
     /// the prior `recv_timeout` block used (default 50 ms = 20 Hz),
     /// keeping animation behaviour and idle CPU equivalent.
@@ -68,7 +68,7 @@ fn run_loop(event_tx: mpsc::Sender<AppEvent>, interval: Duration, should_quit: A
         if should_quit.load(Ordering::Relaxed) {
             break;
         }
-        if event_tx.send(AppEvent::Tick).is_err() {
+        if event_tx.send(AppEvent::Wake).is_err() {
             // App has dropped the receiver — teardown.
             return;
         }

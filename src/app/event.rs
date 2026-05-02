@@ -14,11 +14,16 @@
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
 //!   on it and dispatches the appropriate downstream `AppMsg`s.
-//! - [`AppEvent::Tick`] — periodic wake-up from the frame timer
+//! - [`AppEvent::Wake`] — periodic wake-up from the frame timer
 //!   thread. Replaces the old `recv_timeout` polling: the main loop
-//!   now blocks on `recv()` and the timer guarantees per-frame
+//!   now blocks on `recv()` and the timer guarantees per-iteration
 //!   work (animation plugins, overlay redraws) still ticks at a
 //!   predictable cadence even with no input or render activity.
+//!   *Not* the same thing as the Lua-side `"tick"` bus event:
+//!   `Wake` is "main loop, please run an iteration", whereas the
+//!   Lua `"tick"` event fires from inside the per-frame draw closure
+//!   against a live `MapApi`. They're aligned in cadence (one per
+//!   draw) but live at different layers.
 //!
 //! The split (rather than adding `FrameReady` directly to [`AppMsg`])
 //! is intentional: `AppMsg` derives `PartialEq` for keymap binding
@@ -52,10 +57,11 @@ pub enum AppEvent {
     Input(crossterm::event::Event),
     /// Periodic wake-up from the frame timer thread. The main loop's
     /// only response is to fall through into the per-iteration
-    /// draw + overlay-redraw rate-check, so animation plugins and
-    /// any other per-frame work still tick at the configured cadence
-    /// even when no other event is arriving.
-    Tick,
+    /// draw + overlay-redraw rate-check, so per-frame work still
+    /// ticks at the configured cadence even when no other event is
+    /// arriving. Distinct from the Lua-side `"tick"` event, which
+    /// fires from inside the draw closure against a `MapApi`.
+    Wake,
 }
 
 impl From<AppMsg> for AppEvent {

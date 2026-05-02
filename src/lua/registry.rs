@@ -20,10 +20,39 @@
 
 use std::collections::HashMap;
 
-use mlua::{Lua, RegistryKey};
+use mlua::{IntoLuaMulti, Lua, RegistryKey};
 
 use crate::compositor::MapApi;
 use crate::lua::ttymap::map_api;
+
+/// Canonical Lua-facing event names. Centralised so the host emit
+/// site and any internal subscriber agree on the spelling — Lua
+/// scripts use bare strings (`ttymap.on_event("frame_ready", fn)`)
+/// since they live outside the Rust crate, but everything inside
+/// goes through these constants.
+pub mod names {
+    /// Per-frame draw hook. Subscribers fire from inside `ui::draw`
+    /// against a live `MapApi`. Distinct from `AppEvent::Wake`,
+    /// which is the main-loop wake-up signal.
+    pub const TICK: &str = "tick";
+    /// Render thread produced a fresh `MapFrame`. No payload — the
+    /// frame is heavy + the live snapshot is read via `ttymap.map`
+    /// accessors.
+    pub const FRAME_READY: &str = "frame_ready";
+    /// Map state recentred via `Action::Jump`. Payload: `(lon, lat)`.
+    pub const MAP_JUMPED: &str = "map_jumped";
+    /// Direct zoom set via `Action::SetZoom`. Payload: `zoom: f64`.
+    pub const MAP_ZOOM_SET: &str = "map_zoom_set";
+    /// Composite recentre+zoom via `Action::FlyTo`. Payload:
+    /// `(lon, lat, zoom)`.
+    pub const MAP_FLEW_TO: &str = "map_flew_to";
+    /// Theme switched. Payload: `theme name string`.
+    pub const THEME_CHANGED: &str = "theme_changed";
+    /// Terminal resized. Payload: `(cols, rows)`.
+    pub const RESIZED: &str = "resized";
+    /// `Action::ExportFrame` ran (regardless of success). No payload.
+    pub const FRAME_EXPORTED: &str = "frame_exported";
+}
 
 /// One registered subscriber. The Lua state is the plugin's setup
 /// state (cloned from `register_one`); the registry key points at the
@@ -79,18 +108,17 @@ impl LuaEventBus {
 
     /// Fire the per-frame `"tick"` bucket against a live `MapApi`.
     ///
-    /// Carved out as its own method (rather than a generic
-    /// `dispatch(name, args)`) because `MapApi` borrows the ratatui
+    /// Carved out as its own method (rather than just calling
+    /// [`Self::dispatch`]) because `MapApi` borrows the ratatui
     /// buffer for one frame and the Lua-facing handle has to be
-    /// constructed inside `Lua::scope` — a shape that doesn't fit a
-    /// fully-generic dispatch signature without HRTB gymnastics.
-    /// When future event surfaces fire from elsewhere, they get
-    /// their own `dispatch_*` method shaped to the data they pass.
+    /// constructed inside `Lua::scope` — a shape that doesn't fit
+    /// the simple `IntoLuaMulti` signature of `dispatch`. Other
+    /// events that pass plain values use `dispatch` directly.
     ///
     /// Errors are logged + swallowed per callback so a single broken
     /// plugin must not freeze the loop.
     pub fn dispatch_tick(&self, map: &mut MapApi<'_>) {
-        let Some(subs) = self.subscribers.get("tick") else {
+        let Some(subs) = self.subscribers.get(names::TICK) else {
             return;
         };
         let cell = std::cell::RefCell::new(map);
@@ -102,6 +130,38 @@ impl LuaEventBus {
             });
             if let Err(e) = result {
                 log::warn!("lua[{}]: tick subscriber failed: {}", sub.name, e);
+            }
+        }
+    }
+
+    /// Fire the bucket for `event_name` against every registered
+    /// subscriber, passing `args` to each. Used for non-tick events
+    /// whose payload is a plain Lua value (or tuple of values) — see
+    /// the [`names`] module for the canonical event-name set.
+    ///
+    /// `Clone` is required because mlua's `Function::call` consumes
+    /// the args, and the bus may have multiple subscribers per
+    /// event. For payloads cheap to clone (numbers, short strings,
+    /// small tuples) this is the natural shape; expensive payloads
+    /// should provide their own `dispatch_*` variant the way
+    /// [`Self::dispatch_tick`] does.
+    ///
+    /// Errors are logged + swallowed per callback so one broken
+    /// plugin can't break the dispatch loop.
+    pub fn dispatch<A>(&self, event_name: &str, args: A)
+    where
+        A: IntoLuaMulti + Clone,
+    {
+        let Some(subs) = self.subscribers.get(event_name) else {
+            return;
+        };
+        for sub in subs {
+            let result: mlua::Result<()> = (|| {
+                let f: mlua::Function = sub.lua.registry_value(&sub.callback)?;
+                f.call::<()>(args.clone())
+            })();
+            if let Err(e) = result {
+                log::warn!("lua[{}]: {} subscriber failed: {}", sub.name, event_name, e);
             }
         }
     }
@@ -281,5 +341,91 @@ mod tests {
             other, 0,
             "dispatch_tick must not fire subscribers under other event names"
         );
+    }
+
+    /// `dispatch(name, args)` is the generic broadcast for non-tick
+    /// events. Verifies the args round-trip into the Lua callback —
+    /// here a `(f64, f64)` payload (the `map_jumped` shape) lands as
+    /// two arguments.
+    #[test]
+    fn dispatch_passes_args_through_to_subscriber() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            captured_lon = 0.0
+            captured_lat = 0.0
+            function record(lon, lat)
+                captured_lon = lon
+                captured_lat = lat
+            end
+            "#,
+        )
+        .exec()
+        .expect("lua exec");
+        let f: mlua::Function = lua.globals().get("record").expect("get fn");
+        let key = lua.create_registry_value(f).expect("registry");
+
+        let mut bus = LuaEventBus::default();
+        bus.subscribe(
+            names::MAP_JUMPED,
+            Subscriber {
+                name: "test",
+                lua: lua.clone(),
+                callback: key,
+            },
+        );
+        bus.dispatch(names::MAP_JUMPED, (139.7595_f64, 35.6828_f64));
+
+        let lon: f64 = lua.globals().get("captured_lon").expect("read lon");
+        let lat: f64 = lua.globals().get("captured_lat").expect("read lat");
+        assert!((lon - 139.7595).abs() < 1e-9);
+        assert!((lat - 35.6828).abs() < 1e-9);
+    }
+
+    /// `dispatch` runs every subscriber for the named event in
+    /// registration order; subscribers under different names stay
+    /// silent. Same pub/sub guarantee as `dispatch_tick` but for the
+    /// generic path.
+    #[test]
+    fn dispatch_fans_out_in_registration_order_and_skips_other_buckets() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            log = {}
+            function bump(tag) table.insert(log, tag) end
+            "#,
+        )
+        .exec()
+        .expect("lua exec");
+        let bump: mlua::Function = lua.globals().get("bump").expect("get bump");
+
+        let mut bus = LuaEventBus::default();
+        // Two subscribers for `frame_ready`, one for an unrelated
+        // event. `dispatch("frame_ready", ...)` must hit the first
+        // two and skip the third.
+        for tag in ["a", "b"] {
+            let key = lua.create_registry_value(bump.clone()).expect("registry");
+            bus.subscribe(
+                names::FRAME_READY,
+                Subscriber {
+                    name: tag,
+                    lua: lua.clone(),
+                    callback: key,
+                },
+            );
+        }
+        let key_other = lua.create_registry_value(bump).expect("registry");
+        bus.subscribe(
+            names::THEME_CHANGED,
+            Subscriber {
+                name: "other",
+                lua: lua.clone(),
+                callback: key_other,
+            },
+        );
+
+        bus.dispatch(names::FRAME_READY, "yes");
+        let log: Vec<String> = lua.globals().get("log").expect("read log");
+        assert_eq!(log, vec!["yes".to_string(), "yes".to_string()]);
     }
 }
