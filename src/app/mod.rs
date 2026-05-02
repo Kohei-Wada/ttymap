@@ -29,7 +29,7 @@ use log::{debug, info};
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
 use crate::keymap::{KeyMap, KeybindingOverrides};
-use crate::lua::LuaTickRegistry;
+use crate::lua::LuaEventBus;
 use crate::lua::ttymap::LuaHostHandles;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
@@ -51,12 +51,13 @@ pub struct App {
     compositor: Compositor,
     theme_id: ThemeId,
     ui_theme: UiTheme,
-    /// Per-frame tick dispatcher. Populated at startup from
-    /// `Registrar.tick_registry` (every `ttymap.api.frame.on_tick(fn)`
-    /// call across all plugin scripts lands here) and ticked once per
-    /// frame against the live `MapApi`, before the compositor's
-    /// `paint_on_map`.
-    tick_registry: LuaTickRegistry,
+    /// Lua-side pub/sub registry. Populated at startup from
+    /// `Registrar.event_bus`: every `ttymap.on_event(name, fn)` (and
+    /// its `ttymap.api.frame.on_tick(fn)` sugar) capture lands as a
+    /// `Subscriber` keyed by event name. Today only `"tick"` is
+    /// fired — `dispatch_tick` runs once per frame against the live
+    /// `MapApi`, before the compositor's `paint_on_map`.
+    event_bus: LuaEventBus,
     /// Ephemeral polyline overlays pushed by Lua plugins during the
     /// current frame's `on_tick` pass. Drained into the next
     /// `RenderTask::Draw` immediately after `ui::draw` returns — so
@@ -142,7 +143,7 @@ impl App {
         // into the compositor below). Owned on App so the per-frame
         // `tick` call has direct access without threading the
         // registrar reference through.
-        let tick_registry = std::mem::take(&mut registrar.tick_registry);
+        let event_bus = std::mem::take(&mut registrar.event_bus);
         // Same pattern for the setup-state handle pool: the App
         // drains these per frame so plugins' `ttymap.map:jump` /
         // `api.frame.export` / `api.window.open` / `api.palette.open`
@@ -189,7 +190,7 @@ impl App {
             compositor,
             theme_id,
             ui_theme,
-            tick_registry,
+            event_bus,
             lua_host_handles,
             event_rx,
             event_tx,
@@ -262,7 +263,7 @@ impl App {
                     f,
                     self.map_frame.as_ref(),
                     &self.compositor,
-                    &self.tick_registry,
+                    &self.event_bus,
                     &self.ui_theme,
                     &ctx,
                     &mut self.overlay_sink,

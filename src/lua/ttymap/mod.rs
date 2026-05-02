@@ -283,6 +283,16 @@ pub struct KeybindSpec {
     pub callback: mlua::RegistryKey,
 }
 
+/// One subscription declared via `ttymap.on_event(name, fn)` (or its
+/// `ttymap.api.frame.on_tick(fn)` sugar, which lowers to event name
+/// `"tick"`). The host walks these at register time and pushes one
+/// [`Subscriber`](crate::lua::registry::Subscriber) into the
+/// [`LuaEventBus`](crate::lua::LuaEventBus) bucket for `event_name`.
+pub struct EventSubscription {
+    pub event_name: &'static str,
+    pub callback: mlua::RegistryKey,
+}
+
 /// Everything a single plugin file's setup phase declared. nvim-
 /// style: each activation surface is a separate explicit call with
 /// its own Lua callback. Plugins own whether/when to push by
@@ -290,17 +300,16 @@ pub struct KeybindSpec {
 /// `ttymap.api.window.open(spec)` / `ttymap.api.palette.open(spec)`.
 /// Per-frame work subscribes via `ttymap.api.frame.on_tick(fn)` —
 /// stacked: each call appends a callback that fires every frame.
+/// Other events go through `ttymap.on_event(name, fn)`.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
     /// Each `ttymap.register_keybind(key, callback)` call.
     pub keybinds: Vec<KeybindSpec>,
-    /// Each `ttymap.api.frame.on_tick(fn)` call. Stored as registry
-    /// keys; the host walks them at register time and pushes a
-    /// [`crate::lua::registry::TickEntry`] per entry into the
-    /// per-frame dispatcher.
-    pub ticks: Vec<mlua::RegistryKey>,
+    /// Each `ttymap.on_event(name, fn)` call (and `on_tick` sugar).
+    /// Order = registration order across event names.
+    pub event_subscriptions: Vec<EventSubscription>,
 }
 
 /// Slot used by a fresh Lua state to capture the script's
@@ -438,6 +447,43 @@ pub fn install(
             },
         )?,
     )?;
+
+    // `ttymap.on_event(name, fn)` — generic pub/sub subscription.
+    // Lower into a [`EventSubscription`] keyed by the leaked event
+    // name; the host walks them at register time and pushes one
+    // [`Subscriber`](crate::lua::registry::Subscriber) into the
+    // matching [`LuaEventBus`](crate::lua::LuaEventBus) bucket.
+    //
+    // The leak is bounded by `(unique event names) × plugins`,
+    // happens at register time only, and produces `&'static str`
+    // (which the bus needs as a HashMap key matching plugin-name
+    // and source-text leaks done elsewhere in `register_plugins_in`).
+    //
+    // `ttymap.api.frame.on_tick(fn)` is sugar for
+    // `ttymap.on_event("tick", fn)` — same Subscriber shape, same
+    // dispatch path, just a different surface for the common case.
+    let cap = slot.clone();
+    ttymap.set(
+        "on_event",
+        lua.create_function(
+            move |lua, (event_name, callback): (String, mlua::Function)| -> mlua::Result<()> {
+                if event_name.is_empty() {
+                    return Err(mlua::Error::external(
+                        "ttymap.on_event: event name must be a non-empty string",
+                    ));
+                }
+                let leaked: &'static str = Box::leak(event_name.into_boxed_str());
+                let key = lua.create_registry_value(callback)?;
+                cap.borrow_mut()
+                    .event_subscriptions
+                    .push(EventSubscription {
+                        event_name: leaked,
+                        callback: key,
+                    });
+                Ok(())
+            },
+        )?,
+    )?;
     // ── ttymap.api ────────────────────────────────────────────────
     //
     // The (nvim-style) plugin API surface. Currently hosts:
@@ -566,12 +612,21 @@ pub fn install(
             Ok(())
         })?,
     )?;
+    // `on_tick` is a thin sugar for `on_event("tick", fn)` — kept
+    // because the existing plugin set + docs use it everywhere and
+    // it reads more naturally for the per-frame use case. New
+    // event surfaces should use `ttymap.on_event` directly.
     let cap = slot.clone();
     frame_api.set(
         "on_tick",
         lua.create_function(move |lua, callback: mlua::Function| -> mlua::Result<()> {
             let key = lua.create_registry_value(callback)?;
-            cap.borrow_mut().ticks.push(key);
+            cap.borrow_mut()
+                .event_subscriptions
+                .push(EventSubscription {
+                    event_name: "tick",
+                    callback: key,
+                });
             Ok(())
         })?,
     )?;
@@ -1188,7 +1243,71 @@ mod tests {
         .exec()
         .expect("exec");
         let cap = slot.borrow();
-        assert_eq!(cap.ticks.len(), 2, "two on_tick calls -> two entries");
+        assert_eq!(
+            cap.event_subscriptions.len(),
+            2,
+            "two on_tick calls -> two entries"
+        );
+        assert!(
+            cap.event_subscriptions
+                .iter()
+                .all(|s| s.event_name == "tick"),
+            "on_tick must lower to event name `tick`"
+        );
+    }
+
+    #[test]
+    fn on_event_captures_subscription_under_the_named_event() {
+        // `ttymap.on_event(name, fn)` — generic surface. Each call
+        // must land as one entry tagged with the supplied event name.
+        // Multiple distinct names lower to distinct buckets in the
+        // event bus.
+        let lua = mlua::Lua::new();
+        let slot = new_capture_slot();
+        let _handles = install(
+            &lua,
+            "lua-test",
+            LuaHostShared::empty(),
+            slot.clone(),
+            dummy_event_tx(),
+        )
+        .expect("install ttymap table");
+        lua.load(
+            r#"
+            ttymap.on_event("tick", function() end)
+            ttymap.on_event("frame_ready", function() end)
+            ttymap.on_event("frame_ready", function() end)
+            "#,
+        )
+        .exec()
+        .expect("exec");
+        let cap = slot.borrow();
+        assert_eq!(cap.event_subscriptions.len(), 3);
+        let names: Vec<&str> = cap
+            .event_subscriptions
+            .iter()
+            .map(|s| s.event_name)
+            .collect();
+        assert_eq!(names, vec!["tick", "frame_ready", "frame_ready"]);
+    }
+
+    #[test]
+    fn on_event_rejects_empty_name() {
+        // Empty event names would land in a HashMap bucket that's
+        // unreachable from any sensible dispatch call — surface an
+        // error at register time so the plugin author finds it.
+        let lua = mlua::Lua::new();
+        let slot = new_capture_slot();
+        let _handles = install(
+            &lua,
+            "lua-test",
+            LuaHostShared::empty(),
+            slot,
+            dummy_event_tx(),
+        )
+        .expect("install ttymap table");
+        let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();
+        assert!(result.is_err(), "empty event name should error");
     }
 
     #[test]

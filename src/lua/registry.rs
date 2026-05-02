@@ -1,70 +1,107 @@
-//! Per-frame tick dispatcher.
+//! Lua-side event bus.
 //!
-//! Each `ttymap.api.frame.on_tick(fn)` call from a plugin script
-//! lands here as a [`TickEntry`]. The App's main thread calls
-//! [`LuaTickRegistry::tick`] once per frame, which walks the registry
-//! and dispatches each callback against a per-frame `MapApi` table.
+//! Each plugin script subscribes to host events via either:
 //!
-//! This is the unified per-frame work mechanism for the nvim-style
-//! plugin API: plugins that paint markers, drain async fetches, or
-//! do periodic work all use the same `on_tick` subscription. Errors
-//! from one callback are logged and swallowed so a single broken
-//! plugin cannot freeze the host.
+//! - `ttymap.on_event(name, fn)` — generic subscription
+//! - `ttymap.api.frame.on_tick(fn)` — sugar for `on_event("tick", fn)`
+//!
+//! Both lower into a [`Subscriber`] held in [`LuaEventBus`] under the
+//! event name key. The bus is a textbook pub/sub registry on the Lua
+//! side: each event name owns a `Vec<Subscriber>`, and dispatch finds
+//! the bucket for the event name and runs every callback in
+//! registration order.
+//!
+//! Today there is one event surface — `"tick"` — fired from
+//! [`crate::ui::draw`] once per frame against the live `MapApi`.
+//! Future events (`"frame_ready"`, `"map_jumped"`, …) will land in
+//! the same bus and follow the same pattern: pass an event-specific
+//! Lua argument to each subscriber, log + swallow errors per call so
+//! one buggy plugin can't freeze the host.
+
+use std::collections::HashMap;
 
 use mlua::{Lua, RegistryKey};
 
 use crate::compositor::MapApi;
 use crate::lua::ttymap::map_api;
 
-/// One registered per-frame callback. The Lua state is the plugin's
-/// setup state (cloned from `register_one`); the registry key points
-/// at the function passed to `ttymap.api.frame.on_tick`.
-pub struct TickEntry {
+/// One registered subscriber. The Lua state is the plugin's setup
+/// state (cloned from `register_one`); the registry key points at the
+/// callback the script handed to `ttymap.on_event` /
+/// `ttymap.api.frame.on_tick`.
+pub struct Subscriber {
     pub name: &'static str,
     pub lua: Lua,
     pub callback: RegistryKey,
 }
 
-/// Registry of every plugin-declared per-frame `on_tick` callback.
-/// Built up by `register_one` as bundled and user plugins load,
-/// then ticked once per frame from `App::run`.
+/// Pub/sub registry for Lua-side event subscriptions.
+///
+/// Keyed by event name (currently `"tick"`; new event types add new
+/// keys). Each bucket is a `Vec<Subscriber>`, dispatched in
+/// registration order. Adding a new event surface is two lines: pick
+/// a name and call [`Self::dispatch_tick`]-style from wherever the
+/// event fires.
 #[derive(Default)]
-pub struct LuaTickRegistry {
-    entries: Vec<TickEntry>,
+pub struct LuaEventBus {
+    /// Per-event subscriber list. `&'static str` keys because event
+    /// names are baked at the host (script-supplied names from
+    /// `ttymap.on_event` get leaked once at register time, mirroring
+    /// the plugin-name/source treatment in `register_one`).
+    subscribers: HashMap<&'static str, Vec<Subscriber>>,
 }
 
-impl LuaTickRegistry {
-    pub fn add(&mut self, entry: TickEntry) {
-        self.entries.push(entry);
+impl LuaEventBus {
+    /// Add a callback to the bucket for `event_name`. Order within
+    /// a bucket is registration order (`Vec::push`).
+    pub fn subscribe(&mut self, event_name: &'static str, sub: Subscriber) {
+        self.subscribers.entry(event_name).or_default().push(sub);
     }
 
-    /// Number of registered tick callbacks. Used by tests and could
-    /// be useful to surface in diagnostics.
+    /// Total number of subscribers across every event. Used by the
+    /// `every_bundled_script_registers` smoke test as a lower bound
+    /// on chrome plugins that subscribe to `"tick"`.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.subscribers.values().map(|v| v.len()).sum()
+    }
+
+    /// Number of subscribers for a specific event name.
+    pub fn count(&self, event_name: &str) -> usize {
+        self.subscribers
+            .get(event_name)
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.subscribers.values().all(|v| v.is_empty())
     }
 
-    /// Run every registered callback once. Errors are logged and the
-    /// loop continues — a single broken plugin must not freeze the app.
+    /// Fire the per-frame `"tick"` bucket against a live `MapApi`.
     ///
-    /// `MapApi` borrows the ratatui buffer for one frame, so the
-    /// Lua-facing handle is built inside `Lua::scope` (closures over
-    /// a `RefCell` of the ref) and torn down before this method
-    /// returns.
-    pub fn tick(&self, map: &mut MapApi<'_>) {
+    /// Carved out as its own method (rather than a generic
+    /// `dispatch(name, args)`) because `MapApi` borrows the ratatui
+    /// buffer for one frame and the Lua-facing handle has to be
+    /// constructed inside `Lua::scope` — a shape that doesn't fit a
+    /// fully-generic dispatch signature without HRTB gymnastics.
+    /// When future event surfaces fire from elsewhere, they get
+    /// their own `dispatch_*` method shaped to the data they pass.
+    ///
+    /// Errors are logged + swallowed per callback so a single broken
+    /// plugin must not freeze the loop.
+    pub fn dispatch_tick(&self, map: &mut MapApi<'_>) {
+        let Some(subs) = self.subscribers.get("tick") else {
+            return;
+        };
         let cell = std::cell::RefCell::new(map);
-        for entry in &self.entries {
-            let result: mlua::Result<()> = entry.lua.scope(|scope| {
-                let map_table = map_api::make_map_table(&entry.lua, scope, &cell)?;
-                let f: mlua::Function = entry.lua.registry_value(&entry.callback)?;
+        for sub in subs {
+            let result: mlua::Result<()> = sub.lua.scope(|scope| {
+                let map_table = map_api::make_map_table(&sub.lua, scope, &cell)?;
+                let f: mlua::Function = sub.lua.registry_value(&sub.callback)?;
                 f.call::<()>(map_table)
             });
             if let Err(e) = result {
-                log::warn!("lua[{}]: on_tick failed: {}", entry.name, e);
+                log::warn!("lua[{}]: tick subscriber failed: {}", sub.name, e);
             }
         }
     }
@@ -117,50 +154,57 @@ mod tests {
     }
 
     #[test]
-    fn tick_calls_each_registered_callback_once_per_call() {
+    fn dispatch_tick_calls_each_subscriber_once_per_call() {
         let (lua_a, key_a) = lua_with_counter("a");
         let (lua_b, key_b) = lua_with_counter("b");
 
-        let mut reg = LuaTickRegistry::default();
-        reg.add(TickEntry {
-            name: "a",
-            lua: lua_a.clone(),
-            callback: key_a,
-        });
-        reg.add(TickEntry {
-            name: "b",
-            lua: lua_b.clone(),
-            callback: key_b,
-        });
-        assert_eq!(reg.len(), 2);
+        let mut bus = LuaEventBus::default();
+        bus.subscribe(
+            "tick",
+            Subscriber {
+                name: "a",
+                lua: lua_a.clone(),
+                callback: key_a,
+            },
+        );
+        bus.subscribe(
+            "tick",
+            Subscriber {
+                name: "b",
+                lua: lua_b.clone(),
+                callback: key_b,
+            },
+        );
+        assert_eq!(bus.len(), 2);
+        assert_eq!(bus.count("tick"), 2);
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
         {
             let mut sink: Vec<UserPolyline> = Vec::new();
             let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
-            reg.tick(&mut api);
+            bus.dispatch_tick(&mut api);
         }
         let a: i64 = lua_a.globals().get("a").expect("read a");
         let b: i64 = lua_b.globals().get("b").expect("read b");
-        assert_eq!(a, 1, "first tick should bump a once");
-        assert_eq!(b, 1, "first tick should bump b once");
+        assert_eq!(a, 1, "first dispatch should bump a once");
+        assert_eq!(b, 1, "first dispatch should bump b once");
 
         {
             let mut sink: Vec<UserPolyline> = Vec::new();
             let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
-            reg.tick(&mut api);
+            bus.dispatch_tick(&mut api);
         }
         let a: i64 = lua_a.globals().get("a").expect("read a");
         let b: i64 = lua_b.globals().get("b").expect("read b");
-        assert_eq!(a, 2, "second tick should bump a again");
-        assert_eq!(b, 2, "second tick should bump b again");
+        assert_eq!(a, 2, "second dispatch should bump a again");
+        assert_eq!(b, 2, "second dispatch should bump b again");
     }
 
-    /// A callback that throws is logged and swallowed; subsequent
-    /// callbacks in the same registry still fire. Guards against the
+    /// A subscriber that throws is logged and swallowed; subsequent
+    /// subscribers in the same bucket still fire. Guards against the
     /// "one buggy plugin freezes everyone" failure mode.
     #[test]
-    fn tick_continues_after_a_callback_errors() {
+    fn dispatch_continues_after_a_subscriber_errors() {
         let lua_bad = Lua::new();
         lua_bad
             .load(r#"function bang(_map) error("boom") end"#)
@@ -171,37 +215,71 @@ mod tests {
 
         let (lua_good, good_key) = lua_with_counter("good");
 
-        let mut reg = LuaTickRegistry::default();
-        reg.add(TickEntry {
-            name: "bad",
-            lua: lua_bad,
-            callback: bad_key,
-        });
-        reg.add(TickEntry {
-            name: "good",
-            lua: lua_good.clone(),
-            callback: good_key,
-        });
+        let mut bus = LuaEventBus::default();
+        bus.subscribe(
+            "tick",
+            Subscriber {
+                name: "bad",
+                lua: lua_bad,
+                callback: bad_key,
+            },
+        );
+        bus.subscribe(
+            "tick",
+            Subscriber {
+                name: "good",
+                lua: lua_good.clone(),
+                callback: good_key,
+            },
+        );
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
         let mut sink: Vec<UserPolyline> = Vec::new();
         let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
-        reg.tick(&mut api);
+        bus.dispatch_tick(&mut api);
 
         let good: i64 = lua_good.globals().get("good").expect("read good");
         assert_eq!(
             good, 1,
-            "broken upstream callback should not stop downstream callbacks"
+            "broken upstream subscriber should not stop downstream subscribers"
         );
     }
 
     #[test]
-    fn empty_registry_tick_is_a_noop() {
-        let reg = LuaTickRegistry::default();
+    fn dispatch_tick_with_empty_bus_is_a_noop() {
+        let bus = LuaEventBus::default();
         let (mut buf, area, frame, theme) = fixture(20, 5);
         let mut sink: Vec<UserPolyline> = Vec::new();
         let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
-        reg.tick(&mut api);
-        assert!(reg.is_empty());
+        bus.dispatch_tick(&mut api);
+        assert!(bus.is_empty());
+    }
+
+    #[test]
+    fn dispatch_only_runs_subscribers_for_the_named_event() {
+        // Subscribers under a different event name must not fire when
+        // we dispatch `"tick"`. This is the core pub/sub guarantee.
+        let (lua_other, key_other) = lua_with_counter("other");
+
+        let mut bus = LuaEventBus::default();
+        bus.subscribe(
+            "frame_ready", // not "tick"
+            Subscriber {
+                name: "other",
+                lua: lua_other.clone(),
+                callback: key_other,
+            },
+        );
+
+        let (mut buf, area, frame, theme) = fixture(20, 5);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        bus.dispatch_tick(&mut api);
+
+        let other: i64 = lua_other.globals().get("other").expect("read other");
+        assert_eq!(
+            other, 0,
+            "dispatch_tick must not fire subscribers under other event names"
+        );
     }
 }

@@ -397,7 +397,7 @@ pub struct Registrar {
     /// (zero or more times per script), and ticked once per frame
     /// from `App::run` against the live `MapApi`. The unified
     /// per-frame work mechanism for the nvim-style plugin API.
-    pub tick_registry: crate::lua::LuaTickRegistry,
+    pub event_bus: crate::lua::LuaEventBus,
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::app::App::new`] and drains each handle's receivers

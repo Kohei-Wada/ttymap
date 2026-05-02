@@ -21,7 +21,7 @@ pub mod ttymap;
 
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use init_lua::run_init_lua;
-pub use registry::LuaTickRegistry;
+pub use registry::LuaEventBus;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;
 
@@ -216,16 +216,20 @@ fn register_one(
             }
         };
 
-    // Each `ttymap.api.frame.on_tick(fn)` capture lands as a
-    // separate TickEntry. The setup-state Lua is cloned (cheap Arc
-    // bump) into each entry so the closure stays callable for the
-    // program's lifetime. Order = registration order.
-    for callback in captured.ticks {
-        r.tick_registry.add(crate::lua::registry::TickEntry {
-            name,
-            lua: lua.clone(),
-            callback,
-        });
+    // Every `ttymap.on_event(name, fn)` (and its sugar
+    // `ttymap.api.frame.on_tick(fn)` which lowers to event "tick")
+    // capture lands as a separate Subscriber. The setup-state Lua is
+    // cloned (cheap Arc bump) into each entry so the callback stays
+    // invokable for the program's lifetime. Order = registration order.
+    for sub in captured.event_subscriptions {
+        r.event_bus.subscribe(
+            sub.event_name,
+            crate::lua::registry::Subscriber {
+                name,
+                lua: lua.clone(),
+                callback: sub.callback,
+            },
+        );
     }
 
     // Hand the setup state's `LuaHostHandles` over to the
@@ -489,7 +493,7 @@ mod tests {
         // Panel migrations (aircraft / quake / wiki / search / here /
         // satellite) also subscribe a tick for async drain + paint,
         // so this is a lower bound rather than equality.
-        let tick_count = r.tick_registry.len();
+        let tick_count = r.event_bus.count("tick");
 
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased). `satellite` is the
@@ -559,7 +563,7 @@ mod tests {
             "#,
             "x",
         );
-        assert_eq!(c.ticks.len(), 2);
+        assert_eq!(c.event_subscriptions.len(), 2);
     }
 
     #[test]
@@ -570,7 +574,8 @@ mod tests {
         let (_lua, c) = parse_spec(r#"ttymap.api.frame.on_tick(function(_map) end)"#, "chrome");
         assert!(c.palette_commands.is_empty());
         assert!(c.keybinds.is_empty());
-        assert_eq!(c.ticks.len(), 1);
+        assert_eq!(c.event_subscriptions.len(), 1);
+        assert_eq!(c.event_subscriptions[0].event_name, "tick");
     }
 
     #[test]

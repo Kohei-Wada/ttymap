@@ -152,12 +152,12 @@ pub fn fresh_load(
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()
         || !captured.keybinds.is_empty()
-        || !captured.ticks.is_empty();
+        || !captured.event_subscriptions.is_empty();
     if !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap registration API \
-             (ttymap.api.frame.on_tick, ttymap.register_palette_command, \
-             or ttymap.register_keybind)",
+             (ttymap.on_event, ttymap.api.frame.on_tick, \
+             ttymap.register_palette_command, or ttymap.register_keybind)",
         ));
     }
     Ok((lua, captured, handles))
