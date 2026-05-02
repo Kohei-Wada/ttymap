@@ -56,8 +56,10 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
 
     // Left sidebar (when toggled on) takes a fixed width; remaining
     // columns go to the world block. When closed, the world fills
-    // the full width as before.
-    let map_area = if sidebar_open && main_area.width > sidebar_width + 4 {
+    // the full width as before. `sidebar_inner` is the inside of the
+    // bordered ` side ` block — handed to `compositor.render` so it
+    // can lay sidebar components out vertically inside it.
+    let (map_area, sidebar_inner) = if sidebar_open && main_area.width > sidebar_width + 4 {
         let cols = Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)])
             .split(main_area);
         let side_area = cols[0];
@@ -70,18 +72,9 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         let side_inner = side_block.inner(side_area);
         f.render_widget(side_block, side_area);
 
-        // Placeholder until Section components are wired up. Helps
-        // confirm the sidebar is receiving paint without forcing the
-        // user to wonder if the toggle did anything.
-        let placeholder = Paragraph::new(Line::from(Span::styled(
-            "(no sections yet)",
-            Style::default().fg(theme.muted_color),
-        )));
-        f.render_widget(placeholder, side_inner);
-
-        map_area
+        (map_area, Some(side_inner))
     } else {
-        main_area
+        (main_area, None)
     };
 
     let map_block = Block::new()
@@ -114,8 +107,22 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         compositor.paint_on_map(&mut api);
     }
 
-    // Modal panels on top of the map, bottom-up.
-    compositor.render(f, map_inner, theme, ctx);
+    // Modal panels on top of the map (bottom-up) + sidebar sections
+    // laid out vertically in the side panel when it's open.
+    compositor.render(f, map_inner, sidebar_inner, theme, ctx);
+
+    // Empty-sidebar placeholder so toggling on with no sections shows
+    // SOMETHING — otherwise the user would just see an empty box and
+    // wonder if the toggle did anything.
+    if let Some(side_inner) = sidebar_inner
+        && !compositor.has_sidebar_components()
+    {
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            "(no sections yet)",
+            Style::default().fg(theme.muted_color),
+        )));
+        f.render_widget(placeholder, side_inner);
+    }
 
     let hints = build_hints(compositor);
     let sep = Span::styled("  ", Style::default().fg(theme.muted_color));

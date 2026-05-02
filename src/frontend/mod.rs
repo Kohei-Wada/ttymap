@@ -350,6 +350,16 @@ impl Frontend {
 
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
+
+        // Auto-open the sidebar the moment a `Placement::Sidebar`
+        // component lands on the stack — pushing wiki without first
+        // pressing `\` would otherwise silently put the panel
+        // somewhere invisible.
+        if !self.sidebar_open && self.compositor.has_sidebar_components() {
+            self.sidebar_open = true;
+            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+            self.handle_resize(cols, rows);
+        }
     }
 
     /// Single per-iteration draw. The `tick` bus event fires from

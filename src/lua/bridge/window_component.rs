@@ -53,17 +53,19 @@ pub struct WindowLayout {
     anchor: PanelAnchor,
     width: u16,
     height: Option<u16>,
+    placement: crate::frontend::compositor::Placement,
 }
 
 impl WindowLayout {
     /// Sane default when a plugin omits the `layout` field —
-    /// top-left, 32×10. Big enough for a few lines of text, small
-    /// enough not to swallow the map.
+    /// top-left, 32×10, modal placement. Big enough for a few lines
+    /// of text, small enough not to swallow the map.
     fn fallback() -> Self {
         Self {
             anchor: PanelAnchor::TopLeft,
             width: 32,
             height: Some(10),
+            placement: crate::frontend::compositor::Placement::Modal,
         }
     }
 }
@@ -108,6 +110,14 @@ fn parse_layout(spec: &Table) -> WindowLayout {
         out.height = Some(h);
     } else {
         out.height = None;
+    }
+    // `kind = "sidebar"` opts the component into the left sidebar's
+    // vertical-section layout; absent or any other value keeps the
+    // default modal placement.
+    if let Ok(s) = layout.get::<String>("kind")
+        && s.eq_ignore_ascii_case("sidebar")
+    {
+        out.placement = crate::frontend::compositor::Placement::Sidebar;
     }
     out
 }
@@ -318,6 +328,10 @@ impl Component for LuaWindowComponent {
 
     fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.footer_hints.clone()
+    }
+
+    fn placement(&self) -> crate::frontend::compositor::Placement {
+        self.layout.placement
     }
 }
 

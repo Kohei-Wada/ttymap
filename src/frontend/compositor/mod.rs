@@ -37,7 +37,7 @@ pub use map_api::MapApi;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::frontend::{AppEvent, UserIntent};
 use crate::theme::ThemeId;
@@ -98,6 +98,17 @@ pub struct Context {
 /// The framework applies those ops atomically after the hook
 /// returns, so components cannot break stack / focus invariants
 /// regardless of what order they call the methods.
+///
+/// Where the component renders. Default is `Modal` — the existing
+/// behaviour of floating panels anchored over the map. `Sidebar`
+/// components share the left sidebar via equal vertical split so
+/// multiple sections can live there at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    Modal,
+    Sidebar,
+}
+
 pub trait Component {
     /// Handle a single key event. Call `win.close()` / `open(c)` /
     /// `emit(msg)` / `ignore()` to express what should happen next.
@@ -120,6 +131,13 @@ pub trait Component {
     /// Default impl is no-op — for marker-only components that have
     /// no panel UI (just `paint_on_map`).
     fn render(&self, _win: &mut window::RenderWindow) {}
+
+    /// Where to draw this component. Defaults to [`Placement::Modal`]
+    /// (free-floating panel over the map). Plugins that want to live
+    /// in the left sidebar override to [`Placement::Sidebar`].
+    fn placement(&self) -> Placement {
+        Placement::Modal
+    }
 
     /// Paint world-space primitives on the map via [`MapApi`].
     /// Called every frame while on the stack, before `render`. Default
@@ -278,17 +296,62 @@ impl Compositor {
     /// everything else), regardless of where it sits in the stack.
     /// This lets multiple panels overlap freely; whichever the user
     /// is currently driving with the keyboard pops to the front.
-    pub fn render(&self, f: &mut Frame, area: Rect, theme: &UiTheme, ctx: &Context) {
-        for (i, c) in self.stack.iter().enumerate() {
+    ///
+    /// Components are routed by their [`Placement`]: `Modal` ones
+    /// render into `map_area` (existing behaviour); `Sidebar` ones
+    /// share `sidebar_area` via equal vertical split, in stack order
+    /// (oldest at top). When `sidebar_area` is `None` (sidebar
+    /// hidden), `Sidebar` components are skipped — they stay alive
+    /// on the stack but are invisible until the user toggles the
+    /// sidebar back on.
+    pub fn render(
+        &self,
+        f: &mut Frame,
+        map_area: Rect,
+        sidebar_area: Option<Rect>,
+        theme: &UiTheme,
+        ctx: &Context,
+    ) {
+        // Modal components: bottom-up, focused last so it sits on top.
+        let modal_indices: Vec<usize> = self
+            .stack
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.placement() == Placement::Modal)
+            .map(|(i, _)| i)
+            .collect();
+        for &i in &modal_indices {
             if i == self.focused_idx {
                 continue;
             }
-            let mut win = window::RenderWindow::new(f, area, theme, ctx);
+            let mut win = window::RenderWindow::new(f, map_area, theme, ctx);
+            self.stack[i].render(&mut win);
+        }
+        if let Some(c) = self.stack.get(self.focused_idx)
+            && c.placement() == Placement::Modal
+        {
+            let mut win = window::RenderWindow::new(f, map_area, theme, ctx);
             c.render(&mut win);
         }
-        if let Some(c) = self.stack.get(self.focused_idx) {
-            let mut win = window::RenderWindow::new(f, area, theme, ctx);
-            c.render(&mut win);
+
+        // Sidebar components: equal vertical split, all visible.
+        if let Some(side_area) = sidebar_area {
+            let sidebar_components: Vec<&dyn Component> = self
+                .stack
+                .iter()
+                .filter(|c| c.placement() == Placement::Sidebar)
+                .map(|c| c.as_ref())
+                .collect();
+            if !sidebar_components.is_empty() {
+                let n = sidebar_components.len() as u32;
+                let constraints: Vec<Constraint> =
+                    (0..n).map(|_| Constraint::Ratio(1, n)).collect();
+                let chunks = Layout::vertical(constraints).split(side_area);
+                for (slot, c) in chunks.iter().zip(sidebar_components.iter()) {
+                    let mut win = window::RenderWindow::new(f, *slot, theme, ctx);
+                    c.render(&mut win);
+                }
+            }
         }
     }
 
@@ -299,6 +362,16 @@ impl Compositor {
         for c in self.stack.iter() {
             c.paint_on_map(p);
         }
+    }
+
+    /// Whether any [`Placement::Sidebar`] component is on the stack.
+    /// Used by the UI layer to decide whether to show the
+    /// "(no sections yet)" placeholder when the sidebar is open but
+    /// empty.
+    pub fn has_sidebar_components(&self) -> bool {
+        self.stack
+            .iter()
+            .any(|c| c.placement() == Placement::Sidebar)
     }
 
     /// Footer hints from the currently focused component.
