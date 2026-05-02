@@ -330,6 +330,19 @@ impl Component for LuaWindowComponent {
         let body = win.style(StyleKind::Body);
         let raw_lines = self.render_lines();
         let total_lines = raw_lines.len() as u16;
+
+        // Auto-scroll to keep the selected row in view. Plugins
+        // mark the focused row with a `Highlight`-styled span (wiki
+        // / aircraft / satellite all do); we scan for the first
+        // such row and bump the scroll offset whenever it falls
+        // outside the visible window. Plugins that don't use a
+        // highlight style get pure C-n / C-p scroll behaviour
+        // unchanged.
+        let highlight_row: Option<u16> = raw_lines
+            .iter()
+            .position(|spans| spans.iter().any(|(_, kind)| *kind == StyleKind::Highlight))
+            .map(|p| p as u16);
+
         let lines: Vec<Line<'static>> = raw_lines
             .into_iter()
             .map(|spans| {
@@ -341,15 +354,24 @@ impl Component for LuaWindowComponent {
             })
             .collect();
 
-        // Clamp the scroll offset against the freshly-rendered line
-        // count so j/k overshoot from the previous frame self-corrects
-        // here (and the offset never traps the section in blank space).
-        let max_offset = total_lines.saturating_sub(inner.height);
         let mut offset = self.scroll_offset.get();
+        if let Some(row) = highlight_row
+            && inner.height > 0
+        {
+            if row < offset {
+                offset = row;
+            } else if row >= offset + inner.height {
+                offset = row + 1 - inner.height;
+            }
+        }
+        // Clamp against the freshly-rendered line count so j/k
+        // overshoot from the previous frame self-corrects here (and
+        // the offset never traps the section in blank space).
+        let max_offset = total_lines.saturating_sub(inner.height);
         if offset > max_offset {
             offset = max_offset;
-            self.scroll_offset.set(offset);
         }
+        self.scroll_offset.set(offset);
 
         let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
         win.paragraph(paragraph, inner);
