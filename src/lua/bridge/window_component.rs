@@ -153,6 +153,10 @@ pub struct LuaWindowComponent {
     /// `&'static str` without leaking per call. Empty when the spec
     /// omits the field.
     footer_hints: Vec<(&'static str, &'static str)>,
+    /// First visible line index when the rendered content overflows
+    /// the slot. Bridge-managed (j/k for sidebar sections); ignored
+    /// for modal placement. `Cell` because `render` takes `&self`.
+    scroll_offset: std::cell::Cell<u16>,
 }
 
 impl LuaWindowComponent {
@@ -197,6 +201,7 @@ impl LuaWindowComponent {
             layout,
             has_render,
             footer_hints,
+            scroll_offset: std::cell::Cell::new(0),
         })
     }
 
@@ -268,6 +273,28 @@ impl LuaWindowComponent {
 impl Component for LuaWindowComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let action = self.dispatch_event(event);
+
+        // Sidebar sections: when the Lua spec didn't consume the
+        // event, the bridge applies a built-in C-n / C-p scroll so
+        // overflow content is reachable without every plugin
+        // re-implementing it. j/k stay untouched and pass through to
+        // the base layer (map pan).
+        if self.layout.placement == crate::frontend::compositor::Placement::Sidebar
+            && action == KeyAction::Ignore
+            && event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let cur = self.scroll_offset.get();
+            let next = match event.code {
+                KeyCode::Char('n') => Some(cur.saturating_add(1)),
+                KeyCode::Char('p') => Some(cur.saturating_sub(1)),
+                _ => None,
+            };
+            if let Some(v) = next {
+                self.scroll_offset.set(v);
+                return; // consumed
+            }
+        }
+
         // Host-side jump / frame.export the callback queued hits the
         // setup state's senders, not per-window receivers. App drains
         // those centrally each frame.
@@ -286,19 +313,24 @@ impl Component for LuaWindowComponent {
             return;
         }
         let outer = win.area();
-        // Anchor the panel inside the map area so the framed
-        // Paragraph doesn't paint over the rendered tiles. Height
-        // defaults to the available space minus a 1-cell margin
-        // when the spec doesn't pin a specific value.
-        let height = self
-            .layout
-            .height
-            .unwrap_or_else(|| outer.height.saturating_sub(2));
-        let area = self.layout.anchor.rect(outer, self.layout.width, height);
+        // Sidebar sections fill the entire allocated slot — the
+        // sidebar layout already picked the rect, no inner anchor /
+        // width logic needed. Modal placement keeps the historical
+        // anchor + width math.
+        let area = if self.layout.placement == crate::frontend::compositor::Placement::Sidebar {
+            outer
+        } else {
+            let height = self
+                .layout
+                .height
+                .unwrap_or_else(|| outer.height.saturating_sub(2));
+            self.layout.anchor.rect(outer, self.layout.width, height)
+        };
         let inner = win.panel(area, self.display);
         let body = win.style(StyleKind::Body);
-        let lines: Vec<Line<'static>> = self
-            .render_lines()
+        let raw_lines = self.render_lines();
+        let total_lines = raw_lines.len() as u16;
+        let lines: Vec<Line<'static>> = raw_lines
             .into_iter()
             .map(|spans| {
                 let rendered: Vec<Span<'static>> = spans
@@ -308,7 +340,18 @@ impl Component for LuaWindowComponent {
                 Line::from(rendered)
             })
             .collect();
-        let paragraph = Paragraph::new(lines).style(body);
+
+        // Clamp the scroll offset against the freshly-rendered line
+        // count so j/k overshoot from the previous frame self-corrects
+        // here (and the offset never traps the section in blank space).
+        let max_offset = total_lines.saturating_sub(inner.height);
+        let mut offset = self.scroll_offset.get();
+        if offset > max_offset {
+            offset = max_offset;
+            self.scroll_offset.set(offset);
+        }
+
+        let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
         win.paragraph(paragraph, inner);
     }
 
