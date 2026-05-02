@@ -241,8 +241,11 @@ mod tests {
     fn build_provider(script: &str) -> LuaPaletteProvider {
         let lua = Lua::new();
         let slot = new_capture_slot();
-        let _handles =
-            install(&lua, "lua-test", LuaHostShared::empty(), slot).expect("install ttymap");
+        // Disconnected sender — tests here exercise the trait surface,
+        // not the AppMsg channel.
+        let (app_msg_tx, _rx) = std::sync::mpsc::channel();
+        let _handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, app_msg_tx)
+            .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");
         LuaPaletteProvider::from_spec(lua, spec, "lua-test").expect("from_spec")
     }

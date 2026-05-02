@@ -62,12 +62,16 @@ pub struct App {
     /// Setup-state [`LuaHostHandles`] for every Lua plugin script
     /// (palette providers, plugin components, plugin loops, and any
     /// `ttymap.api.window.open` / `palette.open` callers). Each
-    /// entry's receivers (`push_rx`, `app_msg_rx`) are drained once
-    /// per frame in [`Self::drain_lua_host_handles`]: queued components
-    /// hit `compositor.push`, every fire-and-forget Lua intent
-    /// (`map:jump`, `:zoom(level)`, `:fly_to`, `frame.export`) arrives
-    /// as a pre-built `AppMsg` and is dispatched directly.
+    /// entry's `push_rx` is drained once per frame so queued
+    /// components reach `compositor.push`. `Box<dyn Component>` is
+    /// `!Send`, hence one channel per plugin (kept on main thread).
     lua_host_handles: Vec<LuaHostHandles>,
+    /// Single `AppMsg` receiver shared by every Lua plugin. Each
+    /// plugin's `HostMap` / export closure pushes intents through a
+    /// clone of the matching `Sender`; this Receiver is drained once
+    /// per frame in [`Self::drain_lua_host_handles`] regardless of
+    /// how many plugins are loaded.
+    lua_app_msg_rx: std::sync::mpsc::Receiver<AppMsg>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -105,13 +109,21 @@ impl App {
         let (tile_cache, wake_rx) = build_tile_cache(&config);
         let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
+
+        // Single AppMsg channel shared by every Lua plugin. Each
+        // plugin's `HostMap` / export closure clones `app_msg_tx` and
+        // pushes its fire-and-forget intents (`map:jump`, `:zoom`,
+        // `:fly_to`, `frame.export`); the App holds the matching
+        // Receiver and drains all plugins through one loop per frame.
+        let (app_msg_tx, app_msg_rx) = std::sync::mpsc::channel::<AppMsg>();
+
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
         let BuiltRegistrar {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, tile_cache.attribution(), &keymap);
+        } = build_registrar(&config, tile_cache.attribution(), &keymap, app_msg_tx);
         // Lift the per-frame tick dispatcher off the registrar before
         // the rest is consumed (activations / palette_entries move
         // into the compositor below). Owned on App so the per-frame
@@ -166,6 +178,7 @@ impl App {
             ui_theme,
             tick_registry,
             lua_host_handles,
+            lua_app_msg_rx: app_msg_rx,
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
@@ -305,14 +318,18 @@ impl App {
     /// an active window.
     ///
     /// Components queued via `ttymap.api.window.open` /
-    /// `palette.open` get pushed onto the compositor stack inline;
-    /// fire-and-forget Lua intents (map verbs and `frame.export`)
-    /// arrive on each plugin's `app_msg_rx` already shaped as
-    /// [`AppMsg`]s and are returned for the caller to dispatch.
+    /// `palette.open` get pushed onto the compositor stack inline.
+    /// Fire-and-forget Lua intents (map verbs and `frame.export`)
+    /// arrive on the **single** `lua_app_msg_rx` already shaped as
+    /// [`AppMsg`]s and are returned for the caller to dispatch — one
+    /// drain per frame regardless of plugin count.
     fn drain_lua_host_handles(&mut self) -> Vec<AppMsg> {
         let center = self.map.center();
         let zoom = self.map.zoom();
-        let mut msgs = Vec::new();
+        // Refresh per-plugin getter mirrors and drain `push_rx`. These
+        // stay per-plugin because `Box<dyn Component>` is `!Send` and
+        // each plugin's setup-state holds its own queue on the main
+        // thread.
         for handles in &self.lua_host_handles {
             if let Ok(mut cell) = handles.center.lock() {
                 *cell = center;
@@ -320,18 +337,15 @@ impl App {
             if let Ok(mut cell) = handles.zoom.lock() {
                 *cell = zoom;
             }
-            // Push queued components first so the same tick's
-            // compositor.poll already sees them.
             while let Ok(component) = handles.push_rx.try_recv() {
                 self.compositor.push(component);
             }
-            // Every fire-and-forget Lua intent arrives pre-packed as
-            // an `AppMsg` so the host doesn't need a `match` per verb.
-            // Map intents (`Action::Jump` / `SetZoom` / `FlyTo`) and
-            // `ExportFrame` all flow through this single drain.
-            while let Ok(msg) = handles.app_msg_rx.try_recv() {
-                msgs.push(msg);
-            }
+        }
+        // Every fire-and-forget Lua intent across every plugin lands
+        // on this single Receiver, so one drain covers them all.
+        let mut msgs = Vec::new();
+        while let Ok(msg) = self.lua_app_msg_rx.try_recv() {
+            msgs.push(msg);
         }
         msgs
     }
@@ -521,6 +535,7 @@ fn build_registrar(
     config: &Config,
     attribution: Option<String>,
     keymap: &KeyMap,
+    app_msg_tx: std::sync::mpsc::Sender<AppMsg>,
 ) -> BuiltRegistrar {
     use std::sync::Arc;
 
@@ -559,6 +574,7 @@ fn build_registrar(
         runtime_path,
         &config.plugins.disable,
         shared.clone(),
+        app_msg_tx,
         &mut r,
     );
 

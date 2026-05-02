@@ -26,10 +26,11 @@ pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use mlua::{Lua, Table};
 
+use crate::app::AppMsg;
 use crate::compositor::Registrar;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
@@ -163,6 +164,7 @@ pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
+    app_msg_tx: mpsc::Sender<AppMsg>,
     r: &mut Registrar,
 ) {
     if runtime_path.is_empty() {
@@ -175,7 +177,14 @@ pub fn register_builtin_plugins(
         if !plugin_dir.is_dir() {
             continue;
         }
-        register_plugins_in(&plugin_dir, Some(&mut seen), disable, shared.clone(), r);
+        register_plugins_in(
+            &plugin_dir,
+            Some(&mut seen),
+            disable,
+            shared.clone(),
+            app_msg_tx.clone(),
+            r,
+        );
     }
 }
 
@@ -187,6 +196,7 @@ fn register_one(
     name: &'static str,
     source: &'static str,
     shared: Arc<ttymap::LuaHostShared>,
+    app_msg_tx: mpsc::Sender<AppMsg>,
     r: &mut Registrar,
 ) {
     // Run the script once to capture its activation surfaces and
@@ -198,7 +208,7 @@ fn register_one(
     // lifetime — that's the hook for plugin-side toggle state.
     let shared_for_meta = shared.clone();
     let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta) {
+        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta, app_msg_tx) {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
@@ -347,6 +357,7 @@ fn register_plugins_in(
     mut seen: Option<&mut std::collections::HashSet<String>>,
     disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
+    app_msg_tx: mpsc::Sender<AppMsg>,
     r: &mut Registrar,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -406,7 +417,7 @@ fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(name, source, shared.clone(), r);
+        register_one(name, source, shared.clone(), app_msg_tx.clone(), r);
     }
 }
 
@@ -414,6 +425,15 @@ fn register_plugins_in(
 mod tests {
     use super::*;
     use mlua::Result;
+
+    /// Disconnected `Sender<AppMsg>` for tests that exercise plugin
+    /// registration without verifying intent flow. The receiver drops
+    /// immediately so any `send()` returns `Err` — the registration
+    /// path under test never inspects the channel.
+    fn dummy_app_msg_tx() -> mpsc::Sender<AppMsg> {
+        let (tx, _rx) = mpsc::channel();
+        tx
+    }
 
     #[test]
     fn lua_evaluates_a_basic_expression() {
@@ -457,7 +477,7 @@ mod tests {
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        register_builtin_plugins(&rtp, &[], shared, &mut r);
+        register_builtin_plugins(&rtp, &[], shared, dummy_app_msg_tx(), &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -504,7 +524,8 @@ mod tests {
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
         let shared = ttymap::LuaHostShared::empty();
         let (lua, captured, _handles) =
-            bridge::handle::fresh_load(source, name, "lua-test", shared).expect("load");
+            bridge::handle::fresh_load(source, name, "lua-test", shared, dummy_app_msg_tx())
+                .expect("load");
         (lua, captured)
     }
 
@@ -572,7 +593,7 @@ mod tests {
 
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], shared.clone(), &mut r);
+        register_plugins_in(&dir, None, &[], shared.clone(), dummy_app_msg_tx(), &mut r);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -620,7 +641,14 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -639,7 +667,14 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -663,7 +698,14 @@ mod tests {
 
         let mut r = Registrar::default();
         let disable = vec!["beta".to_string()];
-        register_plugins_in(&dir, None, &disable, ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &disable,
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -685,7 +727,14 @@ mod tests {
         .expect("write init.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         let ls = labels(&r);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -709,7 +758,14 @@ mod tests {
         .expect("write fmt.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         assert!(
             !labels(&r).iter().any(|l| l.contains("libonly")),
             "lib-only subdir must not register as a plugin"
@@ -727,7 +783,14 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -808,7 +871,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], ttymap::LuaHostShared::empty(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            ttymap::LuaHostShared::empty(),
+            dummy_app_msg_tx(),
+            &mut r,
+        );
         assert!(r.palette_entries.is_empty());
     }
 }
