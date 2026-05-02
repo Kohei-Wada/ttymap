@@ -186,11 +186,6 @@ impl Frontend {
         self.dispatch_initial_redraw();
 
         while self.is_running() {
-            // Per-plugin housekeeping before the event drain — Lua
-            // plugins queued via `ttymap.api.window.open` reach the
-            // compositor before this iteration's `poll_compositor`.
-            self.refresh_lua_host_state();
-
             // Park on the unified bus until any source produces an
             // event; drain any further buffered events non-blockingly
             // so a burst doesn't push the paint behind.
@@ -225,37 +220,6 @@ impl Frontend {
     /// iteration.
     fn is_running(&self) -> bool {
         self.running
-    }
-
-    /// Drain every Lua plugin's setup-state receivers once.
-    ///
-    /// Before draining, refreshes the host-shared `center` / `zoom`
-    /// cells each plugin's `ttymap.map:center()` / `:zoom()` reads
-    /// from. Doing this once at the App level — instead of from
-    /// inside each `LuaWindowComponent` dispatch — means the values
-    /// are correct for *every* callback path (palette invoke,
-    /// register_keybind, on_tick), not just paths that go through
-    /// an active window.
-    ///
-    /// Per-plugin housekeeping: refresh `center` / `zoom` mirrors that
-    /// `ttymap.map:center()` / `:zoom()` read, and drain each plugin's
-    /// `push_rx` so any component queued via `ttymap.api.window.open`
-    /// / `palette.open` reaches the compositor stack before the
-    /// current tick's `compositor.poll`. Stays per-plugin because
-    /// `Box<dyn Component>` is `!Send` and the channel must remain on
-    /// the main thread.
-    ///
-    /// Intent flow (`map:jump`, `frame.export`, …) is **not** drained
-    /// here — those reach the App through the unified `event_rx`.
-    fn refresh_lua_host_state(&mut self) {
-        let center = self.map.center();
-        let zoom = self.map.zoom();
-        self.lua.sync_view(center, zoom);
-        // Disjoint borrows: `&self.lua` for the iterator, `&mut
-        // self.compositor` for the push side.
-        let lua = &self.lua;
-        let compositor = &mut self.compositor;
-        lua.drain_pushes(|component| compositor.push(component));
     }
 
     /// Apply one event drained off the unified queue. Each variant
@@ -364,7 +328,17 @@ impl Frontend {
     /// Drive a single `compositor.poll` pass. Components emitting
     /// intents through `Window::emit` route directly onto the bus —
     /// the run loop's same-iteration `try_recv` picks them up.
+    ///
+    /// Drains any components Lua queued via
+    /// `ttymap.api.window.open` / `palette.open` first, so they
+    /// participate in this same poll pass.
     fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+        // Disjoint borrows: `&self.lua` for the iterator, `&mut
+        // self.compositor` for the push side.
+        let lua = &self.lua;
+        let compositor = &mut self.compositor;
+        lua.drain_pushes(|component| compositor.push(component));
+
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
     }
@@ -472,6 +446,11 @@ impl Frontend {
     }
 
     fn request_map_redraw(&mut self) {
+        // Refresh the Lua-side view mirror in the same beat as
+        // queueing the next render task — Lua plugins read
+        // `ttymap.map:center()` / `:zoom()` from these mirrors and
+        // expect them to reflect the view about to be drawn.
+        self.lua.sync_view(self.map.center(), self.map.zoom());
         let overlays = std::mem::take(&mut self.overlay_sink);
         self.map.request_redraw(overlays);
     }
