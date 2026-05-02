@@ -17,10 +17,15 @@
 //! }
 //! ```
 //!
-//! Method calls queue into [`WindowOps`]. The compositor drains the
-//! queue after the hook returns and applies the ops atomically in a
-//! deterministic order: `close` → `opens` (with TypeId dedup) → and
-//! the collected `msgs` are returned to `App::dispatch`.
+//! Stack-mutation methods (`close`, `open`, `ignore`) queue into
+//! [`WindowOps`]; the compositor drains the queue after the hook
+//! returns and applies them in a deterministic order (`close` →
+//! `opens`). `emit` is *not* queued — it routes the [`AppMsg`]
+//! straight onto the App-level [`AppEvent`] channel, so every
+//! intent (whether produced by the keymap, a Lua palette callback,
+//! or a panel hook) flows through the same bus the render thread,
+//! input thread, and Lua plugins push into. There's no longer a
+//! second "synchronous return" path back to `App::dispatch`.
 //!
 //! # Why a handle instead of a return value
 //!
@@ -32,17 +37,21 @@
 //! the compositor is the sole applier of the queue, so invariants
 //! (focus, dedup, clamp) remain framework-enforced.
 
+use std::sync::mpsc;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Clear, Paragraph, Table, TableState};
 
-use crate::app::AppMsg;
+use crate::app::{AppEvent, AppMsg};
 use crate::compositor::{Component, Context};
 use crate::theme::{StyleKind, UiTheme};
 
-/// Queue of actions a [`Component`] hook recorded through [`Window`].
-/// Drained and applied by the compositor after the hook returns.
+/// Queue of stack-mutation actions a [`Component`] hook recorded
+/// through [`Window`]. Drained and applied by the compositor after
+/// the hook returns. Intent emission (`win.emit`) is **not** queued
+/// here — it fires directly onto the App's [`AppEvent`] bus.
 #[derive(Default)]
 pub(crate) struct WindowOps {
     /// `true` if the plugin called [`Window::close`]. Pops the
@@ -54,10 +63,12 @@ pub(crate) struct WindowOps {
     /// want toggle semantics ("close if already open") handle that
     /// themselves in their own `handle_event`.
     pub opens: Vec<Box<dyn Component>>,
-    /// Messages for [`App::dispatch`](crate::app::App). Returned
-    /// from `Compositor::handle_event` to the caller (App), which
-    /// dispatches them after the ops have been applied.
-    pub msgs: Vec<AppMsg>,
+    /// `true` if the plugin called [`Window::emit`] at least once.
+    /// Tracked so the fall-through logic in `Compositor::handle_event`
+    /// can tell "the hook only signalled ignore()" from "the hook
+    /// did emit something" — without this flag, an emit-then-ignore
+    /// component would leak its key down to the base layer.
+    pub did_emit: bool,
     /// `true` if the plugin called [`Window::ignore`]. Meaningful
     /// only when no other op was queued — in that case the
     /// compositor re-delivers the event to the base layer (unless
@@ -70,7 +81,7 @@ impl WindowOps {
     /// hook's only effect was `ignore()`, this is also true (ignore
     /// itself is a signal, not an op).
     pub(crate) fn is_ignorable_noop(&self) -> bool {
-        !self.close && self.opens.is_empty() && self.msgs.is_empty()
+        !self.close && self.opens.is_empty() && !self.did_emit
     }
 }
 
@@ -79,15 +90,23 @@ impl WindowOps {
 /// cannot break focus / stack invariants even if buggy.
 ///
 /// Read-only accessors (`ctx`) give the component what it needs for
-/// decision-making without granting any capability.
+/// decision-making without granting any capability. `emit` routes
+/// onto the App-level [`AppEvent`] bus the compositor was given;
+/// the component never sees the bus directly, so signature
+/// stability survives changes to the channel topology.
 pub struct Window<'a> {
     ops: &'a mut WindowOps,
     ctx: &'a Context,
+    event_tx: &'a mpsc::Sender<AppEvent>,
 }
 
 impl<'a> Window<'a> {
-    pub(crate) fn new(ops: &'a mut WindowOps, ctx: &'a Context) -> Self {
-        Self { ops, ctx }
+    pub(crate) fn new(
+        ops: &'a mut WindowOps,
+        ctx: &'a Context,
+        event_tx: &'a mpsc::Sender<AppEvent>,
+    ) -> Self {
+        Self { ops, ctx, event_tx }
     }
 
     /// App-level snapshot passed for this hook (map center, theme id).
@@ -112,13 +131,16 @@ impl<'a> Window<'a> {
         self.ops.opens.push(c);
     }
 
-    /// Queue `msg` for `App::dispatch`. Dispatched by the caller
-    /// (App) after the compositor has applied `close` / `open`. For
-    /// typical `emit + close` patterns this means the msg still
-    /// fires, but the component is already popped when it runs —
-    /// identical to the old `EventResult::Close(msgs)` semantic.
+    /// Send `msg` onto the App's unified [`AppEvent`] bus, wrapped
+    /// as [`AppEvent::Intent`]. The App's main loop drains the bus
+    /// in the same iteration's `try_recv` pass after this hook
+    /// returns, so `emit + close` still results in the msg being
+    /// dispatched (against the post-pop state). A failed send means
+    /// the bus receiver has been dropped (App teardown) — silently
+    /// ignored.
     pub fn emit(&mut self, msg: AppMsg) {
-        self.ops.msgs.push(msg);
+        self.ops.did_emit = true;
+        let _ = self.event_tx.send(AppEvent::Intent(msg));
     }
 
     /// Signal "this event isn't mine". With no other op queued,

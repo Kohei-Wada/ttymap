@@ -133,6 +133,7 @@ mod tests {
     /// [`super::window_component::LuaWindowComponent`].
     #[test]
     fn close_flag_wrapper_polls_close_when_flag_set() {
+        use crate::app::AppEvent;
         use crate::compositor::Component;
         use crate::compositor::Context;
         use crate::compositor::window::{Window, WindowOps};
@@ -146,6 +147,7 @@ mod tests {
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };
+        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
 
         let flag = CloseFlag::default();
         let mut wrapped = CloseFlagWrapper::new(Inert, flag.clone());
@@ -153,7 +155,7 @@ mod tests {
         // No flip → no close.
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             wrapped.poll(&mut win);
         }
         assert!(!ops.close);
@@ -162,14 +164,14 @@ mod tests {
         flag.request();
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             wrapped.poll(&mut win);
         }
         assert!(ops.close);
 
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             wrapped.poll(&mut win);
         }
         assert!(!ops.close);

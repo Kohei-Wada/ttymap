@@ -1,8 +1,12 @@
 //! Application event loop and central message dispatcher.
 //!
 //! [`App`] is the sole **Receiver** in the GoF Command pattern: every
-//! invoker (keymap, palette, plugins, mouse adapter) returns
-//! `Vec<AppMsg>` and only `App::dispatch` executes them.
+//! invoker (keymap, palette, plugins, mouse adapter, render thread,
+//! input thread, frame timer) emits onto the unified [`AppEvent`]
+//! bus, and only `App::dispatch` executes the resulting `AppMsg`s.
+//! Component hooks express intent through `Window::emit(msg)` which
+//! routes onto the same bus — no synchronous "return `Vec<AppMsg>`"
+//! path remains.
 //!
 //! Focus/modal state lives on [`Compositor`] — a stack of
 //! [`Component`]s that replaced the old `FocusManager` + `Plugin`
@@ -23,7 +27,7 @@ pub use msg::AppMsg;
 use std::io;
 use std::sync::Arc;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
@@ -252,14 +256,12 @@ impl App {
                 self.handle_event(event);
             }
 
-            // Drain per-tick messages from compositor components.
-            // Borrows &mut self transitively through dispatch, so
-            // collect into a Vec first.
+            // Component poll: any `win.emit(msg)` inside fires
+            // directly onto the unified event bus. Same-iteration
+            // `try_recv` below picks them up and dispatches them
+            // — no synchronous return path remains.
             let ctx = self.context();
-            let compositor_msgs = self.compositor.poll(&ctx);
-            for msg in compositor_msgs {
-                self.dispatch(msg);
-            }
+            self.compositor.poll(&ctx, &self.event_tx);
 
             let ctx = self.context();
             terminal.draw(|f| {
@@ -428,30 +430,28 @@ impl App {
                     && key_event.code == KeyCode::Char('c')
                 {
                     info!("Ctrl-C received, quitting");
-                    self.dispatch(AppMsg::Map(Action::Quit));
+                    let _ = self
+                        .event_tx
+                        .send(AppEvent::Intent(AppMsg::Map(Action::Quit)));
                 } else {
                     debug!("key event: {:?}", key_event.code);
-                    self.handle_key(key_event);
+                    let ctx = self.context();
+                    self.compositor
+                        .handle_event(key_event, &ctx, &self.event_tx);
                 }
             }
             Event::Resize(cols, rows) => {
                 info!("resize: {}x{}", cols, rows);
-                self.dispatch(AppMsg::Resize(cols, rows));
+                let _ = self
+                    .event_tx
+                    .send(AppEvent::Intent(AppMsg::Resize(cols, rows)));
             }
             Event::Mouse(mouse) => {
                 for msg in self.mouse.translate(mouse) {
-                    self.dispatch(msg);
+                    let _ = self.event_tx.send(AppEvent::Intent(msg));
                 }
             }
             _ => {}
-        }
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) {
-        let ctx = self.context();
-        let msgs = self.compositor.handle_event(key, &ctx);
-        for msg in msgs {
-            self.dispatch(msg);
         }
     }
 

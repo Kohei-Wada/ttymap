@@ -647,6 +647,7 @@ mod tests {
 
     #[test]
     fn poll_does_nothing_until_flag_is_flipped() {
+        use crate::app::AppEvent;
         use crate::compositor::Context;
         use crate::compositor::window::WindowOps;
 
@@ -659,9 +660,10 @@ mod tests {
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };
+        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             c.poll(&mut win);
         }
         assert!(!ops.close, "no flag flip → no close queued");
@@ -669,6 +671,7 @@ mod tests {
 
     #[test]
     fn poll_honours_flag_and_closes_window() {
+        use crate::app::AppEvent;
         use crate::compositor::Context;
         use crate::compositor::window::WindowOps;
 
@@ -681,10 +684,11 @@ mod tests {
             theme_id: crate::theme::ThemeId::Dark,
             cursor: None,
         };
+        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
         flag.request();
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             c.poll(&mut win);
         }
         assert!(ops.close, "flipped flag → win.close() queued");
@@ -692,7 +696,7 @@ mod tests {
         // Idempotent — second poll without re-flipping is a no-op.
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX);
+            let mut win = Window::new(&mut ops, &CTX, &tx);
             c.poll(&mut win);
         }
         assert!(!ops.close);

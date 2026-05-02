@@ -39,7 +39,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app::AppMsg;
+use crate::app::{AppEvent, AppMsg};
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -203,17 +203,23 @@ impl Compositor {
     /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**
     /// and never reach any component — focus cycling is a property
     /// of the framework, not of any individual plugin.
-    pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<AppMsg> {
+    pub fn handle_event(
+        &mut self,
+        event: KeyEvent,
+        ctx: &Context,
+        event_tx: &std::sync::mpsc::Sender<AppEvent>,
+    ) {
         if let Some(msg) = intercept_focus_key(event) {
-            return vec![msg];
+            let _ = event_tx.send(AppEvent::Intent(msg));
+            return;
         }
         if self.stack.is_empty() {
-            return Vec::new();
+            return;
         }
         let focused = self.focused_idx;
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, ctx);
+            let mut win = Window::new(&mut ops, ctx, event_tx);
             self.stack[focused].handle_event(event, &mut win);
         }
         // Fall-through: only when the hook queued nothing *and*
@@ -222,21 +228,23 @@ impl Compositor {
         if ops.is_ignorable_noop() && ops.ignored && focused != 0 {
             let mut ops = WindowOps::default();
             {
-                let mut win = Window::new(&mut ops, ctx);
+                let mut win = Window::new(&mut ops, ctx, event_tx);
                 self.stack[0].handle_event(event, &mut win);
             }
-            return self.apply_ops(0, ops);
+            self.apply_ops(0, ops);
+            return;
         }
-        self.apply_ops(focused, ops)
+        self.apply_ops(focused, ops);
     }
 
     /// Drain a [`WindowOps`] queue in the documented order:
-    /// `close` → `opens` → return `msgs` for the caller to dispatch.
+    /// `close` → `opens`. Intent emission already happened during
+    /// the hook (via `Window::emit` → bus); nothing left to return.
     /// Always pushes new instances on `open` — nvim-style, no
     /// identity dedup. Plugins that want toggle behavior implement
     /// it inside their own `handle_event` (return `close = true`
     /// when the activation key fires).
-    fn apply_ops(&mut self, idx: usize, ops: WindowOps) -> Vec<AppMsg> {
+    fn apply_ops(&mut self, idx: usize, ops: WindowOps) {
         if ops.close {
             self.stack.remove(idx);
             self.clamp_focus_after_shrink();
@@ -245,28 +253,24 @@ impl Compositor {
             self.stack.push(c);
             self.focused_idx = self.stack.len() - 1;
         }
-        ops.msgs
     }
 
-    /// Poll every component; drain all queued `win.emit(...)` /
-    /// `win.close()` / `win.open(...)` ops and apply them in the
-    /// same way [`handle_event`](Self::handle_event) does.
-    pub fn poll(&mut self, ctx: &Context) -> Vec<AppMsg> {
+    /// Poll every component. Intent emission inside the hook fires
+    /// directly onto the event bus via `Window::emit`; the only
+    /// queue-back work here is applying the `close` / `open` ops.
+    pub fn poll(&mut self, ctx: &Context, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; apply
         // after the borrow of `stack` is released.
-        let mut all_msgs: Vec<AppMsg> = Vec::new();
         let len = self.stack.len();
         for i in (0..len).rev() {
             let mut ops = WindowOps::default();
             {
-                let mut win = Window::new(&mut ops, ctx);
+                let mut win = Window::new(&mut ops, ctx, event_tx);
                 self.stack[i].poll(&mut win);
             }
-            let msgs = self.apply_ops(i, ops);
-            all_msgs.extend(msgs);
+            self.apply_ops(i, ops);
         }
-        all_msgs
     }
 
     /// Render bottom-up so later pushes draw on top — with one
@@ -581,6 +585,33 @@ mod tests {
         }
     }
 
+    /// Build a disposable `(Sender, Receiver)` pair for tests that
+    /// drive the compositor without an actual App. Drain the
+    /// receiver after the dispatch under test to inspect what bus
+    /// events fired.
+    fn test_bus() -> (
+        std::sync::mpsc::Sender<AppEvent>,
+        std::sync::mpsc::Receiver<AppEvent>,
+    ) {
+        std::sync::mpsc::channel()
+    }
+
+    /// Drain every `AppEvent::Intent` from `rx` and return the
+    /// underlying `AppMsg`s in arrival order. Other variants — none
+    /// of which the compositor produces today — are surfaced as a
+    /// panic so a future variant addition doesn't silently slip
+    /// through.
+    fn drain_intents(rx: &std::sync::mpsc::Receiver<AppEvent>) -> Vec<AppMsg> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AppEvent::Intent(m) => out.push(m),
+                other => panic!("unexpected non-Intent event from compositor: {other:?}"),
+            }
+        }
+        out
+    }
+
     /// `open` always pushes a new instance, even if a component
     /// with the same concrete type is already on the stack. nvim-
     /// style: no Rust-side identity dedup. A plugin that wants
@@ -591,6 +622,7 @@ mod tests {
             theme_id: ThemeId::Dark,
             cursor: None,
         };
+        let (tx, _rx) = test_bus();
 
         let mut c = Compositor::new();
         c.push(Box::new(Spawner {
@@ -599,7 +631,11 @@ mod tests {
             spawn_label: "wiki",
         }));
         // Open the spawned component for the first time.
-        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        c.handle_event(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+            &ctx,
+            &tx,
+        );
         assert_eq!(c.len(), 2);
         assert_eq!(focused_tag(&c), "wiki");
 
@@ -610,7 +646,11 @@ mod tests {
         // Press `i` again — pushes a second wiki on top. Plugins
         // that want toggle behavior implement self-close in their
         // own handle_event.
-        c.handle_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &ctx);
+        c.handle_event(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+            &ctx,
+            &tx,
+        );
         assert_eq!(c.len(), 3, "second activation pushes a new instance");
         assert_eq!(focused_tag(&c), "wiki");
     }
@@ -637,14 +677,19 @@ mod tests {
             theme_id: ThemeId::Dark,
             cursor: None,
         };
+        let (tx, rx) = test_bus();
 
         let mut c = Compositor::new();
         c.push(Box::new(SwallowsAll));
 
-        let msgs = c.handle_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &ctx);
-        assert_eq!(msgs, vec![AppMsg::CycleFocus(true)]);
+        c.handle_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &ctx, &tx);
+        assert_eq!(drain_intents(&rx), vec![AppMsg::CycleFocus(true)]);
 
-        let msgs = c.handle_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE), &ctx);
-        assert_eq!(msgs, vec![AppMsg::CycleFocus(false)]);
+        c.handle_event(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+            &ctx,
+            &tx,
+        );
+        assert_eq!(drain_intents(&rx), vec![AppMsg::CycleFocus(false)]);
     }
 }
