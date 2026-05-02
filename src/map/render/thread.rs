@@ -13,6 +13,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use crossbeam_channel as cb;
+
+use crate::app::AppEvent;
 use log::{debug, error, info};
 
 use super::frame::MapFrame;
@@ -35,7 +37,6 @@ pub enum RenderTask {
 
 pub struct RenderHandle {
     task_tx: cb::Sender<RenderTask>,
-    frame_rx: mpsc::Receiver<MapFrame>,
     should_quit: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -47,15 +48,24 @@ impl RenderHandle {
     /// each ping says "at least one tile arrived in the cache, drain
     /// it on the next render cycle". It replaces the polling timeout
     /// that used to bound tile-arrival → frame latency to 50 ms.
-    pub fn spawn(pipeline: RenderPipeline, wake_rx: cb::Receiver<()>) -> Self {
+    ///
+    /// `event_tx` is a clone of the App-level [`AppEvent`] sender;
+    /// the render thread wraps each completed [`MapFrame`] as
+    /// [`AppEvent::FrameReady`] and pushes it onto the unified queue.
+    /// The App's main-loop drain replaces the prior dedicated
+    /// frame channel.
+    pub fn spawn(
+        pipeline: RenderPipeline,
+        wake_rx: cb::Receiver<()>,
+        event_tx: mpsc::Sender<AppEvent>,
+    ) -> Self {
         let (task_tx, task_rx) = cb::unbounded();
-        let (frame_tx, frame_rx) = mpsc::channel();
         let should_quit = Arc::new(AtomicBool::new(false));
         let should_quit_clone = should_quit.clone();
 
         let thread = thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_loop(task_rx, wake_rx, frame_tx, should_quit_clone, pipeline);
+                run_loop(task_rx, wake_rx, event_tx, should_quit_clone, pipeline);
             }));
             if let Err(e) = result {
                 let msg = if let Some(s) = e.downcast_ref::<String>() {
@@ -71,7 +81,6 @@ impl RenderHandle {
 
         RenderHandle {
             task_tx,
-            frame_rx,
             should_quit,
             thread: Some(thread),
         }
@@ -89,12 +98,6 @@ impl RenderHandle {
         {
             log::warn!("render thread channel closed on draw");
         }
-    }
-
-    /// Pull the next completed frame from the render thread, if any.
-    /// Non-blocking: returns `None` when the queue is empty.
-    pub fn try_recv_frame(&self) -> Option<MapFrame> {
-        self.frame_rx.try_recv().ok()
     }
 
     pub fn request_resize(&self, width: usize, height: usize) {
@@ -185,11 +188,14 @@ fn drain_tasks(
     Ok(latest_draw)
 }
 
-fn send_frame(frame_tx: &mpsc::Sender<MapFrame>, frame: Option<MapFrame>) -> bool {
+/// Wrap a completed `MapFrame` as [`AppEvent::FrameReady`] and push it
+/// onto the App's unified event queue. Returns `false` only when the
+/// receiver has been dropped (App teardown) — the run loop exits.
+fn send_frame(event_tx: &mpsc::Sender<AppEvent>, frame: Option<MapFrame>) -> bool {
     if let Some(frame) = frame
-        && frame_tx.send(frame).is_err()
+        && event_tx.send(AppEvent::FrameReady(frame)).is_err()
     {
-        return false; // channel closed
+        return false;
     }
     true
 }
@@ -197,7 +203,7 @@ fn send_frame(frame_tx: &mpsc::Sender<MapFrame>, frame: Option<MapFrame>) -> boo
 fn run_loop(
     task_rx: cb::Receiver<RenderTask>,
     wake_rx: cb::Receiver<()>,
-    frame_tx: mpsc::Sender<MapFrame>,
+    event_tx: mpsc::Sender<AppEvent>,
     should_quit: Arc<AtomicBool>,
     mut pipeline: RenderPipeline,
 ) {
@@ -232,7 +238,7 @@ fn run_loop(
                 match latest_draw {
                     Some((viewport, overlays)) => {
                         debug!("render: drawing (zoom={:.1}, overlays={})", viewport.zoom, overlays.len());
-                        if !send_frame(&frame_tx, pipeline.render(&viewport, &overlays)) {
+                        if !send_frame(&event_tx, pipeline.render(&viewport, &overlays)) {
                             return;
                         }
                         last_viewport = Some(viewport);
@@ -249,7 +255,7 @@ fn run_loop(
                         // (e.g. theme change should refresh the
                         // visible frame).
                         if let Some(ref vp) = last_viewport
-                            && !send_frame(&frame_tx, pipeline.render(vp, &[]))
+                            && !send_frame(&event_tx, pipeline.render(vp, &[]))
                         {
                             return;
                         }
@@ -262,7 +268,7 @@ fn run_loop(
                 while wake_rx.try_recv().is_ok() {}
                 if let Some(ref viewport) = last_viewport
                     && pipeline.poll_tiles()
-                    && !send_frame(&frame_tx, pipeline.render(viewport, &[]))
+                    && !send_frame(&event_tx, pipeline.render(viewport, &[]))
                 {
                     return;
                 }
@@ -295,7 +301,6 @@ mod tests {
         let exited_clone = Arc::clone(&exited);
 
         let (task_tx, task_rx) = cb::unbounded::<RenderTask>();
-        let (_frame_tx, frame_rx) = mpsc::channel::<MapFrame>();
         let should_quit = Arc::new(AtomicBool::new(false));
         let should_quit_clone = Arc::clone(&should_quit);
 
@@ -319,7 +324,6 @@ mod tests {
 
         let mut handle = RenderHandle {
             task_tx,
-            frame_rx,
             should_quit,
             thread: Some(thread),
         };

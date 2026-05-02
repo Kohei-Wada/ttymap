@@ -11,15 +11,17 @@
 //! plugin type — it carries only `Box<dyn Component>`s populated by
 //! the Lua dispatcher at composition time.
 
+pub mod event;
 mod mouse;
 pub mod msg;
 
+pub use event::AppEvent;
 pub use msg::AppMsg;
 
 use std::io;
 use std::sync::Arc;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self as crossterm_event, Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
@@ -66,12 +68,12 @@ pub struct App {
     /// components reach `compositor.push`. `Box<dyn Component>` is
     /// `!Send`, hence one channel per plugin (kept on main thread).
     lua_host_handles: Vec<LuaHostHandles>,
-    /// Single `AppMsg` receiver shared by every Lua plugin. Each
-    /// plugin's `HostMap` / export closure pushes intents through a
-    /// clone of the matching `Sender`; this Receiver is drained once
-    /// per frame in [`Self::drain_lua_host_handles`] regardless of
-    /// how many plugins are loaded.
-    lua_app_msg_rx: std::sync::mpsc::Receiver<AppMsg>,
+    /// Unified [`AppEvent`] receiver. Every fire-and-forget Lua intent
+    /// (wrapped as [`AppEvent::Intent`]) and every completed render
+    /// frame from the render thread (wrapped as [`AppEvent::FrameReady`])
+    /// arrives here. Drained once per frame regardless of plugin
+    /// count or how many frames the render thread has produced.
+    event_rx: std::sync::mpsc::Receiver<AppEvent>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -110,12 +112,14 @@ impl App {
         let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
 
-        // Single AppMsg channel shared by every Lua plugin. Each
-        // plugin's `HostMap` / export closure clones `app_msg_tx` and
-        // pushes its fire-and-forget intents (`map:jump`, `:zoom`,
-        // `:fly_to`, `frame.export`); the App holds the matching
-        // Receiver and drains all plugins through one loop per frame.
-        let (app_msg_tx, app_msg_rx) = std::sync::mpsc::channel::<AppMsg>();
+        // Unified [`AppEvent`] channel shared by every Lua plugin and
+        // the render thread. Each plugin's `HostMap` / export closure
+        // clones `event_tx` and pushes fire-and-forget intents wrapped
+        // as `AppEvent::Intent(...)`; the render thread pushes
+        // `AppEvent::FrameReady(frame)` once a render completes. The
+        // App holds the matching Receiver and drains everything in
+        // arrival order through a single loop per frame.
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<AppEvent>();
 
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
@@ -123,7 +127,7 @@ impl App {
         let BuiltRegistrar {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, tile_cache.attribution(), &keymap, app_msg_tx);
+        } = build_registrar(&config, tile_cache.attribution(), &keymap, event_tx.clone());
         // Lift the per-frame tick dispatcher off the registrar before
         // the rest is consumed (activations / palette_entries move
         // into the compositor below). Owned on App so the per-frame
@@ -156,7 +160,7 @@ impl App {
             width,
             height,
         );
-        let render_handle = RenderHandle::spawn(pipeline, wake_rx);
+        let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx);
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -178,7 +182,7 @@ impl App {
             ui_theme,
             tick_registry,
             lua_host_handles,
-            lua_app_msg_rx: app_msg_rx,
+            event_rx,
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
@@ -199,22 +203,26 @@ impl App {
         self.dispatch(AppMsg::Map(Action::Redraw));
 
         while self.map.is_running() {
-            // Drain every frame the render thread has produced; the
-            // last one wins (stale ones are discarded).
-            while let Some(frame) = self.render_handle.try_recv_frame() {
-                self.map_frame = Some(frame);
-            }
+            // Refresh per-plugin getter mirrors and drain `push_rx`
+            // (which carries `Box<dyn Component>`, kept off the unified
+            // queue because `Component` is `!Send`). Components queued
+            // via `ttymap.api.window.open` / `palette.open` land on
+            // the compositor stack here so the same tick's
+            // `compositor.poll` already sees them.
+            self.refresh_lua_host_state();
 
-            // Drain per-tick events from Lua plugins' setup-state
-            // handles before the compositor poll: any component queued
-            // via `ttymap.api.window.open` or `ttymap.api.palette.open`
-            // lands on the stack first, so the same tick's
-            // `compositor.poll` already sees it and the user gets one
-            // fewer frame of latency on open. Map jumps and frame
-            // exports fan out through `dispatch` like everything else.
-            let host_msgs = self.drain_lua_host_handles();
-            for msg in host_msgs {
-                self.dispatch(msg);
+            // Single drain over the unified `AppEvent` queue:
+            // - `Intent(AppMsg)` from any plugin's host channel and
+            //   from anything else that defers its dispatch
+            // - `FrameReady(MapFrame)` from the render thread; last one
+            //   wins so stale frames are simply overwritten
+            while let Ok(event) = self.event_rx.try_recv() {
+                match event {
+                    AppEvent::Intent(msg) => self.dispatch(msg),
+                    AppEvent::FrameReady(frame) => {
+                        self.map_frame = Some(frame);
+                    }
+                }
             }
 
             // Drain per-tick messages from compositor components.
@@ -271,9 +279,9 @@ impl App {
             // (20 Hz) keeps per-tick work cheap while input latency
             // stays imperceptible.
             let mut poll_timeout = self.poll_timeout;
-            while event::poll(poll_timeout)? {
+            while crossterm_event::poll(poll_timeout)? {
                 poll_timeout = Duration::from_millis(0);
-                match event::read()? {
+                match crossterm_event::read()? {
                     Event::Key(key_event) => {
                         if key_event.modifiers.contains(KeyModifiers::CONTROL)
                             && key_event.code == KeyCode::Char('c')
@@ -317,19 +325,19 @@ impl App {
     /// register_keybind, on_tick), not just paths that go through
     /// an active window.
     ///
-    /// Components queued via `ttymap.api.window.open` /
-    /// `palette.open` get pushed onto the compositor stack inline.
-    /// Fire-and-forget Lua intents (map verbs and `frame.export`)
-    /// arrive on the **single** `lua_app_msg_rx` already shaped as
-    /// [`AppMsg`]s and are returned for the caller to dispatch — one
-    /// drain per frame regardless of plugin count.
-    fn drain_lua_host_handles(&mut self) -> Vec<AppMsg> {
+    /// Per-plugin housekeeping: refresh `center` / `zoom` mirrors that
+    /// `ttymap.map:center()` / `:zoom()` read, and drain each plugin's
+    /// `push_rx` so any component queued via `ttymap.api.window.open`
+    /// / `palette.open` reaches the compositor stack before the
+    /// current tick's `compositor.poll`. Stays per-plugin because
+    /// `Box<dyn Component>` is `!Send` and the channel must remain on
+    /// the main thread.
+    ///
+    /// Intent flow (`map:jump`, `frame.export`, …) is **not** drained
+    /// here — those reach the App through the unified `event_rx`.
+    fn refresh_lua_host_state(&mut self) {
         let center = self.map.center();
         let zoom = self.map.zoom();
-        // Refresh per-plugin getter mirrors and drain `push_rx`. These
-        // stay per-plugin because `Box<dyn Component>` is `!Send` and
-        // each plugin's setup-state holds its own queue on the main
-        // thread.
         for handles in &self.lua_host_handles {
             if let Ok(mut cell) = handles.center.lock() {
                 *cell = center;
@@ -341,13 +349,6 @@ impl App {
                 self.compositor.push(component);
             }
         }
-        // Every fire-and-forget Lua intent across every plugin lands
-        // on this single Receiver, so one drain covers them all.
-        let mut msgs = Vec::new();
-        while let Ok(msg) = self.lua_app_msg_rx.try_recv() {
-            msgs.push(msg);
-        }
-        msgs
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -535,7 +536,7 @@ fn build_registrar(
     config: &Config,
     attribution: Option<String>,
     keymap: &KeyMap,
-    app_msg_tx: std::sync::mpsc::Sender<AppMsg>,
+    event_tx: std::sync::mpsc::Sender<AppEvent>,
 ) -> BuiltRegistrar {
     use std::sync::Arc;
 
@@ -574,7 +575,7 @@ fn build_registrar(
         runtime_path,
         &config.plugins.disable,
         shared.clone(),
-        app_msg_tx,
+        event_tx,
         &mut r,
     );
 

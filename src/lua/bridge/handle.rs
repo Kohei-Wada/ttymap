@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 
 use mlua::{Lua, RegistryKey, Table};
 
-use crate::app::AppMsg;
+use crate::app::AppEvent;
 use crate::lua::new_lua;
 use crate::lua::ttymap as host;
 
@@ -135,19 +135,19 @@ pub enum CallOutcome<R> {
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
 /// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
-/// - `app_msg_tx` is the App-level [`AppMsg`] sender every plugin
+/// - `event_tx` is the App-level [`AppEvent`] sender every plugin
 ///   clones into its `HostMap` / export closure; one drain per frame
-///   covers every plugin.
+///   covers every plugin and the render thread alike.
 pub fn fresh_load(
     source: &str,
     chunk_name: &str,
     host_tag: &'static str,
     shared: Arc<host::LuaHostShared>,
-    app_msg_tx: mpsc::Sender<AppMsg>,
+    event_tx: mpsc::Sender<AppEvent>,
 ) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
     let lua = new_lua();
     let slot = host::new_capture_slot();
-    let handles = host::install(&lua, host_tag, shared, slot.clone(), app_msg_tx)?;
+    let handles = host::install(&lua, host_tag, shared, slot.clone(), event_tx)?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()
