@@ -12,6 +12,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::frontend::SIDEBAR_WIDTH;
 use crate::frontend::compositor::{Compositor, Context, MapApi};
 use crate::lua::LuaHandle;
 use crate::map::render::frame::MapFrame;
@@ -24,19 +25,63 @@ use crate::theme::UiTheme;
 /// `Component::paint_on_map`) and on-top panels
 /// (via `Component::render`) go through the same draw pass as the
 /// map.
-pub fn draw(
-    f: &mut Frame,
-    map_frame: Option<&MapFrame>,
-    compositor: &Compositor,
-    lua: &LuaHandle,
-    theme: &UiTheme,
-    ctx: &Context,
-    overlay_sink: &mut Vec<UserPolyline>,
-) {
+/// Per-frame inputs collected by [`Frontend::render_into`]. Bundled
+/// to keep [`draw`] under clippy's argument-count threshold and to
+/// give related fields a single place to grow.
+pub struct DrawInputs<'a> {
+    pub map_frame: Option<&'a MapFrame>,
+    pub compositor: &'a Compositor,
+    pub lua: &'a LuaHandle,
+    pub theme: &'a UiTheme,
+    pub ctx: &'a Context,
+    pub overlay_sink: &'a mut Vec<UserPolyline>,
+    pub sidebar_open: bool,
+}
+
+pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
+    let DrawInputs {
+        map_frame,
+        compositor,
+        lua,
+        theme,
+        ctx,
+        overlay_sink,
+        sidebar_open,
+    } = inputs;
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
 
-    let map_area = chunks[0];
+    let main_area = chunks[0];
     let footer_area = chunks[1];
+
+    // Left sidebar (when toggled on) takes a fixed width; remaining
+    // columns go to the world block. When closed, the world fills
+    // the full width as before.
+    let map_area = if sidebar_open && main_area.width > SIDEBAR_WIDTH + 4 {
+        let cols = Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(1)])
+            .split(main_area);
+        let side_area = cols[0];
+        let map_area = cols[1];
+
+        let side_block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.accent))
+            .title(" side ");
+        let side_inner = side_block.inner(side_area);
+        f.render_widget(side_block, side_area);
+
+        // Placeholder until Section components are wired up. Helps
+        // confirm the sidebar is receiving paint without forcing the
+        // user to wonder if the toggle did anything.
+        let placeholder = Paragraph::new(Line::from(Span::styled(
+            "(no sections yet)",
+            Style::default().fg(theme.muted_color),
+        )));
+        f.render_widget(placeholder, side_inner);
+
+        map_area
+    } else {
+        main_area
+    };
 
     let map_block = Block::new()
         .borders(Borders::ALL)

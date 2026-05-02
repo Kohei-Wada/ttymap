@@ -70,6 +70,10 @@ pub enum UserIntent {
     /// Emitted by the export plugin's palette entry. Filename encodes
     /// zoom + centre + timestamp so repeated exports don't collide.
     ExportFrame,
+    /// Show / hide the left sidebar. Toggling re-computes the map
+    /// canvas dimensions so the render pipeline allocates the right
+    /// buffer size for the visible map area.
+    ToggleSidebar,
 }
 
 impl UserIntent {
@@ -78,10 +82,11 @@ impl UserIntent {
     /// are matched directly; everything else falls through to
     /// [`Action::from_config_name`] wrapped as [`Self::Map`].
     pub fn from_config_name(name: &str) -> Option<UserIntent> {
-        if name == "quit" {
-            return Some(UserIntent::Quit);
+        match name {
+            "quit" => Some(UserIntent::Quit),
+            "toggle_sidebar" => Some(UserIntent::ToggleSidebar),
+            _ => Action::from_config_name(name).map(UserIntent::Map),
         }
-        Action::from_config_name(name).map(UserIntent::Map)
     }
 
     /// `(config_name, label)` pairs for every intent the help plugin
@@ -93,6 +98,7 @@ impl UserIntent {
             .map(|a| (UserIntent::Map(a.clone()), a.label()))
             .collect();
         out.push((UserIntent::Quit, "Quit"));
+        out.push((UserIntent::ToggleSidebar, "Toggle sidebar"));
         out
     }
 

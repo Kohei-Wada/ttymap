@@ -48,6 +48,11 @@ use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
+/// Width (terminal cells) of the left sidebar when [`Frontend::sidebar_open`]
+/// is true. Includes the bordered block, so the inner content area is
+/// `SIDEBAR_WIDTH - 2`.
+pub const SIDEBAR_WIDTH: u16 = 30;
+
 pub struct Frontend {
     /// Map subsystem handle: dispatch state + render-task sender +
     /// theme id + attribution. Built by [`crate::map::build`] in
@@ -60,6 +65,10 @@ pub struct Frontend {
     /// here (not on `MapState`) because liveness is an app concern,
     /// not a map-data concern.
     running: bool,
+    /// Whether the left sidebar is visible. Toggled via
+    /// [`UserIntent::ToggleSidebar`]; flipping it shrinks/expands the
+    /// map canvas as a follow-up resize.
+    sidebar_open: bool,
     /// Active theme id. Crosses both UI chrome (drives `ui_theme`)
     /// and map rendering (drives the styler the render thread uses);
     /// owned here because the choice is an app concern, not a
@@ -145,6 +154,7 @@ impl Frontend {
         Frontend {
             map,
             running: true,
+            sidebar_open: false,
             theme_id,
             lua,
             map_frame: None,
@@ -353,9 +363,21 @@ impl Frontend {
         let compositor = &self.compositor;
         let lua = &self.lua;
         let ui_theme = &self.ui_theme;
+        let sidebar_open = self.sidebar_open;
         let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
-            crate::frontend::ui::draw(f, map_frame, compositor, lua, ui_theme, &ctx, overlay_sink)
+            crate::frontend::ui::draw(
+                f,
+                crate::frontend::ui::DrawInputs {
+                    map_frame,
+                    compositor,
+                    lua,
+                    theme: ui_theme,
+                    ctx: &ctx,
+                    overlay_sink,
+                    sidebar_open,
+                },
+            )
         })?;
         Ok(())
     }
@@ -401,7 +423,16 @@ impl Frontend {
             }
             UserIntent::Resize(cols, rows) => self.handle_resize(cols, rows),
             UserIntent::ExportFrame => self.export_current_frame(),
+            UserIntent::ToggleSidebar => self.toggle_sidebar(),
         }
+    }
+
+    fn toggle_sidebar(&mut self) {
+        self.sidebar_open = !self.sidebar_open;
+        // The visible map area shrinks/expands — re-run the resize
+        // path so the render thread allocates the right canvas size.
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        self.handle_resize(cols, rows);
     }
 
     fn export_current_frame(&self) {
@@ -441,8 +472,21 @@ impl Frontend {
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        self.map.handle_resize(cols, rows);
+        let map_cols = self.effective_map_cols(cols);
+        self.map.handle_resize(map_cols, rows);
         self.request_map_redraw();
+    }
+
+    /// Terminal-cell width of the visible map area, accounting for
+    /// the sidebar when it is open. Mirrors the `ui::draw` layout
+    /// fallback: very narrow terminals skip the sidebar entirely so
+    /// the map keeps a usable width.
+    fn effective_map_cols(&self, full_cols: u16) -> u16 {
+        if self.sidebar_open && full_cols > SIDEBAR_WIDTH + 4 {
+            full_cols.saturating_sub(SIDEBAR_WIDTH)
+        } else {
+            full_cols
+        }
     }
 
     fn request_map_redraw(&mut self) {

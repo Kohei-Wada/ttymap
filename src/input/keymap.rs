@@ -149,6 +149,7 @@ impl Default for KeyMap {
                 map("-", ZoomOut),
                 map("0", ResetPosition),
                 intent("q", UserIntent::Quit),
+                intent("\\", UserIntent::ToggleSidebar),
             ],
         }
     }
