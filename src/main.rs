@@ -123,37 +123,27 @@ fn main() {
     }
 }
 
-/// The composition root: builds the event channel and the Lua bus,
-/// constructs `Frontend` + every off-thread subsystem (render /
-/// input / frame timer), then drives the per-iteration loop.
-/// `Frontend` is just a state-mutating handler invoked by the loop;
-/// the bus, channels, and threads are peer participants on the same
-/// bus, all wired up here in `main` rather than implicitly inside
-/// the frontend.
+/// Composition root: builds the event channel + Lua bus, constructs
+/// `Frontend`, spawns the off-thread input / frame-timer subsystems,
+/// then hands control to `Frontend::run`. Every thread handle joins
+/// in its `Drop` impl, so teardown is just RAII at end of scope —
+/// no manual `drop()` orchestration needed.
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let (mut frontend, render_handle, event_bus) =
-        Frontend::new(config, keymap_overrides, event_tx.clone());
+    let (mut frontend, event_bus) = Frontend::new(config, keymap_overrides, event_tx.clone());
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
 
-    // Subsystems are peers to the Frontend on the same bus — main spawns
-    // each with its own `event_tx` clone. `Drop` order here matters
-    // for clean teardown: input thread / frame timer first (they
-    // read from a still-live receiver), then `render_handle` after
-    // the loop has stopped consuming frames.
     let _input = InputHandle::spawn(event_tx.clone(), frontend.poll_timeout());
     let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
 
     log::info!("event loop started");
     frontend.run(&mut terminal, &event_rx, &event_tx, &event_bus)?;
     log::info!("event loop ended");
-    drop(_input);
-    drop(_frame_timer);
+
     crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
     log::info!("terminal restored, exiting");
-    drop(render_handle);
     Ok(())
 }

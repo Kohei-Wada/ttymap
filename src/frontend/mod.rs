@@ -53,11 +53,13 @@ use crate::theme::UiTheme;
 
 pub struct Frontend {
     map: MapState,
-    /// Cheap-clone command channel for the render thread. The thread
-    /// itself (and its `Drop`-driven join) is owned by `main` as a
-    /// peer subsystem to the App, mirroring how the input thread and
-    /// frame timer live outside the App.
+    /// Cheap-clone command channel for the render thread.
     render_client: RenderClient,
+    /// Owning handle to the render thread. Built inside [`Frontend::new`]
+    /// (it needs the tile cache, styler, and canvas dims) and held
+    /// here so its `Drop` impl (`Shutdown` send + thread join) fires
+    /// when `Frontend` is dropped.
+    _render_handle: RenderHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -108,21 +110,25 @@ impl Frontend {
     ///
     /// The unified [`AppEvent`] channel is constructed by the caller
     /// (typically `main`) so the bus stays a wiring concern at the
-    /// composition root rather than something `App` "owns". Each
-    /// subsystem (render thread / Lua plugins / future input thread /
-    /// frame timer) gets its own clone of `event_tx`; the App takes
-    /// one too only because [`Compositor::poll`] / `Compositor::handle_event`
-    /// pass it to `Window::emit` — same role as any other source.
+    /// composition root. Each off-thread subsystem (render thread /
+    /// Lua plugins / input thread / frame timer) gets its own clone
+    /// of `event_tx`; Frontend takes one too because
+    /// [`Compositor::poll`] / `Compositor::handle_event` pass it to
+    /// `Window::emit`.
     ///
-    /// Returns `(App, LuaEventBus)` because the event bus is built
-    /// during plugin registration but drained from outside the App
-    /// (`ui::draw` for `dispatch_tick`, the run loop for the post-
-    /// effect notification path).
+    /// The render thread is spawned here (it needs the tile cache,
+    /// styler, and canvas dims) and its handle is stored on Frontend
+    /// so `Drop` cleans it up automatically.
+    ///
+    /// Returns `(Self, LuaEventBus)` because the event bus is built
+    /// during plugin registration but consumed across both the
+    /// per-frame `dispatch_tick` path and the post-effect
+    /// notification path.
     pub fn new(
         config: Config,
         keymap_overrides: KeybindingOverrides,
         event_tx: std::sync::mpsc::Sender<AppEvent>,
-    ) -> (Self, RenderHandle, LuaEventBus) {
+    ) -> (Self, LuaEventBus) {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::map::render::canvas_size(cols, rows);
 
@@ -194,6 +200,7 @@ impl Frontend {
         let app = Frontend {
             map,
             render_client,
+            _render_handle: render_handle,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
@@ -208,7 +215,7 @@ impl Frontend {
                 config.runtime.overlay_redraw_ms,
             ),
         };
-        (app, render_handle, event_bus)
+        (app, event_bus)
     }
 
     /// The configured idle wake-up interval — `main` reads this when
