@@ -13,30 +13,13 @@ pub use theme::ThemeProvider;
 
 use std::time::Duration;
 
-use crate::app::AppMsg;
-use crate::compositor::{Component, Context};
+use crate::compositor::Context;
+use crate::palette::action::PaletteAction;
 
 /// One row in the palette list.
 pub struct PaletteItem {
     pub label: String,
     pub hint: String,
-}
-
-/// What a provider wants the host to do when the user activates an
-/// item. Translated by the palette Component into the equivalent
-/// `win.*` calls.
-pub enum PaletteAction {
-    /// Close the palette with no side effect.
-    Close,
-    /// Close the palette and dispatch these messages.
-    Run(Vec<AppMsg>),
-    /// Close the palette and push `component` onto the compositor.
-    /// Always stacks new — no Rust-side dedup. A plugin that wants
-    /// "close existing on re-select" implements that itself.
-    Push(Box<dyn Component>),
-    /// Swap the palette's provider in place — sub-mode transition
-    /// (e.g. "Theme"). Palette stays open.
-    SwitchProvider(Box<dyn PaletteProvider>),
 }
 
 /// When the palette should call [`PaletteProvider::filter`].

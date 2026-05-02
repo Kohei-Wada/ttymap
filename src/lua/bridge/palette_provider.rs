@@ -15,7 +15,8 @@ use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaHandle};
 use crate::compositor::Context;
-use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
+use crate::palette::PaletteAction;
+use crate::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {

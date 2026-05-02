@@ -15,8 +15,11 @@
 //! swaps its internal `provider` field in place — no round-trip
 //! through the compositor.
 
+pub mod action;
 pub mod panel;
 pub mod provider;
+
+pub use action::PaletteAction;
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -28,7 +31,7 @@ use crate::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
 use crate::theme::ThemeId;
 
-use provider::{CommandProvider, CommandSeed, PaletteAction, PaletteProvider, SubmitMode};
+use provider::{CommandProvider, CommandSeed, PaletteProvider, SubmitMode};
 
 pub struct PaletteComponent {
     pub(super) query: String,
