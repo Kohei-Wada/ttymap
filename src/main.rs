@@ -146,10 +146,14 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     let mut lua =
         ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap, lua_sender);
 
-    // Palette is a built-in (not a plugin): drains every plugin's
-    // palette_entries into a CommandSeed and adds the `:` activation.
+    // Palette is a built-in (not a plugin): drain every plugin's
+    // palette_entries into a CommandSeed and append the `:` activation.
     // Must run after every plugin's register call.
-    ttymap::frontend::palette::install(&keymap, &mut lua.registrar);
+    ttymap::frontend::palette::install(
+        &keymap,
+        &mut lua.activations,
+        std::mem::take(&mut lua.palette_entries),
+    );
 
     let mut frontend = Frontend::new(config, keymap, map, lua);
 

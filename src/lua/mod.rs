@@ -36,28 +36,41 @@ use mlua::{Lua, Table};
 
 use crate::config::Config;
 use crate::frontend::UserIntent;
-use crate::frontend::compositor::Registrar;
+use crate::frontend::compositor::{Activation, PaletteEntry, Registrar};
 use crate::input::KeyMap;
 use crate::lua::sender::LuaSender;
 
-/// Result of [`build_subsystem`] — the populated [`Registrar`]
-/// (activations, palette entries, event bus, per-plugin handles)
-/// plus the harvested footer hints. Handed to `Frontend::new` after
-/// `palette::install` runs from the composition root.
+/// Result of [`build_subsystem`].
+///
+/// The runtime-held [`LuaHandle`] is **already constructed** by
+/// `build_subsystem` itself — the Frontend just stores it, no longer
+/// reaches into a registrar to assemble it. The remaining fields are
+/// the parts that flow into the frontend's compositor (activations,
+/// plugin_hints) and the palette installer (palette_entries).
 pub struct LuaSubsystem {
-    pub registrar: Registrar,
+    /// Runtime handle to the Lua subsystem — semantic surface
+    /// Frontend uses to observe state changes and tick plugins.
+    pub handle: LuaHandle,
+    /// Per-plugin keymap activations (`<key>` ⇒ spawn component).
+    /// Consumed by the compositor's `BaseLayer`.
+    pub activations: Vec<Activation>,
+    /// Plugin-supplied palette entries — drained by
+    /// [`crate::frontend::palette::install`] in `main` before the
+    /// rest of this struct reaches `Frontend::new`.
+    pub palette_entries: Vec<PaletteEntry>,
+    /// `[<key> <name>]` footer hints harvested from
+    /// `palette_entries` *before* the palette installer drains them.
     pub plugin_hints: Vec<(&'static str, &'static str)>,
 }
 
 /// Build the Lua plugin subsystem: load every `*.lua` under the
 /// runtime path's `plugin/` layers, register their activations /
-/// palette entries / event-bus subscriptions / per-plugin handles
-/// into a fresh [`Registrar`], and harvest footer hints.
+/// palette entries / event-bus subscriptions / per-plugin handles,
+/// and assemble the runtime [`LuaHandle`].
 ///
-/// **Does not install the palette** — that step is performed by the
-/// composition root after this function returns, since
-/// [`crate::frontend::palette::install`] is a frontend-side concern
-/// that only needs the populated registrar.
+/// **Does not install the palette** — that step runs from the
+/// composition root after this returns, draining `palette_entries`
+/// into a default `:`-palette provider.
 pub fn build_subsystem(
     config: &Config,
     attribution: Option<String>,
@@ -92,10 +105,9 @@ pub fn build_subsystem(
     );
 
     // Harvest the BaseLayer's footer hints. Has to happen *before*
-    // `palette::install` because that call `mem::take`s
-    // `r.palette_entries`. The footer slot is `[<key> <name>]` —
-    // built directly from each entry's keybinding and `module.name`.
-    // No keybinding ⇒ no footer slot.
+    // the palette installer drains `palette_entries`. The footer
+    // slot is `[<key> <name>]` — built directly from each entry's
+    // keybinding and `module.name`. No keybinding ⇒ no footer slot.
     let plugin_hints: Vec<(&'static str, &'static str)> = r
         .palette_entries
         .iter()
@@ -111,8 +123,19 @@ pub fn build_subsystem(
     // the local handle here is fine.
     drop(shared);
 
+    // Lift the runtime parts (bus + per-plugin host channels) out of
+    // the registrar and wrap them into the [`LuaHandle`] right here,
+    // so callers never see the bus or the channels and never have to
+    // assemble a handle themselves.
+    let handle = LuaHandle::new(
+        std::mem::take(&mut r.event_bus),
+        std::mem::take(&mut r.lua_host_handles),
+    );
+
     LuaSubsystem {
-        registrar: r,
+        handle,
+        activations: r.activations,
+        palette_entries: r.palette_entries,
         plugin_hints,
     }
 }

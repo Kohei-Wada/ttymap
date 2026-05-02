@@ -110,18 +110,14 @@ impl Frontend {
     /// and storing the per-iteration state.
     pub fn new(config: Config, keymap: KeyMap, map: MapHandle, lua: LuaSubsystem) -> Self {
         let LuaSubsystem {
-            mut registrar,
+            handle: lua,
+            activations,
             plugin_hints,
+            // `palette_entries` was already drained by
+            // `palette::install` from main; nothing left for
+            // Frontend to consume.
+            palette_entries: _,
         } = lua;
-
-        // Lift bus + per-plugin handles off the registrar and wrap
-        // them in a `LuaHandle` — everything the Frontend needs to
-        // talk to the Lua subsystem at runtime, behind a semantic
-        // surface. Activations are moved into the compositor below.
-        let lua = LuaHandle::new(
-            std::mem::take(&mut registrar.event_bus),
-            std::mem::take(&mut registrar.lua_host_handles),
-        );
 
         let ui_theme = UiTheme::from_palette(map.theme_id.palette());
 
@@ -129,11 +125,7 @@ impl Frontend {
         // activation dispatch) at index 0. Every subsequent modal is
         // pushed on top.
         let mut compositor = Compositor::new();
-        compositor.push(Box::new(BaseLayer::new(
-            keymap,
-            registrar.activations,
-            plugin_hints,
-        )));
+        compositor.push(Box::new(BaseLayer::new(keymap, activations, plugin_hints)));
 
         Frontend {
             map,

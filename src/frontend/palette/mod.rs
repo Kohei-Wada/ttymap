@@ -27,7 +27,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::frontend::compositor::window::{RenderWindow, Window};
-use crate::frontend::compositor::{Activation, Component, Context, Registrar};
+use crate::frontend::compositor::{Activation, Component, Context};
 use crate::input::keymap::KeyMap;
 use crate::theme::ThemeId;
 
@@ -212,17 +212,19 @@ impl Component for PaletteComponent {
 }
 
 /// Install the palette as a built-in. Unlike a plugin's `register`,
-/// this is a **sink**: it drains every palette entry contributed by
-/// earlier `plugin::*::register` calls via `std::mem::take`, bakes
-/// them into a [`CommandSeed`], and adds a single `:` activation
-/// pointing at a fresh [`PaletteComponent`]. Must be called **after**
-/// every other plugin's `register`.
-pub fn install(keymap: &KeyMap, r: &mut Registrar) {
-    let plugin_entries = std::mem::take(&mut r.palette_entries);
-    let seed = Rc::new(CommandSeed::build(keymap, plugin_entries));
-
+/// this is a **sink**: bake `palette_entries` (every entry
+/// contributed by earlier plugin registration) into a
+/// [`CommandSeed`] and append a single `:` activation pointing at a
+/// fresh [`PaletteComponent`]. Must be called **after** every
+/// plugin's `register`.
+pub fn install(
+    keymap: &KeyMap,
+    activations: &mut Vec<Activation>,
+    palette_entries: Vec<crate::frontend::compositor::PaletteEntry>,
+) {
+    let seed = Rc::new(CommandSeed::build(keymap, palette_entries));
     let seed_for_spawn = seed;
-    r.add_activation(Activation {
+    activations.push(Activation {
         code: KeyCode::Char(':'),
         modifiers: KeyModifiers::NONE,
         spawn: Box::new(move |ctx: &Context| -> Option<Box<dyn Component>> {
