@@ -62,10 +62,11 @@ pub struct App {
     /// Setup-state [`LuaHostHandles`] for every Lua plugin script
     /// (palette providers, plugin components, plugin loops, and any
     /// `ttymap.api.window.open` / `palette.open` callers). Each
-    /// entry's receivers (`push_rx`, `jump_rx`, `export_rx`) are
-    /// drained once per frame in [`Self::drain_lua_host_handles`]:
-    /// queued components hit `compositor.push`, queued map jumps and
-    /// frame-export requests are dispatched as `AppMsg`s.
+    /// entry's receivers (`push_rx`, `app_msg_rx`) are drained once
+    /// per frame in [`Self::drain_lua_host_handles`]: queued components
+    /// hit `compositor.push`, every fire-and-forget Lua intent
+    /// (`map:jump`, `:zoom(level)`, `:fly_to`, `frame.export`) arrives
+    /// as a pre-built `AppMsg` and is dispatched directly.
     lua_host_handles: Vec<LuaHostHandles>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
@@ -305,8 +306,9 @@ impl App {
     ///
     /// Components queued via `ttymap.api.window.open` /
     /// `palette.open` get pushed onto the compositor stack inline;
-    /// `ttymap.map:jump` and `ttymap.api.frame.export` requests are
-    /// returned as [`AppMsg`]s for the caller to dispatch.
+    /// fire-and-forget Lua intents (map verbs and `frame.export`)
+    /// arrive on each plugin's `app_msg_rx` already shaped as
+    /// [`AppMsg`]s and are returned for the caller to dispatch.
     fn drain_lua_host_handles(&mut self) -> Vec<AppMsg> {
         let center = self.map.center();
         let zoom = self.map.zoom();
@@ -323,17 +325,12 @@ impl App {
             while let Ok(component) = handles.push_rx.try_recv() {
                 self.compositor.push(component);
             }
-            while let Ok(ll) = handles.jump_rx.try_recv() {
-                msgs.push(AppMsg::Map(crate::map::Action::Jump(ll)));
-            }
-            while let Ok(z) = handles.zoom_rx.try_recv() {
-                msgs.push(AppMsg::Map(crate::map::Action::SetZoom(z)));
-            }
-            while let Ok((center, zoom)) = handles.fly_to_rx.try_recv() {
-                msgs.push(AppMsg::Map(crate::map::Action::FlyTo { center, zoom }));
-            }
-            while handles.export_rx.try_recv().is_ok() {
-                msgs.push(AppMsg::ExportFrame);
+            // Every fire-and-forget Lua intent arrives pre-packed as
+            // an `AppMsg` so the host doesn't need a `match` per verb.
+            // Map intents (`Action::Jump` / `SetZoom` / `FlyTo`) and
+            // `ExportFrame` all flow through this single drain.
+            while let Ok(msg) = handles.app_msg_rx.try_recv() {
+                msgs.push(msg);
             }
         }
         msgs

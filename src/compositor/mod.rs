@@ -401,10 +401,9 @@ pub struct Registrar {
     /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::app::App::new`] and drains each handle's receivers
-    /// (`push_rx` / `jump_rx` / `export_rx`) once per frame so
-    /// callbacks running in the setup state can request map jumps,
-    /// frame exports, or component pushes without sitting on a dead
-    /// receiver.
+    /// (`push_rx` / `app_msg_rx`) once per frame so callbacks running
+    /// in the setup state can request map jumps, frame exports, or
+    /// component pushes without sitting on a dead receiver.
     pub lua_host_handles: Vec<crate::lua::ttymap::LuaHostHandles>,
 }
 

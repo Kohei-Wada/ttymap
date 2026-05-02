@@ -88,7 +88,9 @@ use std::time::{Instant, SystemTime};
 
 use mlua::{Lua, Table, UserData};
 
+use crate::app::AppMsg;
 use crate::geo::LonLat;
+use crate::map::Action;
 use crate::shared::http::HttpClient;
 
 /// Maximum number of pending notifications retained in the host's
@@ -218,31 +220,31 @@ impl LuaHostShared {
 /// `install()` returns this once per state; the App routes the
 /// receivers to the right consumers.
 ///
-/// - `jump_rx` / `export_rx` — drained by the App per frame and
-///   emitted as `AppMsg`s. These fire from inside any setup callback
-///   (palette `invoke`, `register_keybind` callback, and the spec
-///   callbacks of windows opened via `ttymap.api.window.open`).
+/// - `app_msg_rx` — every fire-and-forget Lua intent (`ttymap.map:jump`
+///   / `:zoom(level)` / `:fly_to` / `ttymap.api.frame.export`) is
+///   pre-built into an [`AppMsg`] on the Lua side and pushed through
+///   here. The App drains and dispatches them per frame. One channel
+///   covers every map verb so adding a new `AppMsg` variant doesn't
+///   require new plumbing in this struct or in `App::drain_lua_host_handles`.
 /// - `center` — shared with `ttymap.map`'s userdata so
 ///   `ttymap.map:center()` returns the live centre. Components
 ///   refresh it on each dispatch path that carries a `Window`.
 /// - `push_rx` — components queued by `ttymap.api.window.open` (and
 ///   later `ttymap.api.palette.open` in A6). Drained by the App per
-///   frame and pushed onto the compositor stack.
+///   frame and pushed onto the compositor stack. Kept separate from
+///   `app_msg_rx` because pushing a [`crate::compositor::Component`]
+///   is a focus-stack mutation, not an `AppMsg` (see `app::msg` for
+///   the rationale).
 ///
 /// All receivers are owned by the **setup state** (the Lua VM that
 /// ran the script's top-level `register_*` calls) and drained
 /// centrally by the App per frame.
 pub struct LuaHostHandles {
-    pub jump_rx: mpsc::Receiver<LonLat>,
-    /// Direct zoom requests from `ttymap.map:zoom(level)`. The host
-    /// emits `AppMsg::Map(Action::SetZoom)` per drained value.
-    pub zoom_rx: mpsc::Receiver<f64>,
-    /// Composite recenter+zoom requests from
-    /// `ttymap.map:fly_to(lon, lat, zoom)`. One dispatch produces a
-    /// single render at the new view; emitting `Jump` and `SetZoom`
-    /// separately would render an intermediate frame.
-    pub fly_to_rx: mpsc::Receiver<(LonLat, f64)>,
-    pub export_rx: mpsc::Receiver<()>,
+    /// Single channel carrying every fire-and-forget [`AppMsg`] a Lua
+    /// callback can request. Replaces the prior per-verb (jump / zoom
+    /// / fly_to / export) channel set so new map intents land entirely
+    /// inside `lua/ttymap/` without touching the App drain loop.
+    pub app_msg_rx: mpsc::Receiver<AppMsg>,
     pub center: Arc<Mutex<LonLat>>,
     /// Latest zoom level mirrored from the host so
     /// `ttymap.map:zoom()` (no-arg getter form) returns the current
@@ -338,10 +340,11 @@ pub fn install(
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
 ) -> mlua::Result<LuaHostHandles> {
-    let (jump_tx, jump_rx) = mpsc::channel();
-    let (zoom_tx, zoom_rx) = mpsc::channel();
-    let (fly_to_tx, fly_to_rx) = mpsc::channel();
-    let (export_tx, export_rx) = mpsc::channel();
+    // One `AppMsg` channel per Lua state: every fire-and-forget
+    // intent (`map:jump`, `:zoom(level)`, `:fly_to`, `frame.export`)
+    // builds an `AppMsg` directly on the Lua side and sends through
+    // `app_msg_tx`. The App drains a single receiver per frame.
+    let (app_msg_tx, app_msg_rx) = mpsc::channel::<AppMsg>();
     // `Box<dyn Component>` is `!Send`; that's fine — the channel
     // stays on the main thread (install + every `window.open` Lua
     // callback + App drain all run on the same thread). `mpsc`
@@ -361,9 +364,7 @@ pub fn install(
     ttymap.set(
         "map",
         lua.create_userdata(HostMap {
-            jump_tx,
-            zoom_tx,
-            fly_to_tx,
+            app_msg_tx: app_msg_tx.clone(),
             center: center.clone(),
             zoom: zoom.clone(),
         })?,
@@ -546,8 +547,8 @@ pub fn install(
     // Per-frame primitives:
     //
     // - `export()`     fire-and-forget request to snapshot the current
-    //                  frame to disk; the App drains `export_rx` per
-    //                  frame and emits `AppMsg::ExportFrame`.
+    //                  frame to disk; pushes `AppMsg::ExportFrame` onto
+    //                  the shared `app_msg_tx`, drained per frame.
     // - `on_tick(fn)`  subscribe a callback to per-frame dispatch. The
     //                  host walks the captured registry keys after the
     //                  script runs and pushes one [`TickEntry`] per
@@ -555,11 +556,12 @@ pub fn install(
     //                  calls per script are stacked in registration
     //                  order.
     let frame_api = lua.create_table()?;
+    let export_tx = app_msg_tx.clone();
     frame_api.set(
         "export",
         lua.create_function(move |_, _: ()| {
-            if export_tx.send(()).is_err() {
-                log::error!("lua-host: ttymap.api.frame.export: export channel closed");
+            if export_tx.send(AppMsg::ExportFrame).is_err() {
+                log::error!("lua-host: ttymap.api.frame.export: app_msg channel closed");
             }
             Ok(())
         })?,
@@ -638,11 +640,14 @@ pub fn install(
 
     lua.globals().set("ttymap", ttymap)?;
 
+    // The remaining clone of `app_msg_tx` is held by the export
+    // closure (and the `HostMap` userdata via its earlier clone). All
+    // senders live inside Lua-owned closures / userdata for the
+    // program lifetime; dropping the original here is fine.
+    drop(app_msg_tx);
+
     Ok(LuaHostHandles {
-        jump_rx,
-        zoom_rx,
-        fly_to_rx,
-        export_rx,
+        app_msg_rx,
         center,
         zoom,
         push_rx,
@@ -692,9 +697,11 @@ impl UserData for HostHttp {
 // ── ttymap.map ────────────────────────────────────────────────────────
 
 struct HostMap {
-    jump_tx: mpsc::Sender<LonLat>,
-    zoom_tx: mpsc::Sender<f64>,
-    fly_to_tx: mpsc::Sender<(LonLat, f64)>,
+    /// Single `AppMsg` sender shared by every fire-and-forget map
+    /// method (`jump` / `zoom` / `fly_to`). Lua-side calls build the
+    /// appropriate `AppMsg::Map(Action::*)` and push it through here;
+    /// the App's central drain forwards it to `dispatch` per frame.
+    app_msg_tx: mpsc::Sender<AppMsg>,
     center: Arc<Mutex<LonLat>>,
     zoom: Arc<Mutex<f64>>,
 }
@@ -702,13 +709,15 @@ struct HostMap {
 impl UserData for HostMap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.map:jump(lon, lat)` — request the map recentre on the
-        // given coordinate. The actual `AppMsg::Map(Action::Jump)`
-        // emit happens when App drains the setup state's `jump_rx`
-        // per frame, so this is fire-and-forget from the Lua side.
-        // Send errors (channel disconnected) mean the setup state is
-        // being torn down — silently ignore.
+        // given coordinate. Fire-and-forget: the App drains the setup
+        // state's `app_msg_rx` per frame and dispatches the queued
+        // `AppMsg::Map(Action::Jump)`. Send errors (channel
+        // disconnected) mean the setup state is being torn down —
+        // silently ignore.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
-            let _ = this.jump_tx.send(LonLat { lon, lat });
+            let _ = this
+                .app_msg_tx
+                .send(AppMsg::Map(Action::Jump(LonLat { lon, lat })));
             Ok(())
         });
 
@@ -722,7 +731,7 @@ impl UserData for HostMap {
         // `None` (getter), number → `Some(level)` (setter).
         methods.add_method("zoom", |_, this, level: Option<f64>| match level {
             Some(z) => {
-                let _ = this.zoom_tx.send(z);
+                let _ = this.app_msg_tx.send(AppMsg::Map(Action::SetZoom(z)));
                 Ok(mlua::Value::Nil)
             }
             None => {
@@ -736,7 +745,10 @@ impl UserData for HostMap {
         // would render two frames; this routes through
         // `Action::FlyTo` so the user sees a single transition.
         methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
-            let _ = this.fly_to_tx.send((LonLat { lon, lat }, zoom));
+            let _ = this.app_msg_tx.send(AppMsg::Map(Action::FlyTo {
+                center: LonLat { lon, lat },
+                zoom,
+            }));
             Ok(())
         });
 
@@ -1051,7 +1063,10 @@ mod tests {
     }
 
     #[test]
-    fn host_map_jump_pushes_to_channel() {
+    fn host_map_jump_pushes_appmsg_jump() {
+        // `ttymap.map:jump(lon, lat)` lands on the shared `app_msg_rx`
+        // as a fully-formed `AppMsg::Map(Action::Jump(LonLat))`; the
+        // App's central drain forwards it to dispatch unchanged.
         let (lua, handles) = install_for_test();
 
         // Lua-side call: longitude first, then latitude.
@@ -1059,20 +1074,28 @@ mod tests {
             .exec()
             .expect("exec");
 
-        let ll = handles.jump_rx.try_recv().expect("jump must be queued");
-        assert!((ll.lon - 139.7595).abs() < 1e-9);
-        assert!((ll.lat - 35.6828).abs() < 1e-9);
+        let msg = handles.app_msg_rx.try_recv().expect("jump must be queued");
+        match msg {
+            AppMsg::Map(Action::Jump(ll)) => {
+                assert!((ll.lon - 139.7595).abs() < 1e-9);
+                assert!((ll.lat - 35.6828).abs() < 1e-9);
+            }
+            other => panic!("expected AppMsg::Map(Action::Jump), got {other:?}"),
+        }
     }
 
     #[test]
-    fn host_map_zoom_pushes_to_channel() {
-        // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side
-        // — the level lands on `zoom_rx` and the host emits the
-        // `AppMsg::Map(Action::SetZoom)` per drained value.
+    fn host_map_zoom_setter_pushes_appmsg_set_zoom() {
+        // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side —
+        // the level lands on `app_msg_rx` as
+        // `AppMsg::Map(Action::SetZoom(level))`.
         let (lua, handles) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
-        let z = handles.zoom_rx.try_recv().expect("zoom must be queued");
-        assert!((z - 7.5).abs() < 1e-9);
+        let msg = handles.app_msg_rx.try_recv().expect("zoom must be queued");
+        match msg {
+            AppMsg::Map(Action::SetZoom(z)) => assert!((z - 7.5).abs() < 1e-9),
+            other => panic!("expected AppMsg::Map(Action::SetZoom), got {other:?}"),
+        }
     }
 
     #[test]
@@ -1089,29 +1112,38 @@ mod tests {
         let z: f64 = lua.load("return ttymap.map:zoom()").eval().expect("eval");
         assert!((z - 9.25).abs() < 1e-9);
         // Calling the getter must not enqueue a setter request.
-        assert!(handles.zoom_rx.try_recv().is_err());
+        assert!(handles.app_msg_rx.try_recv().is_err());
     }
 
     #[test]
-    fn host_map_fly_to_pushes_centre_and_zoom() {
+    fn host_map_fly_to_pushes_appmsg_fly_to() {
         // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
-        // channel value so the host can emit one `Action::FlyTo` per
-        // call (single redraw, no intermediate frame).
+        // `AppMsg::Map(Action::FlyTo)` so the host can emit one
+        // dispatch per call (single redraw, no intermediate frame).
         let (lua, handles) = install_for_test();
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
             .exec()
             .expect("exec");
-        let (ll, zoom) = handles.fly_to_rx.try_recv().expect("fly_to queued");
-        assert!((ll.lon - 139.7595).abs() < 1e-9);
-        assert!((ll.lat - 35.6828).abs() < 1e-9);
-        assert!((zoom - 12.0).abs() < 1e-9);
+        let msg = handles.app_msg_rx.try_recv().expect("fly_to queued");
+        match msg {
+            AppMsg::Map(Action::FlyTo { center, zoom }) => {
+                assert!((center.lon - 139.7595).abs() < 1e-9);
+                assert!((center.lat - 35.6828).abs() < 1e-9);
+                assert!((zoom - 12.0).abs() < 1e-9);
+            }
+            other => panic!("expected AppMsg::Map(Action::FlyTo), got {other:?}"),
+        }
     }
 
     #[test]
-    fn api_frame_export_pushes_to_export_channel() {
+    fn api_frame_export_pushes_appmsg_export_frame() {
         let (lua, handles) = install_for_test();
         lua.load("ttymap.api.frame.export()").exec().expect("exec");
-        assert!(handles.export_rx.try_recv().is_ok());
+        let msg = handles
+            .app_msg_rx
+            .try_recv()
+            .expect("export must be queued");
+        assert!(matches!(msg, AppMsg::ExportFrame), "got {msg:?}");
     }
 
     #[test]

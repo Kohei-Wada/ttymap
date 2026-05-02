@@ -9,15 +9,12 @@
 //! Errors in any callback are logged + recovered (empty results,
 //! Close action) to keep a buggy plugin from crashing the host.
 
-use std::sync::mpsc;
 use std::time::Duration;
 
 use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaHandle};
-use crate::app::AppMsg;
 use crate::compositor::Context;
-use crate::geo::LonLat;
 use crate::palette::provider::{PaletteAction, PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
@@ -37,11 +34,6 @@ pub struct LuaPaletteProvider {
     /// `items()` returns `&[PaletteItem]` so we keep a local copy
     /// rather than round-tripping into Lua per call.
     items: Vec<PaletteItem>,
-    /// Inbox for `ttymap.map:jump(lon, lat)` calls made from inside
-    /// `execute`. Drained right before the action is returned so
-    /// the Run-with-Jump path is preserved without exposing the
-    /// `AppMsg` enum to Lua.
-    jump_rx: mpsc::Receiver<LonLat>,
 }
 
 impl LuaPaletteProvider {
@@ -54,35 +46,23 @@ impl LuaPaletteProvider {
     ///
     /// Host services (`ttymap.map`, `ttymap.api`, …) are already
     /// installed on `lua` by the prior [`crate::lua::ttymap::install`]
-    /// call that produced the setup state.
-    ///
-    /// **Channel ownership** (per A3's Path 4 decision): `ttymap.map:jump`
-    /// inside this provider's `execute` callback hits the **setup
-    /// state's** `jump_tx` — drained centrally by [`crate::app::App`]
-    /// per frame and emitted as `AppMsg::Map(Action::Jump)`. This
-    /// provider's own `jump_rx` is a disconnected channel (sender
-    /// dropped immediately) — the in-execute "jump → Run([Jump])" path
-    /// is unreachable here, replaced by the App's central drain.
-    /// `execute` always collapses to `Close` (modulo the legacy
-    /// `jump_rx` priority check kept for forward compatibility).
+    /// call that produced the setup state. `ttymap.map:jump` inside
+    /// this provider's `execute` callback hits the setup state's
+    /// shared `app_msg_tx` — drained centrally by [`crate::app::App`]
+    /// per frame and dispatched as `AppMsg::Map(Action::Jump)`.
+    /// `execute` returns purely structural [`PaletteAction`] variants
+    /// (`Close`, future `Push` / `SwitchProvider`); map intents leave
+    /// through the host channel, not the action return value.
     pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
         let prompt: String = spec.get("prompt").unwrap_or_else(|_| ":".to_string());
         let submit_mode = parse_submit_mode(&spec);
         let handle = LuaHandle::new(lua, spec, log_tag)?;
-
-        // Disconnected jump channel — see doc comment above. The
-        // sender goes out of scope immediately, so every `try_recv`
-        // is `Err` and `action_from_lua` falls through to `Close`.
-        // Real jump intent goes through the setup state's `jump_tx`
-        // (held by `ttymap.map`) and is drained centrally by App.
-        let (_jump_tx, jump_rx) = mpsc::channel();
 
         Ok(Self {
             handle,
             prompt,
             submit_mode,
             items: Vec::new(),
-            jump_rx,
         })
     }
 
@@ -197,24 +177,17 @@ impl PaletteProvider for LuaPaletteProvider {
 
 impl LuaPaletteProvider {
     /// Translate a Lua-returned execute() value into a PaletteAction.
-    /// Three accepted forms:
+    /// Two accepted forms today:
     /// - `nil` → Close
     /// - `{ close = true }` → Close
-    /// - `ttymap.map:jump(lon, lat)` inside execute → Run([Map(Action::Jump(ll))])
+    ///
+    /// Map intents (`ttymap.map:jump` inside `execute`) take a
+    /// different path: they push onto the setup state's shared
+    /// `app_msg_tx`, which the App drains centrally and dispatches.
+    /// Future structural variants (Push / Toggle / SwitchProvider) can
+    /// branch on the table shape here without affecting that intent
+    /// path.
     fn action_from_lua(&self, value: mlua::Value) -> PaletteAction {
-        // First check the in-execute jump channel — `ttymap.map:jump` pushes
-        // a LonLat that takes priority over any returned table since
-        // the script's intent ("jump to this") is unambiguous.
-        let mut jumps = Vec::new();
-        while let Ok(ll) = self.jump_rx.try_recv() {
-            jumps.push(AppMsg::Map(crate::map::Action::Jump(ll)));
-        }
-        if !jumps.is_empty() {
-            return PaletteAction::Run(jumps);
-        }
-        // No jump pending: every other return value (nil, `{close=true}`,
-        // anything malformed) collapses to Close. Future variants can
-        // branch in here if a script ever needs Push/Toggle/SwitchProvider.
         let _ = value;
         PaletteAction::Close
     }
