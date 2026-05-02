@@ -78,7 +78,7 @@ fn main() {
     // Run init.lua first, then override with CLI args. `keymap_overrides`
     // travels to Frontend::new alongside Config because the keymap is
     // scripted at the same place but lives in its own data shape.
-    let (mut config, keymap_overrides) = ttymap::lua::run_init_lua(Config::default());
+    let (mut config, keymap_overrides) = ttymap::lua::load_init_lua(Config::default());
 
     if let Some(v) = cli.lat {
         config.map.lat = v;

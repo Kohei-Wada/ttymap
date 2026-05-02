@@ -490,7 +490,7 @@ impl Frontend {
                     self.request_map_redraw();
                 }
             }
-            UserIntent::SetTheme(new_id) => self.apply_theme(new_id),
+            UserIntent::SetTheme(new_id) => self.switch_theme(new_id),
             UserIntent::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
             }
@@ -531,7 +531,7 @@ impl Frontend {
         }
     }
 
-    fn apply_theme(&mut self, new_id: ThemeId) {
+    fn switch_theme(&mut self, new_id: ThemeId) {
         self.theme_id = new_id;
         let styler = Arc::new(Styler::new(new_id));
         self.ui_theme = UiTheme::from_palette(styler.palette());

@@ -160,7 +160,7 @@ App::dispatch(msg)
   ↓
     UserIntent::Map(action)      → MapState::process_action(&action)
     UserIntent::Jump(loc)        → MapState::jump_to(loc)
-    UserIntent::SetTheme(id)     → App::apply_theme (rebuilds styler + UI theme)
+    UserIntent::SetTheme(id)     → App::switch_theme (rebuilds styler + UI theme)
     UserIntent::CursorMoved(c,r) → overlay.set_cursor
     UserIntent::CycleFocus(fwd)  → Compositor::cycle
     UserIntent::Resize(cols,rows)→ App::handle_resize

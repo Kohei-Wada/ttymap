@@ -4,7 +4,7 @@
 //! when we migrated to Lua, only in the *language* the user writes
 //! their overrides in.
 //!
-//! The actual loader lives in [`crate::lua::init_lua::run_init_lua`].
+//! The actual loader lives in [`crate::lua::init_lua::load_init_lua`].
 //! This module just owns the struct definitions and their `Default`
 //! impls (which act as the seed Lua starts from).
 

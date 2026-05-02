@@ -54,7 +54,7 @@ use crate::input::keymap::KeybindingOverrides;
 /// all log + leave the prior state intact. A broken bundled init
 /// still lets the user's init.lua run; a broken user init still
 /// lets the bundled defaults take effect.
-pub fn run_init_lua(defaults: Config) -> (Config, KeybindingOverrides) {
+pub fn load_init_lua(defaults: Config) -> (Config, KeybindingOverrides) {
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     if let Some(p) = bundled_init_path()
         && let Some(src) = read_init_file(&p)
@@ -120,7 +120,7 @@ fn bundled_init_path() -> Option<PathBuf> {
     None
 }
 
-/// Inner half of [`run_init_lua`] — pure logic split out so unit
+/// Inner half of [`load_init_lua`] — pure logic split out so unit
 /// tests can drive Lua source directly without faking the XDG path.
 /// Each source in `sources` runs in turn against the same Lua state;
 /// `ttymap.opt.*` mutations and `ttymap.keymap.set/del` calls
@@ -452,7 +452,7 @@ mod tests {
         // Bad syntax in a layer is caught + logged; the rest of the
         // chain still runs and the surviving Config reflects the
         // valid mutations from the other layers. Mirrors how
-        // run_init_lua handles a broken bundled init while letting
+        // load_init_lua handles a broken bundled init while letting
         // the user's init.lua take effect.
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
         let sources = vec![

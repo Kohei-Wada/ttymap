@@ -22,7 +22,7 @@ pub mod sender;
 pub mod ttymap;
 
 pub use bridge::palette_provider::LuaPaletteProvider;
-pub use init_lua::run_init_lua;
+pub use init_lua::load_init_lua;
 pub use registry::LuaEventBus;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;

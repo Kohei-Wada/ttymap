@@ -237,7 +237,7 @@ Note: this is a **separate Lua state** from the plugin runtime state
 `keymap` (config DSL) — no collision because the scopes don't share a
 VM.
 
-`run_init_lua` exposes:
+`load_init_lua` exposes:
 
 - **`opt.*`** — pre-populated table tree seeded from Rust defaults.
   User mutates leaves.

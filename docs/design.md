@@ -24,7 +24,7 @@ palette, plugins, mouse) returns `Vec<UserIntent>` and never executes
 anything itself. Each match arm either delegates to a method on the
 domain type that owns the relevant state (`MapState`) or — for
 cross-cutting transitions — to a method on `App` itself
-(`apply_theme`, `handle_resize`). Arms whose effect changed the map
+(`switch_theme`, `handle_resize`). Arms whose effect changed the map
 frame call `self.request_map_redraw()` inline to request a fresh
 frame and notify passive widgets. This gives us:
 
@@ -136,7 +136,7 @@ app/
   mod.rs          # App struct + top-level run/dispatch
   msg.rs          # UserIntent enum definition
   map_msg.rs      # impl App for Map / Jump
-  theme.rs        # impl App for apply_theme
+  theme.rs        # impl App for switch_theme
   resize.rs       # impl App for handle_resize
 ```
 
