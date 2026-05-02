@@ -85,8 +85,8 @@ local function open()
     w = ttymap.api.window.open({
         layout = { kind = "sidebar" },
         footer_hints = {
-            { key = "C-n/C-p", label = "scroll" },
-            { key = "Esc",     label = "close" },
+            { key = "↑↓ PgUp PgDn", label = "scroll" },
+            { key = "Esc",          label = "close" },
         },
         render = build_lines,
         handle_event = function(key)
@@ -95,9 +95,10 @@ local function open()
                 return nil
             end
             -- Everything else (j/k pan, q quit, : palette …) falls
-            -- through to the base layer. C-n / C-p reach the
-            -- bridge's built-in section scroll because help has no
-            -- selection logic of its own.
+            -- through to the base layer. The bridge intercepts
+            -- ↑ ↓ PgUp PgDn Home End C-n C-p C-d C-u for built-in
+            -- section scroll because help has no selection logic
+            -- of its own.
             return { ignore = true }
         end,
     })

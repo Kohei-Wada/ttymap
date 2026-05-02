@@ -42,7 +42,9 @@ use std::sync::mpsc;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Clear, Paragraph, Table, TableState};
+use ratatui::widgets::{
+    Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
+};
 
 use crate::frontend::compositor::{Component, Context};
 use crate::frontend::{AppEvent, UserIntent};
@@ -227,6 +229,29 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     pub fn table(&mut self, t: Table<'static>, rect: Rect, state: &mut TableState) {
         let clamped = clamp(rect, self.area);
         self.frame.render_stateful_widget(t, clamped, state);
+    }
+
+    /// Draw a vertical scrollbar on the right edge of `rect`. Use
+    /// the panel's outer rect so the bar sits on the border. No-op
+    /// when content fits (content_length <= viewport_length): no
+    /// reason to draw an indicator that says "you've seen
+    /// everything".
+    pub fn scrollbar(
+        &mut self,
+        rect: Rect,
+        content_length: u16,
+        position: u16,
+        viewport_length: u16,
+    ) {
+        if content_length == 0 || content_length <= viewport_length {
+            return;
+        }
+        let clamped = clamp(rect, self.area);
+        let mut state = ScrollbarState::new(content_length as usize)
+            .position(position as usize)
+            .viewport_content_length(viewport_length as usize);
+        let bar = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        self.frame.render_stateful_widget(bar, clamped, &mut state);
     }
 
     /// Resolve a semantic [`StyleKind`] to a concrete `ratatui::Style`

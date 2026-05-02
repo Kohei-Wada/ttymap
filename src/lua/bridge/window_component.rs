@@ -157,6 +157,13 @@ pub struct LuaWindowComponent {
     /// the slot. Bridge-managed (j/k for sidebar sections); ignored
     /// for modal placement. `Cell` because `render` takes `&self`.
     scroll_offset: std::cell::Cell<u16>,
+    /// Last rendered inner height of this section's panel (i.e.
+    /// `area - frame border`). Cached so PageUp / PageDown / C-d /
+    /// C-u in `handle_event` can use the *current* slot height as
+    /// the page step size — `handle_event` itself has no Rect.
+    /// Defaults to a sane fallback (10) when no frame has rendered
+    /// yet.
+    last_inner_height: std::cell::Cell<u16>,
 }
 
 impl LuaWindowComponent {
@@ -202,6 +209,7 @@ impl LuaWindowComponent {
             has_render,
             footer_hints,
             scroll_offset: std::cell::Cell::new(0),
+            last_inner_height: std::cell::Cell::new(10),
         })
     }
 
@@ -275,18 +283,32 @@ impl Component for LuaWindowComponent {
         let action = self.dispatch_event(event);
 
         // Sidebar sections: when the Lua spec didn't consume the
-        // event, the bridge applies a built-in C-n / C-p scroll so
-        // overflow content is reachable without every plugin
-        // re-implementing it. j/k stay untouched and pass through to
-        // the base layer (map pan).
+        // event, the bridge applies built-in scroll keys so overflow
+        // content is reachable without every plugin re-implementing
+        // it. Plugins that *want* one of these (e.g. aircraft uses
+        // Up / Down to pick a row) consume by returning nil — those
+        // never reach this branch. j/k stay untouched here and pass
+        // through to the base layer (map pan), since holding `j` to
+        // pan while a section is focused is more useful than line-
+        // by-line scroll without a modifier.
         if self.layout.placement == crate::frontend::compositor::Placement::Sidebar
             && action == KeyAction::Ignore
-            && event.modifiers.contains(KeyModifiers::CONTROL)
         {
             let cur = self.scroll_offset.get();
-            let next = match event.code {
-                KeyCode::Char('n') => Some(cur.saturating_add(1)),
-                KeyCode::Char('p') => Some(cur.saturating_sub(1)),
+            let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
+            let page = self.last_inner_height.get().max(1);
+            let half = (page / 2).max(1);
+            let next = match (event.code, ctrl) {
+                (KeyCode::Down, false) => Some(cur.saturating_add(1)),
+                (KeyCode::Up, false) => Some(cur.saturating_sub(1)),
+                (KeyCode::Char('n'), true) => Some(cur.saturating_add(1)),
+                (KeyCode::Char('p'), true) => Some(cur.saturating_sub(1)),
+                (KeyCode::PageDown, _) => Some(cur.saturating_add(page)),
+                (KeyCode::PageUp, _) => Some(cur.saturating_sub(page)),
+                (KeyCode::Char('d'), true) => Some(cur.saturating_add(half)),
+                (KeyCode::Char('u'), true) => Some(cur.saturating_sub(half)),
+                (KeyCode::Home, _) => Some(0),
+                (KeyCode::End, _) => Some(u16::MAX),
                 _ => None,
             };
             if let Some(v) = next {
@@ -327,6 +349,10 @@ impl Component for LuaWindowComponent {
             self.layout.anchor.rect(outer, self.layout.width, height)
         };
         let inner = win.panel(area, self.display);
+        // Snapshot the slot's content height so handle_event can use
+        // it as the page step for PageUp / PageDown / C-d / C-u
+        // without computing layout itself.
+        self.last_inner_height.set(inner.height);
         let body = win.style(StyleKind::Body);
         let raw_lines = self.render_lines();
         let total_lines = raw_lines.len() as u16;
@@ -375,6 +401,12 @@ impl Component for LuaWindowComponent {
 
         let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
         win.paragraph(paragraph, inner);
+
+        // Vertical scrollbar on the right border (no-op when content
+        // fits the slot — the helper short-circuits internally).
+        // Drawn over `area` so the indicator sits on the panel
+        // border, not inside the content.
+        win.scrollbar(area, total_lines, offset, inner.height);
     }
 
     fn poll(&mut self, win: &mut Window) {
