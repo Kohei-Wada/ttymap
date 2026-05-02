@@ -25,13 +25,11 @@ pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
 pub mod intent;
-pub mod observer;
 pub mod palette;
 pub mod ui;
 
 pub use event::AppEvent;
 pub use intent::UserIntent;
-pub use observer::AppObserver;
 
 use std::io;
 
@@ -39,10 +37,11 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::config::Config;
-use crate::frontend::compositor::Activation;
 use crate::frontend::compositor::{BaseLayer, Compositor, Context};
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
+use crate::lua::LuaHandle;
+use crate::lua::LuaSubsystem;
 use crate::map::Action;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
@@ -67,12 +66,11 @@ pub struct Frontend {
     /// map-data concern. The map subsystem only consumes it
     /// transiently when [`MapHandle::set_theme`] is called.
     theme_id: ThemeId,
-    /// Hook surface for parties that want to observe app activity
-    /// without Frontend knowing what they are. Today the Lua
-    /// subsystem ships the only impl; Frontend itself stays
-    /// completely agnostic — no `lua` import, no Lua-specific
-    /// concepts in this file.
-    observer: Box<dyn AppObserver>,
+    /// Runtime handle to the Lua subsystem. Encapsulates the event
+    /// bus and per-plugin host channels so Frontend never names them
+    /// directly — every Lua-side interaction goes through semantic
+    /// methods (`notify_*`, `tick`, `sync_view`, `drain_pushes`).
+    lua: LuaHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -124,10 +122,18 @@ impl Frontend {
         keymap: KeyMap,
         theme_id: ThemeId,
         map: MapHandle,
-        activations: Vec<Activation>,
-        plugin_hints: Vec<(&'static str, &'static str)>,
-        observer: Box<dyn AppObserver>,
+        lua: LuaSubsystem,
     ) -> Self {
+        let LuaSubsystem {
+            handle: lua,
+            activations,
+            plugin_hints,
+            // `palette_entries` was already drained by
+            // `palette::install` from main; nothing left for
+            // Frontend to consume.
+            palette_entries: _,
+        } = lua;
+
         let ui_theme = UiTheme::from_palette(theme_id.palette());
 
         // Compositor bootstraps with the BaseLayer (keymap +
@@ -140,7 +146,7 @@ impl Frontend {
             map,
             running: true,
             theme_id,
-            observer,
+            lua,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
@@ -237,7 +243,7 @@ impl Frontend {
             }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
-                self.observer.on_frame_ready();
+                self.lua.notify_frame_ready();
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
             AppEvent::LuaIntent(intent) => {
@@ -259,12 +265,27 @@ impl Frontend {
         }
     }
 
-    /// Forward the dispatched intent to the observer; what gets
-    /// broadcast (and what stays silent) is the observer's call —
-    /// Frontend doesn't filter, doesn't translate, doesn't know
-    /// what the observer does with it.
+    /// Broadcast post-effect notifications for the variants that
+    /// plugins want to observe. Skips noisy / internal intents
+    /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
+    /// surface stays meaningful — bus events are "something
+    /// observable happened to the app", not "every state mutation".
     fn notify_post_intent(&self, msg: &UserIntent) {
-        self.observer.on_intent_dispatched(msg);
+        match msg {
+            UserIntent::Map(Action::Jump(ll)) => self.lua.notify_map_jumped(*ll),
+            UserIntent::Map(Action::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
+            UserIntent::Map(Action::FlyTo { center, zoom }) => {
+                self.lua.notify_map_flew_to(*center, *zoom);
+            }
+            UserIntent::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
+            UserIntent::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
+            UserIntent::ExportFrame => self.lua.notify_frame_exported(),
+            // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
+            // `CycleFocus`, the discrete `Pan*` keymap actions, and
+            // `Quit` (the App is tearing down anyway) are deliberately
+            // not broadcast. Adding them later is one match arm.
+            _ => {}
+        }
     }
 
     /// Classify a raw terminal event and dispatch downstream messages.
@@ -308,41 +329,33 @@ impl Frontend {
     /// intents through `Window::emit` route directly onto the bus —
     /// the run loop's same-iteration `try_recv` picks them up.
     ///
-    /// Drains any components the observer wants to inject first, so
-    /// they participate in this same poll pass.
+    /// Drains any components Lua queued via
+    /// `ttymap.api.window.open` / `palette.open` first, so they
+    /// participate in this same poll pass.
     fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
-        // Disjoint borrows: `&self.observer` for the iterator,
-        // `&mut self.compositor` for the push side.
-        let observer = &*self.observer;
+        // Disjoint borrows: `&self.lua` for the iterator, `&mut
+        // self.compositor` for the push side.
+        let lua = &self.lua;
         let compositor = &mut self.compositor;
-        observer.drain_components(&mut |c| compositor.push(c));
+        lua.drain_pushes(|component| compositor.push(component));
 
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
     }
 
-    /// Single per-iteration draw. The observer's `pre_paint_map` hook
-    /// fires from inside `ui::draw` against the live `MapApi` (see
-    /// `ui::draw`).
+    /// Single per-iteration draw. The `tick` bus event fires from
+    /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
     fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let ctx = self.context();
         // Field-disjoint borrows so the closure can hold `&self.X`
         // alongside `&mut self.overlay_sink`.
         let map_frame = self.map_frame.as_ref();
         let compositor = &self.compositor;
-        let observer = &*self.observer;
+        let lua = &self.lua;
         let ui_theme = &self.ui_theme;
         let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
-            crate::frontend::ui::draw(
-                f,
-                map_frame,
-                compositor,
-                observer,
-                ui_theme,
-                &ctx,
-                overlay_sink,
-            )
+            crate::frontend::ui::draw(f, map_frame, compositor, lua, ui_theme, &ctx, overlay_sink)
         })?;
         Ok(())
     }
@@ -437,8 +450,7 @@ impl Frontend {
         // queueing the next render task — Lua plugins read
         // `ttymap.map:center()` / `:zoom()` from these mirrors and
         // expect them to reflect the view about to be drawn.
-        self.observer
-            .on_view_change(self.map.center(), self.map.zoom());
+        self.lua.sync_view(self.map.center(), self.map.zoom());
         let overlays = std::mem::take(&mut self.overlay_sink);
         self.map.request_redraw(overlays);
     }

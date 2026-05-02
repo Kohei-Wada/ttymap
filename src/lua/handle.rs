@@ -7,14 +7,11 @@
 //! "Frontend doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
-use crate::frontend::AppObserver;
-use crate::frontend::UserIntent;
 use crate::frontend::compositor::Component;
 use crate::frontend::compositor::MapApi;
 use crate::geo::LonLat;
 use crate::lua::registry::{LuaEventBus, names};
 use crate::lua::ttymap::LuaHostHandles;
-use crate::map::Action;
 
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`] and lifted out of the registrar by
@@ -101,48 +98,5 @@ impl LuaHandle {
                 on_push(component);
             }
         }
-    }
-}
-
-/// `LuaHandle` is the canonical [`AppObserver`] for ttymap — it
-/// translates Frontend's hook calls into Lua-bus dispatches. Any
-/// future observer (telemetry, audit log) would impl the same trait
-/// independently; Frontend stays unaware of which one is plugged in.
-impl AppObserver for LuaHandle {
-    fn on_intent_dispatched(&self, intent: &UserIntent) {
-        match intent {
-            UserIntent::Map(Action::Jump(ll)) => self.notify_map_jumped(*ll),
-            UserIntent::Map(Action::SetZoom(z)) => self.notify_map_zoom_set(*z),
-            UserIntent::Map(Action::FlyTo { center, zoom }) => {
-                self.notify_map_flew_to(*center, *zoom);
-            }
-            UserIntent::SetTheme(new_id) => self.notify_theme_changed(new_id.name()),
-            UserIntent::Resize(cols, rows) => self.notify_resized(*cols, *rows),
-            UserIntent::ExportFrame => self.notify_frame_exported(),
-            // Quit / CursorMoved / CycleFocus / noisy map actions
-            // (PanCells, ZoomAt, discrete Pan*) deliberately not
-            // broadcast — the bus surface stays meaningful.
-            _ => {}
-        }
-    }
-
-    fn on_frame_ready(&self) {
-        self.notify_frame_ready();
-    }
-
-    fn on_view_change(&self, center: LonLat, zoom: f64) {
-        self.sync_view(center, zoom);
-    }
-
-    fn drain_components(&self, on_push: &mut dyn FnMut(Box<dyn Component>)) {
-        for handles in &self.host_handles {
-            while let Ok(component) = handles.push_rx.try_recv() {
-                on_push(component);
-            }
-        }
-    }
-
-    fn pre_paint_map(&self, map: &mut MapApi<'_>) {
-        self.tick(map);
     }
 }

@@ -159,21 +159,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
         std::mem::take(&mut lua.palette_entries),
     );
 
-    // Frontend gets the compositor seed (activations + plugin_hints)
-    // and an opaque observer — it doesn't know the observer is Lua.
-    let activations = lua.activations;
-    let plugin_hints = lua.plugin_hints;
-    let observer: Box<dyn ttymap::frontend::AppObserver> = Box::new(lua.handle);
-
-    let mut frontend = Frontend::new(
-        config,
-        keymap,
-        theme_id,
-        map,
-        activations,
-        plugin_hints,
-        observer,
-    );
+    let mut frontend = Frontend::new(config, keymap, theme_id, map, lua);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
