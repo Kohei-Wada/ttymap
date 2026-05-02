@@ -36,10 +36,17 @@ impl UiTheme {
 
     /// Build a theme-styled bordered block with `title`. Used by
     /// `RenderWindow::panel` to wrap content in a framed container.
-    pub fn panel(&self, title: &str) -> Block<'static> {
+    /// When `focused`, the border switches to `accent_alt` to make
+    /// the active section visually pop out of a stack.
+    pub fn panel(&self, title: &str, focused: bool) -> Block<'static> {
+        let border = if focused {
+            self.accent_alt
+        } else {
+            self.accent
+        };
         Block::new()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(self.accent).bg(self.bg))
+            .border_style(Style::default().fg(border).bg(self.bg))
             .title(format!(" {} ", title))
             .style(Style::default().bg(self.bg))
     }

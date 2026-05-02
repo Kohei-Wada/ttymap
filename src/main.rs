@@ -163,6 +163,20 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+    // Push the kitty keyboard protocol's DISAMBIGUATE flag so
+    // C-j arrives as `Char('j') + CONTROL` instead of being
+    // collapsed onto `Enter` (= ASCII LF = legacy C-j). Required
+    // for the C-j / C-k focus-cycle keybind to be distinct from
+    // Enter (palette submit, plugin "jump"). If the terminal
+    // doesn't speak the protocol the push is a no-op; we ignore
+    // the error so non-supporting terminals still boot.
+    let kitty_pushed = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )
+    .is_ok();
 
     let _input = InputHandle::spawn(event_tx.clone(), frontend.poll_timeout());
     let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
@@ -171,6 +185,12 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     frontend.run(&mut terminal, &event_rx, &event_tx)?;
     log::info!("event loop ended");
 
+    if kitty_pushed {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::PopKeyboardEnhancementFlags
+        );
+    }
     crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
     log::info!("terminal restored, exiting");

@@ -47,12 +47,21 @@ use crate::theme::UiTheme;
 // ── Framework-reserved keys ────────────────────────────────────────
 
 /// Keys the compositor handles globally, without consulting any
-/// component. Currently: `Tab` → forward cycle, `Shift-Tab` /
-/// `BackTab` → backward cycle.
+/// component:
+/// - `Tab` / `C-j` → forward cycle
+/// - `Shift-Tab` / `BackTab` / `C-k` → backward cycle
 ///
 /// Intercepting here — rather than at `BaseLayer` — means no
-/// component on the stack can accidentally absorb Tab. Focus cycling
-/// is a property of the framework, not of any plugin's correctness.
+/// component on the stack can accidentally absorb the key. Focus
+/// cycling is a property of the framework, not of any plugin's
+/// correctness.
+///
+/// `C-j` requires the kitty keyboard protocol's
+/// `DISAMBIGUATE_ESCAPE_CODES` flag (pushed at startup in
+/// `main`); otherwise terminals collapse `C-j` onto `Enter` (=
+/// ASCII LF) and the binding silently does nothing. `C-k` has no
+/// such legacy collision and works regardless. Tab / Shift-Tab
+/// always work as a fallback.
 fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
     if event.code == KeyCode::Tab && event.modifiers == KeyModifiers::NONE {
         return Some(UserIntent::CycleFocus(true));
@@ -60,6 +69,13 @@ fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
     if event.code == KeyCode::BackTab
         || (event.code == KeyCode::Tab && event.modifiers.contains(KeyModifiers::SHIFT))
     {
+        return Some(UserIntent::CycleFocus(false));
+    }
+    let only_ctrl = event.modifiers == KeyModifiers::CONTROL;
+    if only_ctrl && event.code == KeyCode::Char('j') {
+        return Some(UserIntent::CycleFocus(true));
+    }
+    if only_ctrl && event.code == KeyCode::Char('k') {
         return Some(UserIntent::CycleFocus(false));
     }
     None
@@ -331,7 +347,7 @@ impl Compositor {
         if let Some(c) = self.stack.get(self.focused_idx)
             && c.placement() == Placement::Modal
         {
-            let mut win = window::RenderWindow::new(f, map_area, theme, ctx);
+            let mut win = window::RenderWindow::new(f, map_area, theme, ctx).focused(true);
             c.render(&mut win);
         }
 
@@ -400,8 +416,15 @@ impl Compositor {
                 let constraints: Vec<Constraint> =
                     (0..n).map(|_| Constraint::Ratio(1, n)).collect();
                 let chunks = Layout::vertical(constraints).split(cards_area);
-                for (slot, c) in chunks.iter().zip(sidebar_components[start..end].iter()) {
-                    let mut win = window::RenderWindow::new(f, *slot, theme, ctx);
+                for (offset, (slot, c)) in chunks
+                    .iter()
+                    .zip(sidebar_components[start..end].iter())
+                    .enumerate()
+                {
+                    let global_idx = start + offset;
+                    let is_focused = focused_in_sidebar == Some(global_idx);
+                    let mut win =
+                        window::RenderWindow::new(f, *slot, theme, ctx).focused(is_focused);
                     c.render(&mut win);
                 }
 

@@ -174,6 +174,12 @@ pub struct RenderWindow<'a, 'b> {
     theme: &'a UiTheme,
     #[allow(dead_code)] // read via ctx(); kept even if unused
     ctx: &'a Context,
+    /// Whether the component being rendered into this window is
+    /// the focused one. Drives the panel border colour: focused
+    /// ⇒ accent_alt, otherwise accent. Set by the compositor
+    /// per-component, not by the component itself (a component
+    /// doesn't know its focus state).
+    focused: bool,
 }
 
 impl<'a, 'b> RenderWindow<'a, 'b> {
@@ -188,7 +194,17 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
             area,
             theme,
             ctx,
+            focused: false,
         }
+    }
+
+    /// Mark this window as rendering the focused component.
+    /// Builder-style so call sites read `RenderWindow::new(…)
+    /// .focused(true)` at the compositor layer without needing a
+    /// second constructor.
+    pub(crate) fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
     }
 
     /// The area this component is allowed to draw into (usually
@@ -211,7 +227,7 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     pub fn panel(&mut self, rect: Rect, title: &str) -> Rect {
         let clamped = clamp(rect, self.area);
         self.frame.render_widget(Clear, clamped);
-        let block = self.theme.panel(title);
+        let block = self.theme.panel(title, self.focused);
         let inner = block.inner(clamped);
         self.frame.render_widget(block, clamped);
         inner
