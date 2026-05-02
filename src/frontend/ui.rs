@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::frontend::compositor::{Compositor, Context, MapApi};
-use crate::lua::LuaEventBus;
+use crate::lua::LuaHandle;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;
 use crate::theme::UiTheme;
@@ -28,7 +28,7 @@ pub fn draw(
     f: &mut Frame,
     map_frame: Option<&MapFrame>,
     compositor: &Compositor,
-    event_bus: &LuaEventBus,
+    lua: &LuaHandle,
     theme: &UiTheme,
     ctx: &Context,
     overlay_sink: &mut Vec<UserPolyline>,
@@ -59,12 +59,12 @@ pub fn draw(
             ctx.cursor,
             overlay_sink,
         );
-        // Fire the per-frame `"tick"` bucket on the Lua event bus
+        // Fire the per-frame `"tick"` event on the Lua subsystem
         // against the live MapApi *before* the compositor paints —
         // so any plugin-emitted points lie underneath focused-component
         // overlays in the same frame, matching the layering plugin
         // authors expect from `Component::paint_on_map`.
-        event_bus.dispatch_tick(&mut api);
+        lua.tick(&mut api);
         compositor.paint_on_map(&mut api);
     }
 

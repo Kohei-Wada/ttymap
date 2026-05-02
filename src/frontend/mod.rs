@@ -41,9 +41,8 @@ use crate::config::Config;
 use crate::frontend::compositor::{BaseLayer, Compositor, Context};
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
-use crate::lua::LuaEventBus;
+use crate::lua::LuaHandle;
 use crate::lua::LuaSubsystem;
-use crate::lua::ttymap::LuaHostHandles;
 use crate::map::Action;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
@@ -58,12 +57,11 @@ pub struct Frontend {
     /// `main`'s scope as a peer subsystem alongside `InputHandle`
     /// and `FrameTimer`.
     map: MapHandle,
-    /// Lua plugins' notification bus. Built upstream by
-    /// [`crate::lua::build_subsystem`]; the dispatch loop fires
-    /// post-effect events (`MAP_JUMPED`, `THEME_CHANGED`, etc.) onto
-    /// it from `handle_event`, and `ui::draw` fires the per-frame
-    /// `TICK` event against it.
-    event_bus: LuaEventBus,
+    /// Runtime handle to the Lua subsystem. Encapsulates the event
+    /// bus and per-plugin host channels so Frontend never names them
+    /// directly — every Lua-side interaction goes through semantic
+    /// methods (`notify_*`, `tick`, `sync_view`, `drain_pushes`).
+    lua: LuaHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -77,13 +75,6 @@ pub struct Frontend {
     /// the Lua side fire-and-forgets every frame and the render thread
     /// always gets the freshest set.
     overlay_sink: Vec<crate::map::render::overlay::UserPolyline>,
-    /// Setup-state [`LuaHostHandles`] for every Lua plugin script
-    /// (palette providers, plugin components, plugin loops, and any
-    /// `ttymap.api.window.open` / `palette.open` callers). Each
-    /// entry's `push_rx` is drained once per frame so queued
-    /// components reach `compositor.push`. `Box<dyn Component>` is
-    /// `!Send`, hence one channel per plugin (kept on main thread).
-    lua_host_handles: Vec<LuaHostHandles>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -123,11 +114,14 @@ impl Frontend {
             plugin_hints,
         } = lua;
 
-        // Lift bus + per-plugin handles off the registrar before the
-        // rest is consumed (activations are moved into the compositor
-        // below).
-        let event_bus = std::mem::take(&mut registrar.event_bus);
-        let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
+        // Lift bus + per-plugin handles off the registrar and wrap
+        // them in a `LuaHandle` — everything the Frontend needs to
+        // talk to the Lua subsystem at runtime, behind a semantic
+        // surface. Activations are moved into the compositor below.
+        let lua = LuaHandle::new(
+            std::mem::take(&mut registrar.event_bus),
+            std::mem::take(&mut registrar.lua_host_handles),
+        );
 
         let ui_theme = UiTheme::from_palette(map.theme_id.palette());
 
@@ -143,12 +137,11 @@ impl Frontend {
 
         Frontend {
             map,
-            event_bus,
+            lua,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
             ui_theme,
-            lua_host_handles,
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
@@ -247,17 +240,12 @@ impl Frontend {
     fn refresh_lua_host_state(&mut self) {
         let center = self.map.state.center();
         let zoom = self.map.state.zoom();
-        for handles in &self.lua_host_handles {
-            if let Ok(mut cell) = handles.center.lock() {
-                *cell = center;
-            }
-            if let Ok(mut cell) = handles.zoom.lock() {
-                *cell = zoom;
-            }
-            while let Ok(component) = handles.push_rx.try_recv() {
-                self.compositor.push(component);
-            }
-        }
+        self.lua.sync_view(center, zoom);
+        // Disjoint borrows: `&self.lua` for the iterator, `&mut
+        // self.compositor` for the push side.
+        let lua = &self.lua;
+        let compositor = &mut self.compositor;
+        lua.drain_pushes(|component| compositor.push(component));
     }
 
     /// Apply one event drained off the unified queue. Each variant
@@ -281,8 +269,7 @@ impl Frontend {
             }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
-                self.event_bus
-                    .dispatch(crate::lua::registry::names::FRAME_READY, ());
+                self.lua.notify_frame_ready();
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
             AppEvent::LuaIntent(intent) => {
@@ -310,27 +297,15 @@ impl Frontend {
     /// surface stays meaningful — bus events are "something
     /// observable happened to the app", not "every state mutation".
     fn notify_post_intent(&self, msg: &UserIntent) {
-        use crate::lua::registry::names;
         match msg {
-            UserIntent::Map(Action::Jump(ll)) => {
-                self.event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
-            }
-            UserIntent::Map(Action::SetZoom(z)) => {
-                self.event_bus.dispatch(names::MAP_ZOOM_SET, *z);
-            }
+            UserIntent::Map(Action::Jump(ll)) => self.lua.notify_map_jumped(*ll),
+            UserIntent::Map(Action::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
             UserIntent::Map(Action::FlyTo { center, zoom }) => {
-                self.event_bus
-                    .dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
+                self.lua.notify_map_flew_to(*center, *zoom);
             }
-            UserIntent::SetTheme(new_id) => {
-                self.event_bus.dispatch(names::THEME_CHANGED, new_id.name());
-            }
-            UserIntent::Resize(cols, rows) => {
-                self.event_bus.dispatch(names::RESIZED, (*cols, *rows));
-            }
-            UserIntent::ExportFrame => {
-                self.event_bus.dispatch(names::FRAME_EXPORTED, ());
-            }
+            UserIntent::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
+            UserIntent::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
+            UserIntent::ExportFrame => self.lua.notify_frame_exported(),
             // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
             // `CycleFocus`, the discrete `Pan*` keymap actions, and
             // `Quit` (the App is tearing down anyway) are deliberately
@@ -392,19 +367,11 @@ impl Frontend {
         // alongside `&mut self.overlay_sink`.
         let map_frame = self.map_frame.as_ref();
         let compositor = &self.compositor;
-        let event_bus = &self.event_bus;
+        let lua = &self.lua;
         let ui_theme = &self.ui_theme;
         let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
-            crate::frontend::ui::draw(
-                f,
-                map_frame,
-                compositor,
-                event_bus,
-                ui_theme,
-                &ctx,
-                overlay_sink,
-            )
+            crate::frontend::ui::draw(f, map_frame, compositor, lua, ui_theme, &ctx, overlay_sink)
         })?;
         Ok(())
     }
