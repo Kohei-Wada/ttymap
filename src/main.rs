@@ -147,39 +147,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
 
     log::info!("event loop started");
-    frontend.dispatch_initial_redraw();
-
-    while frontend.is_running() {
-        // Per-plugin housekeeping before the event drain — Lua plugins
-        // queue components via `ttymap.api.window.open` here and the
-        // current iteration's `poll_compositor` already sees them.
-        frontend.refresh_lua_host_state_per_tick();
-
-        // Park on the unified bus until any source produces an
-        // event; drain any further buffered events non-blockingly
-        // so a burst doesn't push the paint behind.
-        match event_rx.recv() {
-            Ok(event) => frontend.handle_event(event, &event_bus, &event_tx),
-            Err(_) => break,
-        }
-        while let Ok(event) = event_rx.try_recv() {
-            frontend.handle_event(event, &event_bus, &event_tx);
-        }
-
-        // Component poll: any `win.emit(msg)` inside fires onto the
-        // bus directly. Same-iteration `try_recv` ran above already;
-        // an emission here will be picked up next iteration.
-        frontend.poll_compositor(&event_tx);
-
-        // Render a frame. Inside `ui::draw`, the per-frame Lua
-        // `tick` event fires against the live MapApi.
-        frontend.render_into(&mut terminal, &event_bus)?;
-
-        // If plugin `on_tick` callbacks pushed polylines, throttle
-        // the redraw request to the configured interval.
-        frontend.tick_overlay_redraw();
-    }
-
+    frontend.run(&mut terminal, &event_rx, &event_tx, &event_bus)?;
     log::info!("event loop ended");
     drop(_input);
     drop(_frame_timer);

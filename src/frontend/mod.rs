@@ -218,9 +218,62 @@ impl Frontend {
         self.poll_timeout
     }
 
+    /// Drive the per-iteration event loop until the map state
+    /// requests shutdown.
+    ///
+    /// The frontend owns the iteration shape (housekeeping → drain
+    /// queue → poll components → render → throttle overlay redraw)
+    /// because the ordering between those steps is a frontend
+    /// concern, not a wiring concern. `main` stays the composition
+    /// root: it builds the bus, the channel, and the off-thread
+    /// subsystems, then hands them in here as borrows.
+    pub fn run(
+        &mut self,
+        terminal: &mut ratatui::DefaultTerminal,
+        event_rx: &std::sync::mpsc::Receiver<AppEvent>,
+        event_tx: &std::sync::mpsc::Sender<AppEvent>,
+        event_bus: &LuaEventBus,
+    ) -> io::Result<()> {
+        self.dispatch_initial_redraw();
+
+        while self.is_running() {
+            // Per-plugin housekeeping before the event drain — Lua
+            // plugins queued via `ttymap.api.window.open` reach the
+            // compositor before this iteration's `poll_compositor`.
+            self.refresh_lua_host_state();
+
+            // Park on the unified bus until any source produces an
+            // event; drain any further buffered events non-blockingly
+            // so a burst doesn't push the paint behind.
+            match event_rx.recv() {
+                Ok(event) => self.handle_event(event, event_bus, event_tx),
+                Err(_) => break,
+            }
+            while let Ok(event) = event_rx.try_recv() {
+                self.handle_event(event, event_bus, event_tx);
+            }
+
+            // Component poll: any `win.emit(msg)` inside fires onto
+            // the bus directly. Same-iteration `try_recv` ran above
+            // already; an emission here will be picked up next
+            // iteration.
+            self.poll_compositor(event_tx);
+
+            // Render a frame. Inside `ui::draw`, the per-frame Lua
+            // `tick` event fires against the live MapApi.
+            self.render_into(terminal, event_bus)?;
+
+            // If plugin `on_tick` callbacks pushed polylines, throttle
+            // the redraw request to the configured interval.
+            self.tick_overlay_redraw();
+        }
+
+        Ok(())
+    }
+
     /// Whether the map state machine still wants the loop to keep
-    /// running. The run loop checks this at the top of each iteration.
-    pub fn is_running(&self) -> bool {
+    /// running. Checked at the top of each `run` iteration.
+    fn is_running(&self) -> bool {
         self.map.is_running()
     }
 
@@ -272,7 +325,7 @@ impl Frontend {
     /// notification path; they read the resulting state through the
     /// usual `ttymap.map:*` accessors. Intent flow stays single-
     /// executor; the bus is observation only.
-    pub fn handle_event(
+    fn handle_event(
         &mut self,
         event: AppEvent,
         event_bus: &LuaEventBus,
@@ -379,30 +432,17 @@ impl Frontend {
         }
     }
 
-    /// Per-iteration housekeeping the run loop runs **before**
-    /// draining the event queue. Refreshes per-plugin `center` /
-    /// `zoom` Mutexes and pushes any components Lua queued via
-    /// `ttymap.api.window.open` / `palette.open` onto the
-    /// compositor stack so the same iteration's `compositor.poll`
-    /// already sees them.
-    pub fn refresh_lua_host_state_per_tick(&mut self) {
-        self.refresh_lua_host_state();
-    }
-
     /// Drive a single `compositor.poll` pass. Components emitting
     /// intents through `Window::emit` route directly onto the bus —
     /// the run loop's same-iteration `try_recv` picks them up.
-    pub fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+    fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
     }
 
-    /// Single per-iteration draw. Owns the borrow gymnastics — main
-    /// calls this with the terminal handle and the bus, App passes
-    /// its own state into `ui::draw` without exposing internal
-    /// fields. The `tick` bus event fires from inside `ui::draw`
-    /// against the live `MapApi` (see `ui::draw`).
-    pub fn render_into(
+    /// Single per-iteration draw. The `tick` bus event fires from
+    /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
+    fn render_into(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
         event_bus: &LuaEventBus,
@@ -426,7 +466,7 @@ impl Frontend {
     /// `overlay_sink` during `on_tick` and the throttle interval
     /// has elapsed, queue a fresh `RenderTask::Draw` so the next
     /// frame carries them.
-    pub fn tick_overlay_redraw(&mut self) {
+    fn tick_overlay_redraw(&mut self) {
         if !self.overlay_sink.is_empty() {
             let now = std::time::Instant::now();
             if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
@@ -436,10 +476,10 @@ impl Frontend {
         }
     }
 
-    /// Initial dispatch fired by the run loop right after entering
-    /// the loop — kicks off the very first render task so the
-    /// terminal isn't blank waiting for input.
-    pub fn dispatch_initial_redraw(&mut self) {
+    /// Initial dispatch fired by `run` right after entering the
+    /// loop — kicks off the very first render task so the terminal
+    /// isn't blank waiting for input.
+    fn dispatch_initial_redraw(&mut self) {
         self.dispatch(UserIntent::Map(Action::Redraw));
     }
 
