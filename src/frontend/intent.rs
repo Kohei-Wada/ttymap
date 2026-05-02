@@ -26,6 +26,7 @@
 //! off `UserIntent` means the focus state machine isn't coupled to the
 //! dispatch table.
 
+use crate::input::KeyMap;
 use crate::map::Action;
 use crate::theme::ThemeId;
 
@@ -42,8 +43,13 @@ use crate::theme::ThemeId;
 /// delegate to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserIntent {
-    /// Dispatch a map-state action (pan, zoom, reset, quit, jump, ...).
+    /// Dispatch a map-state action (pan, zoom, reset, jump, ...).
     Map(Action),
+    /// Stop the event loop and tear down the app. Lives at the top
+    /// level (not nested under [`Action`]) because Quit is an
+    /// app-lifetime concern, not a map-data concern — `MapState`
+    /// has no business knowing whether the program is alive.
+    Quit,
     /// Switch the running theme. Cross-cutting: rebuilds the styler
     /// (on the render thread) and the UI colour cache.
     SetTheme(ThemeId),
@@ -64,4 +70,46 @@ pub enum UserIntent {
     /// Emitted by the export plugin's palette entry. Filename encodes
     /// zoom + centre + timestamp so repeated exports don't collide.
     ExportFrame,
+}
+
+impl UserIntent {
+    /// Resolve a `[keymap]` config name (e.g. `"quit"`, `"pan_up"`)
+    /// to the matching intent. Top-level intents like [`Self::Quit`]
+    /// are matched directly; everything else falls through to
+    /// [`Action::from_config_name`] wrapped as [`Self::Map`].
+    pub fn from_config_name(name: &str) -> Option<UserIntent> {
+        if name == "quit" {
+            return Some(UserIntent::Quit);
+        }
+        Action::from_config_name(name).map(UserIntent::Map)
+    }
+
+    /// `(config_name, label)` pairs for every intent the help plugin
+    /// surfaces. Each entry's `keymap.keys_for(intent)` is queried
+    /// upstream to produce the final help text.
+    pub fn listed_with_labels() -> Vec<(UserIntent, &'static str)> {
+        let mut out: Vec<(UserIntent, &'static str)> = Action::all_listed()
+            .iter()
+            .map(|a| (UserIntent::Map(a.clone()), a.label()))
+            .collect();
+        out.push((UserIntent::Quit, "Quit"));
+        out
+    }
+
+    /// Help-table entries: `(keys, label)` strings for every listed
+    /// intent that has at least one key bound in `keymap`. Drives the
+    /// `ttymap.help:keymap_entries()` Lua surface.
+    pub fn keymap_help_entries(keymap: &KeyMap) -> Vec<(String, String)> {
+        Self::listed_with_labels()
+            .into_iter()
+            .filter_map(|(intent, label)| {
+                let keys = keymap.keys_for(&intent);
+                if keys.is_empty() {
+                    None
+                } else {
+                    Some((keys.join(", "), label.to_string()))
+                }
+            })
+            .collect()
+    }
 }

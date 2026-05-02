@@ -55,6 +55,11 @@ pub struct Frontend {
     /// `main`'s scope as a peer subsystem alongside `InputHandle`
     /// and `FrameTimer`.
     map: MapHandle,
+    /// App-lifetime flag — `true` while the event loop should keep
+    /// running, flipped to `false` by [`UserIntent::Quit`]. Lives
+    /// here (not on `MapState`) because liveness is an app concern,
+    /// not a map-data concern.
+    running: bool,
     /// Runtime handle to the Lua subsystem. Encapsulates the event
     /// bus and per-plugin host channels so Frontend never names them
     /// directly — every Lua-side interaction goes through semantic
@@ -127,6 +132,7 @@ impl Frontend {
 
         Frontend {
             map,
+            running: true,
             lua,
             map_frame: None,
             mouse: MouseAdapter::default(),
@@ -201,10 +207,11 @@ impl Frontend {
         Ok(())
     }
 
-    /// Whether the map state machine still wants the loop to keep
-    /// running. Checked at the top of each `run` iteration.
+    /// Whether the event loop should keep running — flipped off by
+    /// [`UserIntent::Quit`]. Checked at the top of each `run`
+    /// iteration.
     fn is_running(&self) -> bool {
-        self.map.is_running()
+        self.running
     }
 
     /// Drain every Lua plugin's setup-state receivers once.
@@ -314,7 +321,7 @@ impl Frontend {
                     && key_event.code == KeyCode::Char('c')
                 {
                     info!("Ctrl-C received, quitting");
-                    let _ = event_tx.send(AppEvent::Intent(UserIntent::Map(Action::Quit)));
+                    let _ = event_tx.send(AppEvent::Intent(UserIntent::Quit));
                 } else {
                     debug!("key event: {:?}", key_event.code);
                     let ctx = self.context();
@@ -393,6 +400,10 @@ impl Frontend {
                 if self.map.apply_action(&action) {
                     self.request_map_redraw();
                 }
+            }
+            UserIntent::Quit => {
+                debug!("UserIntent::Quit — stopping event loop");
+                self.running = false;
             }
             UserIntent::SetTheme(new_id) => self.switch_theme(new_id),
             UserIntent::CursorMoved(col, row) => {

@@ -11,7 +11,6 @@ use crate::geo::LonLat;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     None,
-    Quit,
     PanUp,
     PanDown,
     PanLeft,
@@ -64,7 +63,6 @@ impl Action {
     pub fn label(&self) -> &'static str {
         match self {
             Action::None => "",
-            Action::Quit => "Quit",
             Action::PanUp => "Pan up",
             Action::PanDown => "Pan down",
             Action::PanLeft => "Pan left",
@@ -105,7 +103,6 @@ impl Action {
             Action::ZoomToWorld,
             Action::ResetPosition,
             Action::Redraw,
-            Action::Quit,
         ]
     }
 
@@ -116,7 +113,6 @@ impl Action {
     pub fn config_name(&self) -> &'static str {
         match self {
             Action::None => "",
-            Action::Quit => "quit",
             Action::PanUp => "pan_up",
             Action::PanDown => "pan_down",
             Action::PanLeft => "pan_left",

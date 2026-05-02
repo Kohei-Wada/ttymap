@@ -53,12 +53,6 @@ pub struct MapHandle {
 impl MapHandle {
     // ── Queries ────────────────────────────────────────────────────────
 
-    /// Whether the map state machine still wants the loop to keep
-    /// running (a `Quit` action sets this to `false`).
-    pub fn is_running(&self) -> bool {
-        self.state.is_running()
-    }
-
     /// Active centre in lon/lat — what every Lua plugin's
     /// `ttymap.map:center()` mirror cell tracks.
     pub fn center(&self) -> LonLat {
@@ -107,11 +101,8 @@ impl MapHandle {
     /// Queue a fresh `RenderTask::Draw` against the current
     /// viewport, carrying any per-frame overlays the caller has
     /// collected (e.g. Lua-pushed polylines drained from
-    /// `overlay_sink`). No-op if the map state is no longer running.
+    /// `overlay_sink`).
     pub fn request_redraw(&self, overlays: Vec<render::overlay::UserPolyline>) {
-        if !self.state.is_running() {
-            return;
-        }
         self.render_client
             .request_draw(self.state.viewport(), overlays);
     }

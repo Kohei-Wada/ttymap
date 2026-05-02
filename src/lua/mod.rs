@@ -144,18 +144,7 @@ pub fn build_subsystem(
 /// plugin surfaces via `ttymap.help:keymap_entries()`. Live data —
 /// runtime keymap overrides surface here.
 fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
-    use crate::map::Action;
-    Action::all_listed()
-        .iter()
-        .filter_map(|action| {
-            let keys = keymap.keys_for(&UserIntent::Map(action.clone()));
-            if keys.is_empty() {
-                None
-            } else {
-                Some((keys.join(", "), action.label().to_string()))
-            }
-        })
-        .collect()
+    UserIntent::keymap_help_entries(keymap)
 }
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming

@@ -1,5 +1,3 @@
-use log::debug;
-
 use super::action::Action;
 use crate::geo::{self, LonLat};
 
@@ -31,7 +29,6 @@ pub struct MapState {
     min_zoom: f64,
     width: usize,
     height: usize,
-    running: bool,
     // Remembered for `ResetPosition`.
     initial_lon: f64,
     initial_lat: f64,
@@ -56,7 +53,6 @@ impl MapState {
             min_zoom,
             width,
             height,
-            running: true,
             initial_lon: opts.initial_lon,
             initial_lat: opts.initial_lat,
             initial_zoom: opts.initial_zoom,
@@ -65,9 +61,6 @@ impl MapState {
         }
     }
 
-    pub fn is_running(&self) -> bool {
-        self.running
-    }
     pub fn width(&self) -> usize {
         self.width
     }
@@ -79,9 +72,6 @@ impl MapState {
     }
     pub fn zoom(&self) -> f64 {
         self.zoom
-    }
-    pub fn stop(&mut self) {
-        self.running = false;
     }
     pub fn zoom_step(&self) -> f64 {
         self.zoom_step
@@ -95,11 +85,6 @@ impl MapState {
 
         match action {
             Action::None => false,
-            Action::Quit => {
-                debug!("action: Quit");
-                self.running = false;
-                false
-            }
             Action::PanLeft => self.pan(step, -1.0, 0.0),
             Action::PanRight => self.pan(step, 1.0, 0.0),
             Action::PanUp => self.pan(step, 0.0, 0.75),
@@ -258,14 +243,6 @@ mod tests {
             160,
             92,
         )
-    }
-
-    #[test]
-    fn test_quit() {
-        let mut map = default_core();
-        assert!(map.is_running());
-        map.process_action(&Action::Quit);
-        assert!(!map.is_running());
     }
 
     #[test]

@@ -104,15 +104,15 @@ impl KeyMap {
         }
     }
 
-    /// Default bindings with user `[keymap]` overrides applied on top.
-    /// Each entry's key is the `Action::config_name` (e.g. `"pan_left"`);
-    /// unknown names are logged and skipped so a stale config can't
-    /// crash startup.
+    /// Default bindings with user `[keymap]` overrides applied on
+    /// top. Each entry's key is a [`UserIntent`] config name (e.g.
+    /// `"pan_left"`, `"quit"`); unknown names are logged and skipped
+    /// so a stale config can't crash startup.
     pub fn with_overrides(overrides: &KeybindingOverrides) -> Self {
         let mut km = Self::default();
         for (name, keys) in overrides {
-            match Action::from_config_name(name) {
-                Some(action) => km.set_bindings(UserIntent::Map(action), keys),
+            match UserIntent::from_config_name(name) {
+                Some(intent) => km.set_bindings(intent, keys),
                 None => log::warn!("unknown [keymap] entry: {:?}", name),
             }
         }
@@ -123,29 +123,32 @@ impl KeyMap {
 impl Default for KeyMap {
     fn default() -> Self {
         use Action::*;
-        let b = |key: &str, action: Action| -> (KeyBinding, UserIntent) {
+        let map = |key: &str, action: Action| -> (KeyBinding, UserIntent) {
             (parse_key_binding(key).unwrap(), UserIntent::Map(action))
+        };
+        let intent = |key: &str, intent: UserIntent| -> (KeyBinding, UserIntent) {
+            (parse_key_binding(key).unwrap(), intent)
         };
         Self {
             bindings: vec![
-                b("h", PanLeft),
-                b("Left", PanLeft),
-                b("l", PanRight),
-                b("Right", PanRight),
-                b("k", PanUp),
-                b("Up", PanUp),
-                b("j", PanDown),
-                b("Down", PanDown),
-                b("b", PanLeftFast),
-                b("w", PanRightFast),
-                b("C-u", PanUpHalf),
-                b("C-d", PanDownHalf),
-                b("a", ZoomIn),
-                b("+", ZoomIn),
-                b("z", ZoomOut),
-                b("-", ZoomOut),
-                b("0", ResetPosition),
-                b("q", Quit),
+                map("h", PanLeft),
+                map("Left", PanLeft),
+                map("l", PanRight),
+                map("Right", PanRight),
+                map("k", PanUp),
+                map("Up", PanUp),
+                map("j", PanDown),
+                map("Down", PanDown),
+                map("b", PanLeftFast),
+                map("w", PanRightFast),
+                map("C-u", PanUpHalf),
+                map("C-d", PanDownHalf),
+                map("a", ZoomIn),
+                map("+", ZoomIn),
+                map("z", ZoomOut),
+                map("-", ZoomOut),
+                map("0", ResetPosition),
+                intent("q", UserIntent::Quit),
             ],
         }
     }
@@ -269,11 +272,11 @@ mod tests {
         );
         assert_eq!(
             km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
-            Some(&map(Action::Quit))
+            Some(&UserIntent::Quit)
         );
         assert_eq!(
             km.lookup(KeyCode::Char('q'), KeyModifiers::CONTROL),
-            Some(&map(Action::Quit))
+            Some(&UserIntent::Quit)
         );
     }
 
@@ -338,10 +341,7 @@ mod tests {
     #[test]
     fn resolve_quit() {
         let km = KeyMap::default();
-        assert_eq!(
-            km.resolve(KeyCode::Char('q'), NONE),
-            Some(map(Action::Quit))
-        );
+        assert_eq!(km.resolve(KeyCode::Char('q'), NONE), Some(UserIntent::Quit));
     }
 
     #[test]
