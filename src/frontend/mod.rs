@@ -64,6 +64,13 @@ pub struct Frontend {
     /// [`UserIntent::ToggleSidebar`]; flipping it shrinks/expands the
     /// map canvas as a follow-up resize.
     sidebar_open: bool,
+    /// Sidebar component count observed at the previous
+    /// `poll_compositor` tick. The sidebar auto-opens on the
+    /// transition `0 → ≥1` and on any *increase* (so opening a new
+    /// section while the sidebar is hidden brings it back), but
+    /// stays hidden if the user explicitly toggled it off and the
+    /// count is stable.
+    prev_sidebar_count: usize,
     /// Sidebar width in terminal cells when visible. Sourced from
     /// `ttymap.opt.runtime.sidebar_width` at startup.
     sidebar_width: u16,
@@ -153,6 +160,7 @@ impl Frontend {
             map,
             running: true,
             sidebar_open: false,
+            prev_sidebar_count: 0,
             sidebar_width: config.runtime.sidebar_width,
             theme_id,
             lua,
@@ -351,15 +359,22 @@ impl Frontend {
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
 
-        // Auto-open the sidebar the moment a `Placement::Sidebar`
-        // component lands on the stack — pushing wiki without first
-        // pressing `\` would otherwise silently put the panel
-        // somewhere invisible.
-        if !self.sidebar_open && self.compositor.has_sidebar_components() {
+        // Auto-open the sidebar only on a *count increase* (a new
+        // section just landed). Triggering off "any component
+        // exists" instead would force the sidebar back open on
+        // every poll tick after the user closed it via `\` — they
+        // could never hide the sidebar while a wiki / aircraft
+        // panel was alive on the stack. Tracking the previous
+        // count lets the user toggle freely; opening a *new*
+        // section still asserts itself, since asking for new
+        // content is an implicit "show me this".
+        let count = self.compositor.sidebar_component_count();
+        if count > self.prev_sidebar_count && !self.sidebar_open {
             self.sidebar_open = true;
             let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
             self.handle_resize(cols, rows);
         }
+        self.prev_sidebar_count = count;
     }
 
     /// Single per-iteration draw. The `tick` bus event fires from
