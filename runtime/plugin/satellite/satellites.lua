@@ -117,13 +117,6 @@ function M.make(specs)
     table.insert(hints, { "Enter", "re-centre" })
     table.insert(hints, { "Esc/q", "close" })
 
-    -- Block::Borders::ALL eats one row top + one row bottom, so the
-    -- visible content area is `height - 2`. Width fits a highlighted
-    -- "● [H] Hubble  XX.X°N, YYY.Y°E  ZZZkm" row plus a little
-    -- padding so the focused style doesn't crowd the right border.
-    local panel_height = #sats + 2
-    local panel_width = 44
-
     local selected = 1
     local initial_jump_done = false
 
@@ -310,7 +303,7 @@ function M.make(specs)
     local function open()
         if w then return end
         w = ttymap.api.window.open({
-            layout = { anchor = "top-left", width = panel_width, height = panel_height },
+            layout = { kind = "sidebar" },
             footer_hints = hints,
             render = build_lines,
             handle_event = function(key)
@@ -346,8 +339,9 @@ function M.make(specs)
                     return nil
                 end
 
-                -- Esc / q close the panel.
-                if code == "Esc" or (code == "Char" and ch == "q") then
+                -- Esc closes the panel; q is left to fall through so
+                -- the base layer's quit binding keeps working.
+                if code == "Esc" then
                     close()
                     return nil
                 end
