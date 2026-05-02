@@ -334,20 +334,53 @@ impl Compositor {
             c.render(&mut win);
         }
 
-        // Sidebar components: equal vertical split, all visible.
+        // Sidebar components: equal vertical split, capped at
+        // `MAX_VISIBLE_SIDEBAR_SECTIONS` cards. When the user has
+        // more sections open than fits, the visible window slides to
+        // include the focused section so Tab-cycling keeps the
+        // focused card on screen.
+        const MAX_VISIBLE_SIDEBAR_SECTIONS: usize = 3;
         if let Some(side_area) = sidebar_area {
-            let sidebar_components: Vec<&dyn Component> = self
-                .stack
-                .iter()
-                .filter(|c| c.placement() == Placement::Sidebar)
-                .map(|c| c.as_ref())
-                .collect();
-            if !sidebar_components.is_empty() {
-                let n = sidebar_components.len() as u32;
+            // Walk the stack once to collect sidebar refs alongside
+            // the focused-in-sidebar index (counted within the
+            // sidebar slice, not the global stack).
+            let mut sidebar_components: Vec<&dyn Component> = Vec::new();
+            let mut focused_in_sidebar: Option<usize> = None;
+            for (i, c) in self.stack.iter().enumerate() {
+                if c.placement() == Placement::Sidebar {
+                    if i == self.focused_idx {
+                        focused_in_sidebar = Some(sidebar_components.len());
+                    }
+                    sidebar_components.push(c.as_ref());
+                }
+            }
+
+            let total = sidebar_components.len();
+            if total > 0 {
+                // Pick the first visible index. Centre on the focused
+                // section when possible; otherwise pin to the bottom
+                // (most recently opened) so new sections stay visible.
+                let visible = total.min(MAX_VISIBLE_SIDEBAR_SECTIONS);
+                let start = if total <= visible {
+                    0
+                } else {
+                    let target = focused_in_sidebar.unwrap_or(total - 1);
+                    let half = visible / 2;
+                    if target < half {
+                        0
+                    } else if target + visible - half > total {
+                        total - visible
+                    } else {
+                        target - half
+                    }
+                };
+                let end = start + visible;
+
+                let n = visible as u32;
                 let constraints: Vec<Constraint> =
                     (0..n).map(|_| Constraint::Ratio(1, n)).collect();
                 let chunks = Layout::vertical(constraints).split(side_area);
-                for (slot, c) in chunks.iter().zip(sidebar_components.iter()) {
+                for (slot, c) in chunks.iter().zip(sidebar_components[start..end].iter()) {
                     let mut win = window::RenderWindow::new(f, *slot, theme, ctx);
                     c.render(&mut win);
                 }
