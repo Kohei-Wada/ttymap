@@ -17,15 +17,23 @@ local function heading_arrow(deg)
     return ARROWS[sector + 1]
 end
 
+-- Structured line for the panel — a vec of `{ text, style }` spans
+-- matching the shape `LuaWindowComponent` understands. Selected
+-- entries get `highlight`; unselected use `accent`. Secondary info
+-- (altitude, ground state) renders muted, mirroring wiki's pattern.
 function M.fmt(a, selected)
-    local prefix = selected and "→ " or "  "
-    local cs     = a.callsign ~= "" and a.callsign or "(no callsign)"
-    local alt    = ""
-    if type(a.alt) == "number" then
-        alt = string.format(" %dm", math.floor(a.alt))
+    local title_style = selected and "highlight" or "accent"
+    local cs = a.callsign ~= "" and a.callsign or "(no callsign)"
+    local secondary = ""
+    if a.on_ground then
+        secondary = "  (ground)"
+    elseif type(a.alt) == "number" then
+        secondary = string.format("  %dm", math.floor(a.alt))
     end
-    local ground = a.on_ground and " (ground)" or ""
-    return prefix .. cs .. alt .. ground
+    return {
+        { text = cs,        style = title_style },
+        { text = secondary, style = "muted" },
+    }
 end
 
 function M.marker_for(a)

@@ -18,7 +18,10 @@ local w = nil  -- window handle while open; nil while closed (also acts as enabl
 
 local function build_lines()
     if #state.aircraft == 0 then
-        return { "Loading aircraft data...", "(OpenSky takes ~12s)" }
+        return {
+            { { text = "Loading...",            style = "muted" } },
+            { { text = "(OpenSky takes ~12s)", style = "muted" } },
+        }
     end
     local lines = {}
     for i, a in ipairs(state.aircraft) do
