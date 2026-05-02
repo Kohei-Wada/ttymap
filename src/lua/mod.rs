@@ -15,8 +15,10 @@
 
 pub mod bridge;
 pub mod init_lua;
+pub mod intent;
 pub mod registry;
 pub mod runtimepath;
+pub mod sender;
 pub mod ttymap;
 
 pub use bridge::palette_provider::LuaPaletteProvider;
@@ -26,12 +28,12 @@ pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use ttymap::LuaHostShared;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
 use crate::compositor::Registrar;
-use crate::frontend::AppEvent;
+use crate::lua::sender::LuaSender;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM with
@@ -164,7 +166,7 @@ pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
-    event_tx: mpsc::Sender<AppEvent>,
+    sender: LuaSender,
     r: &mut Registrar,
 ) {
     if runtime_path.is_empty() {
@@ -182,7 +184,7 @@ pub fn register_builtin_plugins(
             Some(&mut seen),
             disable,
             shared.clone(),
-            event_tx.clone(),
+            sender.clone(),
             r,
         );
     }
@@ -196,7 +198,7 @@ fn register_one(
     name: &'static str,
     source: &'static str,
     shared: Arc<ttymap::LuaHostShared>,
-    event_tx: mpsc::Sender<AppEvent>,
+    sender: LuaSender,
     r: &mut Registrar,
 ) {
     // Run the script once to capture its activation surfaces and
@@ -208,7 +210,7 @@ fn register_one(
     // lifetime — that's the hook for plugin-side toggle state.
     let shared_for_meta = shared.clone();
     let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta, event_tx) {
+        match bridge::handle::fresh_load(source, name, "lua-meta", shared_for_meta, sender) {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
@@ -361,7 +363,7 @@ fn register_plugins_in(
     mut seen: Option<&mut std::collections::HashSet<String>>,
     disable: &[String],
     shared: Arc<ttymap::LuaHostShared>,
-    event_tx: mpsc::Sender<AppEvent>,
+    sender: LuaSender,
     r: &mut Registrar,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -421,22 +423,24 @@ fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(name, source, shared.clone(), event_tx.clone(), r);
+        register_one(name, source, shared.clone(), sender.clone(), r);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
     use mlua::Result;
 
-    /// Disconnected `Sender<AppEvent>` for tests that exercise plugin
-    /// registration without verifying intent flow. The receiver drops
-    /// immediately so any `send()` returns `Err` — the registration
-    /// path under test never inspects the channel.
-    fn dummy_event_tx() -> mpsc::Sender<AppEvent> {
+    /// Disconnected [`LuaSender`] for tests that exercise plugin
+    /// registration without verifying intent flow. The underlying
+    /// receiver drops immediately so any `emit()` is a no-op — the
+    /// registration path under test never inspects the channel.
+    fn dummy_lua_sender() -> LuaSender {
         let (tx, _rx) = mpsc::channel();
-        tx
+        LuaSender::new(tx)
     }
 
     #[test]
@@ -481,7 +485,7 @@ mod tests {
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        register_builtin_plugins(&rtp, &[], shared, dummy_event_tx(), &mut r);
+        register_builtin_plugins(&rtp, &[], shared, dummy_lua_sender(), &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -528,7 +532,7 @@ mod tests {
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
         let shared = ttymap::LuaHostShared::empty();
         let (lua, captured, _handles) =
-            bridge::handle::fresh_load(source, name, "lua-test", shared, dummy_event_tx())
+            bridge::handle::fresh_load(source, name, "lua-test", shared, dummy_lua_sender())
                 .expect("load");
         (lua, captured)
     }
@@ -598,7 +602,7 @@ mod tests {
 
         let shared = ttymap::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], shared.clone(), dummy_event_tx(), &mut r);
+        register_plugins_in(&dir, None, &[], shared.clone(), dummy_lua_sender(), &mut r);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -651,7 +655,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         let ls = labels(&r);
@@ -677,7 +681,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         let ls = labels(&r);
@@ -708,7 +712,7 @@ mod tests {
             None,
             &disable,
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         let ls = labels(&r);
@@ -737,7 +741,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         let ls = labels(&r);
@@ -768,7 +772,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         assert!(
@@ -793,7 +797,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         let ls = labels(&r);
@@ -881,7 +885,7 @@ mod tests {
             None,
             &[],
             ttymap::LuaHostShared::empty(),
-            dummy_event_tx(),
+            dummy_lua_sender(),
             &mut r,
         );
         assert!(r.palette_entries.is_empty());

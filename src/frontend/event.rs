@@ -14,6 +14,12 @@
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
 //!   on it and dispatches the appropriate downstream `AppMsg`s.
+//! - [`AppEvent::LuaIntent`] — a Lua-originated intent emitted via
+//!   `ttymap.*` host bindings. Carries [`crate::lua::intent::LuaIntent`]
+//!   and is translated to the matching [`AppMsg`] inside the
+//!   frontend's `handle_event` arm. The Lua subsystem doesn't import
+//!   `AppMsg` / `Action` — the translation lives at this boundary so
+//!   the lua module stays bounded to its own intent vocabulary.
 //! - [`AppEvent::Wake`] — periodic wake-up from the frame timer
 //!   thread. Replaces the old `recv_timeout` polling: the main loop
 //!   now blocks on `recv()` and the timer guarantees per-iteration
@@ -32,6 +38,7 @@
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
 
+use crate::lua::intent::LuaIntent;
 use crate::map::render::frame::MapFrame;
 
 use super::AppMsg;
@@ -55,6 +62,13 @@ pub enum AppEvent {
     /// `crossterm::event::poll` block, just sourced through the
     /// unified queue.
     Input(crossterm::event::Event),
+    /// Lua-originated intent emitted by a `ttymap.*` host method.
+    /// The frontend translates it to the matching [`AppMsg`] in
+    /// `handle_event`. Carrying it as a separate variant (rather
+    /// than wrapping `AppMsg` directly inside the lua module) keeps
+    /// the lua subsystem's import surface bounded — see
+    /// [`crate::lua::sender::LuaSender`] for the boundary type.
+    LuaIntent(LuaIntent),
     /// Periodic wake-up from the frame timer thread. The main loop's
     /// only response is to fall through into the per-iteration
     /// draw + overlay-redraw rate-check, so per-frame work still

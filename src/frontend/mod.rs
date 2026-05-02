@@ -136,13 +136,17 @@ impl Frontend {
         let keymap = KeyMap::with_overrides(&keymap_overrides);
         let theme_id = ThemeId::from_name(&config.render.style);
 
+        // Boundary type around the App-level event channel — the
+        // lua subsystem only sees `LuaSender`, never `AppEvent`.
+        let lua_sender = crate::lua::sender::LuaSender::new(event_tx.clone());
+
         // `_lua_shared` is kept alive on the App so every Lua plugin's
         // host accessor (`ttymap.help:palette_entries()` etc.) keeps
         // reading the live snapshot for the program lifetime.
         let BuiltRegistrar {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, tile_cache.attribution(), &keymap, event_tx.clone());
+        } = build_registrar(&config, tile_cache.attribution(), &keymap, lua_sender);
         // Lift the Lua event bus off the registrar before the rest
         // is consumed (activations / palette_entries move into the
         // compositor below). Returned by value so the caller (main)
@@ -286,6 +290,16 @@ impl Frontend {
                 event_bus.dispatch(crate::lua::registry::names::FRAME_READY, ());
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
+            AppEvent::LuaIntent(intent) => {
+                // Translate Lua-originated intents to the App's own
+                // imperative vocabulary. The lua subsystem doesn't
+                // import `AppMsg` / `Action`; the boundary lives
+                // here.
+                let msg = lua_intent_to_app_msg(intent);
+                let snapshot = msg.clone();
+                self.dispatch(msg);
+                self.notify_post_intent(&snapshot, event_bus);
+            }
             // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
             // already does whatever per-frame work is needed; no
@@ -503,6 +517,21 @@ impl Frontend {
     }
 }
 
+/// Translate a Lua-originated [`LuaIntent`] into the App's own
+/// [`AppMsg`] vocabulary. Lives in the frontend (not the lua
+/// module) because the lua module deliberately doesn't import
+/// `AppMsg` / `Action` — the lua subsystem brokers events; this
+/// function is the boundary that interprets them.
+fn lua_intent_to_app_msg(intent: crate::lua::intent::LuaIntent) -> AppMsg {
+    use crate::lua::intent::LuaIntent;
+    match intent {
+        LuaIntent::MapJump(ll) => AppMsg::Map(Action::Jump(ll)),
+        LuaIntent::MapZoomSet(z) => AppMsg::Map(Action::SetZoom(z)),
+        LuaIntent::MapFlyTo { center, zoom } => AppMsg::Map(Action::FlyTo { center, zoom }),
+        LuaIntent::FrameExport => AppMsg::ExportFrame,
+    }
+}
+
 /// Composition root for plugins. **This is the only function that
 /// names concrete plugin modules by type path**; `App` itself is
 /// plugin-agnostic. Order matters: the palette is installed last so
@@ -521,7 +550,7 @@ fn build_registrar(
     config: &Config,
     attribution: Option<String>,
     keymap: &KeyMap,
-    event_tx: std::sync::mpsc::Sender<AppEvent>,
+    lua_sender: crate::lua::sender::LuaSender,
 ) -> BuiltRegistrar {
     use std::sync::Arc;
 
@@ -560,7 +589,7 @@ fn build_registrar(
         runtime_path,
         &config.plugins.disable,
         shared.clone(),
-        event_tx,
+        lua_sender,
         &mut r,
     );
 

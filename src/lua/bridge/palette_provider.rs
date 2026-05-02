@@ -239,12 +239,14 @@ mod tests {
     /// table for `from_spec`. Mirrors how `ttymap.api.palette.open`
     /// receives a spec from a Lua callback at runtime.
     fn build_provider(script: &str) -> LuaPaletteProvider {
+        use crate::lua::sender::LuaSender;
         let lua = Lua::new();
         let slot = new_capture_slot();
-        // Disconnected sender — tests here exercise the trait surface,
-        // not the AppMsg channel.
-        let (app_msg_tx, _rx) = std::sync::mpsc::channel();
-        let _handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, app_msg_tx)
+        // Disconnected sender — tests here exercise the trait
+        // surface, not the bus.
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = LuaSender::new(tx);
+        let _handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, sender)
             .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");
         LuaPaletteProvider::from_spec(lua, spec, "lua-test").expect("from_spec")
