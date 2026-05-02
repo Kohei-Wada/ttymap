@@ -24,7 +24,7 @@
 //! lives in the **setup state** that ran the script's top-level
 //! `register_*` calls — *not* on this per-window component. Those
 //! receivers are returned by
-//! [`crate::lua::ttymap::install`] inside [`LuaHostHandles`] and
+//! [`crate::lua::api::install`] inside [`LuaHostHandles`] and
 //! drained centrally by `App` per frame. This is by design:
 //! `window.open` runs in the setup state's Lua VM, so its callbacks'
 //! `ttymap.map:jump(...)` calls hit the setup-state senders, not

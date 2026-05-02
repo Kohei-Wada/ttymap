@@ -402,13 +402,13 @@ pub struct Registrar {
     /// from `App::run` against the live `MapApi`. The unified
     /// per-frame work mechanism for the nvim-style plugin API.
     pub event_bus: crate::lua::LuaEventBus,
-    /// Setup-state [`LuaHostHandles`](crate::lua::ttymap::LuaHostHandles)
+    /// Setup-state [`LuaHostHandles`](crate::lua::api::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
     /// in [`crate::frontend::App::new`] and drains each handle's receivers
     /// (`push_rx` / `intent_rx`) once per frame so callbacks running
     /// in the setup state can request map jumps, frame exports, or
     /// component pushes without sitting on a dead receiver.
-    pub lua_host_handles: Vec<crate::lua::ttymap::LuaHostHandles>,
+    pub lua_host_handles: Vec<crate::lua::api::LuaHostHandles>,
 }
 
 impl Registrar {

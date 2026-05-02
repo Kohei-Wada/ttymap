@@ -10,8 +10,8 @@
 use crate::frontend::compositor::Component;
 use crate::frontend::compositor::MapApi;
 use crate::geo::LonLat;
+use crate::lua::api::LuaHostHandles;
 use crate::lua::registry::{LuaEventBus, names};
-use crate::lua::ttymap::LuaHostHandles;
 
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`] and lifted out of the registrar by

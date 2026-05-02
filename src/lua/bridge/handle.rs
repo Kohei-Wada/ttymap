@@ -20,9 +20,9 @@ use std::sync::Arc;
 
 use mlua::{Lua, RegistryKey, Table};
 
+use crate::lua::api as host;
 use crate::lua::new_lua;
 use crate::lua::sender::LuaSender;
-use crate::lua::ttymap as host;
 
 /// Per-adapter Lua state + the registry handle for the dispatch
 /// table. Both adapters (Component, PaletteProvider) compose this

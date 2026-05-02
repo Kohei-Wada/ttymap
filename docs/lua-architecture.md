@@ -74,7 +74,7 @@ src/lua/
 
 ## Plugin runtime API (`ttymap` global)
 
-Built by `ttymap::install` (`src/lua/ttymap/mod.rs`). Domain-namespaced
+Built by `ttymap::install` (`src/lua/api/mod.rs`). Domain-namespaced
 userdatas:
 
 | Namespace        | Methods                                                                                        |

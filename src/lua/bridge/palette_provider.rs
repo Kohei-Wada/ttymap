@@ -46,7 +46,7 @@ impl LuaPaletteProvider {
     /// inline inside an activation callback rather than at top level.
     ///
     /// Host services (`ttymap.map`, `ttymap.api`, …) are already
-    /// installed on `lua` by the prior [`crate::lua::ttymap::install`]
+    /// installed on `lua` by the prior [`crate::lua::api::install`]
     /// call that produced the setup state. `ttymap.map:jump` inside
     /// this provider's `execute` callback hits the setup state's
     /// shared `intent_tx` — drained centrally by [`crate::frontend::App`]
@@ -224,7 +224,7 @@ impl LuaPaletteProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lua::ttymap::{LuaHostShared, install, new_capture_slot};
+    use crate::lua::api::{LuaHostShared, install, new_capture_slot};
     use crate::theme::ThemeId;
 
     fn ctx() -> Context {

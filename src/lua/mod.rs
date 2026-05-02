@@ -13,6 +13,7 @@
 //!   crash the host. Helpers in this module wrap mlua results with
 //!   `log::warn!` + recovery default.
 
+pub mod api;
 pub mod bridge;
 pub mod handle;
 pub mod init_lua;
@@ -20,14 +21,13 @@ pub mod intent;
 pub mod registry;
 pub mod runtimepath;
 pub mod sender;
-pub mod ttymap;
 
+pub use api::LuaHostShared;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use handle::LuaHandle;
 pub use init_lua::load_init_lua;
 pub use registry::LuaEventBus;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
-pub use ttymap::LuaHostShared;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -277,7 +277,7 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
-    shared: Arc<ttymap::LuaHostShared>,
+    shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
     r: &mut Registrar,
 ) {
@@ -309,7 +309,7 @@ pub fn register_builtin_plugins(
 fn register_one(
     name: &'static str,
     source: &'static str,
-    shared: Arc<ttymap::LuaHostShared>,
+    shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
     r: &mut Registrar,
 ) {
@@ -439,8 +439,8 @@ fn run_lua_callback(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) {
 /// entries with a top-level keybinding — matching the harvest filter
 /// help relied on previously. Overlays don't show up in the palette
 /// and aren't help-relevant, so they're never pushed.
-fn push_plugin_entry(shared: &Arc<ttymap::LuaHostShared>, name: &str, key: &str, label: &str) {
-    shared.push_palette_entry(ttymap::PluginEntry {
+fn push_plugin_entry(shared: &Arc<api::LuaHostShared>, name: &str, key: &str, label: &str) {
+    shared.push_palette_entry(api::PluginEntry {
         name: name.to_string(),
         key: key.to_string(),
         label: label.to_string(),
@@ -475,7 +475,7 @@ fn register_plugins_in(
     dir: &Path,
     mut seen: Option<&mut std::collections::HashSet<String>>,
     disable: &[String],
-    shared: Arc<ttymap::LuaHostShared>,
+    shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
     r: &mut Registrar,
 ) {
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn every_bundled_script_registers() {
         runtimepath::ensure_runtime_path_for_tests();
-        let shared = ttymap::LuaHostShared::empty();
+        let shared = api::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
         register_builtin_plugins(&rtp, &[], shared, dummy_lua_sender(), &mut r);
@@ -642,8 +642,8 @@ mod tests {
     /// the test can assert on the activation surfaces and tick
     /// subscriptions. Mirrors what `register_one` does at
     /// registration time.
-    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, ttymap::CapturedRegistration) {
-        let shared = ttymap::LuaHostShared::empty();
+    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, api::CapturedRegistration) {
+        let shared = api::LuaHostShared::empty();
         let (lua, captured, _handles) =
             bridge::handle::fresh_load(source, name, "lua-test", shared, dummy_lua_sender())
                 .expect("load");
@@ -713,7 +713,7 @@ mod tests {
             "#,
         );
 
-        let shared = ttymap::LuaHostShared::empty();
+        let shared = api::LuaHostShared::empty();
         let mut r = Registrar::default();
         register_plugins_in(&dir, None, &[], shared.clone(), dummy_lua_sender(), &mut r);
 
@@ -767,7 +767,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -793,7 +793,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -824,7 +824,7 @@ mod tests {
             &dir,
             None,
             &disable,
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -853,7 +853,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -884,7 +884,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -909,7 +909,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
@@ -997,7 +997,7 @@ mod tests {
             &dir,
             None,
             &[],
-            ttymap::LuaHostShared::empty(),
+            api::LuaHostShared::empty(),
             dummy_lua_sender(),
             &mut r,
         );
