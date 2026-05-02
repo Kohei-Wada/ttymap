@@ -32,8 +32,106 @@ use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
+use crate::config::Config;
+use crate::frontend::UserIntent;
 use crate::frontend::compositor::Registrar;
+use crate::input::KeyMap;
 use crate::lua::sender::LuaSender;
+
+/// Result of [`build_subsystem`] — the populated [`Registrar`]
+/// (activations, palette entries, event bus, per-plugin handles)
+/// plus the harvested footer hints. Handed to `Frontend::new` after
+/// `palette::install` runs from the composition root.
+pub struct LuaSubsystem {
+    pub registrar: Registrar,
+    pub plugin_hints: Vec<(&'static str, &'static str)>,
+}
+
+/// Build the Lua plugin subsystem: load every `*.lua` under the
+/// runtime path's `plugin/` layers, register their activations /
+/// palette entries / event-bus subscriptions / per-plugin handles
+/// into a fresh [`Registrar`], and harvest footer hints.
+///
+/// **Does not install the palette** — that step is performed by the
+/// composition root after this function returns, since
+/// [`crate::frontend::palette::install`] is a frontend-side concern
+/// that only needs the populated registrar.
+pub fn build_subsystem(
+    config: &Config,
+    attribution: Option<String>,
+    keymap: &KeyMap,
+    lua_sender: LuaSender,
+) -> LuaSubsystem {
+    let mut r = Registrar::default();
+
+    // Build the shared runtime-data carrier once. Every Lua plugin
+    // (bundled and user) sees the same `ttymap.*` accessor surface;
+    // there is no per-plugin Rust glue, no per-plugin upvalue
+    // injection. Adding a new bundled plugin is one file under
+    // `runtime/plugin/`; adding a user plugin is one file in
+    // `~/.config/ttymap/plugin/`.
+    let shared = Arc::new(LuaHostShared::new(
+        attribution,
+        config.geoip.endpoint.clone(),
+        keymap_entries(keymap),
+    ));
+
+    // Bundled plugins (every `*.lua` under each runtime layer's
+    // `plugin/`) always register — disabling one is an edit to the
+    // script itself (`enabled = false` in the spec). Higher-priority
+    // layers shadow lower ones by stem.
+    let runtime_path = runtime_path();
+    register_builtin_plugins(
+        runtime_path,
+        &config.plugins.disable,
+        shared.clone(),
+        lua_sender,
+        &mut r,
+    );
+
+    // Harvest the BaseLayer's footer hints. Has to happen *before*
+    // `palette::install` because that call `mem::take`s
+    // `r.palette_entries`. The footer slot is `[<key> <name>]` —
+    // built directly from each entry's keybinding and `module.name`.
+    // No keybinding ⇒ no footer slot.
+    let plugin_hints: Vec<(&'static str, &'static str)> = r
+        .palette_entries
+        .iter()
+        .filter(|e| !e.hint.is_empty())
+        .map(|e| {
+            let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
+            (key, e.name)
+        })
+        .collect();
+
+    // `shared` is kept alive via Arc clones inside every Lua plugin's
+    // setup state and any `LuaPaletteProvider` it creates — dropping
+    // the local handle here is fine.
+    drop(shared);
+
+    LuaSubsystem {
+        registrar: r,
+        plugin_hints,
+    }
+}
+
+/// Build the `(key-binding, action-label)` pairs that the help
+/// plugin surfaces via `ttymap.help:keymap_entries()`. Live data —
+/// runtime keymap overrides surface here.
+fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
+    use crate::map::Action;
+    Action::all_listed()
+        .iter()
+        .filter_map(|action| {
+            let keys = keymap.keys_for(&UserIntent::Map(action.clone()));
+            if keys.is_empty() {
+                None
+            } else {
+                Some((keys.join(", "), action.label().to_string()))
+            }
+        })
+        .collect()
+}
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM with

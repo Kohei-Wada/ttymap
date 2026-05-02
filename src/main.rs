@@ -123,11 +123,10 @@ fn main() {
     }
 }
 
-/// Composition root: builds the event channel + map subsystem +
-/// Frontend (which builds the Lua subsystem), spawns the off-thread
-/// input / frame-timer peers, then hands control to `Frontend::run`.
-/// Every thread handle joins in its `Drop` impl, so teardown is just
-/// RAII at end of scope — no manual `drop()` orchestration needed.
+/// Composition root: builds the event channel, every subsystem
+/// (map / Lua), spawns the off-thread input / frame-timer peers,
+/// then hands control to `Frontend::run`. Every thread handle joins
+/// in its `Drop` impl, so teardown is just RAII at end of scope.
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
@@ -136,7 +135,23 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // here for `Drop`-driven shutdown, not used otherwise.
     let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone());
 
-    let (mut frontend, event_bus) = Frontend::new(config, keymap_overrides, event_tx.clone(), map);
+    // Keymap is shared input by both the Lua subsystem (help plugin
+    // displays it; palette uses it for prefix matching) and the
+    // compositor's BaseLayer at runtime — build it once here.
+    let keymap = ttymap::input::KeyMap::with_overrides(&keymap_overrides);
+
+    // Lua subsystem: load every plugin, register activations / palette
+    // entries / event-bus subscriptions, return the populated bundle.
+    let lua_sender = ttymap::lua::sender::LuaSender::new(event_tx.clone());
+    let mut lua =
+        ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap, lua_sender);
+
+    // Palette is a built-in (not a plugin): drains every plugin's
+    // palette_entries into a CommandSeed and adds the `:` activation.
+    // Must run after every plugin's register call.
+    ttymap::frontend::palette::install(&keymap, &mut lua.registrar);
+
+    let mut frontend = Frontend::new(config, keymap, map, lua);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
@@ -145,7 +160,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
 
     log::info!("event loop started");
-    frontend.run(&mut terminal, &event_rx, &event_tx, &event_bus)?;
+    frontend.run(&mut terminal, &event_rx, &event_tx)?;
     log::info!("event loop ended");
 
     crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;

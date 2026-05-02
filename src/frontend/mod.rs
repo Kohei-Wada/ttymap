@@ -25,7 +25,7 @@ pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
 pub mod intent;
-pub(crate) mod palette;
+pub mod palette;
 pub mod ui;
 
 pub use event::AppEvent;
@@ -38,10 +38,11 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::config::Config;
-use crate::frontend::compositor::{BaseLayer, Compositor, Context, Registrar};
+use crate::frontend::compositor::{BaseLayer, Compositor, Context};
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaEventBus;
+use crate::lua::LuaSubsystem;
 use crate::lua::ttymap::LuaHostHandles;
 use crate::map::Action;
 use crate::map::MapHandle;
@@ -57,6 +58,12 @@ pub struct Frontend {
     /// `main`'s scope as a peer subsystem alongside `InputHandle`
     /// and `FrameTimer`.
     map: MapHandle,
+    /// Lua plugins' notification bus. Built upstream by
+    /// [`crate::lua::build_subsystem`]; the dispatch loop fires
+    /// post-effect events (`MAP_JUMPED`, `THEME_CHANGED`, etc.) onto
+    /// it from `handle_event`, and `ui::draw` fires the per-frame
+    /// `TICK` event against it.
+    event_bus: LuaEventBus,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -102,50 +109,24 @@ pub struct Frontend {
 }
 
 impl Frontend {
-    /// Build the app state and the Lua event bus.
+    /// Build the Frontend.
     ///
-    /// `main` (the composition root) builds the map subsystem
-    /// upstream and hands it in as a [`MapHandle`]. The unified
-    /// [`AppEvent`] channel is also owned by `main`; every subsystem
-    /// (render thread, input thread, frame timer, Lua plugins) gets
-    /// its own clone, and `Frontend` takes one because
-    /// [`Compositor::poll`] / `Compositor::handle_event` pass it to
-    /// `Window::emit`.
-    ///
-    /// The Lua subsystem (plugin scripts + the [`LuaEventBus`]) is
-    /// still built here because plugin registration is woven into
-    /// the compositor (activations + footer hints) and the palette
-    /// installer; the bus is returned to `main` only so the
-    /// post-effect notification path can run from inside
-    /// [`Self::run`].
-    pub fn new(
-        config: Config,
-        keymap_overrides: KeybindingOverrides,
-        event_tx: std::sync::mpsc::Sender<AppEvent>,
-        map: MapHandle,
-    ) -> (Self, LuaEventBus) {
-        let keymap = KeyMap::with_overrides(&keymap_overrides);
-
-        // Boundary type around the App-level event channel — the
-        // lua subsystem only sees `LuaSender`, never `AppEvent`.
-        let lua_sender = crate::lua::sender::LuaSender::new(event_tx);
-
-        // `_lua_shared` is kept alive on the App so every Lua plugin's
-        // host accessor (`ttymap.help:palette_entries()` etc.) keeps
-        // reading the live snapshot for the program lifetime.
-        let BuiltRegistrar {
+    /// Composition root (`main`) builds every subsystem upstream and
+    /// hands them in: the map subsystem as [`MapHandle`], the Lua
+    /// plugin subsystem as [`LuaSubsystem`] (already with the palette
+    /// installed). Frontend just consumes them — its only own work
+    /// is wiring the compositor base layer, deriving the UI theme,
+    /// and storing the per-iteration state.
+    pub fn new(config: Config, keymap: KeyMap, map: MapHandle, lua: LuaSubsystem) -> Self {
+        let LuaSubsystem {
             mut registrar,
             plugin_hints,
-        } = build_registrar(&config, map.attribution.clone(), &keymap, lua_sender);
-        // Lift the Lua event bus off the registrar before the rest
-        // is consumed (activations / palette_entries move into the
-        // compositor below). Returned by value so the caller (main)
-        // owns it.
+        } = lua;
+
+        // Lift bus + per-plugin handles off the registrar before the
+        // rest is consumed (activations are moved into the compositor
+        // below).
         let event_bus = std::mem::take(&mut registrar.event_bus);
-        // Drain per-plugin setup-state handles. The App drains these
-        // per tick so plugins' `ttymap.map:jump` / `api.frame.export`
-        // / `api.window.open` / `api.palette.open` calls reach the
-        // compositor and the app dispatch table.
         let lua_host_handles = std::mem::take(&mut registrar.lua_host_handles);
 
         let ui_theme = UiTheme::from_palette(map.theme_id.palette());
@@ -160,8 +141,9 @@ impl Frontend {
             plugin_hints,
         )));
 
-        let app = Frontend {
+        Frontend {
             map,
+            event_bus,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
@@ -174,8 +156,7 @@ impl Frontend {
             overlay_redraw_interval: std::time::Duration::from_millis(
                 config.runtime.overlay_redraw_ms,
             ),
-        };
-        (app, event_bus)
+        }
     }
 
     /// The configured idle wake-up interval — `main` reads this when
@@ -199,7 +180,6 @@ impl Frontend {
         terminal: &mut ratatui::DefaultTerminal,
         event_rx: &std::sync::mpsc::Receiver<AppEvent>,
         event_tx: &std::sync::mpsc::Sender<AppEvent>,
-        event_bus: &LuaEventBus,
     ) -> io::Result<()> {
         self.dispatch_initial_redraw();
 
@@ -213,11 +193,11 @@ impl Frontend {
             // event; drain any further buffered events non-blockingly
             // so a burst doesn't push the paint behind.
             match event_rx.recv() {
-                Ok(event) => self.handle_event(event, event_bus, event_tx),
+                Ok(event) => self.handle_event(event, event_tx),
                 Err(_) => break,
             }
             while let Ok(event) = event_rx.try_recv() {
-                self.handle_event(event, event_bus, event_tx);
+                self.handle_event(event, event_tx);
             }
 
             // Component poll: any `win.emit(msg)` inside fires onto
@@ -228,7 +208,7 @@ impl Frontend {
 
             // Render a frame. Inside `ui::draw`, the per-frame Lua
             // `tick` event fires against the live MapApi.
-            self.render_into(terminal, event_bus)?;
+            self.render_into(terminal)?;
 
             // If plugin `on_tick` callbacks pushed polylines, throttle
             // the redraw request to the configured interval.
@@ -292,21 +272,17 @@ impl Frontend {
     /// notification path; they read the resulting state through the
     /// usual `ttymap.map:*` accessors. Intent flow stays single-
     /// executor; the bus is observation only.
-    fn handle_event(
-        &mut self,
-        event: AppEvent,
-        event_bus: &LuaEventBus,
-        event_tx: &std::sync::mpsc::Sender<AppEvent>,
-    ) {
+    fn handle_event(&mut self, event: AppEvent, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
             AppEvent::Intent(msg) => {
                 let snapshot = msg.clone();
                 self.dispatch(msg);
-                self.notify_post_intent(&snapshot, event_bus);
+                self.notify_post_intent(&snapshot);
             }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
-                event_bus.dispatch(crate::lua::registry::names::FRAME_READY, ());
+                self.event_bus
+                    .dispatch(crate::lua::registry::names::FRAME_READY, ());
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
             AppEvent::LuaIntent(intent) => {
@@ -317,7 +293,7 @@ impl Frontend {
                 let msg = lua_intent_to_user_intent(intent);
                 let snapshot = msg.clone();
                 self.dispatch(msg);
-                self.notify_post_intent(&snapshot, event_bus);
+                self.notify_post_intent(&snapshot);
             }
             // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
@@ -333,26 +309,27 @@ impl Frontend {
     /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
     /// surface stays meaningful — bus events are "something
     /// observable happened to the app", not "every state mutation".
-    fn notify_post_intent(&self, msg: &UserIntent, event_bus: &LuaEventBus) {
+    fn notify_post_intent(&self, msg: &UserIntent) {
         use crate::lua::registry::names;
         match msg {
             UserIntent::Map(Action::Jump(ll)) => {
-                event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
+                self.event_bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
             }
             UserIntent::Map(Action::SetZoom(z)) => {
-                event_bus.dispatch(names::MAP_ZOOM_SET, *z);
+                self.event_bus.dispatch(names::MAP_ZOOM_SET, *z);
             }
             UserIntent::Map(Action::FlyTo { center, zoom }) => {
-                event_bus.dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
+                self.event_bus
+                    .dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, *zoom));
             }
             UserIntent::SetTheme(new_id) => {
-                event_bus.dispatch(names::THEME_CHANGED, new_id.name());
+                self.event_bus.dispatch(names::THEME_CHANGED, new_id.name());
             }
             UserIntent::Resize(cols, rows) => {
-                event_bus.dispatch(names::RESIZED, (*cols, *rows));
+                self.event_bus.dispatch(names::RESIZED, (*cols, *rows));
             }
             UserIntent::ExportFrame => {
-                event_bus.dispatch(names::FRAME_EXPORTED, ());
+                self.event_bus.dispatch(names::FRAME_EXPORTED, ());
             }
             // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
             // `CycleFocus`, the discrete `Pan*` keymap actions, and
@@ -409,21 +386,24 @@ impl Frontend {
 
     /// Single per-iteration draw. The `tick` bus event fires from
     /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
-    fn render_into(
-        &mut self,
-        terminal: &mut ratatui::DefaultTerminal,
-        event_bus: &LuaEventBus,
-    ) -> io::Result<()> {
+    fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let ctx = self.context();
+        // Field-disjoint borrows so the closure can hold `&self.X`
+        // alongside `&mut self.overlay_sink`.
+        let map_frame = self.map_frame.as_ref();
+        let compositor = &self.compositor;
+        let event_bus = &self.event_bus;
+        let ui_theme = &self.ui_theme;
+        let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
             crate::frontend::ui::draw(
                 f,
-                self.map_frame.as_ref(),
-                &self.compositor,
+                map_frame,
+                compositor,
                 event_bus,
-                &self.ui_theme,
+                ui_theme,
                 &ctx,
-                &mut self.overlay_sink,
+                overlay_sink,
             )
         })?;
         Ok(())
@@ -537,121 +517,4 @@ fn lua_intent_to_user_intent(intent: crate::lua::intent::LuaIntent) -> UserInten
         LuaIntent::MapFlyTo { center, zoom } => UserIntent::Map(Action::FlyTo { center, zoom }),
         LuaIntent::FrameExport => UserIntent::ExportFrame,
     }
-}
-
-/// Composition root for plugins. **This is the only function that
-/// names concrete plugin modules by type path**; `App` itself is
-/// plugin-agnostic. Order matters: the palette is installed last so
-/// its default provider can harvest every other plugin's palette
-/// entries.
-/// Tuple-struct carrier so [`App::new`] can keep the plugin hints
-/// alive across the call to [`build_registrar`]. The hints would
-/// otherwise be unreachable, since [`crate::frontend::palette::install`]
-/// `mem::take`s `Registrar.palette_entries` before returning.
-struct BuiltRegistrar {
-    registrar: Registrar,
-    plugin_hints: Vec<(&'static str, &'static str)>,
-}
-
-fn build_registrar(
-    config: &Config,
-    attribution: Option<String>,
-    keymap: &KeyMap,
-    lua_sender: crate::lua::sender::LuaSender,
-) -> BuiltRegistrar {
-    use std::sync::Arc;
-
-    let mut r = Registrar::default();
-
-    // Build the shared runtime-data carrier once. Every Lua plugin
-    // (bundled and user) sees the same `ttymap.*` accessor surface;
-    // there is no per-plugin Rust glue, no per-plugin upvalue
-    // injection. Adding a new bundled plugin is one file under
-    // `runtime/plugin/`; adding a user plugin is one file in
-    // `~/.config/ttymap/plugin/`.
-    let shared = Arc::new(crate::lua::LuaHostShared::new(
-        attribution,
-        config.geoip.endpoint.clone(),
-        keymap_entries(keymap),
-    ));
-
-    // Bundled plugins (every `*.lua` under each runtime layer's
-    // `plugin/`) always register — disabling one is an edit to the
-    // script itself (`enabled = false` in the spec). Higher-priority
-    // layers shadow lower ones by stem, so a user's
-    // `~/.config/ttymap/plugin/wiki.lua` replaces the bundled `wiki`.
-    // The dispatcher reads each script's own activation/kind/key/label
-    // metadata, so chrome overlays, palette toggles, key binds, and
-    // the search palette provider all flow through one path.
-    //
-    // `runtime_path()` was set once at startup by `main.rs` (or the
-    // test harness via `ensure_runtime_path_for_tests`).
-    //
-    // User plugins live in `~/.config/ttymap/plugin/` — that's just
-    // the xdg_config layer of `runtime_path()`, so the same walker
-    // picks them up. Higher-priority layers shadow lower ones by
-    // stem (env > manifest > xdg_config > xdg_data).
-    let runtime_path = crate::lua::runtime_path();
-    crate::lua::register_builtin_plugins(
-        runtime_path,
-        &config.plugins.disable,
-        shared.clone(),
-        lua_sender,
-        &mut r,
-    );
-
-    // Plugin metadata for help is published to `shared.palette_entries`
-    // directly during registration (see `lua::push_plugin_entry`), so
-    // there's no harvest step here. Help reads the snapshot lazily at
-    // render time via `ttymap.help:palette_entries()`.
-
-    // Harvest the BaseLayer's footer hints. Has to happen *before*
-    // `palette::install` because that call `mem::take`s
-    // `r.palette_entries`. The footer slot is `[<key> <name>]` —
-    // built directly from each entry's keybinding and `module.name`.
-    // No keybinding ⇒ no footer slot. Leak the key string once to
-    // satisfy [`Component::footer_hints`]'s `&'static str` contract;
-    // `name` is already `&'static`.
-    let plugin_hints: Vec<(&'static str, &'static str)> = r
-        .palette_entries
-        .iter()
-        .filter(|e| !e.hint.is_empty())
-        .map(|e| {
-            let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
-            (key, e.name)
-        })
-        .collect();
-
-    // Palette is a built-in, not a plugin. `install` drains every
-    // palette_entry contributed above and bakes them into the default
-    // provider — so it must run after every plugin's register call.
-    crate::frontend::palette::install(keymap, &mut r);
-
-    // `shared` is kept alive via Arc clones inside every Lua plugin's
-    // setup state and any `LuaPaletteProvider` it creates — dropping
-    // the local handle here is fine.
-    drop(shared);
-
-    BuiltRegistrar {
-        registrar: r,
-        plugin_hints,
-    }
-}
-
-/// Build the `(key-binding, action-label)` pairs that the help plugin
-/// surfaces via `ttymap.help:keymap_entries()`. Live data — runtime keymap
-/// overrides surface here.
-fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
-    use crate::map::Action;
-    Action::all_listed()
-        .iter()
-        .filter_map(|action| {
-            let keys = keymap.keys_for(&UserIntent::Map(action.clone()));
-            if keys.is_empty() {
-                None
-            } else {
-                Some((keys.join(", "), action.label().to_string()))
-            }
-        })
-        .collect()
 }
