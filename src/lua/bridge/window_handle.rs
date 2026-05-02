@@ -62,7 +62,7 @@ impl UserData for WindowHandle {
 /// that already exist (`PaletteComponent` wrapping a
 /// [`LuaPaletteProvider`]) wrapping is the cheaper bridge.
 ///
-/// [`Component`]: crate::compositor::Component
+/// [`Component`]: crate::frontend::compositor::Component
 /// [`LuaWindowComponent`]: super::window_component::LuaWindowComponent
 /// [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 pub struct CloseFlagWrapper<C> {
@@ -76,24 +76,26 @@ impl<C> CloseFlagWrapper<C> {
     }
 }
 
-impl<C: crate::compositor::Component> crate::compositor::Component for CloseFlagWrapper<C> {
+impl<C: crate::frontend::compositor::Component> crate::frontend::compositor::Component
+    for CloseFlagWrapper<C>
+{
     fn handle_event(
         &mut self,
         event: crossterm::event::KeyEvent,
-        win: &mut crate::compositor::window::Window,
+        win: &mut crate::frontend::compositor::window::Window,
     ) {
         self.inner.handle_event(event, win);
     }
 
-    fn render(&self, win: &mut crate::compositor::window::RenderWindow) {
+    fn render(&self, win: &mut crate::frontend::compositor::window::RenderWindow) {
         self.inner.render(win);
     }
 
-    fn paint_on_map(&self, p: &mut crate::compositor::MapApi<'_>) {
+    fn paint_on_map(&self, p: &mut crate::frontend::compositor::MapApi<'_>) {
         self.inner.paint_on_map(p);
     }
 
-    fn poll(&mut self, win: &mut crate::compositor::window::Window) {
+    fn poll(&mut self, win: &mut crate::frontend::compositor::window::Window) {
         self.inner.poll(win);
         if self.flag.take() {
             win.close();
@@ -133,10 +135,10 @@ mod tests {
     /// [`super::window_component::LuaWindowComponent`].
     #[test]
     fn close_flag_wrapper_polls_close_when_flag_set() {
-        use crate::compositor::Component;
-        use crate::compositor::Context;
-        use crate::compositor::window::{Window, WindowOps};
         use crate::frontend::AppEvent;
+        use crate::frontend::compositor::Component;
+        use crate::frontend::compositor::Context;
+        use crate::frontend::compositor::window::{Window, WindowOps};
 
         /// Inert inner component — no-op for every method so the
         /// wrapper's behaviour is the only thing under test.

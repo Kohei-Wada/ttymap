@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 
-use crate::compositor::window::RenderWindow;
+use crate::frontend::compositor::window::RenderWindow;
 use crate::theme::StyleKind;
 
 use super::PaletteComponent;

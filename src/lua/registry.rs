@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use mlua::{IntoLuaMulti, Lua, RegistryKey};
 
-use crate::compositor::MapApi;
+use crate::frontend::compositor::MapApi;
 use crate::lua::ttymap::map_api;
 
 /// Canonical Lua-facing event names. Centralised so the host emit

@@ -3,8 +3,8 @@
 //! Reached from [`CommandProvider`](super::CommandProvider) via the
 //! "Theme" entry.
 
-use crate::compositor::Context;
 use crate::frontend::AppMsg;
+use crate::frontend::compositor::Context;
 use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};

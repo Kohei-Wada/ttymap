@@ -6,7 +6,7 @@
 //! pop — no `active` flag, no `seed` field on a long-lived struct.
 //!
 //! The list of non-palette palette entries is harvested from the
-//! [`Registrar`](crate::compositor::Registrar) at composition time
+//! [`Registrar`](crate::frontend::compositor::Registrar) at composition time
 //! (see [`install`]) and baked into a [`CommandSeed`] that the
 //! activation closure clones (as an `Rc`) for each push.
 //!
@@ -26,8 +26,8 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context, Registrar};
+use crate::frontend::compositor::window::{RenderWindow, Window};
+use crate::frontend::compositor::{Activation, Component, Context, Registrar};
 use crate::keymap::KeyMap;
 use crate::theme::ThemeId;
 
@@ -315,8 +315,8 @@ mod tests {
             .collect()
     }
 
-    use crate::compositor::window::WindowOps;
     use crate::frontend::AppEvent;
+    use crate::frontend::compositor::window::WindowOps;
 
     /// Dispatch a key into the palette and return the queued stack
     /// ops + the `AppMsg`s the hook emitted onto a disposable bus.

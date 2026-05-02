@@ -13,8 +13,8 @@ pub use theme::ThemeProvider;
 
 use std::time::Duration;
 
-use crate::compositor::Context;
-use crate::palette::action::PaletteAction;
+use crate::frontend::compositor::Context;
+use crate::frontend::palette::action::PaletteAction;
 
 /// One row in the palette list.
 pub struct PaletteItem {

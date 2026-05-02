@@ -4,7 +4,7 @@
 //!
 //! Structurally identical to [`super::window_handle::WindowHandle`]:
 //! the handle holds a shared atomic flag, `close()` flips it, and the
-//! wrapped [`crate::palette::PaletteComponent`] checks the flag on its
+//! wrapped [`crate::frontend::palette::PaletteComponent`] checks the flag on its
 //! next poll tick (via [`super::window_handle::CloseFlagWrapper`]) and
 //! pops itself off the stack via `win.close()`. Kept as its own type
 //! so callers know which kind of primitive they have — the Rust-side

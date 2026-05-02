@@ -9,8 +9,8 @@
 //!
 //! [`PaletteProvider`]: super::provider::PaletteProvider
 
-use crate::compositor::Component;
 use crate::frontend::AppMsg;
+use crate::frontend::compositor::Component;
 
 use super::provider::PaletteProvider;
 

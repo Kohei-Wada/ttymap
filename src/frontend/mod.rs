@@ -21,11 +21,13 @@
 //! plugin type — it carries only `Box<dyn Component>`s populated by
 //! the Lua dispatcher at composition time.
 
+pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
 pub mod input_thread;
 mod mouse;
 pub mod msg;
+pub(crate) mod palette;
 pub mod ui;
 
 pub use event::AppEvent;
@@ -37,8 +39,8 @@ use std::sync::Arc;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
+use crate::frontend::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::keymap::KeyMap;
 pub use crate::keymap::KeybindingOverrides;
 use crate::lua::LuaEventBus;
@@ -83,7 +85,7 @@ pub struct Frontend {
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
-    /// [`Context`](crate::compositor::Context) so plugins can build
+    /// [`Context`](crate::frontend::compositor::Context) so plugins can build
     /// cursor-aware overlays.
     cursor: Option<(u16, u16)>,
     /// Timestamp of the last overlay-driven `request_map_redraw`. Used
@@ -539,7 +541,7 @@ fn lua_intent_to_app_msg(intent: crate::lua::intent::LuaIntent) -> AppMsg {
 /// entries.
 /// Tuple-struct carrier so [`App::new`] can keep the plugin hints
 /// alive across the call to [`build_registrar`]. The hints would
-/// otherwise be unreachable, since [`crate::palette::install`]
+/// otherwise be unreachable, since [`crate::frontend::palette::install`]
 /// `mem::take`s `Registrar.palette_entries` before returning.
 struct BuiltRegistrar {
     registrar: Registrar,
@@ -618,7 +620,7 @@ fn build_registrar(
     // Palette is a built-in, not a plugin. `install` drains every
     // palette_entry contributed above and bakes them into the default
     // provider — so it must run after every plugin's register call.
-    crate::palette::install(keymap, &mut r);
+    crate::frontend::palette::install(keymap, &mut r);
 
     // `shared` is kept alive via Arc clones inside every Lua plugin's
     // setup state and any `LuaPaletteProvider` it creates — dropping

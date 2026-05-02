@@ -18,13 +18,6 @@ pub mod frontend;
 /// [`commands::Command::run`].
 pub mod commands;
 
-/// Helix-style compositor stack — the focus/modal system that
-/// replaced the old FocusManager / FocusSurface / Plugin trio. Holds
-/// the `Component`, `Painter`, `Task`, `Registrar` abstractions that
-/// every plugin plugs into, plus the always-on `BaseLayer`
-/// (keymap fallback + activation dispatch).
-pub(crate) mod compositor;
-
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
 
@@ -45,13 +38,6 @@ pub mod theme;
 
 /// Key binding table and TOML override shape.
 pub(crate) mod keymap;
-
-/// Command palette — `:`-triggered universal picker. Lives as a peer
-/// of `plugin/` (not inside it) because palette has privileged
-/// integration with the compositor's `Registrar`: it *drains*
-/// `palette_entries` at install time rather than contributing one.
-/// Plugins still plug into it via `Registrar::add_palette_entry`.
-pub(crate) mod palette;
 
 /// File-based logging to XDG state directory.
 pub mod logging;

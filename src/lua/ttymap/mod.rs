@@ -233,7 +233,7 @@ impl LuaHostShared {
 /// - `push_rx` — components queued by `ttymap.api.window.open` (and
 ///   later `ttymap.api.palette.open` in A6). Drained by the App per
 ///   frame and pushed onto the compositor stack. Kept per-plugin
-///   because [`crate::compositor::Component`] is `!Send` and the
+///   because [`crate::frontend::compositor::Component`] is `!Send` and the
 ///   channel must stay on the main thread.
 ///
 /// `push_rx` is owned by the **setup state** (the Lua VM that ran
@@ -258,7 +258,7 @@ pub struct LuaHostHandles {
     /// `!Send` payloads at construction; only `Sender<T>: Send`
     /// requires `T: Send`, and we never move the sender across
     /// threads.
-    pub push_rx: mpsc::Receiver<Box<dyn crate::compositor::Component>>,
+    pub push_rx: mpsc::Receiver<Box<dyn crate::frontend::compositor::Component>>,
 }
 
 // ── Self-registration capture ────────────────────────────────────────
@@ -355,7 +355,7 @@ pub fn install(
     // callback + App drain all run on the same thread). `mpsc`
     // accepts `!Send` payloads at construction; only `Sender<T>: Send`
     // requires `T: Send`, and the Sender never moves across threads.
-    let (push_tx, push_rx) = mpsc::channel::<Box<dyn crate::compositor::Component>>();
+    let (push_tx, push_rx) = mpsc::channel::<Box<dyn crate::frontend::compositor::Component>>();
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
     let zoom = Arc::new(Mutex::new(0.0_f64));
 
@@ -528,7 +528,7 @@ pub fn install(
                 // dropped the receiver mid-run; that should never happen
                 // in production, hence `error!` rather than `warn!`.
                 if push_tx_for_window
-                    .send(Box::new(component) as Box<dyn crate::compositor::Component>)
+                    .send(Box::new(component) as Box<dyn crate::frontend::compositor::Component>)
                     .is_err()
                 {
                     log::error!(
@@ -569,10 +569,11 @@ pub fn install(
                 // upvalues there, so the per-provider Lua handle must
                 // be a clone of it (cheap Arc bump).
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
-                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
+                let palette =
+                    crate::frontend::palette::PaletteComponent::with_provider(Box::new(provider));
                 let wrapped = CloseFlagWrapper::new(palette, flag.clone());
                 if push_tx_for_palette
-                    .send(Box::new(wrapped) as Box<dyn crate::compositor::Component>)
+                    .send(Box::new(wrapped) as Box<dyn crate::frontend::compositor::Component>)
                     .is_err()
                 {
                     log::error!(

@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
-use crate::compositor::Registrar;
+use crate::frontend::compositor::Registrar;
 use crate::lua::sender::LuaSender;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
@@ -268,15 +268,16 @@ fn register_one(
     // host API — flows through the channels in `LuaHostHandles` that
     // the App drains every frame. The factory itself never builds
     // or returns a Component; pushing is fully Lua-driven now.
-    use crate::compositor::{Activation, PaletteEntry};
+    use crate::frontend::compositor::{Activation, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
-    let build_factory =
-        |gate_key: mlua::RegistryKey, lua_clone: mlua::Lua| -> crate::compositor::SpawnComponent {
-            Box::new(move |_ctx| {
-                run_lua_callback(&lua_clone, &gate_key, name);
-                None
-            })
-        };
+    let build_factory = |gate_key: mlua::RegistryKey,
+                         lua_clone: mlua::Lua|
+     -> crate::frontend::compositor::SpawnComponent {
+        Box::new(move |_ctx| {
+            run_lua_callback(&lua_clone, &gate_key, name);
+            None
+        })
+    };
 
     for cmd in captured.palette_commands {
         let factory = build_factory(cmd.invoke, lua.clone());

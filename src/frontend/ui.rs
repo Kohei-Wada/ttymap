@@ -12,7 +12,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::compositor::{Compositor, Context, MapApi};
+use crate::frontend::compositor::{Compositor, Context, MapApi};
 use crate::lua::LuaEventBus;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;

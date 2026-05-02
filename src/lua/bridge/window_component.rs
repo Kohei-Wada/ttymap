@@ -40,9 +40,9 @@ use ratatui::widgets::Paragraph;
 
 use super::handle::{CallOutcome, LuaHandle};
 use super::window_handle::CloseFlag;
-use crate::compositor::Component;
-use crate::compositor::layout::PanelAnchor;
-use crate::compositor::window::{RenderWindow, Window};
+use crate::frontend::compositor::Component;
+use crate::frontend::compositor::layout::PanelAnchor;
+use crate::frontend::compositor::window::{RenderWindow, Window};
 use crate::theme::StyleKind;
 
 // ── Layout ─────────────────────────────────────────────────────────
@@ -647,9 +647,9 @@ mod tests {
 
     #[test]
     fn poll_does_nothing_until_flag_is_flipped() {
-        use crate::compositor::Context;
-        use crate::compositor::window::WindowOps;
         use crate::frontend::AppEvent;
+        use crate::frontend::compositor::Context;
+        use crate::frontend::compositor::window::WindowOps;
 
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
@@ -671,9 +671,9 @@ mod tests {
 
     #[test]
     fn poll_honours_flag_and_closes_window() {
-        use crate::compositor::Context;
-        use crate::compositor::window::WindowOps;
         use crate::frontend::AppEvent;
+        use crate::frontend::compositor::Context;
+        use crate::frontend::compositor::window::WindowOps;
 
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();

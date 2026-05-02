@@ -19,10 +19,10 @@
 //! Surface activation (palette open, plugin activate) intentionally
 //! does *not* live here — those are focus transitions, handled
 //! internally by the
-//! [`Compositor`](crate::compositor::Compositor) via
-//! [`Window::open`](crate::compositor::window::Window::open) /
-//! [`Window::close`](crate::compositor::window::Window::close) calls
-//! from a [`Component`](crate::compositor::Component). Keeping them
+//! [`Compositor`](crate::frontend::compositor::Compositor) via
+//! [`Window::open`](crate::frontend::compositor::window::Window::open) /
+//! [`Window::close`](crate::frontend::compositor::window::Window::close) calls
+//! from a [`Component`](crate::frontend::compositor::Component). Keeping them
 //! off `AppMsg` means the focus state machine isn't coupled to the
 //! dispatch table.
 
