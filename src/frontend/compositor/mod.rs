@@ -81,6 +81,15 @@ fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
     None
 }
 
+/// Returns true for the "close the focused plugin" key. Today
+/// just `q` with no modifiers — same key the base keymap binds to
+/// Quit, but with the focused-plugin-takes-precedence semantic
+/// applied at the framework layer instead of asking every plugin
+/// to bind it.
+fn is_close_focused_key(event: KeyEvent) -> bool {
+    event.modifiers == KeyModifiers::NONE && event.code == KeyCode::Char('q')
+}
+
 // ── Component + event routing ──────────────────────────────────────
 
 /// Read-only snapshot of app-level context a component may need
@@ -235,9 +244,11 @@ impl Compositor {
     /// two-step routing restores the old "non-modal plugin passes
     /// unknown keys through to the keymap" semantic.
     ///
-    /// `Tab` / `Shift-Tab` / `BackTab` are **framework-reserved**
-    /// and never reach any component — focus cycling is a property
-    /// of the framework, not of any individual plugin.
+    /// `Tab` / `Shift-Tab` / `BackTab` / `C-j` / `C-k` are
+    /// **framework-reserved** for focus cycling. `q` while a
+    /// plugin is focused is also framework-reserved as
+    /// "close the focused plugin"; without that intercept it
+    /// would fall through to the base keymap and quit the app.
     pub fn handle_event(
         &mut self,
         event: KeyEvent,
@@ -256,6 +267,21 @@ impl Compositor {
         {
             let mut win = Window::new(&mut ops, ctx, event_tx);
             self.stack[focused].handle_event(event, &mut win);
+        }
+        // Framework-reserved close key: `q` closes the focused
+        // plugin when the plugin itself didn't consume the key
+        // (i.e. returned `ignore`). Components that legitimately
+        // consume `q` — palette typing the char into its query —
+        // call `consume`, so this branch doesn't fire and `q`
+        // reaches them as input. Components that don't bind `q`
+        // (panels like wiki / aircraft / help) emit ignore, which
+        // would otherwise fall through to the base keymap and
+        // quit the app; intercepting here turns it into a panel
+        // dismiss, which is what the user expects.
+        if ops.is_ignorable_noop() && ops.ignored && focused != 0 && is_close_focused_key(event) {
+            self.stack.remove(focused);
+            self.clamp_focus_after_shrink();
+            return;
         }
         // Fall-through: only when the hook queued nothing *and*
         // explicitly called `ignore()`, and the focus isn't already

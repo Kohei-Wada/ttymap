@@ -287,17 +287,20 @@ impl Component for LuaWindowComponent {
         // content is reachable without every plugin re-implementing
         // it. Plugins that *want* one of these (e.g. aircraft uses
         // Up / Down to pick a row) consume by returning nil — those
-        // never reach this branch. j/k stay untouched here and pass
-        // through to the base layer (map pan), since holding `j` to
-        // pan while a section is focused is more useful than line-
-        // by-line scroll without a modifier.
+        // never reach this branch.
+        //
+        // j / k and C-u / C-d stay untouched here and pass through
+        // to the base layer (map pan / half-page pan). Letting them
+        // scroll the focused section instead would steal navigation
+        // keys the user is in the middle of using; the dedicated
+        // PageUp / PageDown / C-n / C-p / Home / End cover the
+        // intra-section case without that ambiguity.
         if self.layout.placement == crate::frontend::compositor::Placement::Sidebar
             && action == KeyAction::Ignore
         {
             let cur = self.scroll_offset.get();
             let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
             let page = self.last_inner_height.get().max(1);
-            let half = (page / 2).max(1);
             let next = match (event.code, ctrl) {
                 (KeyCode::Down, false) => Some(cur.saturating_add(1)),
                 (KeyCode::Up, false) => Some(cur.saturating_sub(1)),
@@ -305,8 +308,6 @@ impl Component for LuaWindowComponent {
                 (KeyCode::Char('p'), true) => Some(cur.saturating_sub(1)),
                 (KeyCode::PageDown, _) => Some(cur.saturating_add(page)),
                 (KeyCode::PageUp, _) => Some(cur.saturating_sub(page)),
-                (KeyCode::Char('d'), true) => Some(cur.saturating_add(half)),
-                (KeyCode::Char('u'), true) => Some(cur.saturating_sub(half)),
                 (KeyCode::Home, _) => Some(0),
                 (KeyCode::End, _) => Some(u16::MAX),
                 _ => None,
