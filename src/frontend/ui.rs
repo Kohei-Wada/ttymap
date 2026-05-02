@@ -67,7 +67,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
 
         let side_block = Block::new()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.accent))
+            .border_style(Style::default().fg(theme.muted_color))
             .title(" side ");
         let side_inner = side_block.inner(side_area);
         f.render_widget(side_block, side_area);
