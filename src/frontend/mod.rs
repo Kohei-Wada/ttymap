@@ -32,7 +32,6 @@ pub use event::AppEvent;
 pub use intent::UserIntent;
 
 use std::io;
-use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
@@ -46,7 +45,6 @@ use crate::lua::LuaSubsystem;
 use crate::map::Action;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
-use crate::map::styler::Styler;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -119,7 +117,7 @@ impl Frontend {
             palette_entries: _,
         } = lua;
 
-        let ui_theme = UiTheme::from_palette(map.theme_id.palette());
+        let ui_theme = UiTheme::from_palette(map.theme_id().palette());
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -206,7 +204,7 @@ impl Frontend {
     /// Whether the map state machine still wants the loop to keep
     /// running. Checked at the top of each `run` iteration.
     fn is_running(&self) -> bool {
-        self.map.state.is_running()
+        self.map.is_running()
     }
 
     /// Drain every Lua plugin's setup-state receivers once.
@@ -230,8 +228,8 @@ impl Frontend {
     /// Intent flow (`map:jump`, `frame.export`, …) is **not** drained
     /// here — those reach the App through the unified `event_rx`.
     fn refresh_lua_host_state(&mut self) {
-        let center = self.map.state.center();
-        let zoom = self.map.state.zoom();
+        let center = self.map.center();
+        let zoom = self.map.zoom();
         self.lua.sync_view(center, zoom);
         // Disjoint borrows: `&self.lua` for the iterator, `&mut
         // self.compositor` for the push side.
@@ -338,7 +336,7 @@ impl Frontend {
 
     fn context(&self) -> Context {
         Context {
-            theme_id: self.map.theme_id,
+            theme_id: self.map.theme_id(),
             cursor: self.cursor,
         }
     }
@@ -392,7 +390,7 @@ impl Frontend {
     fn dispatch(&mut self, msg: UserIntent) {
         match msg {
             UserIntent::Map(action) => {
-                if self.map.state.process_action(&action) {
+                if self.map.apply_action(&action) {
                     self.request_map_redraw();
                 }
             }
@@ -438,28 +436,19 @@ impl Frontend {
     }
 
     fn switch_theme(&mut self, new_id: ThemeId) {
-        self.map.theme_id = new_id;
-        let styler = Arc::new(Styler::new(new_id));
-        self.ui_theme = UiTheme::from_palette(styler.palette());
-        self.map.render_client.set_styler(styler);
+        self.map.set_theme(new_id);
+        self.ui_theme = UiTheme::from_palette(new_id.palette());
         self.request_map_redraw();
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        self.map.state.resize(cols, rows);
-        self.map
-            .render_client
-            .request_resize(self.map.state.width(), self.map.state.height());
+        self.map.handle_resize(cols, rows);
         self.request_map_redraw();
     }
 
     fn request_map_redraw(&mut self) {
-        if !self.map.state.is_running() {
-            return;
-        }
-        let viewport = self.map.state.viewport();
         let overlays = std::mem::take(&mut self.overlay_sink);
-        self.map.render_client.request_draw(viewport, overlays);
+        self.map.request_redraw(overlays);
     }
 }
 

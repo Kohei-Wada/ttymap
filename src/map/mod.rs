@@ -25,25 +25,96 @@ use std::sync::mpsc;
 
 use crate::config::Config;
 use crate::frontend::AppEvent;
+use crate::geo::LonLat;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::{RenderClient, RenderHandle};
 use crate::map::styler::Styler;
 use crate::theme::ThemeId;
 
-/// Map-subsystem handle owned by `Frontend`.
+/// Runtime handle to the map subsystem.
 ///
-/// `RenderHandle` is **not** in here — it is the owning thread guard
-/// and lives in `main`'s scope so its `Drop` (Shutdown + join) fires
-/// at the composition root, peer to `InputHandle` / `FrameTimer`. The
-/// fields below are everything Frontend works with at runtime:
-/// the dispatch state (`MapState`), the render-task sender, the
-/// active theme id, and the attribution string the Lua subsystem
-/// reads once at register time.
+/// Frontend stores one of these and interacts with the map only
+/// through the methods below — never names `MapState`, the render
+/// channel, the styler, or the underlying viewport machinery.
+///
+/// The owning [`RenderHandle`] is **not** in here — it lives in
+/// `main`'s scope so its `Drop` (Shutdown + join) fires at the
+/// composition root, peer to `InputHandle` / `FrameTimer`.
 pub struct MapHandle {
-    pub state: MapState,
-    pub render_client: RenderClient,
+    state: MapState,
+    render_client: RenderClient,
+    /// Tile-source attribution string. The Lua subsystem reads this
+    /// once at register time (passed to plugin shared state); main
+    /// is the sole reader after construction.
     pub attribution: Option<String>,
-    pub theme_id: ThemeId,
+    theme_id: ThemeId,
+}
+
+impl MapHandle {
+    // ── Queries ────────────────────────────────────────────────────────
+
+    /// Whether the map state machine still wants the loop to keep
+    /// running (a `Quit` action sets this to `false`).
+    pub fn is_running(&self) -> bool {
+        self.state.is_running()
+    }
+
+    /// Active centre in lon/lat — what every Lua plugin's
+    /// `ttymap.map:center()` mirror cell tracks.
+    pub fn center(&self) -> LonLat {
+        self.state.center()
+    }
+
+    /// Active zoom level.
+    pub fn zoom(&self) -> f64 {
+        self.state.zoom()
+    }
+
+    /// Active theme id. Read by Frontend to seed the per-frame
+    /// `Context` handed to components (`Component::handle_event` /
+    /// `Component::render` / `Component::paint_on_map`).
+    pub fn theme_id(&self) -> ThemeId {
+        self.theme_id
+    }
+
+    // ── Mutations ──────────────────────────────────────────────────────
+
+    /// Apply a map-level [`Action`] (pan / zoom / jump / reset / …).
+    /// Returns `true` if the state changed in a way that warrants a
+    /// redraw.
+    pub fn apply_action(&mut self, action: &Action) -> bool {
+        self.state.process_action(action)
+    }
+
+    /// Resize the canvas — both the in-process [`MapState`] (so the
+    /// next viewport is computed for the new dimensions) and the
+    /// render thread's pipeline (so it allocates a new
+    /// canvas-sized buffer).
+    pub fn handle_resize(&mut self, cols: u16, rows: u16) {
+        self.state.resize(cols, rows);
+        self.render_client
+            .request_resize(self.state.width(), self.state.height());
+    }
+
+    /// Switch the active theme: update the stored `ThemeId`, build
+    /// a fresh styler, and ship it to the render thread.
+    pub fn set_theme(&mut self, new_id: ThemeId) {
+        self.theme_id = new_id;
+        let styler = Arc::new(Styler::new(new_id));
+        self.render_client.set_styler(styler);
+    }
+
+    /// Queue a fresh `RenderTask::Draw` against the current
+    /// viewport, carrying any per-frame overlays the caller has
+    /// collected (e.g. Lua-pushed polylines drained from
+    /// `overlay_sink`). No-op if the map state is no longer running.
+    pub fn request_redraw(&self, overlays: Vec<render::overlay::UserPolyline>) {
+        if !self.state.is_running() {
+            return;
+        }
+        self.render_client
+            .request_draw(self.state.viewport(), overlays);
+    }
 }
 
 /// Build the map subsystem: tile cache + render pipeline + render
