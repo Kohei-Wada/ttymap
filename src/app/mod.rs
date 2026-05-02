@@ -12,6 +12,7 @@
 //! the Lua dispatcher at composition time.
 
 pub mod event;
+mod input_thread;
 mod mouse;
 pub mod msg;
 
@@ -21,7 +22,7 @@ pub use msg::AppMsg;
 use std::io;
 use std::sync::Arc;
 
-use crossterm::event::{self as crossterm_event, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
@@ -69,11 +70,18 @@ pub struct App {
     /// `!Send`, hence one channel per plugin (kept on main thread).
     lua_host_handles: Vec<LuaHostHandles>,
     /// Unified [`AppEvent`] receiver. Every fire-and-forget Lua intent
-    /// (wrapped as [`AppEvent::Intent`]) and every completed render
-    /// frame from the render thread (wrapped as [`AppEvent::FrameReady`])
-    /// arrives here. Drained once per frame regardless of plugin
-    /// count or how many frames the render thread has produced.
+    /// (wrapped as [`AppEvent::Intent`]), every completed render frame
+    /// from the render thread (wrapped as [`AppEvent::FrameReady`]),
+    /// and every terminal event from the input thread (wrapped as
+    /// [`AppEvent::Input`]) arrives here. Drained once per main-loop
+    /// iteration; the loop parks on this channel so idle CPU is
+    /// dominated by `poll_timeout` rather than per-tick polling.
     event_rx: std::sync::mpsc::Receiver<AppEvent>,
+    /// Sender side of the unified queue. Cloned into the input thread
+    /// at `run()` time. Render thread + Lua plugins received their
+    /// own clones at construction; this one stays on the App so the
+    /// input thread can be (re)spawned without re-plumbing.
+    event_tx: std::sync::mpsc::Sender<AppEvent>,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
@@ -160,7 +168,7 @@ impl App {
             width,
             height,
         );
-        let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx);
+        let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx.clone());
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -183,6 +191,7 @@ impl App {
             tick_registry,
             lua_host_handles,
             event_rx,
+            event_tx,
             cursor: None,
             overlay_sink: Vec::new(),
             last_overlay_redraw: std::time::Instant::now(),
@@ -194,10 +203,14 @@ impl App {
     }
 
     pub fn run(&mut self) -> io::Result<()> {
-        use std::time::Duration;
-
         let mut terminal = ratatui::init();
         crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+
+        // Spawn the input thread *after* terminal setup so it never
+        // reads from a non-raw stdin. The handle's `Drop` joins on
+        // shutdown — it's tied to this scope so the thread is cleaned
+        // up before `ratatui::restore` runs at the end of the function.
+        let _input = input_thread::InputHandle::spawn(self.event_tx.clone(), self.poll_timeout);
 
         info!("event loop started");
         self.dispatch(AppMsg::Map(Action::Redraw));
@@ -211,18 +224,20 @@ impl App {
             // `compositor.poll` already sees them.
             self.refresh_lua_host_state();
 
-            // Single drain over the unified `AppEvent` queue:
-            // - `Intent(AppMsg)` from any plugin's host channel and
-            //   from anything else that defers its dispatch
-            // - `FrameReady(MapFrame)` from the render thread; last one
-            //   wins so stale frames are simply overwritten
+            // Park on the unified queue. `recv_timeout` returns either
+            // an event or a timeout — in either case we fall through
+            // to the per-iteration draw, so animation plugins still
+            // tick at ~`poll_timeout` cadence even with no input. The
+            // first event is processed inline; subsequent buffered
+            // events drain non-blockingly so we never paint behind a
+            // burst.
+            match self.event_rx.recv_timeout(self.poll_timeout) {
+                Ok(event) => self.handle_event(event),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
             while let Ok(event) = self.event_rx.try_recv() {
-                match event {
-                    AppEvent::Intent(msg) => self.dispatch(msg),
-                    AppEvent::FrameReady(frame) => {
-                        self.map_frame = Some(frame);
-                    }
-                }
+                self.handle_event(event);
             }
 
             // Drain per-tick messages from compositor components.
@@ -267,47 +282,15 @@ impl App {
                     self.last_overlay_redraw = now;
                 }
             }
-
-            // Idle wake rate. crossterm's `event::poll` blocks
-            // until an input event arrives or this elapses, so the
-            // real cost is bounded latency for things that aren't
-            // event-driven: a freshly produced render frame (we
-            // drain those non-blockingly at the top of the loop)
-            // and any plugin whose `on_tick` touches render output
-            // (e.g. ping animation). Configurable via
-            // `ttymap.opt.runtime.poll_timeout_ms`; default 50 ms
-            // (20 Hz) keeps per-tick work cheap while input latency
-            // stays imperceptible.
-            let mut poll_timeout = self.poll_timeout;
-            while crossterm_event::poll(poll_timeout)? {
-                poll_timeout = Duration::from_millis(0);
-                match crossterm_event::read()? {
-                    Event::Key(key_event) => {
-                        if key_event.modifiers.contains(KeyModifiers::CONTROL)
-                            && key_event.code == KeyCode::Char('c')
-                        {
-                            info!("Ctrl-C received, quitting");
-                            self.dispatch(AppMsg::Map(Action::Quit));
-                        } else {
-                            debug!("key event: {:?}", key_event.code);
-                            self.handle_key(key_event);
-                        }
-                    }
-                    Event::Resize(cols, rows) => {
-                        info!("resize: {}x{}", cols, rows);
-                        self.dispatch(AppMsg::Resize(cols, rows));
-                    }
-                    Event::Mouse(mouse) => {
-                        for msg in self.mouse.translate(mouse) {
-                            self.dispatch(msg);
-                        }
-                    }
-                    _ => {}
-                }
-            }
         }
 
         info!("event loop ended");
+        // Stop the input thread *before* restoring the terminal so it
+        // never reads from a non-raw stdin during teardown. Default
+        // Drop ordering (locals dropped after the explicit cleanup
+        // below) would otherwise leave the thread polling against a
+        // terminal in cooked mode for the join window.
+        drop(_input);
         crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
         ratatui::restore();
         info!("terminal restored, exiting");
@@ -348,6 +331,49 @@ impl App {
             while let Ok(component) = handles.push_rx.try_recv() {
                 self.compositor.push(component);
             }
+        }
+    }
+
+    /// Apply one event drained off the unified queue. Each variant
+    /// has a small fixed handler and the work is bounded — long Lua
+    /// callbacks notwithstanding, the loop never sits inside this
+    /// for more than the time a single dispatch needs.
+    fn handle_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Intent(msg) => self.dispatch(msg),
+            AppEvent::FrameReady(frame) => {
+                self.map_frame = Some(frame);
+            }
+            AppEvent::Input(input) => self.handle_input(input),
+        }
+    }
+
+    /// Classify a raw terminal event and dispatch downstream messages.
+    /// Same logic as the prior inline `crossterm::event::poll` block —
+    /// just relocated so it can run from the unified-queue drain.
+    fn handle_input(&mut self, event: Event) {
+        match event {
+            Event::Key(key_event) => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && key_event.code == KeyCode::Char('c')
+                {
+                    info!("Ctrl-C received, quitting");
+                    self.dispatch(AppMsg::Map(Action::Quit));
+                } else {
+                    debug!("key event: {:?}", key_event.code);
+                    self.handle_key(key_event);
+                }
+            }
+            Event::Resize(cols, rows) => {
+                info!("resize: {}x{}", cols, rows);
+                self.dispatch(AppMsg::Resize(cols, rows));
+            }
+            Event::Mouse(mouse) => {
+                for msg in self.mouse.translate(mouse) {
+                    self.dispatch(msg);
+                }
+            }
+            _ => {}
         }
     }
 
