@@ -2,7 +2,7 @@
 //!
 //! `AppEvent` is the single payload carried on the App-level `mpsc`
 //! channel that every off-main-thread (or deferred main-thread)
-//! source pushes into. Three variants today:
+//! source pushes into. Four variants:
 //!
 //! - [`AppEvent::Intent`] — wraps an [`AppMsg`]: every fire-and-forget
 //!   user-intent emitter (Lua plugins via the host channel,
@@ -14,6 +14,11 @@
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
 //!   on it and dispatches the appropriate downstream `AppMsg`s.
+//! - [`AppEvent::Tick`] — periodic wake-up from the frame timer
+//!   thread. Replaces the old `recv_timeout` polling: the main loop
+//!   now blocks on `recv()` and the timer guarantees per-frame
+//!   work (animation plugins, overlay redraws) still ticks at a
+//!   predictable cadence even with no input or render activity.
 //!
 //! The split (rather than adding `FrameReady` directly to [`AppMsg`])
 //! is intentional: `AppMsg` derives `PartialEq` for keymap binding
@@ -21,9 +26,6 @@
 //! is meaningless and expensive. Wrapping keeps `AppMsg`'s vocabulary
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
-//!
-//! Future variants (`Tick`, …) will land here when the frame timer
-//! is folded in.
 
 use crate::map::render::frame::MapFrame;
 
@@ -48,6 +50,12 @@ pub enum AppEvent {
     /// `crossterm::event::poll` block, just sourced through the
     /// unified queue.
     Input(crossterm::event::Event),
+    /// Periodic wake-up from the frame timer thread. The main loop's
+    /// only response is to fall through into the per-iteration
+    /// draw + overlay-redraw rate-check, so animation plugins and
+    /// any other per-frame work still tick at the configured cadence
+    /// even when no other event is arriving.
+    Tick,
 }
 
 impl From<AppMsg> for AppEvent {

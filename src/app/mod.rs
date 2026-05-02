@@ -12,6 +12,7 @@
 //! the Lua dispatcher at composition time.
 
 pub mod event;
+mod frame_timer;
 mod input_thread;
 mod mouse;
 pub mod msg;
@@ -212,6 +213,13 @@ impl App {
         // up before `ratatui::restore` runs at the end of the function.
         let _input = input_thread::InputHandle::spawn(self.event_tx.clone(), self.poll_timeout);
 
+        // Frame timer: pushes `AppEvent::Tick` at the configured
+        // interval so the main loop can `recv()` blocking and still
+        // wake reliably for animation plugins / overlay redraws when
+        // no other event is arriving. Same cadence as the previous
+        // `recv_timeout` polling.
+        let _frame_timer = frame_timer::FrameTimer::spawn(self.event_tx.clone(), self.poll_timeout);
+
         info!("event loop started");
         self.dispatch(AppMsg::Map(Action::Redraw));
 
@@ -224,17 +232,16 @@ impl App {
             // `compositor.poll` already sees them.
             self.refresh_lua_host_state();
 
-            // Park on the unified queue. `recv_timeout` returns either
-            // an event or a timeout — in either case we fall through
-            // to the per-iteration draw, so animation plugins still
-            // tick at ~`poll_timeout` cadence even with no input. The
-            // first event is processed inline; subsequent buffered
-            // events drain non-blockingly so we never paint behind a
-            // burst.
-            match self.event_rx.recv_timeout(self.poll_timeout) {
+            // Park on the unified queue until any source produces an
+            // event — input thread, render thread, Lua intent, or the
+            // frame timer's periodic Tick. The first event is processed
+            // inline; subsequent buffered events drain non-blockingly
+            // so a burst doesn't push the paint behind. A `Disconnected`
+            // result means every `Sender` clone has been dropped (App
+            // teardown) and the loop exits cleanly.
+            match self.event_rx.recv() {
                 Ok(event) => self.handle_event(event),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(_) => break,
             }
             while let Ok(event) = self.event_rx.try_recv() {
                 self.handle_event(event);
@@ -285,12 +292,15 @@ impl App {
         }
 
         info!("event loop ended");
-        // Stop the input thread *before* restoring the terminal so it
-        // never reads from a non-raw stdin during teardown. Default
-        // Drop ordering (locals dropped after the explicit cleanup
-        // below) would otherwise leave the thread polling against a
-        // terminal in cooked mode for the join window.
+        // Stop background threads *before* restoring the terminal —
+        // the input thread shouldn't poll against a cooked stdin
+        // during teardown, and the frame timer shouldn't keep firing
+        // Tick events into a Receiver that's about to be dropped.
+        // Default Drop ordering (locals dropped after the cleanup
+        // below) would otherwise leave both running for the join
+        // window.
         drop(_input);
+        drop(_frame_timer);
         crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
         ratatui::restore();
         info!("terminal restored, exiting");
@@ -345,6 +355,11 @@ impl App {
                 self.map_frame = Some(frame);
             }
             AppEvent::Input(input) => self.handle_input(input),
+            // `Tick` exists purely to unblock `event_rx.recv()`. The
+            // per-iteration draw + overlay-redraw rate-check below
+            // already does whatever per-frame work is needed; no
+            // extra handler logic belongs here.
+            AppEvent::Tick => {}
         }
     }
 
