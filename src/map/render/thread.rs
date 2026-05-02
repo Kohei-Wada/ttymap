@@ -35,8 +35,57 @@ pub enum RenderTask {
     Shutdown,
 }
 
-pub struct RenderHandle {
+/// Cheap-to-clone client for issuing commands at the render thread.
+/// Holds just the [`RenderTask`] sender — no thread or shutdown
+/// state — so the App layer can hold a `RenderClient` without
+/// owning the thread's lifecycle. The lifecycle owner is
+/// [`RenderHandle`] (typically held by `main`).
+#[derive(Clone)]
+pub struct RenderClient {
     task_tx: cb::Sender<RenderTask>,
+}
+
+impl RenderClient {
+    pub fn request_draw(
+        &self,
+        viewport: Viewport,
+        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+    ) {
+        if self
+            .task_tx
+            .send(RenderTask::Draw { viewport, overlays })
+            .is_err()
+        {
+            log::warn!("render thread channel closed on draw");
+        }
+    }
+
+    pub fn request_resize(&self, width: usize, height: usize) {
+        if self
+            .task_tx
+            .send(RenderTask::Resize { width, height })
+            .is_err()
+        {
+            log::warn!("render thread channel closed on resize");
+        }
+    }
+
+    /// Hand a fresh `Styler` to the render thread. Processed in order
+    /// with `Draw` / `Resize`, so an in-flight frame at the old theme
+    /// never collides with one at the new theme.
+    pub fn set_styler(&self, styler: Arc<Styler>) {
+        if self.task_tx.send(RenderTask::SetStyler(styler)).is_err() {
+            log::warn!("render thread channel closed on set_styler");
+        }
+    }
+}
+
+/// Lifecycle handle for the render thread: owns the `JoinHandle`
+/// and the shutdown flag. The command sender lives on a peer
+/// [`RenderClient`] which the App layer holds. `Drop` joins the
+/// thread, so dropping the handle is the canonical shutdown.
+pub struct RenderHandle {
+    client: RenderClient,
     should_quit: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -80,48 +129,22 @@ impl RenderHandle {
         });
 
         RenderHandle {
-            task_tx,
+            client: RenderClient { task_tx },
             should_quit,
             thread: Some(thread),
         }
     }
 
-    pub fn request_draw(
-        &self,
-        viewport: Viewport,
-        overlays: Vec<crate::map::render::overlay::UserPolyline>,
-    ) {
-        if self
-            .task_tx
-            .send(RenderTask::Draw { viewport, overlays })
-            .is_err()
-        {
-            log::warn!("render thread channel closed on draw");
-        }
-    }
-
-    pub fn request_resize(&self, width: usize, height: usize) {
-        if self
-            .task_tx
-            .send(RenderTask::Resize { width, height })
-            .is_err()
-        {
-            log::warn!("render thread channel closed on resize");
-        }
-    }
-
-    /// Hand a fresh `Styler` to the render thread. Processed in order
-    /// with `Draw` / `Resize`, so an in-flight frame at the old theme
-    /// never collides with one at the new theme.
-    pub fn set_styler(&self, styler: Arc<Styler>) {
-        if self.task_tx.send(RenderTask::SetStyler(styler)).is_err() {
-            log::warn!("render thread channel closed on set_styler");
-        }
+    /// Cheap-clone client for issuing render commands. Hand to the
+    /// App so it can request redraws / resizes / theme changes
+    /// without owning the thread.
+    pub fn client(&self) -> RenderClient {
+        self.client.clone()
     }
 
     pub fn shutdown(&mut self) {
         self.should_quit.store(true, Ordering::Relaxed);
-        let _ = self.task_tx.send(RenderTask::Shutdown);
+        let _ = self.client.task_tx.send(RenderTask::Shutdown);
         // `Option::take` alone only **drops** the JoinHandle — that's
         // detach, not join. Wait for the thread to actually finish so
         // anything sequenced after shutdown sees it gone (issue #107).
@@ -323,7 +346,7 @@ mod tests {
         });
 
         let mut handle = RenderHandle {
-            task_tx,
+            client: RenderClient { task_tx },
             should_quit,
             thread: Some(thread),
         };

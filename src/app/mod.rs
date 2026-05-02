@@ -16,8 +16,8 @@
 //! the Lua dispatcher at composition time.
 
 pub mod event;
-mod frame_timer;
-mod input_thread;
+pub mod frame_timer;
+pub mod input_thread;
 mod mouse;
 pub mod msg;
 
@@ -32,12 +32,13 @@ use log::{debug, info};
 
 use crate::compositor::{BaseLayer, Compositor, Context, Registrar};
 use crate::config::Config;
-use crate::keymap::{KeyMap, KeybindingOverrides};
+use crate::keymap::KeyMap;
+pub use crate::keymap::KeybindingOverrides;
 use crate::lua::LuaEventBus;
 use crate::lua::ttymap::LuaHostHandles;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::pipeline::RenderPipeline;
-use crate::map::render::thread::RenderHandle;
+use crate::map::render::thread::{RenderClient, RenderHandle};
 use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
 use crate::theme::ThemeId;
@@ -46,7 +47,11 @@ use mouse::MouseAdapter;
 
 pub struct App {
     map: MapState,
-    render_handle: RenderHandle,
+    /// Cheap-clone command channel for the render thread. The thread
+    /// itself (and its `Drop`-driven join) is owned by `main` as a
+    /// peer subsystem to the App, mirroring how the input thread and
+    /// frame timer live outside the App.
+    render_client: RenderClient,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
     /// no UiState wrapper now that built-in chrome lives in plugins.
@@ -111,7 +116,7 @@ impl App {
         config: Config,
         keymap_overrides: KeybindingOverrides,
         event_tx: std::sync::mpsc::Sender<AppEvent>,
-    ) -> (Self, LuaEventBus) {
+    ) -> (Self, RenderHandle, LuaEventBus) {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (width, height) = crate::map::render::canvas_size(cols, rows);
 
@@ -164,6 +169,7 @@ impl App {
             height,
         );
         let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx.clone());
+        let render_client = render_handle.client();
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -177,7 +183,7 @@ impl App {
 
         let app = App {
             map,
-            render_handle,
+            render_client,
             map_frame: None,
             mouse: MouseAdapter::default(),
             compositor,
@@ -192,7 +198,7 @@ impl App {
                 config.runtime.overlay_redraw_ms,
             ),
         };
-        (app, event_bus)
+        (app, render_handle, event_bus)
     }
 
     /// The configured idle wake-up interval — `main` reads this when
@@ -353,71 +359,68 @@ impl App {
         }
     }
 
-    /// Run the main event loop until the map state machine signals
-    /// quit. Owns `terminal.draw` / `ratatui::init` / `ratatui::restore`
-    /// plus the input thread and frame timer subsystems for the
-    /// lifetime of the loop. Bus and channel infrastructure are
-    /// owned by the caller (typically `main`), so the App is one of
-    /// multiple participants on the bus rather than its proprietor.
-    pub fn run(
+    /// Per-iteration housekeeping the run loop runs **before**
+    /// draining the event queue. Refreshes per-plugin `center` /
+    /// `zoom` Mutexes and pushes any components Lua queued via
+    /// `ttymap.api.window.open` / `palette.open` onto the
+    /// compositor stack so the same iteration's `compositor.poll`
+    /// already sees them.
+    pub fn refresh_lua_host_state_per_tick(&mut self) {
+        self.refresh_lua_host_state();
+    }
+
+    /// Drive a single `compositor.poll` pass. Components emitting
+    /// intents through `Window::emit` route directly onto the bus —
+    /// the run loop's same-iteration `try_recv` picks them up.
+    pub fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+        let ctx = self.context();
+        self.compositor.poll(&ctx, event_tx);
+    }
+
+    /// Single per-iteration draw. Owns the borrow gymnastics — main
+    /// calls this with the terminal handle and the bus, App passes
+    /// its own state into `ui::draw` without exposing internal
+    /// fields. The `tick` bus event fires from inside `ui::draw`
+    /// against the live `MapApi` (see `ui::draw`).
+    pub fn render_into(
         &mut self,
-        event_rx: std::sync::mpsc::Receiver<AppEvent>,
-        event_tx: std::sync::mpsc::Sender<AppEvent>,
+        terminal: &mut ratatui::DefaultTerminal,
         event_bus: &LuaEventBus,
     ) -> io::Result<()> {
-        let mut terminal = ratatui::init();
-        crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+        let ctx = self.context();
+        terminal.draw(|f| {
+            crate::ui::draw(
+                f,
+                self.map_frame.as_ref(),
+                &self.compositor,
+                event_bus,
+                &self.ui_theme,
+                &ctx,
+                &mut self.overlay_sink,
+            )
+        })?;
+        Ok(())
+    }
 
-        let _input = input_thread::InputHandle::spawn(event_tx.clone(), self.poll_timeout);
-        let _frame_timer = frame_timer::FrameTimer::spawn(event_tx.clone(), self.poll_timeout);
-
-        info!("event loop started");
-        self.dispatch(AppMsg::Map(Action::Redraw));
-
-        while self.map.is_running() {
-            self.refresh_lua_host_state();
-
-            match event_rx.recv() {
-                Ok(event) => self.handle_event(event, event_bus, &event_tx),
-                Err(_) => break,
-            }
-            while let Ok(event) = event_rx.try_recv() {
-                self.handle_event(event, event_bus, &event_tx);
-            }
-
-            let ctx = self.context();
-            self.compositor.poll(&ctx, &event_tx);
-
-            let ctx = self.context();
-            terminal.draw(|f| {
-                crate::ui::draw(
-                    f,
-                    self.map_frame.as_ref(),
-                    &self.compositor,
-                    event_bus,
-                    &self.ui_theme,
-                    &ctx,
-                    &mut self.overlay_sink,
-                )
-            })?;
-
-            if !self.overlay_sink.is_empty() {
-                let now = std::time::Instant::now();
-                if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
-                    self.request_map_redraw();
-                    self.last_overlay_redraw = now;
-                }
+    /// After draw: if Lua plugins pushed polylines into
+    /// `overlay_sink` during `on_tick` and the throttle interval
+    /// has elapsed, queue a fresh `RenderTask::Draw` so the next
+    /// frame carries them.
+    pub fn tick_overlay_redraw(&mut self) {
+        if !self.overlay_sink.is_empty() {
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
+                self.request_map_redraw();
+                self.last_overlay_redraw = now;
             }
         }
+    }
 
-        info!("event loop ended");
-        drop(_input);
-        drop(_frame_timer);
-        crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
-        ratatui::restore();
-        info!("terminal restored, exiting");
-
-        Ok(())
+    /// Initial dispatch fired by the run loop right after entering
+    /// the loop — kicks off the very first render task so the
+    /// terminal isn't blank waiting for input.
+    pub fn dispatch_initial_redraw(&mut self) {
+        self.dispatch(AppMsg::Map(Action::Redraw));
     }
 
     fn dispatch(&mut self, msg: AppMsg) {
@@ -472,13 +475,13 @@ impl App {
         self.theme_id = new_id;
         let styler = Arc::new(Styler::new(new_id));
         self.ui_theme = UiTheme::from_palette(styler.palette());
-        self.render_handle.set_styler(styler);
+        self.render_client.set_styler(styler);
         self.request_map_redraw();
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
         self.map.resize(cols, rows);
-        self.render_handle
+        self.render_client
             .request_resize(self.map.width(), self.map.height());
         self.request_map_redraw();
     }
@@ -489,7 +492,7 @@ impl App {
         }
         let viewport = self.map.viewport();
         let overlays = std::mem::take(&mut self.overlay_sink);
-        self.render_handle.request_draw(viewport, overlays);
+        self.render_client.request_draw(viewport, overlays);
     }
 }
 
