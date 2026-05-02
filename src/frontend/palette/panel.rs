@@ -39,7 +39,15 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
     let y = map_inner.y + 1;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
 
-    let inner = win.panel(popup_area, "command palette");
+    // Title carries the scroll position so users can tell at a
+    // glance which slice of the candidate list they're looking at,
+    // especially after the cap turned the table into a viewport.
+    let title = if items.is_empty() {
+        "command palette".to_string()
+    } else {
+        format!("command palette · {}/{}", widget.selected + 1, items.len())
+    };
+    let inner = win.panel(popup_area, &title);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
