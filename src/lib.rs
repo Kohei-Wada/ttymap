@@ -36,8 +36,13 @@ pub mod map;
 #[doc(hidden)]
 pub mod theme;
 
-/// Key binding table and TOML override shape.
-pub(crate) mod keymap;
+/// Input subsystem — raw-terminal-event ingest and translation
+/// (input thread, keymap table, mouse adapter). Sits as a peer of
+/// `map/` and `lua/`; the frontend pulls translated [`AppMsg`]s
+/// out of it for each `AppEvent::Input`. `pub` so `main` can name
+/// the [`input::thread::InputHandle`] it spawns at the composition
+/// root.
+pub mod input;
 
 /// File-based logging to XDG state directory.
 pub mod logging;

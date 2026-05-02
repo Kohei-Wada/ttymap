@@ -26,7 +26,7 @@ use std::time::Duration;
 use crossterm::event;
 use log::warn;
 
-use super::AppEvent;
+use crate::frontend::AppEvent;
 
 /// Owns the input-reader thread and its shutdown flag.
 ///

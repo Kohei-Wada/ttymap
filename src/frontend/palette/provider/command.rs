@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::frontend::AppMsg;
 use crate::frontend::compositor::{Context, PaletteEntry as RegistrarEntry};
-use crate::keymap::KeyMap;
+use crate::input::keymap::KeyMap;
 use crate::map::Action;
 use crate::theme::ThemeId;
 

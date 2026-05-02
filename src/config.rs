@@ -8,7 +8,7 @@
 //! This module just owns the struct definitions and their `Default`
 //! impls (which act as the seed Lua starts from).
 
-pub use crate::keymap::KeybindingOverrides;
+pub use crate::input::keymap::KeybindingOverrides;
 
 #[derive(Default, Clone)]
 pub struct Config {

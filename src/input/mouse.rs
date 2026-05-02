@@ -31,7 +31,7 @@
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use super::AppMsg;
+use crate::frontend::AppMsg;
 use crate::map::Action;
 
 #[derive(Default)]

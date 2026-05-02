@@ -24,8 +24,6 @@
 pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
-pub mod input_thread;
-mod mouse;
 pub mod msg;
 pub(crate) mod palette;
 pub mod ui;
@@ -41,8 +39,8 @@ use log::{debug, info};
 
 use crate::config::Config;
 use crate::frontend::compositor::{BaseLayer, Compositor, Context, Registrar};
-use crate::keymap::KeyMap;
-pub use crate::keymap::KeybindingOverrides;
+pub use crate::input::KeybindingOverrides;
+use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaEventBus;
 use crate::lua::ttymap::LuaHostHandles;
 use crate::map::render::frame::MapFrame;
@@ -52,7 +50,6 @@ use crate::map::styler::Styler;
 use crate::map::{Action, MapState, MapStateOptions};
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
-use mouse::MouseAdapter;
 
 pub struct Frontend {
     map: MapState,

@@ -2,8 +2,8 @@ use clap::Parser;
 use ttymap::commands::Command as Subcommand;
 use ttymap::config::Config;
 use ttymap::frontend::frame_timer::FrameTimer;
-use ttymap::frontend::input_thread::InputHandle;
 use ttymap::frontend::{Frontend, KeybindingOverrides};
+use ttymap::input::thread::InputHandle;
 
 #[derive(Parser)]
 #[command(

@@ -35,7 +35,7 @@ use std::rc::Rc;
 use mlua::{Lua, Table};
 
 use crate::config::Config;
-use crate::keymap::KeybindingOverrides;
+use crate::input::keymap::KeybindingOverrides;
 
 /// Run the init.lua chain against `defaults` and return the
 /// resulting `(Config, KeybindingOverrides)`. nvim-style sysinit:
