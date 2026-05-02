@@ -130,10 +130,14 @@ fn main() {
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
+    // Active theme — owned by Frontend, consumed by the map only at
+    // construction (initial styler) and on theme switch.
+    let theme_id = ttymap::theme::ThemeId::from_name(&config.render.style);
+
     // Map subsystem: tile cache + render pipeline + render thread.
     // `_render_handle` is a peer to `_input` / `_frame_timer` — held
     // here for `Drop`-driven shutdown, not used otherwise.
-    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone());
+    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone(), theme_id);
 
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the
@@ -155,7 +159,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
         std::mem::take(&mut lua.palette_entries),
     );
 
-    let mut frontend = Frontend::new(config, keymap, map, lua);
+    let mut frontend = Frontend::new(config, keymap, theme_id, map, lua);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;

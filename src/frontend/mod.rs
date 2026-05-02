@@ -60,6 +60,12 @@ pub struct Frontend {
     /// here (not on `MapState`) because liveness is an app concern,
     /// not a map-data concern.
     running: bool,
+    /// Active theme id. Crosses both UI chrome (drives `ui_theme`)
+    /// and map rendering (drives the styler the render thread uses);
+    /// owned here because the choice is an app concern, not a
+    /// map-data concern. The map subsystem only consumes it
+    /// transiently when [`MapHandle::set_theme`] is called.
+    theme_id: ThemeId,
     /// Runtime handle to the Lua subsystem. Encapsulates the event
     /// bus and per-plugin host channels so Frontend never names them
     /// directly — every Lua-side interaction goes through semantic
@@ -111,7 +117,13 @@ impl Frontend {
     /// installed). Frontend just consumes them — its only own work
     /// is wiring the compositor base layer, deriving the UI theme,
     /// and storing the per-iteration state.
-    pub fn new(config: Config, keymap: KeyMap, map: MapHandle, lua: LuaSubsystem) -> Self {
+    pub fn new(
+        config: Config,
+        keymap: KeyMap,
+        theme_id: ThemeId,
+        map: MapHandle,
+        lua: LuaSubsystem,
+    ) -> Self {
         let LuaSubsystem {
             handle: lua,
             activations,
@@ -122,7 +134,7 @@ impl Frontend {
             palette_entries: _,
         } = lua;
 
-        let ui_theme = UiTheme::from_palette(map.theme_id().palette());
+        let ui_theme = UiTheme::from_palette(theme_id.palette());
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -133,6 +145,7 @@ impl Frontend {
         Frontend {
             map,
             running: true,
+            theme_id,
             lua,
             map_frame: None,
             mouse: MouseAdapter::default(),
@@ -343,7 +356,7 @@ impl Frontend {
 
     fn context(&self) -> Context {
         Context {
-            theme_id: self.map.theme_id(),
+            theme_id: self.theme_id,
             cursor: self.cursor,
         }
     }
@@ -447,8 +460,9 @@ impl Frontend {
     }
 
     fn switch_theme(&mut self, new_id: ThemeId) {
-        self.map.set_theme(new_id);
+        self.theme_id = new_id;
         self.ui_theme = UiTheme::from_palette(new_id.palette());
+        self.map.set_theme(new_id);
         self.request_map_redraw();
     }
 

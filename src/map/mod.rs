@@ -40,6 +40,11 @@ use crate::theme::ThemeId;
 /// The owning [`RenderHandle`] is **not** in here — it lives in
 /// `main`'s scope so its `Drop` (Shutdown + join) fires at the
 /// composition root, peer to `InputHandle` / `FrameTimer`.
+///
+/// The active `ThemeId` is **not** stored here either — the theme is
+/// an app-level concern owned by `Frontend`. The map only consumes
+/// it transiently to build a `Styler` when [`Self::set_theme`] is
+/// called.
 pub struct MapHandle {
     state: MapState,
     render_client: RenderClient,
@@ -47,7 +52,6 @@ pub struct MapHandle {
     /// once at register time (passed to plugin shared state); main
     /// is the sole reader after construction.
     pub attribution: Option<String>,
-    theme_id: ThemeId,
 }
 
 impl MapHandle {
@@ -62,13 +66,6 @@ impl MapHandle {
     /// Active zoom level.
     pub fn zoom(&self) -> f64 {
         self.state.zoom()
-    }
-
-    /// Active theme id. Read by Frontend to seed the per-frame
-    /// `Context` handed to components (`Component::handle_event` /
-    /// `Component::render` / `Component::paint_on_map`).
-    pub fn theme_id(&self) -> ThemeId {
-        self.theme_id
     }
 
     // ── Mutations ──────────────────────────────────────────────────────
@@ -90,10 +87,11 @@ impl MapHandle {
             .request_resize(self.state.width(), self.state.height());
     }
 
-    /// Switch the active theme: update the stored `ThemeId`, build
-    /// a fresh styler, and ship it to the render thread.
-    pub fn set_theme(&mut self, new_id: ThemeId) {
-        self.theme_id = new_id;
+    /// Switch the active theme on the render thread: build a fresh
+    /// styler from `new_id` and ship it. The theme id itself is owned
+    /// by the caller (Frontend); the map only needs it transiently
+    /// to construct a [`Styler`].
+    pub fn set_theme(&self, new_id: ThemeId) {
         let styler = Arc::new(Styler::new(new_id));
         self.render_client.set_styler(styler);
     }
@@ -112,7 +110,15 @@ impl MapHandle {
 /// thread + initial `MapState`. Returns `(RenderHandle, MapHandle)` —
 /// main holds the owning thread guard for `Drop`-driven shutdown,
 /// and hands the handle to `Frontend::new`.
-pub fn build(config: &Config, event_tx: mpsc::Sender<AppEvent>) -> (RenderHandle, MapHandle) {
+///
+/// `theme_id` is consumed transiently to build the initial styler;
+/// the map subsystem doesn't keep it. The active theme lives on
+/// `Frontend` since it crosses both map rendering and UI chrome.
+pub fn build(
+    config: &Config,
+    event_tx: mpsc::Sender<AppEvent>,
+    theme_id: ThemeId,
+) -> (RenderHandle, MapHandle) {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let (width, height) = render::canvas_size(cols, rows);
 
@@ -127,7 +133,6 @@ pub fn build(config: &Config, event_tx: mpsc::Sender<AppEvent>) -> (RenderHandle
     let (tile_cache, wake_rx) = tile::build(config);
     let attribution = tile_cache.attribution();
 
-    let theme_id = ThemeId::from_name(&config.render.style);
     let styler = Arc::new(Styler::new(theme_id));
 
     let pipeline = RenderPipeline::new(
@@ -158,7 +163,6 @@ pub fn build(config: &Config, event_tx: mpsc::Sender<AppEvent>) -> (RenderHandle
             state,
             render_client,
             attribution,
-            theme_id,
         },
     )
 }
