@@ -78,10 +78,41 @@ impl PaletteComponent {
 
     /// React to a query mutation. Sync providers refilter immediately;
     /// debounced ones defer — `poll` flushes once the timer elapses.
+    /// `OnEnter` providers buffer silently; only Enter triggers them.
     fn on_query_changed(&mut self) {
         match self.provider.submit_mode() {
             SubmitMode::OnEachKey => self.refilter(),
             SubmitMode::Debounced(_) => self.pending_since = Some(Instant::now()),
+            SubmitMode::OnEnter => {}
+        }
+    }
+
+    /// Translate a [`PaletteAction`] into `win.*` ops. Shared by every
+    /// trigger that goes through the provider — `execute` (Enter on
+    /// item) and `cancel` (Esc, Enter on empty) both funnel here so
+    /// the close-path semantics live in one place.
+    fn apply_action(&mut self, action: PaletteAction, win: &mut Window) {
+        match action {
+            PaletteAction::Close => win.close(),
+            PaletteAction::Run(msgs) => {
+                for m in msgs {
+                    win.emit(m);
+                }
+                win.close();
+            }
+            PaletteAction::Push(component) => {
+                // The compositor applies `close` before `open` from
+                // the same WindowOps, so the palette is out of the
+                // way before the new component lands.
+                win.close();
+                win.open(component);
+            }
+            PaletteAction::SwitchProvider(next) => {
+                self.query.clear();
+                self.selected = 0;
+                self.provider = next;
+                self.provider.filter("");
+            }
         }
     }
 }
@@ -94,38 +125,25 @@ impl Component for PaletteComponent {
             matches!(event.code, KeyCode::Down) || (ctrl && event.code == KeyCode::Char('n'));
 
         match event.code {
-            KeyCode::Esc => win.close(),
+            KeyCode::Esc => {
+                let action = self.provider.cancel();
+                self.apply_action(action, win);
+            }
             KeyCode::Enter => {
                 let has_item = self.selected < self.items_len();
-                if !has_item {
-                    win.close();
-                    return;
-                }
-                let idx = self.selected;
-                let action = self.provider.execute(idx, win.ctx());
-                match action {
-                    PaletteAction::Close => win.close(),
-                    PaletteAction::Run(msgs) => {
-                        for m in msgs {
-                            win.emit(m);
-                        }
-                        win.close();
-                    }
-                    PaletteAction::Push(component) => {
-                        // The compositor applies `close` before
-                        // `open` from the same WindowOps, so the
-                        // palette is out of the way before the new
-                        // component lands — identical to what the
-                        // old `EventResult::CloseAndPush` did.
-                        win.close();
-                        win.open(component);
-                    }
-                    PaletteAction::SwitchProvider(next) => {
-                        self.query.clear();
-                        self.selected = 0;
-                        self.provider = next;
-                        self.provider.filter("");
-                    }
+                if has_item {
+                    let idx = self.selected;
+                    let action = self.provider.execute(idx, win.ctx());
+                    self.apply_action(action, win);
+                } else if matches!(self.provider.submit_mode(), SubmitMode::OnEnter) {
+                    // OnEnter providers treat Enter on an empty list
+                    // as "submit the current query" — the palette
+                    // stays open while the provider runs `filter`
+                    // (which typically kicks off an async fetch).
+                    self.refilter();
+                } else {
+                    let action = self.provider.cancel();
+                    self.apply_action(action, win);
                 }
             }
             _ if up => {
@@ -409,6 +427,76 @@ mod tests {
         assert!(ops.msgs.is_empty());
     }
 
+    /// Provider that counts how many times `cancel` is invoked. Used
+    /// to verify Esc and Enter-on-empty both funnel through the
+    /// provider rather than short-circuiting straight to `win.close()`.
+    struct CancelCountProvider {
+        items: Vec<PaletteItem>,
+        cancel_calls: std::rc::Rc<std::cell::Cell<u32>>,
+    }
+
+    impl PaletteProvider for CancelCountProvider {
+        fn prompt(&self) -> &str {
+            ":"
+        }
+        fn filter(&mut self, _q: &str) {}
+        fn items(&self) -> &[PaletteItem] {
+            &self.items
+        }
+        fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
+            PaletteAction::Close
+        }
+        fn cancel(&mut self) -> PaletteAction {
+            self.cancel_calls.set(self.cancel_calls.get() + 1);
+            PaletteAction::Close
+        }
+    }
+
+    #[test]
+    fn esc_calls_provider_cancel() {
+        let cancels = std::rc::Rc::new(std::cell::Cell::new(0));
+        let prov = CancelCountProvider {
+            items: vec![PaletteItem {
+                label: "A".into(),
+                hint: String::new(),
+            }],
+            cancel_calls: cancels.clone(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.close);
+        assert_eq!(cancels.get(), 1);
+    }
+
+    #[test]
+    fn enter_on_empty_calls_provider_cancel() {
+        let cancels = std::rc::Rc::new(std::cell::Cell::new(0));
+        let prov = CancelCountProvider {
+            items: Vec::new(),
+            cancel_calls: cancels.clone(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.close);
+        assert_eq!(cancels.get(), 1);
+    }
+
+    #[test]
+    fn enter_on_item_does_not_call_cancel() {
+        let cancels = std::rc::Rc::new(std::cell::Cell::new(0));
+        let prov = CancelCountProvider {
+            items: vec![PaletteItem {
+                label: "A".into(),
+                hint: String::new(),
+            }],
+            cancel_calls: cancels.clone(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.close);
+        assert_eq!(cancels.get(), 0);
+    }
+
     #[test]
     fn ctrl_u_clears_query() {
         let mut p = palette_with(&["A"]);
@@ -489,6 +577,78 @@ mod tests {
         }
         assert_eq!(*calls.borrow(), vec!["".to_string(), "to".to_string()]);
         assert!(p.pending_since.is_none());
+    }
+
+    /// Provider in `OnEnter` mode that records `filter` calls. Used
+    /// to verify Enter on empty triggers `filter` (not `cancel`) and
+    /// query mutations buffer silently in this mode.
+    struct OnEnterProvider {
+        calls: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        items: Vec<PaletteItem>,
+    }
+
+    impl PaletteProvider for OnEnterProvider {
+        fn prompt(&self) -> &str {
+            "/"
+        }
+        fn filter(&mut self, query: &str) {
+            self.calls.borrow_mut().push(query.to_string());
+        }
+        fn items(&self) -> &[PaletteItem] {
+            &self.items
+        }
+        fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
+            PaletteAction::Close
+        }
+        fn submit_mode(&self) -> SubmitMode {
+            SubmitMode::OnEnter
+        }
+    }
+
+    #[test]
+    fn on_enter_mode_buffers_query_silently() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let prov = OnEnterProvider {
+            calls: calls.clone(),
+            items: Vec::new(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        // Construction calls `filter("")`.
+        assert_eq!(*calls.borrow(), vec!["".to_string()]);
+        dispatch(&mut p, KeyCode::Char('t'), NONE);
+        dispatch(&mut p, KeyCode::Char('o'), NONE);
+        // Typing must not call filter; `pending_since` stays None
+        // because OnEnter has no debounce timer to flush.
+        assert_eq!(*calls.borrow(), vec!["".to_string()]);
+        assert!(p.pending_since.is_none());
+    }
+
+    #[test]
+    fn on_enter_mode_enter_on_empty_triggers_filter_keeps_open() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let prov = OnEnterProvider {
+            calls: calls.clone(),
+            items: Vec::new(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        dispatch(&mut p, KeyCode::Char('t'), NONE);
+        dispatch(&mut p, KeyCode::Char('o'), NONE);
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(!ops.close, "OnEnter Enter+empty must keep palette open");
+        assert_eq!(*calls.borrow(), vec!["".to_string(), "to".to_string()]);
+    }
+
+    #[test]
+    fn on_enter_mode_esc_still_closes() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let prov = OnEnterProvider {
+            calls: calls.clone(),
+            items: Vec::new(),
+        };
+        let mut p = PaletteComponent::with_provider(Box::new(prov));
+        dispatch(&mut p, KeyCode::Char('t'), NONE);
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.close);
     }
 
     #[test]

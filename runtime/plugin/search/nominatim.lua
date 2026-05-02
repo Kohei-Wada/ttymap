@@ -9,8 +9,6 @@ local M = {}
 local SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 local LIMIT = 5
 
-M.DEBOUNCE_MS = 400
-
 function M.url(query)
     return string.format("%s?q=%s&format=json&limit=%d",
         SEARCH_URL, ttymap.http:url_encode(query), LIMIT)

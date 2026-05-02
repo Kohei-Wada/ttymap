@@ -134,22 +134,19 @@ ttymap.register_palette_command({
 Example: `search` (Nominatim forward-geocode). `register_palette` at
 top level is gone. Push the provider with
 `ttymap.api.palette.open(spec)` from inside `invoke`. The spec **no
-longer carries `poll`** — async drain moves into `on_tick`.
-`execute` self-closes via the captured handle.
+longer carries `poll`** — async drain moves into `on_tick`. The
+palette closes itself on Enter / Esc; `execute` runs on Enter+item,
+`cancel` runs on Esc / Enter+empty for any cleanup the plugin needs.
 
 ```lua
-local w = nil  -- palette handle while open
 ttymap.api.frame.on_tick(function() drain_inflight() end)  -- runs even when palette is closed
 local function open()
-    if w then return end
-    w = ttymap.api.palette.open({
-        prompt = "/", submit_mode = { kind = "debounced", ms = 400 },
+    ttymap.api.palette.open({
+        prompt = "/", submit_mode = "on_enter",  -- or { kind = "debounced", ms = 400 }
         filter = function(q) ... end,
         items  = function() return state.items end,
-        execute = function(idx)
-            jump_to(idx)
-            if w then w:close(); w = nil end
-        end,
+        execute = function(idx) jump_to(idx) end,
+        -- cancel = function() ... end,  -- optional: fires on Esc / Enter+empty
         is_loading = function() return state.pending end,
     })
 end

@@ -107,8 +107,11 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
   carries `layout`, `render`, `handle_event`, `footer_hints`, `name`.
 - **`ttymap.api.palette.open(spec) -> PaletteHandle`** — push a
   palette-mode component. Spec carries `prompt`, `submit_mode`,
-  `filter`, `items`, `execute`, `is_loading`. (No `poll` — async drain
-  belongs in `on_tick`.)
+  `filter`, `items`, `execute`, `cancel`, `is_loading`. (No `poll` —
+  async drain belongs in `on_tick`.) `cancel` fires on Esc and
+  Enter+empty (default closes); `submit_mode` controls when `filter`
+  fires — `"on_each_key"` (default), `{ kind = "debounced", ms = N }`,
+  or `"on_enter"` (filter only on Enter+empty).
 - **`ttymap.api.frame.export()`** — fire-and-forget snapshot to disk.
 - **`ttymap.api.frame.on_tick(fn)`** — subscribe a per-frame callback
   receiving a `MapApi` table. Stacks across calls.

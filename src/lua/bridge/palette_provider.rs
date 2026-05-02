@@ -112,22 +112,27 @@ impl LuaPaletteProvider {
 /// - `nil` (missing) → OnEachKey
 /// - `"on_each_key"` → OnEachKey
 /// - `"debounced"` → Debounced(400ms) (sane default for Nominatim)
+/// - `"on_enter"` → OnEnter (filter only fires on Enter+empty)
 /// - `{ kind = "debounced", ms = 400 }` → Debounced(custom)
+/// - `{ kind = "on_enter" }` → OnEnter
 fn parse_submit_mode(module: &Table) -> SubmitMode {
     let val = module.get::<mlua::Value>("submit_mode").ok();
     match val {
         Some(mlua::Value::Nil) | None => SubmitMode::OnEachKey,
         Some(mlua::Value::String(s)) => match s.to_str().as_deref() {
             Ok("debounced") => SubmitMode::Debounced(Duration::from_millis(400)),
+            Ok("on_enter") => SubmitMode::OnEnter,
             _ => SubmitMode::OnEachKey,
         },
         Some(mlua::Value::Table(t)) => {
             let kind: String = t.get("kind").unwrap_or_default();
-            if kind == "debounced" {
-                let ms: u64 = t.get("ms").unwrap_or(400);
-                SubmitMode::Debounced(Duration::from_millis(ms))
-            } else {
-                SubmitMode::OnEachKey
+            match kind.as_str() {
+                "debounced" => {
+                    let ms: u64 = t.get("ms").unwrap_or(400);
+                    SubmitMode::Debounced(Duration::from_millis(ms))
+                }
+                "on_enter" => SubmitMode::OnEnter,
+                _ => SubmitMode::OnEachKey,
             }
         }
         _ => SubmitMode::OnEachKey,
@@ -158,6 +163,17 @@ impl PaletteProvider for LuaPaletteProvider {
             CallOutcome::Ok(ret) => self.action_from_lua(ret),
             // Missing handler or runtime error → close. Errors are
             // already logged inside `try_call`.
+            CallOutcome::Missing | CallOutcome::Errored => PaletteAction::Close,
+        }
+    }
+
+    fn cancel(&mut self) -> PaletteAction {
+        // Mirrors `execute` for the Esc / Enter-on-empty paths so a
+        // Lua plugin can react to non-confirm closes (clear a handle,
+        // log, …). Missing callback is normal — most providers don't
+        // need a hook — so it falls through to the default Close.
+        match self.handle.try_call::<_, mlua::Value>("cancel", ()) {
+            CallOutcome::Ok(ret) => self.action_from_lua(ret),
             CallOutcome::Missing | CallOutcome::Errored => PaletteAction::Close,
         }
     }
@@ -267,6 +283,18 @@ mod tests {
     }
 
     #[test]
+    fn submit_mode_string_on_enter() {
+        let p = build_provider(r#"return { submit_mode = "on_enter" }"#);
+        assert!(matches!(p.submit_mode(), SubmitMode::OnEnter));
+    }
+
+    #[test]
+    fn submit_mode_table_on_enter() {
+        let p = build_provider(r#"return { submit_mode = { kind = "on_enter" } }"#);
+        assert!(matches!(p.submit_mode(), SubmitMode::OnEnter));
+    }
+
+    #[test]
     fn items_round_trip_through_lua() {
         // The spec captures `items_list` as a closure upvalue inside
         // the same Lua VM the provider runs against, so `filter`
@@ -297,6 +325,32 @@ mod tests {
         let mut p =
             build_provider(r#"return { execute = function(_) return { close = true } end }"#);
         assert!(matches!(p.execute(0, &ctx()), PaletteAction::Close));
+    }
+
+    #[test]
+    fn cancel_defaults_to_close_when_callback_omitted() {
+        let mut p = build_provider("return {}");
+        assert!(matches!(p.cancel(), PaletteAction::Close));
+    }
+
+    #[test]
+    fn cancel_invokes_lua_callback() {
+        // `cancel` is a side-effect hook (clear a handle, log, …).
+        // Verify the Lua callback fires by mutating an upvalue and
+        // probing it from outside through `is_loading`, which the
+        // provider already round-trips through the same VM.
+        let mut p = build_provider(
+            r#"
+            local cancelled = false
+            return {
+                cancel = function() cancelled = true end,
+                is_loading = function() return cancelled end,
+            }
+            "#,
+        );
+        assert!(!p.is_loading());
+        let _ = p.cancel();
+        assert!(p.is_loading());
     }
 
     #[test]
