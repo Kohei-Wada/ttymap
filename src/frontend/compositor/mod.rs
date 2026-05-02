@@ -471,6 +471,15 @@ impl Compositor {
         }
     }
 
+    /// Whether focus is on the map (i.e. the [`BaseLayer`] at
+    /// stack index 0). Drives the world frame's border highlight
+    /// in the UI: when nothing is pushed, focus stays on base; as
+    /// soon as a modal / sidebar component is pushed, focus moves
+    /// to it and the world border dims.
+    pub fn is_base_focused(&self) -> bool {
+        self.focused_idx == 0
+    }
+
     /// Whether any [`Placement::Sidebar`] component is on the stack.
     /// Used by the UI layer to decide whether to show the
     /// "(no sections yet)" placeholder when the sidebar is open but

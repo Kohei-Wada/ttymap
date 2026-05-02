@@ -77,9 +77,18 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         (main_area, None)
     };
 
+    // World frame highlights when focus is on the map (= no
+    // modal / sidebar component is currently active). The
+    // colour rule mirrors the per-panel border in
+    // `UiTheme::panel`: focused -> accent, otherwise muted.
+    let map_border = if compositor.is_base_focused() {
+        theme.accent
+    } else {
+        theme.muted_color
+    };
     let map_block = Block::new()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.accent))
+        .border_style(Style::default().fg(map_border))
         .title(" world ");
     let map_inner = map_block.inner(map_area);
     f.render_widget(map_block, map_area);
