@@ -37,7 +37,8 @@ pub use map_api::MapApi;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::frontend::{AppEvent, UserIntent};
 use crate::theme::ThemeId;
@@ -334,12 +335,18 @@ impl Compositor {
             c.render(&mut win);
         }
 
-        // Sidebar components: equal vertical split, capped at
-        // `MAX_VISIBLE_SIDEBAR_SECTIONS` cards. When the user has
-        // more sections open than fits, the visible window slides to
-        // include the focused section so Tab-cycling keeps the
-        // focused card on screen.
-        const MAX_VISIBLE_SIDEBAR_SECTIONS: usize = 3;
+        // Sidebar components: equal vertical split, with a sliding
+        // window when more cards are open than fit at the per-card
+        // minimum height (recomputed every frame from the current
+        // `side_area`, so resizing the terminal smoothly grows or
+        // shrinks the visible count). A sidebar-level scrollbar on
+        // the left edge surfaces the windowing when more cards are
+        // off-screen than fit.
+        //
+        // Below this minimum we'd only be drawing border frames with
+        // a row or two of content — bumping the cap up loses more
+        // than scrolling does.
+        const PER_CARD_MIN_HEIGHT: u16 = 12;
         if let Some(side_area) = sidebar_area {
             // Walk the stack once to collect sidebar refs alongside
             // the focused-in-sidebar index (counted within the
@@ -357,10 +364,15 @@ impl Compositor {
 
             let total = sidebar_components.len();
             if total > 0 {
+                // Adaptive visible count: divide the available height
+                // by `PER_CARD_MIN_HEIGHT`, clamped to [1, total].
+                // Bigger terminals → more cards visible at once.
+                let max_fit = (side_area.height / PER_CARD_MIN_HEIGHT).max(1) as usize;
+                let visible = total.min(max_fit);
+
                 // Pick the first visible index. Centre on the focused
                 // section when possible; otherwise pin to the bottom
                 // (most recently opened) so new sections stay visible.
-                let visible = total.min(MAX_VISIBLE_SIDEBAR_SECTIONS);
                 let start = if total <= visible {
                     0
                 } else {
@@ -376,13 +388,53 @@ impl Compositor {
                 };
                 let end = start + visible;
 
+                // Reserve the leftmost column for the sidebar-level
+                // scrollbar when there's overflow. Cards render in
+                // the remaining width; per-card scrollbars sit on
+                // their right border. Visually distinct: outer
+                // (sidebar position) on the left, inner (content
+                // scroll within a card) on the right.
+                let needs_outer_scroll = total > visible;
+                let cards_area = if needs_outer_scroll {
+                    Rect {
+                        x: side_area.x.saturating_add(1),
+                        width: side_area.width.saturating_sub(1),
+                        ..side_area
+                    }
+                } else {
+                    side_area
+                };
+
                 let n = visible as u32;
                 let constraints: Vec<Constraint> =
                     (0..n).map(|_| Constraint::Ratio(1, n)).collect();
-                let chunks = Layout::vertical(constraints).split(side_area);
+                let chunks = Layout::vertical(constraints).split(cards_area);
                 for (slot, c) in chunks.iter().zip(sidebar_components[start..end].iter()) {
                     let mut win = window::RenderWindow::new(f, *slot, theme, ctx);
                     c.render(&mut win);
+                }
+
+                if needs_outer_scroll {
+                    // Sidebar-level scrollbar: card-index-based, not
+                    // row-based. Track length = total cards; thumb
+                    // covers the visible window. Margin trim by 1
+                    // matches the per-card scrollbar pattern (rail
+                    // length aligns with content, doesn't bleed onto
+                    // adjacent UI).
+                    let rail = side_area.inner(Margin {
+                        vertical: 1,
+                        horizontal: 0,
+                    });
+                    if rail.height > 0 {
+                        let mut state = ScrollbarState::new(total)
+                            .position(start)
+                            .viewport_content_length(visible);
+                        let bar = Scrollbar::default()
+                            .orientation(ScrollbarOrientation::VerticalLeft)
+                            .begin_symbol(None)
+                            .end_symbol(None);
+                        f.render_stateful_widget(bar, rail, &mut state);
+                    }
                 }
             }
         }
