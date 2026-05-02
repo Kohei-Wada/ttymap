@@ -20,7 +20,7 @@ pub struct RenderPipeline {
 
 impl RenderPipeline {
     /// Build a pipeline from its two owned subsystems. The caller
-    /// constructs the `TileCache` (see `app::build_tile_cache`) so
+    /// constructs the `TileCache` (see [`crate::map::tile::build`]) so
     /// the backend selection stays visible at the composition root.
     pub fn new(
         tile_cache: TileCache,
