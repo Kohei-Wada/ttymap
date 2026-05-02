@@ -83,14 +83,22 @@ end
 local function open()
     if w then return end
     w = ttymap.api.window.open({
-        layout = { anchor = "center", width = 64, height = 22 },
+        layout = { kind = "sidebar" },
         footer_hints = {
-            { key = "any key", label = "close" },
+            { key = "C-n/C-p", label = "scroll" },
+            { key = "Esc",     label = "close" },
         },
         render = build_lines,
-        handle_event = function(_)
-            close()
-            return nil
+        handle_event = function(key)
+            if key.code == "Esc" then
+                close()
+                return nil
+            end
+            -- Everything else (j/k pan, q quit, : palette …) falls
+            -- through to the base layer. C-n / C-p reach the
+            -- bridge's built-in section scroll because help has no
+            -- selection logic of its own.
+            return { ignore = true }
         end,
     })
 end
