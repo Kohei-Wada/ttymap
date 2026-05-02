@@ -69,7 +69,7 @@ end
 local function open()
     if w then return end
     w = ttymap.api.window.open({
-        layout = { anchor = "left", width = 56 },
+        layout = { kind = "sidebar" },
         render = build_lines,
         handle_event = function(key)
             if key.code == "Esc" or (key.code == "Char" and key.char == "q") then
