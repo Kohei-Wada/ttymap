@@ -27,6 +27,8 @@
 -- re-trigger TLE fetches; the disk-cached `fetch_cached` reuses the
 -- prior body for an hour anyway, so this is a non-issue.
 
+local sidebar = require "ttymap.sidebar"
+
 local M = {}
 
 local function single_url(norad_id)
@@ -316,17 +318,21 @@ function M.make(specs)
                 -- event doesn't leak to the base layer (which uses
                 -- `h` for pan-left etc.). Skip when ctrl is held so
                 -- C-n / C-p reach the focus-navigation branch even
-                -- if a sat is bound to `n` or `p`.
+                -- if a sat is bound to `n` or `p`. Runs before
+                -- `sidebar.is_close_key` so a sat bound to `q` still
+                -- toggles its visibility instead of closing.
                 if code == "Char" and ch and not ctrl and key_to_idx[ch] then
                     local idx = key_to_idx[ch]
                     sats[idx].visible = not sats[idx].visible
                     return nil
                 end
 
-                local up = (ctrl and code == "Char" and ch == "p") or code == "Up"
-                local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
-                if up or down then
-                    move_selection(up and -1 or 1)
+                if sidebar.up_pressed(key) then
+                    move_selection(-1)
+                    return nil
+                end
+                if sidebar.down_pressed(key) then
+                    move_selection(1)
                     return nil
                 end
 
@@ -338,16 +344,7 @@ function M.make(specs)
                     return nil
                 end
 
-                -- Esc / q close the panel. `q` doesn't fall through
-                -- because user expectation is "q dismisses the
-                -- focused panel" — letting it leak to the base layer
-                -- and quit the app while a sidebar is in front of
-                -- the user is the wrong default.
-                if code == "Esc" or (code == "Char" and ch == "q" and not ctrl) then
-                    -- But beware: a sat config might bind `q` as its
-                    -- visibility key, in which case the per-sat
-                    -- toggle above already handled it. We're past
-                    -- that branch here, so it's safe.
+                if sidebar.is_close_key(key) then
                     close()
                     return nil
                 end

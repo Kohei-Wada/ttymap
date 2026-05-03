@@ -14,6 +14,7 @@
 -- preserving overlap by title; selection clamps if the list shrinks.
 
 local fmt = require "ttymap.fmt"
+local sidebar = require "ttymap.sidebar"
 
 local LANGUAGE = "en"
 local LIMIT = 50
@@ -155,11 +156,7 @@ end
 local function move_selection(direction)
     local n = #state.articles
     if n == 0 then return end
-    if direction == -1 then
-        state.selected = state.selected > 1 and state.selected - 1 or n
-    else
-        state.selected = state.selected < n and state.selected + 1 or 1
-    end
+    state.selected = sidebar.cycle(state.selected, n, direction)
     local a = state.articles[state.selected]
     if a then ttymap.map:jump(a.lon, a.lat) end
 end
@@ -243,10 +240,8 @@ local function open()
             local ch = key.char
             local ctrl = key.ctrl
 
-            -- Self-toggle on the activation key. `q` mirrors the
-            -- universal "close focused panel" key the user expects
-            -- across plugins; the activation key (`i`) stays so the
-            -- keybind that opened the panel also closes it.
+            -- Self-toggle on `q` (universal close key) or `i` (the
+            -- activation key the user pressed to open).
             if code == "Char" and not ctrl and (ch == "i" or ch == "q") then
                 close()
                 return nil
@@ -258,8 +253,11 @@ local function open()
                 return nil
             end
 
-            local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
-            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
+            local up = sidebar.up_pressed(key)
+            local down = sidebar.down_pressed(key)
+            -- In wiki, Esc means "back to list" when in detail mode,
+            -- not "close panel" — so the close path above already
+            -- consumed `q`, and Esc here is a navigational key.
             local exit_detail = code == "Esc" or code == "Backspace" or code == "Enter"
 
             if state.detail then

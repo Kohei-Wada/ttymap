@@ -9,6 +9,8 @@
 -- work, no map paint). Just a palette command + keybind that open
 -- the popup window via `ttymap.api.window.open`.
 
+local sidebar = require "ttymap.sidebar"
+
 local URL_MAPSCII = "https://github.com/rastapasta/mapscii"
 local URL_HOME = "https://github.com/Kohei-Wada/ttymap"
 
@@ -89,17 +91,14 @@ local function open()
         },
         render = build_lines,
         handle_event = function(key)
-            if key.code == "Esc"
-                or (key.code == "Char" and key.char == "q" and not key.ctrl)
-            then
+            if sidebar.is_close_key(key) then
                 close()
                 return nil
             end
-            -- Everything else (j/k pan, q quit, : palette …) falls
-            -- through to the base layer. The bridge intercepts
-            -- ↑ ↓ PgUp PgDn Home End C-n C-p C-d C-u for built-in
-            -- section scroll because help has no selection logic
-            -- of its own.
+            -- Everything else (j/k pan, : palette …) falls through
+            -- to the base layer. The bridge intercepts ↑ ↓ PgUp
+            -- PgDn Home End C-n C-p for built-in section scroll
+            -- because help has no selection logic of its own.
             return { ignore = true }
         end,
     })

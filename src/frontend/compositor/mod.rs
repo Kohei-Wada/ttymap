@@ -489,19 +489,15 @@ impl Compositor {
         self.focused_idx == 0
     }
 
-    /// Whether any [`Placement::Sidebar`] component is on the stack.
-    /// Used by the UI layer to decide whether to show the
-    /// "(no sections yet)" placeholder when the sidebar is open but
-    /// empty.
-    pub fn has_sidebar_components(&self) -> bool {
-        self.sidebar_component_count() > 0
-    }
-
-    /// Count of `Placement::Sidebar` components on the stack. Used
-    /// by the Frontend's auto-open logic — the sidebar opens on a
-    /// *count increase*, not on the existence of any sidebar
+    /// Count of `Placement::Sidebar` components on the stack.
+    ///
+    /// Used by the Frontend's auto-open logic — the sidebar opens
+    /// on a *count increase*, not on the existence of any sidebar
     /// component, so toggling the sidebar off via `\` doesn't
     /// fight per-frame auto-open while components stay alive.
+    /// Also used by the UI layer (`> 0`) to decide whether to show
+    /// the "(no sections yet)" placeholder when the sidebar is open
+    /// but empty.
     pub fn sidebar_component_count(&self) -> usize {
         self.stack
             .iter()

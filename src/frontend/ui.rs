@@ -124,7 +124,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
     // SOMETHING — otherwise the user would just see an empty box and
     // wonder if the toggle did anything.
     if let Some(side_inner) = sidebar_inner
-        && !compositor.has_sidebar_components()
+        && compositor.sidebar_component_count() == 0
     {
         let placeholder = Paragraph::new(Line::from(Span::styled(
             "(no sections yet)",

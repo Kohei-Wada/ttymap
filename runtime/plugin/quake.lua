@@ -18,6 +18,8 @@
 -- the highest-magnitude quake so the user always lands somewhere
 -- meaningful.
 
+local sidebar = require("ttymap.sidebar")
+
 local URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
 local INTERVAL_SEC = 300
 local NOTABLE_MAGNITUDE = 5.0
@@ -181,38 +183,24 @@ local function open_panel()
         },
         render = build_lines,
         handle_event = function(key)
-            local code = key.code
-            local ch = key.char
-            local ctrl = key.ctrl
-
-            local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
-            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
-
             local n = #state.quakes
-            if up then
-                if n > 0 then
-                    state.selected = state.selected > 1 and state.selected - 1 or n
-                end
+            if sidebar.up_pressed(key) then
+                state.selected = sidebar.cycle(state.selected, n, -1)
                 return nil
             end
-            if down then
-                if n > 0 then
-                    state.selected = state.selected < n and state.selected + 1 or 1
-                end
+            if sidebar.down_pressed(key) then
+                state.selected = sidebar.cycle(state.selected, n, 1)
                 return nil
             end
-            if code == "Enter" then
+            if key.code == "Enter" then
                 local q = state.quakes[state.selected]
                 if q then ttymap.map:jump(q.lon, q.lat) end
                 return nil
             end
-            if code == "Esc" or (code == "Char" and ch == "q" and not ctrl) then
+            if sidebar.is_close_key(key) then
                 close_panel()
                 return nil
             end
-            -- Anything else (j/k, q, hjkl, +/-, …) passes through
-            -- to the base layer so map pan / zoom / quit keep
-            -- working while the section is focused.
             return { ignore = true }
         end,
     })

@@ -7,6 +7,7 @@
 
 local opensky = require("aircraft.opensky")
 local display = require("aircraft.display")
+local sidebar = require("ttymap.sidebar")
 
 local state = {
     aircraft       = {},  -- list of { callsign, lon, lat, on_ground, alt, heading }
@@ -79,38 +80,27 @@ local function open()
         },
         render = build_lines,
         handle_event = function(key)
-            local code = key.code
-            local ch = key.char
-            local ctrl = key.ctrl
-
-            local up   = (ctrl and code == "Char" and ch == "p") or code == "Up"
-            local down = (ctrl and code == "Char" and ch == "n") or code == "Down"
-
             local n = #state.aircraft
-            if up then
-                if n > 0 then
-                    state.selected = state.selected > 1 and state.selected - 1 or n
-                end
+            if sidebar.up_pressed(key) then
+                state.selected = sidebar.cycle(state.selected, n, -1)
                 return nil
             end
-            if down then
-                if n > 0 then
-                    state.selected = state.selected < n and state.selected + 1 or 1
-                end
+            if sidebar.down_pressed(key) then
+                state.selected = sidebar.cycle(state.selected, n, 1)
                 return nil
             end
-            if code == "Enter" then
+            if key.code == "Enter" then
                 local a = state.aircraft[state.selected]
                 if a then ttymap.map:jump(a.lon, a.lat) end
                 return nil
             end
-            if code == "Esc" or (code == "Char" and ch == "q" and not ctrl) then
+            if sidebar.is_close_key(key) then
                 close()
                 return nil
             end
-            -- Anything else (j/k, q, hjkl, +/-, …) passes through to
-            -- the base layer so map pan / zoom / quit keep working
-            -- while the section is focused.
+            -- Anything else (j/k, hjkl, +/-, …) passes through to
+            -- the base layer so map pan / zoom keep working while
+            -- the section is focused.
             return { ignore = true }
         end,
     })
