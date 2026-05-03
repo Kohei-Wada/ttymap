@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use mlua::{Lua, Table};
 
-use super::handle::{CallOutcome, LuaHandle};
+use super::handle::{CallOutcome, LuaBridgeHandle};
 use crate::frontend::compositor::Context;
 use crate::frontend::palette::PaletteAction;
 use crate::frontend::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
@@ -24,7 +24,7 @@ pub struct LuaPaletteProvider {
     /// table here is the `module.palette` sub-table — every method
     /// (filter / items / execute / poll / is_loading) reads from
     /// it.
-    handle: LuaHandle,
+    handle: LuaBridgeHandle,
     /// Cached `prompt` string read once at construction so
     /// [`PaletteProvider::prompt`] can hand back `&str` without
     /// running Lua per call.
@@ -57,7 +57,7 @@ impl LuaPaletteProvider {
     pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
         let prompt: String = spec.get("prompt").unwrap_or_else(|_| ":".to_string());
         let submit_mode = parse_submit_mode(&spec);
-        let handle = LuaHandle::new(lua, spec, log_tag)?;
+        let handle = LuaBridgeHandle::new(lua, spec, log_tag)?;
 
         Ok(Self {
             handle,

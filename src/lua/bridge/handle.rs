@@ -9,8 +9,8 @@
 //! 2. **Dispatch** — for each trait method, look up `module[name]`,
 //!    call it if present, log + recover if absent or erroring.
 //!
-//! [`LuaHandle`] owns the registry handle + log tag and provides
-//! [`LuaHandle::try_call`] for the dispatch shape. [`fresh_load`] is
+//! [`LuaBridgeHandle`] owns the registry handle + log tag and provides
+//! [`LuaBridgeHandle::try_call`] for the dispatch shape. [`fresh_load`] is
 //! the one-shot construction helper.
 //!
 //! [`LuaCardComponent`]: super::card_component::LuaCardComponent
@@ -27,7 +27,7 @@ use crate::lua::sender::LuaSender;
 /// Per-adapter Lua state + the registry handle for the dispatch
 /// table. Both adapters (Component, PaletteProvider) compose this
 /// instead of carrying `lua` and `module` as separate fields.
-pub struct LuaHandle {
+pub struct LuaBridgeHandle {
     /// Identifier used in log warnings (`lua[wiki]: poll() failed:
     /// …`). For bundled plugins this is the file stem; for user
     /// plugins it's the leaked stem from the registration walker.
@@ -39,7 +39,7 @@ pub struct LuaHandle {
     module: RegistryKey,
 }
 
-impl LuaHandle {
+impl LuaBridgeHandle {
     /// Build a handle around `table` evaluated inside `lua`. The
     /// caller has already inspected the table — read metadata, or
     /// drilled into a sub-table — and is handing it over for
@@ -104,7 +104,7 @@ impl LuaHandle {
     }
 }
 
-/// Outcome of [`LuaHandle::try_call`].
+/// Outcome of [`LuaBridgeHandle::try_call`].
 pub enum CallOutcome<R> {
     /// The method exists and returned a value.
     Ok(R),
@@ -117,7 +117,7 @@ pub enum CallOutcome<R> {
 
 /// Build a fresh Lua state, install host services, run `source`, and
 /// hand back the captured registration for the caller to inspect
-/// before constructing a [`LuaHandle`].
+/// before constructing a [`LuaBridgeHandle`].
 ///
 /// nvim-style: the script's existence in `<runtime>/plugin/` is the
 /// registration. Identity = file stem (the caller passes it as

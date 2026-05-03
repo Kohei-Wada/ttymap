@@ -7,7 +7,7 @@
 //! - [`card_component::LuaCardComponent`] — `Component` impl,
 //!   pushed by `ttymap.api.card.open`
 //! - [`palette_provider::LuaPaletteProvider`] — `PaletteProvider` impl
-//! - [`handle::LuaHandle`] — shared dispatch plumbing reused by both
+//! - [`handle::LuaBridgeHandle`] — shared dispatch plumbing reused by both
 
 pub mod card_component;
 pub mod card_handle;

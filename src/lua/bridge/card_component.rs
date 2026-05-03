@@ -43,7 +43,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::card_handle::CloseFlag;
-use super::handle::{CallOutcome, LuaHandle};
+use super::handle::{CallOutcome, LuaBridgeHandle};
 use crate::frontend::compositor::Component;
 use crate::frontend::compositor::window::{RenderWindow, Window};
 use crate::theme::StyleKind;
@@ -56,7 +56,7 @@ use crate::theme::StyleKind;
 pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
     /// log tag (= identification used in warnings).
-    handle: LuaHandle,
+    handle: LuaBridgeHandle,
     /// Shared with the [`CardHandle`](super::card_handle::CardHandle)
     /// returned to Lua. Either side flipping it triggers a `win.close()`
     /// on the next poll tick.
@@ -142,7 +142,7 @@ impl LuaCardComponent {
             Ok(mlua::Value::Function(_))
         );
         let footer_hints = parse_footer_hints(&spec);
-        let handle = LuaHandle::new(lua, spec, log_tag)?;
+        let handle = LuaBridgeHandle::new(lua, spec, log_tag)?;
         Ok(Self {
             handle,
             flag,
