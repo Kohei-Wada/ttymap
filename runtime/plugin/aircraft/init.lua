@@ -15,7 +15,7 @@ local state = {
     job            = nil, -- pending fetch
     last_fetch_sec = 0,   -- wall-clock second of last fetch start
 }
-local w = nil  -- window handle while open; nil while closed (also acts as enabled flag)
+local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
 
 local function build_lines()
     if #state.aircraft == 0 then
@@ -72,7 +72,7 @@ end
 
 local function open()
     if w then return end
-    w = ttymap.api.window.open({
+    w = ttymap.api.card.open({
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "jump" },

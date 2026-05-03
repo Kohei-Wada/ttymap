@@ -1,9 +1,9 @@
-//! `ttymap.api.window.open(spec) -> WindowHandle` — push a focused
+//! `ttymap.api.card.open(spec) -> CardHandle` — push a focused
 //! component onto the compositor stack, return a Lua-facing handle
 //! whose only method is `close()` (idempotent).
 //!
 //! The handle holds a shared atomic flag; `close()` flips it. The
-//! `LuaWindowComponent` it pushed checks the flag on its next poll
+//! `LuaCardComponent` it pushed checks the flag on its next poll
 //! tick and pops itself off the stack via `win.close()`.
 
 use std::sync::Arc;
@@ -29,20 +29,20 @@ impl CloseFlag {
     }
 }
 
-/// Lua-facing handle returned by `ttymap.api.window.open(...)`.
+/// Lua-facing handle returned by `ttymap.api.card.open(...)`.
 /// Idempotent `:close()` — flipping a flipped flag is a no-op.
-pub struct WindowHandle {
+pub struct CardHandle {
     flag: CloseFlag,
 }
 
-impl WindowHandle {
+impl CardHandle {
     /// Build a handle that signals close via the shared `flag`.
     pub fn new(flag: CloseFlag) -> Self {
         Self { flag }
     }
 }
 
-impl UserData for WindowHandle {
+impl UserData for CardHandle {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("close", |_, this, _: ()| {
             this.flag.request();
@@ -57,13 +57,13 @@ impl UserData for WindowHandle {
 /// Used by `ttymap.api.palette.open` (and any future A-series
 /// primitive that wraps a pre-existing `Component`) to add the
 /// shared-flag close protocol without duplicating it inside each
-/// adapter type. [`LuaWindowComponent`] does the same thing inline
+/// adapter type. [`LuaCardComponent`] does the same thing inline
 /// in its own `poll` because it owns the flag directly; for adapters
 /// that already exist (`PaletteComponent` wrapping a
 /// [`LuaPaletteProvider`]) wrapping is the cheaper bridge.
 ///
 /// [`Component`]: crate::frontend::compositor::Component
-/// [`LuaWindowComponent`]: super::window_component::LuaWindowComponent
+/// [`LuaCardComponent`]: super::card_component::LuaCardComponent
 /// [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 pub struct CloseFlagWrapper<C> {
     inner: C,
@@ -115,9 +115,7 @@ mod tests {
     fn close_flips_flag_idempotent() {
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
-        let ud = lua
-            .create_userdata(WindowHandle::new(flag.clone()))
-            .unwrap();
+        let ud = lua.create_userdata(CardHandle::new(flag.clone())).unwrap();
         lua.load("local h = ...; h:close(); h:close()")
             .call::<()>(ud)
             .unwrap();
@@ -128,7 +126,7 @@ mod tests {
     /// [`CloseFlagWrapper::poll`] must call `win.close()` exactly when
     /// the shared flag has been flipped — and nothing extra at any
     /// other time. Mirrors the equivalent test on
-    /// [`super::window_component::LuaWindowComponent`].
+    /// [`super::card_component::LuaCardComponent`].
     #[test]
     fn close_flag_wrapper_polls_close_when_flag_set() {
         use crate::frontend::AppEvent;

@@ -42,8 +42,8 @@
 //! ttymap.log    :info(msg) / :warn(msg) / :error(msg)
 //!                                            forward to host log at
 //!                                            target `lua[<plugin>]`
-//! ttymap.api.window.open(spec) -> Handle    push a focused window
-//!                                            (LuaWindowComponent) onto
+//! ttymap.api.card.open(spec) -> Handle    push a focused window
+//!                                            (LuaCardComponent) onto
 //!                                            the stack; handle:close()
 //!                                            pops it (idempotent)
 //! ttymap.api.palette.open(spec) -> Handle   push a palette provider
@@ -230,7 +230,7 @@ impl LuaHostShared {
 /// - `center` — shared with `ttymap.map`'s userdata so
 ///   `ttymap.map:center()` returns the live centre. Components
 ///   refresh it on each dispatch path that carries a `Window`.
-/// - `push_rx` — components queued by `ttymap.api.window.open` (and
+/// - `push_rx` — components queued by `ttymap.api.card.open` (and
 ///   later `ttymap.api.palette.open` in A6). Drained by the App per
 ///   frame and pushed onto the compositor stack. Kept per-plugin
 ///   because [`crate::frontend::compositor::Component`] is `!Send` and the
@@ -246,13 +246,13 @@ pub struct LuaHostHandles {
     /// [`HostMap`] userdata; refreshed on the dispatch paths that
     /// also refresh `center`.
     pub zoom: Arc<Mutex<f64>>,
-    /// Components queued by `ttymap.api.window.open` (and, in A6,
+    /// Components queued by `ttymap.api.card.open` (and, in A6,
     /// `ttymap.api.palette.open`). The App drains this per frame and
     /// pushes each component onto the compositor stack.
     ///
     /// `Box<dyn Component>` is **not** `Send` in general; that's fine
     /// because the channel never crosses threads — `install()` runs
-    /// on the main thread, every `window.open` call runs on the main
+    /// on the main thread, every `card.open` call runs on the main
     /// thread (Lua callbacks dispatched from the App loop), and the
     /// App drains on the main thread too. `mpsc::channel` accepts
     /// `!Send` payloads at construction; only `Sender<T>: Send`
@@ -297,7 +297,7 @@ pub struct EventSubscription {
 /// style: each activation surface is a separate explicit call with
 /// its own Lua callback. Plugins own whether/when to push by
 /// inspecting their own state inside the callback and calling
-/// `ttymap.api.window.open(spec)` / `ttymap.api.palette.open(spec)`.
+/// `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`.
 /// Per-frame work subscribes via `ttymap.api.frame.on_tick(fn)` —
 /// stacked: each call appends a callback that fires every frame.
 /// Other events go through `ttymap.on_event(name, fn)`.
@@ -351,7 +351,7 @@ pub fn install(
     // emit [`crate::lua::intent::LuaIntent`] values; the frontend
     // translates them on the way through `handle_event`.
     // `Box<dyn Component>` is `!Send`; that's fine — the channel
-    // stays on the main thread (install + every `window.open` Lua
+    // stays on the main thread (install + every `card.open` Lua
     // callback + App drain all run on the same thread). `mpsc`
     // accepts `!Send` payloads at construction; only `Sender<T>: Send`
     // requires `T: Send`, and the Sender never moves across threads.
@@ -489,8 +489,8 @@ pub fn install(
     //
     // The (nvim-style) plugin API surface. Currently hosts:
     //
-    // - `ttymap.api.window.open(spec) -> WindowHandle` — push a
-    //   focused [`LuaWindowComponent`] onto the compositor stack.
+    // - `ttymap.api.card.open(spec) -> CardHandle` — push a
+    //   focused [`LuaCardComponent`] onto the compositor stack.
     // - `ttymap.api.palette.open(spec) -> PaletteHandle` — push a
     //   palette provider (a `PaletteComponent` wrapping a
     //   [`LuaPaletteProvider`]) onto the stack. Returning
@@ -500,26 +500,23 @@ pub fn install(
     //   snapshotted to disk.
     let api = lua.create_table()?;
 
-    let window_api = lua.create_table()?;
+    let card_api = lua.create_table()?;
     let push_tx_for_window = push_tx.clone();
-    window_api.set(
+    card_api.set(
         "open",
         lua.create_function(
-            move |lua,
-                  spec: Table|
-                  -> mlua::Result<crate::lua::bridge::window_handle::WindowHandle> {
-                use crate::lua::bridge::window_component::LuaWindowComponent;
-                use crate::lua::bridge::window_handle::{CloseFlag, WindowHandle};
+            move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
+                use crate::lua::bridge::card_component::LuaCardComponent;
+                use crate::lua::bridge::card_handle::{CardHandle, CloseFlag};
                 let flag = CloseFlag::default();
                 // Build the component on the **same** Lua VM that ran
-                // `window.open` — i.e. the setup state. The spec's
+                // `card.open` — i.e. the setup state. The spec's
                 // callbacks (`render`, `handle_event`, …) capture
                 // upvalues in this state, so the per-window Lua handle
                 // must be a clone of it (cheap Arc bump, no copy of the
-                // VM). When `LuaWindowComponent` later calls into those
+                // VM). When `LuaCardComponent` later calls into those
                 // callbacks, the same upvalue scope is in scope.
-                let component =
-                    LuaWindowComponent::from_spec(lua.clone(), spec, tag, flag.clone())?;
+                let component = LuaCardComponent::from_spec(lua.clone(), spec, tag, flag.clone())?;
                 // Same-thread send: the channel never crosses threads.
                 // `send` returns Err only when the receiver has been
                 // dropped, which happens at App teardown — log + carry
@@ -532,19 +529,19 @@ pub fn install(
                     .is_err()
                 {
                     log::error!(
-                        "lua[{}]: ttymap.api.window.open: push channel closed (receiver dropped)",
+                        "lua[{}]: ttymap.api.card.open: push channel closed (receiver dropped)",
                         tag
                     );
                 }
-                Ok(WindowHandle::new(flag))
+                Ok(CardHandle::new(flag))
             },
         )?,
     )?;
-    api.set("window", window_api)?;
+    api.set("card", card_api)?;
 
     // ── ttymap.api.palette ───────────────────────────────────────────
     //
-    // Mirror of `ttymap.api.window.open`: build a palette provider on
+    // Mirror of `ttymap.api.card.open`: build a palette provider on
     // the same Lua VM (the setup state), wrap it in a
     // [`PaletteComponent`] plus a [`CloseFlagWrapper`] so the host can
     // pop the palette via the shared `CloseFlag` the
@@ -559,9 +556,9 @@ pub fn install(
             move |lua,
                   spec: Table|
                   -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
+                use crate::lua::bridge::card_handle::{CloseFlag, CloseFlagWrapper};
                 use crate::lua::bridge::palette_handle::PaletteHandle;
                 use crate::lua::bridge::palette_provider::LuaPaletteProvider;
-                use crate::lua::bridge::window_handle::{CloseFlag, CloseFlagWrapper};
                 let flag = CloseFlag::default();
                 // Build the provider on the **same** Lua VM that ran
                 // `palette.open` — the setup state. The spec's
@@ -1523,18 +1520,18 @@ mod tests {
     }
 
     #[test]
-    fn api_window_open_pushes_component_and_returns_handle() {
-        // `ttymap.api.window.open(spec)` must do two things on the same
-        // call: queue a `LuaWindowComponent` onto `push_rx` so the App
+    fn api_card_open_pushes_component_and_returns_handle() {
+        // `ttymap.api.card.open(spec)` must do two things on the same
+        // call: queue a `LuaCardComponent` onto `push_rx` so the App
         // can push it onto the compositor stack, and hand back a
-        // `WindowHandle` whose `:close()` flips a shared flag without
+        // `CardHandle` whose `:close()` flips a shared flag without
         // needing the App to be running. Both behaviours are independent
         // of any `App` plumbing — this is the unit-level proof that the
         // primitive itself is wired right.
         let (lua, handles, _event_rx) = install_for_test();
         lua.load(
             r#"
-            local h = ttymap.api.window.open({
+            local h = ttymap.api.card.open({
                 name = "demo",
                 layout = { anchor = "left", width = 30 },
                 render = function() return { "hello" } end,
@@ -1544,7 +1541,7 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        // Exactly one component must be queued — `window.open`
+        // Exactly one component must be queued — `card.open`
         // pushes per call, no implicit dedup.
         assert!(
             handles.push_rx.try_recv().is_ok(),
@@ -1559,7 +1556,7 @@ mod tests {
         // flag is shared with that component's `CloseFlag`, but
         // since we already drained the receiver and dropped the
         // component, this just confirms the userdata method survives
-        // the call (idempotent close is the WindowHandle contract).
+        // the call (idempotent close is the CardHandle contract).
         lua.load("ttymap_test_handle:close()")
             .exec()
             .expect("close");
@@ -1567,7 +1564,7 @@ mod tests {
 
     #[test]
     fn api_palette_open_pushes_component_and_returns_handle() {
-        // Mirror of `api_window_open_pushes_component_and_returns_handle`:
+        // Mirror of `api_card_open_pushes_component_and_returns_handle`:
         // `ttymap.api.palette.open(spec)` must queue a wrapped
         // `PaletteComponent` on `push_rx` and hand back a
         // `PaletteHandle` whose `:close()` flips a shared flag without
@@ -1598,7 +1595,7 @@ mod tests {
             "push_rx should be drained after a single recv"
         );
         // `:close()` must round-trip through the userdata without a
-        // panic — same idempotent contract as `WindowHandle`.
+        // panic — same idempotent contract as `CardHandle`.
         lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");

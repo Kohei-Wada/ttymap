@@ -353,7 +353,7 @@ fn register_one(
     // Hand the setup state's `LuaHostHandles` over to the
     // registrar so the App can drain its receivers per frame.
     // Setup-state callbacks (palette command invoke, register_keybind
-    // callback, plugin-level `loop`, and any `ttymap.api.window.open`
+    // callback, plugin-level `loop`, and any `ttymap.api.card.open`
     // / `palette.open` spec callbacks) flip these senders. Without
     // this push the receivers would just sit (latent bug pre-A7).
     r.lua_host_handles.push(handles);
@@ -379,7 +379,7 @@ fn register_one(
     // register_keybind from the script gets its own factory. The
     // factory just runs the captured Lua callback in the persistent
     // setup state. Whatever the callback does — toggle a flag, push
-    // a window via `ttymap.api.window.open(spec)`, push a palette
+    // a window via `ttymap.api.card.open(spec)`, push a palette
     // via `ttymap.api.palette.open(spec)`, or call a fire-and-forget
     // host API — flows through the channels in `LuaHostHandles` that
     // the App drains every frame. The factory itself never builds
@@ -421,7 +421,7 @@ fn register_one(
 /// Run a captured Lua callback (palette command's invoke or
 /// keybind's callback). The callback's return value is ignored —
 /// the callback drives plugin state through host APIs
-/// (`ttymap.api.window.open`, `ttymap.api.palette.open`,
+/// (`ttymap.api.card.open`, `ttymap.api.palette.open`,
 /// `ttymap.map:jump`, …) whose effects flow through the setup
 /// state's `LuaHostHandles`. Errors are logged with the plugin's
 /// name but don't propagate.

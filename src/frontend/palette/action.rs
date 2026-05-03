@@ -24,7 +24,7 @@ use super::provider::PaletteProvider;
 /// |--------------------|---------------|----------------------------------|
 /// | `Close`            | return        | `nil` / `{close=true}` (default) |
 /// | `Run(msgs)`        | return        | side channel (`ttymap.map:*`)    |
-/// | `Push(component)`  | return        | side channel (`api.window.open`) |
+/// | `Push(component)`  | return        | side channel (`api.card.open`) |
 /// | `SwitchProvider`   | return        | `{switch = spec}` from execute   |
 ///
 /// `Run` and `Push` are reachable from Lua only via the host

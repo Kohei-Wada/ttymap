@@ -89,7 +89,7 @@ impl LuaHandle {
     }
 
     /// Drain every plugin's `push_rx` queue — components that Lua
-    /// queued via `ttymap.api.window.open` / `palette.open`. The
+    /// queued via `ttymap.api.card.open` / `palette.open`. The
     /// caller decides what to do with each pulled component (in
     /// practice: push it onto the compositor stack).
     pub fn drain_pushes<F: FnMut(Box<dyn Component>)>(&self, mut on_push: F) {

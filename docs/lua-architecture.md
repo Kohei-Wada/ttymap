@@ -24,7 +24,7 @@ A script joins host loops by calling some combination of:
 
 At least one of those is required at script load. Everything dynamic
 (panels, palettes) is *imperative*, opened from inside callbacks via
-`ttymap.api.window.open` / `ttymap.api.palette.open`.
+`ttymap.api.card.open` / `ttymap.api.palette.open`.
 
 ## Module layout (`src/lua/`)
 
@@ -42,24 +42,24 @@ src/lua/
     sgp4.rs        SGP4 propagation namespace
   bridge/          Lua→Rust trait adapters
     handle.rs           shared dispatch plumbing (LuaHandle)
-    window_component.rs LuaWindowComponent: Component for a Lua spec
+    card_component.rs LuaCardComponent: Component for a Lua spec
     palette_provider.rs LuaPaletteProvider: PaletteProvider for a spec
-    window_handle.rs    WindowHandle + CloseFlag + CloseFlagWrapper
-    palette_handle.rs   PaletteHandle (mirror of WindowHandle)
+    card_handle.rs    CardHandle + CloseFlag + CloseFlagWrapper
+    palette_handle.rs   PaletteHandle (mirror of CardHandle)
 ```
 
 ## Key Rust types
 
-- **`LuaWindowComponent`** (`bridge/window_component.rs`) — implements
+- **`LuaCardComponent`** (`bridge/card_component.rs`) — implements
   `Component` by dispatching to a Lua spec table. One per
-  `ttymap.api.window.open(spec)` call.
+  `ttymap.api.card.open(spec)` call.
 - **`LuaPaletteProvider`** (`bridge/palette_provider.rs`) — same idea
   for `PaletteProvider`. Built by `from_spec`.
-- **`WindowHandle`** / **`PaletteHandle`** — userdata returned to Lua
-  by `api.window.open` / `api.palette.open`. `:close()` flips a shared
+- **`CardHandle`** / **`PaletteHandle`** — userdata returned to Lua
+  by `api.card.open` / `api.palette.open`. `:close()` flips a shared
   `CloseFlag` that the host polls each frame to pop the component
   (idempotent).
-- **`CloseFlagWrapper`** (`bridge/window_handle.rs`) — a `Component`
+- **`CloseFlagWrapper`** (`bridge/card_handle.rs`) — a `Component`
   decorator that observes a `CloseFlag` from outside the inner
   component (used for palette providers, which have no `poll`).
 - **`LuaHandle`** (`bridge/handle.rs`) — shared dispatch plumbing for
@@ -102,8 +102,8 @@ Top-level functions the script's setup body calls:
 
 Called from inside callbacks (palette invoke, keybind, on_tick):
 
-- **`ttymap.api.window.open(spec) -> WindowHandle`** — push a focused
-  side-panel `LuaWindowComponent` onto the compositor stack. Spec
+- **`ttymap.api.card.open(spec) -> CardHandle`** — push a focused
+  side-panel `LuaCardComponent` onto the compositor stack. Spec
   carries `layout`, `render`, `handle_event`, `footer_hints`, `name`.
 - **`ttymap.api.palette.open(spec) -> PaletteHandle`** — push a
   palette-mode component. Spec carries `prompt`, `submit_mode`,
@@ -145,7 +145,7 @@ of them. That's how the toggle pattern works:
 local w = nil
 ttymap.register_keybind("i", function()
   if w then w:close(); w = nil
-  else w = ttymap.api.window.open(spec)
+  else w = ttymap.api.card.open(spec)
   end
 end)
 ```
@@ -163,7 +163,7 @@ setup state:
 - `zoom_tx` — `ttymap.map:zoom(level)` setter → `Action::SetZoom`
 - `fly_to_tx` — `ttymap.map:fly_to` → `Action::FlyTo`
 - `export_tx` — `ttymap.api.frame.export` → `UserIntent::ExportFrame`
-- `push_tx` — `Box<dyn Component>` queued by `api.window.open` /
+- `push_tx` — `Box<dyn Component>` queued by `api.card.open` /
   `api.palette.open` → pushed onto the compositor stack
 
 Receivers live on `LuaHostHandles` (returned from `install`); App
@@ -291,7 +291,7 @@ plugin updates the footer for free. **No plugin name is hardcoded in
 `compositor/base.rs`.**
 
 Per-window footer hints live inline in the
-`ttymap.api.window.open(spec)` spec via
+`ttymap.api.card.open(spec)` spec via
 `footer_hints = { {key, label}, ... }`.
 
 ## Migration

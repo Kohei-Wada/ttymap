@@ -347,7 +347,7 @@ impl Frontend {
     /// the run loop's same-iteration `try_recv` picks them up.
     ///
     /// Drains any components Lua queued via
-    /// `ttymap.api.window.open` / `palette.open` first, so they
+    /// `ttymap.api.card.open` / `palette.open` first, so they
     /// participate in this same poll pass.
     fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         // Disjoint borrows: `&self.lua` for the iterator, `&mut

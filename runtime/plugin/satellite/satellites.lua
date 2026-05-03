@@ -3,10 +3,10 @@
 -- Each `make(specs)` call wires up one tracker:
 --   * subscribes a `ttymap.api.frame.on_tick` callback that drives TLE
 --     fetch + SGP4 propagation + map paint while the panel is open
---     (gated on the captured `w` window handle, same convention as
+--     (gated on the captured `w` card handle, same convention as
 --     aircraft / wiki),
 --   * returns an `open` / `close` / `toggle` trio the caller wires to a
---     palette command or keybind. The window owns per-sat visibility
+--     palette command or keybind. The card owns per-sat visibility
 --     keystrokes (`i` for ISS, `H` for Hubble, …) and C-n / C-p / Enter
 --     focus navigation.
 --
@@ -20,7 +20,7 @@
 --     showing the live count. Uses `ttymap.sgp4:propagate_batch` so
 --     N propagations cross the Lua/Rust boundary in one call.
 --
--- One palette entry, one window, regardless of how many entries the
+-- One palette entry, one card, regardless of how many entries the
 -- consumer configures. Visibility flags survive a panel toggle —
 -- `make` runs once at plugin registration, so per-sat `visible` state
 -- persists across open/close cycles. Toggling the panel does NOT
@@ -190,7 +190,7 @@ function M.make(specs)
         return lines
     end
 
-    local w = nil  -- window handle while open; nil while closed (also
+    local w = nil  -- card handle while open; nil while closed (also
                    -- the enabled flag for the loop)
 
     local function paint_markers(map)
@@ -304,7 +304,7 @@ function M.make(specs)
 
     local function open()
         if w then return end
-        w = ttymap.api.window.open({
+        w = ttymap.api.card.open({
             footer_hints = hints,
             render = build_lines,
             handle_event = function(key)

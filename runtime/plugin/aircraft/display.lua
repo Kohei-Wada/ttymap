@@ -18,7 +18,7 @@ local function heading_arrow(deg)
 end
 
 -- Structured line for the panel — a vec of `{ text, style }` spans
--- matching the shape `LuaWindowComponent` understands. Selected
+-- matching the shape `LuaCardComponent` understands. Selected
 -- entries get `highlight`; unselected use `accent`. Secondary info
 -- (altitude, ground state) renders muted, mirroring wiki's pattern.
 function M.fmt(a, selected)

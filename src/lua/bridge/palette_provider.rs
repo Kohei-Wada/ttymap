@@ -1,7 +1,7 @@
 //! [`LuaPaletteProvider`] — adapter that lets a Lua script implement
 //! [`PaletteProvider`].
 //!
-//! Same shape as [`super::window_component::LuaWindowComponent`] but
+//! Same shape as [`super::card_component::LuaCardComponent`] but
 //! for the palette's universal-picker trait instead of the compositor
 //! [`Component`] trait. Used by the search plugin's Lua port:
 //! Nominatim's debounced query/result pipeline + Enter→Jump.
@@ -20,7 +20,7 @@ use crate::frontend::palette::provider::{PaletteItem, PaletteProvider, SubmitMod
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {
-    /// Bridge plumbing shared with `LuaWindowComponent`. The registered
+    /// Bridge plumbing shared with `LuaCardComponent`. The registered
     /// table here is the `module.palette` sub-table — every method
     /// (filter / items / execute / poll / is_loading) reads from
     /// it.
@@ -193,7 +193,7 @@ impl LuaPaletteProvider {
     /// `intent_tx`, which the App drains centrally and dispatches.
     /// `Run([UserIntent::*])` therefore has no return-value form — Lua
     /// emits map intents through the host channel, not the action.
-    /// `Push` similarly is reachable today via `ttymap.api.window.open`
+    /// `Push` similarly is reachable today via `ttymap.api.card.open`
     /// inside the callback (1 frame of layout latency vs. an in-band
     /// return).
     fn action_from_lua(&self, value: mlua::Value) -> PaletteAction {

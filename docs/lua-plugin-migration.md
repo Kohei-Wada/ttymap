@@ -19,7 +19,7 @@ palettes) is *imperative*, opened from inside callbacks via
 | `register_plugin({ name, loop })`         | `ttymap.api.frame.on_tick(function(map) ... end)` (no `name`)                  |
 | `register_overlay({ paint_on_map })`      | `ttymap.api.frame.on_tick(function(map) ... end)`                              |
 | `register_palette({ ... })` (top-level)   | `ttymap.api.palette.open(spec)` from inside an `invoke` callback               |
-| `ttymap.plugin:open()` / `:close()`       | `ttymap.api.window.open(spec)` returns a handle; close via `w:close()`         |
+| `ttymap.plugin:open()` / `:close()`       | `ttymap.api.card.open(spec)` returns a handle; close via `w:close()`         |
 | `ttymap.window:close()`                   | `w:close(); w = nil` from the plugin's own closure                             |
 | `ttymap.window:export_frame()`            | `ttymap.api.frame.export()`                                                    |
 | `paint_on_map = function(map) ... end`    | painting moves into `on_tick`; same `map:point` / `map:text_anchored` API      |
@@ -80,7 +80,7 @@ end)
 local function close() if w then w:close(); w = nil end end
 local function open()
     if w then return end
-    w = ttymap.api.window.open({
+    w = ttymap.api.card.open({
         render = build_lines,
         handle_event = function(key) if key.code == "Esc" then close() end end,
     })

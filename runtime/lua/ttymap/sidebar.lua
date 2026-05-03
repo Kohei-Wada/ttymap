@@ -6,7 +6,7 @@
 -- 1. Cycle a `selected` index through 1..n on Up / Down / C-p / C-n.
 -- 2. Recognise q / Esc as the close key.
 -- 3. Wrap `w:close() + w = nil` in a local `close()` function so
---    the plugin's window-handle ref is reset along with the
+--    the plugin's card-handle ref is reset along with the
 --    compositor stack pop (otherwise re-toggling sees a stale `w`
 --    and tries to close again).
 --

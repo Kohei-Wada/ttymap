@@ -1,5 +1,5 @@
 //! Shared Lua-bridge plumbing for adapter types
-//! ([`LuaWindowComponent`], [`LuaPaletteProvider`], future ones).
+//! ([`LuaCardComponent`], [`LuaPaletteProvider`], future ones).
 //!
 //! Every adapter does the same two things:
 //! 1. **Construction** — spin up a fresh `Lua` VM, install the
@@ -13,7 +13,7 @@
 //! [`LuaHandle::try_call`] for the dispatch shape. [`fresh_load`] is
 //! the one-shot construction helper.
 //!
-//! [`LuaWindowComponent`]: super::window_component::LuaWindowComponent
+//! [`LuaCardComponent`]: super::card_component::LuaCardComponent
 //! [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 
 use std::sync::Arc;
@@ -76,7 +76,7 @@ impl LuaHandle {
     /// The missing-vs-errored split is intentional: an adapter may
     /// want different recovery for "plugin opted out of this hook"
     /// vs "plugin tried but threw" — e.g.
-    /// [`LuaWindowComponent`](super::window_component::LuaWindowComponent)'s
+    /// [`LuaCardComponent`](super::card_component::LuaCardComponent)'s
     /// `handle_event` maps the former to `KeyAction::Ignore`
     /// (forward to base) and the latter to `KeyAction::Consume`
     /// (don't leak buggy keys).

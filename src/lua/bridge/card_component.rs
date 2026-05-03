@@ -1,5 +1,5 @@
-//! [`LuaWindowComponent`] — a focused [`Component`] pushed onto the
-//! compositor stack by `ttymap.api.window.open(spec)` (A3).
+//! [`LuaCardComponent`] — a focused [`Component`] pushed onto the
+//! compositor stack by `ttymap.api.card.open(spec)` (A3).
 //!
 //! Spec table fields (all optional):
 //! - `name = "..."` — display label shown in the focused-footer chip
@@ -7,18 +7,18 @@
 //! - `handle_event = function(key) return action end` — focused keys
 //! - `footer_hints = { {key, label}, ... }` — focused footer hints
 //!
-//! All `LuaWindowComponent`s render in the left sidebar — there's no
+//! All `LuaCardComponent`s render in the left sidebar — there's no
 //! free-floating / anchored layout for plugin-defined panels. The
 //! `spec.layout` field is no longer read; existing scripts that set
 //! it just see their setting silently ignored.
 //!
 //! **No `paint_on_map`, no `poll`, no `loop`** — those belong on a
 //! `ttymap.api.frame.on_tick(fn)` subscription (host-side).
-//! A window opened via `window.open` does focused-UI work only; map
+//! A window opened via `card.open` does focused-UI work only; map
 //! paint and async drain run in the per-frame tick on the main thread.
 //!
-//! Lifetime: the matching [`WindowHandle`] (returned to Lua by
-//! `window.open`) carries a clone of the same [`CloseFlag`]. Either
+//! Lifetime: the matching [`CardHandle`] (returned to Lua by
+//! `card.open`) carries a clone of the same [`CloseFlag`]. Either
 //! side flipping the flag is honoured on the next [`Component::poll`]
 //! tick, where this component pops itself off the stack via
 //! [`Window::close`]. Idempotent — a flipped-then-flipped flag does
@@ -30,7 +30,7 @@
 //! receivers are returned by
 //! [`crate::lua::api::install`] inside [`LuaHostHandles`] and
 //! drained centrally by `App` per frame. This is by design:
-//! `window.open` runs in the setup state's Lua VM, so its callbacks'
+//! `card.open` runs in the setup state's Lua VM, so its callbacks'
 //! `ttymap.map:jump(...)` calls hit the setup-state senders, not
 //! per-window receivers.
 //!
@@ -42,8 +42,8 @@ use mlua::{Lua, Table};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::card_handle::CloseFlag;
 use super::handle::{CallOutcome, LuaHandle};
-use super::window_handle::CloseFlag;
 use crate::frontend::compositor::Component;
 use crate::frontend::compositor::window::{RenderWindow, Window};
 use crate::theme::StyleKind;
@@ -51,21 +51,21 @@ use crate::theme::StyleKind;
 // ── Component ──────────────────────────────────────────────────────
 
 /// A [`Component`] backed by a Lua spec table. Pushed onto the
-/// compositor stack by `ttymap.api.window.open(spec)`; popped when
+/// compositor stack by `ttymap.api.card.open(spec)`; popped when
 /// either side flips the shared [`CloseFlag`].
-pub struct LuaWindowComponent {
+pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
     /// log tag (= identification used in warnings).
     handle: LuaHandle,
-    /// Shared with the [`WindowHandle`](super::window_handle::WindowHandle)
+    /// Shared with the [`CardHandle`](super::card_handle::CardHandle)
     /// returned to Lua. Either side flipping it triggers a `win.close()`
     /// on the next poll tick.
     flag: CloseFlag,
     /// User-facing display label, read from `spec.name` if present
     /// at construction. Falls back to the handle's log tag (the
-    /// `chunk_name` passed in by `window.open`). Leaked once so
+    /// `chunk_name` passed in by `card.open`). Leaked once so
     /// [`Component::name`] can satisfy the `&'static str` signature;
-    /// bounded cost since `LuaWindowComponent` is rebuilt at most a
+    /// bounded cost since `LuaCardComponent` is rebuilt at most a
     /// few times per program lifetime.
     display: &'static str,
     /// Whether the spec exposes a `render` function. Marker-only
@@ -91,9 +91,9 @@ pub struct LuaWindowComponent {
     last_inner_height: std::cell::Cell<u16>,
 }
 
-impl LuaWindowComponent {
-    /// Build a `LuaWindowComponent` from a spec table evaluated in
-    /// `lua`. The spec is everything `window.open` was passed; the
+impl LuaCardComponent {
+    /// Build a `LuaCardComponent` from a spec table evaluated in
+    /// `lua`. The spec is everything `card.open` was passed; the
     /// caller has already extracted the close flag and the lua state
     /// it lives in.
     ///
@@ -201,7 +201,7 @@ impl LuaWindowComponent {
     }
 }
 
-impl Component for LuaWindowComponent {
+impl Component for LuaCardComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let action = self.dispatch_event(event);
 
@@ -485,15 +485,15 @@ fn key_code_to_lua(code: KeyCode) -> (&'static str, Option<char>) {
 mod tests {
     use super::*;
 
-    /// Minimal helper: build a `LuaWindowComponent` from a Lua source
-    /// snippet that returns the spec table directly. `window.open`
+    /// Minimal helper: build a `LuaCardComponent` from a Lua source
+    /// snippet that returns the spec table directly. `card.open`
     /// gets its spec the same way — caller-side `eval`, resulting
     /// Table handed in. Bypasses the whole `register_*` dance because
     /// these tests exercise component behaviour, not registration.
-    fn make(source: &str, log_tag: &'static str) -> LuaWindowComponent {
+    fn make(source: &str, log_tag: &'static str) -> LuaCardComponent {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(source).eval().expect("eval spec");
-        LuaWindowComponent::from_spec(lua, spec, log_tag, CloseFlag::default()).expect("from_spec")
+        LuaCardComponent::from_spec(lua, spec, log_tag, CloseFlag::default()).expect("from_spec")
     }
 
     #[test]
@@ -642,7 +642,7 @@ mod tests {
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaWindowComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
+        let mut c = LuaCardComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
 
         const CTX: Context = Context {
             theme_id: crate::theme::ThemeId::Dark,
@@ -666,7 +666,7 @@ mod tests {
         let flag = CloseFlag::default();
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaWindowComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
+        let mut c = LuaCardComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
 
         const CTX: Context = Context {
             theme_id: crate::theme::ThemeId::Dark,

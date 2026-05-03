@@ -7,7 +7,7 @@
 --
 -- Pure-action plugin: no `on_tick` (static cheatsheet, no async
 -- work, no map paint). Just a palette command + keybind that open
--- the popup window via `ttymap.api.window.open`.
+-- the popup window via `ttymap.api.card.open`.
 
 local sidebar = require "ttymap.sidebar"
 
@@ -84,7 +84,7 @@ end
 
 local function open()
     if w then return end
-    w = ttymap.api.window.open({
+    w = ttymap.api.card.open({
         footer_hints = {
             { key = "↑↓ PgUp PgDn", label = "scroll" },
             { key = "q / Esc",      label = "close" },

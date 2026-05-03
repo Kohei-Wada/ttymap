@@ -28,7 +28,7 @@ local state = {
     pending_pages = nil,    -- titles + coords + dist between geosearch and extracts
     needs_refresh = false,  -- true on (re)open and on 'r'
 }
-local w = nil  -- window handle while open; nil while closed (also acts as enabled flag)
+local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
 
 local function geosearch_url(lat, lon)
     return string.format(
@@ -226,7 +226,7 @@ local function open()
     if w then return end
     -- Trigger a fresh fetch on (re)open.
     state.needs_refresh = true
-    w = ttymap.api.window.open({
+    w = ttymap.api.card.open({
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "open" },
