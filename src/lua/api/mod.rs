@@ -89,9 +89,10 @@ use std::time::Instant;
 
 use mlua::{Lua, Table, UserData};
 
+use crate::frontend::UserIntent;
 use crate::geo::LonLat;
-use crate::lua::intent::LuaIntent;
 use crate::lua::sender::LuaSender;
+use crate::map::Action;
 use crate::shared::http::HttpClient;
 
 /// Maximum number of pending notifications retained in the host's
@@ -347,10 +348,12 @@ pub fn install(
 ) -> mlua::Result<LuaHostHandles> {
     // `sender` is a [`LuaSender`] handed in from the composition
     // root; it wraps the App's `Sender<AppEvent>` so the lua module
-    // never imports `AppEvent` / `UserIntent` directly. Fire-and-forget
-    // Lua intents (`map:jump`, `:zoom`, `:fly_to`, `frame.export`)
-    // emit [`crate::lua::intent::LuaIntent`] values; the frontend
-    // translates them on the way through `handle_event`.
+    // never imports `AppEvent` directly. Fire-and-forget Lua intents
+    // (`map:jump`, `:zoom`, `:fly_to`, `frame.export`) emit
+    // [`UserIntent`] values that the App dispatches through the
+    // same path as keymap-driven intents — plugin trust model is
+    // nvim-style (anything the user could do, a plugin can also
+    // do).
     // `Box<dyn Component>` is `!Send`; that's fine — the channel
     // stays on the main thread (install + every `card.open` Lua
     // callback + App drain all run on the same thread). `mpsc`
@@ -603,7 +606,7 @@ pub fn install(
     frame_api.set(
         "export",
         lua.create_function(move |_, _: ()| {
-            export_sender.emit(LuaIntent::FrameExport);
+            export_sender.emit(UserIntent::ExportFrame);
             Ok(())
         })?,
     )?;
@@ -705,10 +708,10 @@ pub fn install(
 // ── ttymap.map ────────────────────────────────────────────────────────
 
 struct HostMap {
-    /// Boundary type around the App-level event channel. Fire-and-
-    /// forget Lua intents (`jump` / `zoom` / `fly_to`) emit the
-    /// matching [`LuaIntent`] through it; the lua module doesn't
-    /// import `UserIntent` / `AppEvent` directly.
+    /// Boundary around the App-level event channel. Fire-and-forget
+    /// Lua intents (`jump` / `zoom` / `fly_to`) emit the matching
+    /// [`UserIntent`] through it; the lua module doesn't import
+    /// `AppEvent` directly (only the channel type leaks).
     sender: LuaSender,
     center: Arc<Mutex<LonLat>>,
     zoom: Arc<Mutex<f64>>,
@@ -717,11 +720,12 @@ struct HostMap {
 impl UserData for HostMap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.map:jump(lon, lat)` — request the map recentre on
-        // the given coordinate. Emits a `LuaIntent::MapJump`; the
-        // frontend translates to `UserIntent::Map(Action::Jump(...))` on
-        // the way through `handle_event`.
+        // the given coordinate. Emits the matching `UserIntent::Map`
+        // through the shared dispatch boundary so the host treats it
+        // identically to a keymap-driven jump.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
-            this.sender.emit(LuaIntent::MapJump(LonLat { lon, lat }));
+            this.sender
+                .emit(UserIntent::Map(Action::Jump(LonLat { lon, lat })));
             Ok(())
         });
 
@@ -735,7 +739,7 @@ impl UserData for HostMap {
         // `None` (getter), number → `Some(level)` (setter).
         methods.add_method("zoom", |_, this, level: Option<f64>| match level {
             Some(z) => {
-                this.sender.emit(LuaIntent::MapZoomSet(z));
+                this.sender.emit(UserIntent::Map(Action::SetZoom(z)));
                 Ok(mlua::Value::Nil)
             }
             None => {
@@ -749,10 +753,10 @@ impl UserData for HostMap {
         // would render two frames; this routes through `MapFlyTo`
         // so the user sees a single transition.
         methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
-            this.sender.emit(LuaIntent::MapFlyTo {
+            this.sender.emit(UserIntent::Map(Action::FlyTo {
                 center: LonLat { lon, lat },
                 zoom,
-            });
+            }));
             Ok(())
         });
 
@@ -939,11 +943,11 @@ mod tests {
 
         let ev = event_rx.try_recv().expect("jump must be queued");
         match ev {
-            AppEvent::LuaIntent(LuaIntent::MapJump(ll)) => {
+            AppEvent::Intent(UserIntent::Map(Action::Jump(ll))) => {
                 assert!((ll.lon - 139.7595).abs() < 1e-9);
                 assert!((ll.lat - 35.6828).abs() < 1e-9);
             }
-            other => panic!("expected AppEvent::LuaIntent(MapJump), got {other:?}"),
+            other => panic!("expected AppEvent::Intent(Map(Jump)), got {other:?}"),
         }
     }
 
@@ -956,8 +960,10 @@ mod tests {
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let ev = event_rx.try_recv().expect("zoom must be queued");
         match ev {
-            AppEvent::LuaIntent(LuaIntent::MapZoomSet(z)) => assert!((z - 7.5).abs() < 1e-9),
-            other => panic!("expected AppEvent::LuaIntent(MapZoomSet), got {other:?}"),
+            AppEvent::Intent(UserIntent::Map(Action::SetZoom(z))) => {
+                assert!((z - 7.5).abs() < 1e-9)
+            }
+            other => panic!("expected AppEvent::Intent(Map(SetZoom)), got {other:?}"),
         }
     }
 
@@ -989,12 +995,12 @@ mod tests {
             .expect("exec");
         let ev = event_rx.try_recv().expect("fly_to queued");
         match ev {
-            AppEvent::LuaIntent(LuaIntent::MapFlyTo { center, zoom }) => {
+            AppEvent::Intent(UserIntent::Map(Action::FlyTo { center, zoom })) => {
                 assert!((center.lon - 139.7595).abs() < 1e-9);
                 assert!((center.lat - 35.6828).abs() < 1e-9);
                 assert!((zoom - 12.0).abs() < 1e-9);
             }
-            other => panic!("expected AppEvent::LuaIntent(MapFlyTo), got {other:?}"),
+            other => panic!("expected AppEvent::Intent(Map(FlyTo)), got {other:?}"),
         }
     }
 
@@ -1004,7 +1010,7 @@ mod tests {
         lua.load("ttymap.api.frame.export()").exec().expect("exec");
         let ev = event_rx.try_recv().expect("export must be queued");
         assert!(
-            matches!(ev, AppEvent::LuaIntent(LuaIntent::FrameExport)),
+            matches!(ev, AppEvent::Intent(UserIntent::ExportFrame)),
             "got {ev:?}"
         );
     }

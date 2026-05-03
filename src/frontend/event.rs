@@ -4,22 +4,17 @@
 //! channel that every off-main-thread (or deferred main-thread)
 //! source pushes into. Four variants:
 //!
-//! - [`AppEvent::Intent`] — wraps an [`UserIntent`]: every fire-and-forget
-//!   user-intent emitter (Lua plugins via the host channel,
-//!   keymap/mouse when the dispatch can't run inline) goes through
-//!   this. Synchronous emitters (compositor.poll, palette.execute)
-//!   still call [`super::App::dispatch`] directly without the channel.
+//! - [`AppEvent::Intent`] — wraps a [`UserIntent`]: every
+//!   fire-and-forget intent emitter (keymap / mouse when dispatch
+//!   can't run inline, Lua plugins via [`crate::lua::sender::LuaSender`])
+//!   goes through this. Synchronous emitters (compositor.poll,
+//!   palette.execute) still call [`super::Frontend::dispatch`]
+//!   directly without the channel.
 //! - [`AppEvent::FrameReady`] — the render thread hands back a
 //!   completed [`MapFrame`] for the App to display next paint cycle.
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
 //!   on it and dispatches the appropriate downstream `UserIntent`s.
-//! - [`AppEvent::LuaIntent`] — a Lua-originated intent emitted via
-//!   `ttymap.*` host bindings. Carries [`crate::lua::intent::LuaIntent`]
-//!   and is translated to the matching [`UserIntent`] inside the
-//!   frontend's `handle_event` arm. The Lua subsystem doesn't import
-//!   `UserIntent` / `Action` — the translation lives at this boundary so
-//!   the lua module stays bounded to its own intent vocabulary.
 //! - [`AppEvent::Wake`] — periodic wake-up from the frame timer
 //!   thread. Replaces the old `recv_timeout` polling: the main loop
 //!   now blocks on `recv()` and the timer guarantees per-iteration
@@ -38,7 +33,6 @@
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
 
-use crate::lua::intent::LuaIntent;
 use crate::map::render::frame::MapFrame;
 
 use super::UserIntent;
@@ -62,13 +56,6 @@ pub enum AppEvent {
     /// `crossterm::event::poll` block, just sourced through the
     /// unified queue.
     Input(crossterm::event::Event),
-    /// Lua-originated intent emitted by a `ttymap.*` host method.
-    /// The frontend translates it to the matching [`UserIntent`] in
-    /// `handle_event`. Carrying it as a separate variant (rather
-    /// than wrapping `UserIntent` directly inside the lua module) keeps
-    /// the lua subsystem's import surface bounded — see
-    /// [`crate::lua::sender::LuaSender`] for the boundary type.
-    LuaIntent(LuaIntent),
     /// Periodic wake-up from the frame timer thread. The main loop's
     /// only response is to fall through into the per-iteration
     /// draw + overlay-redraw rate-check, so per-frame work still

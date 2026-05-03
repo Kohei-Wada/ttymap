@@ -17,7 +17,6 @@ pub mod api;
 pub mod bridge;
 pub mod handle;
 pub mod init_lua;
-pub mod intent;
 pub mod registry;
 pub mod runtimepath;
 pub mod sender;

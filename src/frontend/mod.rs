@@ -263,16 +263,6 @@ impl Frontend {
                 self.lua.notify_frame_ready();
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
-            AppEvent::LuaIntent(intent) => {
-                // Translate Lua-originated intents to the App's own
-                // imperative vocabulary. The lua subsystem doesn't
-                // import `UserIntent` / `Action`; the boundary lives
-                // here.
-                let msg = lua_intent_to_user_intent(intent);
-                let snapshot = msg.clone();
-                self.dispatch(msg);
-                self.notify_post_intent(&snapshot);
-            }
             // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
             // already does whatever per-frame work is needed; no
@@ -523,20 +513,5 @@ impl Frontend {
         self.lua.sync_view(self.map.center(), self.map.zoom());
         let overlays = std::mem::take(&mut self.overlay_sink);
         self.map.request_redraw(overlays);
-    }
-}
-
-/// Translate a Lua-originated [`LuaIntent`] into the App's own
-/// [`UserIntent`] vocabulary. Lives in the frontend (not the lua
-/// module) because the lua module deliberately doesn't import
-/// `UserIntent` / `Action` — the lua subsystem brokers events; this
-/// function is the boundary that interprets them.
-fn lua_intent_to_user_intent(intent: crate::lua::intent::LuaIntent) -> UserIntent {
-    use crate::lua::intent::LuaIntent;
-    match intent {
-        LuaIntent::MapJump(ll) => UserIntent::Map(Action::Jump(ll)),
-        LuaIntent::MapZoomSet(z) => UserIntent::Map(Action::SetZoom(z)),
-        LuaIntent::MapFlyTo { center, zoom } => UserIntent::Map(Action::FlyTo { center, zoom }),
-        LuaIntent::FrameExport => UserIntent::ExportFrame,
     }
 }
