@@ -11,6 +11,7 @@
 
 pub mod card_component;
 pub mod card_handle;
+pub mod card_parse;
 pub mod handle;
 pub mod palette_handle;
 pub mod palette_provider;
