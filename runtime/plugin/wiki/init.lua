@@ -161,6 +161,10 @@ local function move_selection(direction)
     if a then ttymap.map:jump(a.lon, a.lat) end
 end
 
+-- Detail mode and the empty-state placeholder both render as
+-- free-form paragraph text (the bridge falls through to `render`
+-- when `items()` is empty). The list-mode article list uses the
+-- `items` path below.
 local function build_lines()
     if state.detail then
         local d = state.detail
@@ -179,19 +183,21 @@ local function build_lines()
         return lines
     end
 
-    if #state.articles == 0 then
-        return { { { text = "Loading...", style = "muted" } } }
-    end
+    -- List-mode empty state.
+    return { { { text = "Loading...", style = "muted" } } }
+end
 
-    local lines = {}
-    for i, a in ipairs(state.articles) do
-        local title_style = (i == state.selected) and "highlight" or "accent"
-        table.insert(lines, {
-            { text = a.title,                              style = title_style },
+local function build_items()
+    -- In detail mode there's no list; fall back to render() above.
+    if state.detail then return {} end
+    local items = {}
+    for _, a in ipairs(state.articles) do
+        table.insert(items, { {
+            { text = a.title,                              style = "accent" },
             { text = "  " .. fmt.distance(a.dist_m),    style = "muted" },
-        })
+        } })
     end
-    return lines
+    return items
 end
 
 -- Per-frame work runs only while the panel is open: drives the
@@ -234,7 +240,9 @@ local function open()
             { key = "r",       label = "refresh" },
             { key = "q / i",   label = "close wiki" },
         },
-        render = build_lines,
+        render   = build_lines,
+        items    = build_items,
+        selected = function() return state.selected end,
         handle_event = function(key)
             local code = key.code
             local ch = key.char

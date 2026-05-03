@@ -87,37 +87,42 @@ local function ago(now_sec, ms)
     return math.floor(hours / 24) .. "d ago"
 end
 
+-- Empty-state placeholder. Used by the bridge when `items()`
+-- returns an empty list — either the feed is off, or the first
+-- fetch hasn't returned yet.
 local function build_lines()
     if not enabled then
         return {
-            { { text = "(feed off)",                     style = "muted" } },
-            { { text = "Toggle from :Toggle quakes",     style = "muted" } },
+            { { text = "(feed off)",                 style = "muted" } },
+            { { text = "Toggle from :Toggle quakes", style = "muted" } },
         }
     end
-    if #state.quakes == 0 then
-        return {
-            { { text = "Loading...",      style = "muted" } },
-            { { text = "(USGS, 2.5+/24h)", style = "muted" } },
-        }
-    end
+    return {
+        { { text = "Loading...",       style = "muted" } },
+        { { text = "(USGS, 2.5+/24h)", style = "muted" } },
+    }
+end
+
+local function build_items()
+    if not enabled then return {} end
     local now_sec = os.time()
-    local lines = {}
-    for i, q in ipairs(state.quakes) do
-        local title_style = (i == state.selected) and "highlight" or "accent"
+    local items = {}
+    for _, q in ipairs(state.quakes) do
         local mag_str = string.format("M%.1f", q.mag)
         local place = q.place ~= "" and q.place or "(unknown location)"
-        table.insert(lines, {
-            { text = mag_str,           style = title_style },
-            { text = "  " .. place,     style = "body" },
-        })
+        local item = {
+            -- Line 1: magnitude + place
+            { { text = mag_str,        style = "accent" },
+              { text = "  " .. place,  style = "body" } },
+        }
         local secondary = ago(now_sec, q.time_ms)
         if secondary ~= "" then
-            table.insert(lines, {
-                { text = "  " .. secondary, style = "muted" },
-            })
+            -- Line 2: ago (muted)
+            table.insert(item, { { text = "  " .. secondary, style = "muted" } })
         end
+        table.insert(items, item)
     end
-    return lines
+    return items
 end
 
 -- Per-frame work: drains the in-flight fetch, schedules the next
@@ -181,7 +186,9 @@ local function open_panel()
             { key = "Enter",   label = "jump" },
             { key = "q / Esc", label = "close" },
         },
-        render = build_lines,
+        render   = build_lines,
+        items    = build_items,
+        selected = function() return state.selected end,
         handle_event = function(key)
             local n = #state.quakes
             if sidebar.up_pressed(key) then

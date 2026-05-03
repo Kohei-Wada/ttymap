@@ -43,7 +43,8 @@ use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{
-    Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
+    Clear, List, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    TableState,
 };
 
 use crate::frontend::compositor::{Component, Context};
@@ -245,6 +246,16 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     pub fn table(&mut self, t: Table<'static>, rect: Rect, state: &mut TableState) {
         let clamped = clamp(rect, self.area);
         self.frame.render_stateful_widget(t, clamped, state);
+    }
+
+    /// Draw a `ratatui::widgets::List` into `rect`, using `state`
+    /// as the selection / scroll state. ratatui auto-scrolls
+    /// `state.offset` to keep the selected item in view across
+    /// frames, so callers persist the same `ListState` and just
+    /// update its `selected()` each frame.
+    pub fn list(&mut self, l: List<'static>, rect: Rect, state: &mut ListState) {
+        let clamped = clamp(rect, self.area);
+        self.frame.render_stateful_widget(l, clamped, state);
     }
 
     /// Draw a vertical scrollbar on the right edge of `rect`. Pass

@@ -17,18 +17,22 @@ local state = {
 }
 local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
 
+-- Empty-state placeholder. Used by the bridge when `items()`
+-- below returns an empty list (= no fetch result yet).
 local function build_lines()
-    if #state.aircraft == 0 then
-        return {
-            { { text = "Loading...",            style = "muted" } },
-            { { text = "(OpenSky takes ~12s)", style = "muted" } },
-        }
+    return {
+        { { text = "Loading...",           style = "muted" } },
+        { { text = "(OpenSky takes ~12s)", style = "muted" } },
+    }
+end
+
+local function build_items()
+    local items = {}
+    for _, a in ipairs(state.aircraft) do
+        -- Each aircraft is a 1-line item.
+        table.insert(items, { display.fmt(a) })
     end
-    local lines = {}
-    for i, a in ipairs(state.aircraft) do
-        table.insert(lines, display.fmt(a, i == state.selected))
-    end
-    return lines
+    return items
 end
 
 -- Per-frame work runs only while the panel is open: drains the
@@ -78,7 +82,9 @@ local function open()
             { key = "Enter",   label = "jump" },
             { key = "q / Esc", label = "close" },
         },
-        render = build_lines,
+        render   = build_lines,
+        items    = build_items,
+        selected = function() return state.selected end,
         handle_event = function(key)
             local n = #state.aircraft
             if sidebar.up_pressed(key) then

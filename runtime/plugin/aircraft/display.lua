@@ -18,11 +18,11 @@ local function heading_arrow(deg)
 end
 
 -- Structured line for the panel — a vec of `{ text, style }` spans
--- matching the shape `LuaCardComponent` understands. Selected
--- entries get `highlight`; unselected use `accent`. Secondary info
--- (altitude, ground state) renders muted, mirroring wiki's pattern.
-function M.fmt(a, selected)
-    local title_style = selected and "highlight" or "accent"
+-- matching the shape `LuaCardComponent` understands. The bridge
+-- highlights the selected row natively (List + ListState), so this
+-- helper just paints the title in `accent` and leaves selection to
+-- the host. Secondary info (altitude, ground state) renders muted.
+function M.fmt(a)
     local cs = a.callsign ~= "" and a.callsign or "(no callsign)"
     local secondary = ""
     if a.on_ground then
@@ -31,7 +31,7 @@ function M.fmt(a, selected)
         secondary = string.format("  %dm", math.floor(a.alt))
     end
     return {
-        { text = cs,        style = title_style },
+        { text = cs,        style = "accent" },
         { text = secondary, style = "muted" },
     }
 end

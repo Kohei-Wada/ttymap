@@ -40,7 +40,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, Table};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::card_handle::CloseFlag;
 use super::handle::{CallOutcome, LuaHandle};
@@ -72,6 +72,13 @@ pub struct LuaCardComponent {
     /// windows (no panel UI) omit it; without this flag the adapter
     /// would still paint an empty framed Paragraph over the map.
     has_render: bool,
+    /// Whether the spec exposes an `items` function (list mode).
+    /// When true *and* `items()` returns a non-empty list, the
+    /// component renders as a ratatui `List` with native
+    /// selection / scroll state instead of the free-form
+    /// Paragraph path. Empty `items()` falls through to `render`
+    /// so plugins can use that for "Loading..." placeholders.
+    has_items: bool,
     /// Static footer hints from `spec.footer_hints`. Read once at
     /// construction so [`Component::footer_hints`] can hand back
     /// `&'static str` without leaking per call. Empty when the spec
@@ -80,7 +87,8 @@ pub struct LuaCardComponent {
     /// First visible line index when the rendered content overflows
     /// the slot. Bridge-managed via the section scroll keys
     /// (PageUp / PageDown / C-n / C-p / Up / Down / Home / End).
-    /// `Cell` because `render` takes `&self`.
+    /// `Cell` because `render` takes `&self`. Used by the Paragraph
+    /// path only — list-mode scrolling lives in `list_state.offset`.
     scroll_offset: std::cell::Cell<u16>,
     /// Last rendered inner height of this section's panel (i.e.
     /// `area - frame border`). Cached so PageUp / PageDown / C-d /
@@ -89,6 +97,12 @@ pub struct LuaCardComponent {
     /// Defaults to a sane fallback (10) when no frame has rendered
     /// yet.
     last_inner_height: std::cell::Cell<u16>,
+    /// Persistent ratatui `ListState` for the list-mode render
+    /// path. ratatui mutates `state.offset` in `render` to keep
+    /// `selected` in view; persisting the state across frames lets
+    /// that book-keeping survive. `RefCell` because `render` takes
+    /// `&self`.
+    list_state: std::cell::RefCell<ListState>,
 }
 
 impl LuaCardComponent {
@@ -123,6 +137,10 @@ impl LuaCardComponent {
             spec.get::<mlua::Value>("render"),
             Ok(mlua::Value::Function(_))
         );
+        let has_items = matches!(
+            spec.get::<mlua::Value>("items"),
+            Ok(mlua::Value::Function(_))
+        );
         let footer_hints = parse_footer_hints(&spec);
         let handle = LuaHandle::new(lua, spec, log_tag)?;
         Ok(Self {
@@ -130,9 +148,11 @@ impl LuaCardComponent {
             flag,
             display,
             has_render,
+            has_items,
             footer_hints,
             scroll_offset: std::cell::Cell::new(0),
             last_inner_height: std::cell::Cell::new(10),
+            list_state: std::cell::RefCell::new(ListState::default()),
         })
     }
 
@@ -147,6 +167,34 @@ impl LuaCardComponent {
         match self.handle.try_call::<_, Vec<mlua::Value>>("render", ()) {
             CallOutcome::Ok(raw) => raw.into_iter().map(parse_line_value).collect(),
             CallOutcome::Missing | CallOutcome::Errored => Vec::new(),
+        }
+    }
+
+    /// Pull the `items()` list from the Lua spec. Each item is a
+    /// vec of lines (each line a vec of spans), so a 2-line list
+    /// item like quake's "M5.7 Tokyo / 2h ago" comes back as a
+    /// `Vec<Vec<Span>>` of length 2. Empty list on missing /
+    /// errored / non-function spec field.
+    fn render_items(&self) -> Vec<Vec<Vec<(String, StyleKind)>>> {
+        match self.handle.try_call::<_, Vec<mlua::Value>>("items", ()) {
+            CallOutcome::Ok(raw) => raw.into_iter().map(parse_item_value).collect(),
+            CallOutcome::Missing | CallOutcome::Errored => Vec::new(),
+        }
+    }
+
+    /// Read the current `selected()` index from the spec. Lua side
+    /// is 1-based; we convert to ratatui's 0-based here. Out-of-
+    /// range or non-numeric values become `None` (no selection).
+    fn selected_index(&self, item_count: usize) -> Option<usize> {
+        match self.handle.try_call::<_, mlua::Value>("selected", ()) {
+            CallOutcome::Ok(mlua::Value::Integer(i)) => {
+                if i < 1 {
+                    return None;
+                }
+                let zero = (i - 1) as usize;
+                (zero < item_count).then_some(zero)
+            }
+            _ => None,
         }
     }
 
@@ -182,6 +230,103 @@ impl LuaCardComponent {
             CallOutcome::Missing => KeyAction::Ignore,
             CallOutcome::Errored => KeyAction::Consume,
         }
+    }
+
+    /// Render the spec's `render()` output as a free-form
+    /// Paragraph. Used for help-style content and as the
+    /// empty-state fallback when a list-driven plugin returns no
+    /// items yet.
+    fn render_paragraph(
+        &self,
+        win: &mut RenderWindow,
+        outer: ratatui::layout::Rect,
+        inner: ratatui::layout::Rect,
+    ) {
+        let body = win.style(StyleKind::Body);
+        let raw_lines = self.render_lines();
+        let total_lines = raw_lines.len() as u16;
+
+        let lines: Vec<Line<'static>> = raw_lines
+            .into_iter()
+            .map(|spans| {
+                let rendered: Vec<Span<'static>> = spans
+                    .into_iter()
+                    .map(|(text, kind)| Span::styled(text, win.style(kind)))
+                    .collect();
+                Line::from(rendered)
+            })
+            .collect();
+
+        let mut offset = self.scroll_offset.get();
+        // Clamp against the freshly-rendered line count so PageDown
+        // overshoot self-corrects here (and the offset never traps
+        // the section in blank space).
+        let max_offset = total_lines.saturating_sub(inner.height);
+        if offset > max_offset {
+            offset = max_offset;
+        }
+        self.scroll_offset.set(offset);
+
+        let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
+        win.paragraph(paragraph, inner);
+        win.scrollbar(outer, total_lines, offset, inner.height);
+    }
+
+    /// Render the spec's `items()` output as a stateful
+    /// `ratatui::List`. ratatui handles per-frame
+    /// scroll-to-selected via `ListState.offset`; we just feed it
+    /// the current selection (1-based from Lua → 0-based here)
+    /// and persist the state across frames so the offset survives.
+    fn render_list(
+        &self,
+        win: &mut RenderWindow,
+        outer: ratatui::layout::Rect,
+        inner: ratatui::layout::Rect,
+        raw_items: Vec<Vec<Vec<(String, StyleKind)>>>,
+    ) {
+        let body = win.style(StyleKind::Body);
+        let highlight_style = win.style(StyleKind::Highlight);
+
+        // Materialise items as ratatui ListItems. Each item is a
+        // `Vec<Line>` (1+ lines) so a quake-style "M5.7 Tokyo /
+        // 2h ago" lands as a 2-line ListItem.
+        let list_items: Vec<ListItem<'static>> = raw_items
+            .iter()
+            .map(|item_lines| {
+                let lines: Vec<Line<'static>> = item_lines
+                    .iter()
+                    .map(|spans| {
+                        let rendered: Vec<Span<'static>> = spans
+                            .iter()
+                            .map(|(text, kind)| Span::styled(text.clone(), win.style(*kind)))
+                            .collect();
+                        Line::from(rendered)
+                    })
+                    .collect();
+                ListItem::new(lines)
+            })
+            .collect();
+
+        let total = raw_items.len();
+        let selected = self.selected_index(total);
+
+        // Update the persistent state. ratatui's `render` mutates
+        // `state.offset` to keep `state.selected()` in view; we
+        // hand it a `&mut` view of the cell-stored state.
+        let mut state = self.list_state.borrow_mut();
+        state.select(selected);
+
+        let list = List::new(list_items)
+            .style(body)
+            .highlight_style(highlight_style);
+        win.list(list, inner, &mut state);
+
+        // Scrollbar driven by ratatui's own scroll bookkeeping.
+        // Approximate: rail length = inner.height (one row per
+        // item is the simple case; multi-line items shrink the
+        // ratio but the indicator still tells the right story).
+        let viewport_items = total.min(inner.height as usize) as u16;
+        win.scrollbar(outer, total as u16, state.offset() as u16, viewport_items);
     }
 
     fn build_key_table(&self, event: KeyEvent) -> mlua::Result<Table> {
@@ -250,8 +395,8 @@ impl Component for LuaCardComponent {
     }
 
     fn render(&self, win: &mut RenderWindow) {
-        if !self.has_render {
-            // Marker-only / map-only windows opt out of side-area
+        if !self.has_render && !self.has_items {
+            // Marker-only / map-only cards opt out of side-area
             // chrome; without this guard we'd paint an empty framed
             // Paragraph over the map.
             return;
@@ -265,60 +410,25 @@ impl Component for LuaCardComponent {
         // it as the page step for PageUp / PageDown / C-d / C-u
         // without computing layout itself.
         self.last_inner_height.set(inner.height);
-        let body = win.style(StyleKind::Body);
-        let raw_lines = self.render_lines();
-        let total_lines = raw_lines.len() as u16;
 
-        // Auto-scroll to keep the selected row in view. Plugins
-        // mark the focused row with a `Highlight`-styled span (wiki
-        // / aircraft / satellite all do); we scan for the first
-        // such row and bump the scroll offset whenever it falls
-        // outside the visible window. Plugins that don't use a
-        // highlight style get pure C-n / C-p scroll behaviour
-        // unchanged.
-        let highlight_row: Option<u16> = raw_lines
-            .iter()
-            .position(|spans| spans.iter().any(|(_, kind)| *kind == StyleKind::Highlight))
-            .map(|p| p as u16);
-
-        let lines: Vec<Line<'static>> = raw_lines
-            .into_iter()
-            .map(|spans| {
-                let rendered: Vec<Span<'static>> = spans
-                    .into_iter()
-                    .map(|(text, kind)| Span::styled(text, win.style(kind)))
-                    .collect();
-                Line::from(rendered)
-            })
-            .collect();
-
-        let mut offset = self.scroll_offset.get();
-        if let Some(row) = highlight_row
-            && inner.height > 0
-        {
-            if row < offset {
-                offset = row;
-            } else if row >= offset + inner.height {
-                offset = row + 1 - inner.height;
+        // List path: when `items` is set and returns at least one
+        // entry, render as a ratatui `List`. Otherwise (items is
+        // missing OR returned empty), fall through to the
+        // paragraph path which renders `render()`. This makes
+        // `render` a natural empty-state placeholder for plugins
+        // that drive a list — quake's "feed off" / "loading"
+        // messages, for example.
+        if self.has_items {
+            let raw_items = self.render_items();
+            if !raw_items.is_empty() {
+                self.render_list(win, area, inner, raw_items);
+                return;
             }
         }
-        // Clamp against the freshly-rendered line count so j/k
-        // overshoot from the previous frame self-corrects here (and
-        // the offset never traps the section in blank space).
-        let max_offset = total_lines.saturating_sub(inner.height);
-        if offset > max_offset {
-            offset = max_offset;
+
+        if self.has_render {
+            self.render_paragraph(win, area, inner);
         }
-        self.scroll_offset.set(offset);
-
-        let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
-        win.paragraph(paragraph, inner);
-
-        // Vertical scrollbar on the right border (no-op when content
-        // fits the slot — the helper short-circuits internally).
-        // Drawn over `area` so the indicator sits on the panel
-        // border, not inside the content.
-        win.scrollbar(area, total_lines, offset, inner.height);
     }
 
     fn poll(&mut self, win: &mut Window) {
@@ -408,6 +518,53 @@ fn parse_line_value(value: mlua::Value) -> Vec<(String, StyleKind)> {
             spans
         }
         other => vec![(format!("{:?}", other), StyleKind::Body)],
+    }
+}
+
+/// Parse one `items()[i]` value into a `Vec<Vec<Span>>` (a list of
+/// lines, each a list of spans). Two accepted shapes:
+///
+/// - **`Vec<Line>`** — array of arrays. Each inner array goes
+///   through [`parse_line_value`] for the per-span tagging.
+/// - **`Line`** — bare span array (no outer wrapping). Treated as a
+///   1-line item, mostly so simple plugins can write
+///   `{{text=..., style=...}}` for a 1-line entry instead of
+///   `{{{text=..., style=...}}}`.
+fn parse_item_value(value: mlua::Value) -> Vec<Vec<(String, StyleKind)>> {
+    let mlua::Value::Table(t) = value else {
+        // Stringify whatever this is into a 1-line, 1-span fallback.
+        return vec![parse_line_value(value)];
+    };
+    // Inspect the first sequence entry to disambiguate Vec<Line>
+    // (item is array-of-lines) from Line (item is array-of-spans):
+    //
+    // - A *line* is a Lua array of spans, so its array part is
+    //   non-empty (has 1+ entries that are themselves either span
+    //   tables or strings).
+    // - A *span* is a Lua record with string keys (`text`, `style`)
+    //   so its array part is empty.
+    //
+    // Sample item[0]: if it's a Table with array-len > 0, the
+    // outer is Vec<Line>. Otherwise it's Line.
+    let first_entry: Option<mlua::Value> = t
+        .clone()
+        .sequence_values::<mlua::Value>()
+        .next()
+        .transpose()
+        .ok()
+        .flatten();
+    let looks_like_lines = matches!(
+        &first_entry,
+        Some(mlua::Value::Table(inner)) if inner.len().map(|n| n > 0).unwrap_or(false)
+    );
+    if looks_like_lines {
+        t.sequence_values::<mlua::Value>()
+            .flatten()
+            .map(parse_line_value)
+            .collect()
+    } else {
+        // 1-line item.
+        vec![parse_line_value(mlua::Value::Table(t))]
     }
 }
 

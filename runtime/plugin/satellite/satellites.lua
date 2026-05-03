@@ -164,9 +164,12 @@ function M.make(specs)
         -- All invisible: leave `selected` as-is.
     end
 
-    local function build_lines()
-        local lines = {}
-        for i, sat in ipairs(sats) do
+    -- One sat = one 1-line item. The bridge highlights the selected
+    -- row natively; this builder just describes the row in default
+    -- styling.
+    local function build_items()
+        local items = {}
+        for _, sat in ipairs(sats) do
             local marker = sat.visible and "●" or "○"
             local body
             if not sat.visible then
@@ -179,15 +182,9 @@ function M.make(specs)
             local key_hint = sat.key and ("[" .. sat.key .. "] ") or "    "
             local row = string.format("%s %s%-8s %s",
                 marker, key_hint, sat.display, body)
-            if i == selected and sat.visible then
-                -- Highlight the focused row the same way wiki
-                -- highlights its selected article.
-                table.insert(lines, { { text = row, style = "highlight" } })
-            else
-                table.insert(lines, row)
-            end
+            table.insert(items, { row })
         end
-        return lines
+        return items
     end
 
     local w = nil  -- card handle while open; nil while closed (also
@@ -304,9 +301,14 @@ function M.make(specs)
 
     local function open()
         if w then return end
+        local function selected_index()
+            return selected
+        end
+
         w = ttymap.api.card.open({
             footer_hints = hints,
-            render = build_lines,
+            items    = build_items,
+            selected = selected_index,
             handle_event = function(key)
                 local code = key.code
                 local ch = key.char
