@@ -76,6 +76,8 @@
 //! The split is by *scope*, not by name: `opt` / `keymap` live in
 //! init; `http` / `map` / etc. live in plugin runtime.
 
+pub mod http;
+pub mod json;
 pub mod map_api;
 pub mod sgp4;
 
@@ -83,8 +85,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use mlua::{Lua, Table, UserData};
 
@@ -362,7 +363,7 @@ pub fn install(
     let ttymap = lua.create_table()?;
     ttymap.set(
         "http",
-        lua.create_userdata(HostHttp {
+        lua.create_userdata(http::HostHttp {
             http: HttpClient::new(tag),
         })?,
     )?;
@@ -374,7 +375,7 @@ pub fn install(
             zoom: zoom.clone(),
         })?,
     )?;
-    ttymap.set("json", lua.create_userdata(HostJson)?)?;
+    ttymap.set("json", lua.create_userdata(json::HostJson)?)?;
     ttymap.set("sgp4", lua.create_userdata(sgp4::HostSgp4)?)?;
     ttymap.set(
         "tile",
@@ -701,46 +702,6 @@ pub fn install(
     })
 }
 
-// ── ttymap.http ───────────────────────────────────────────────────────
-
-struct HostHttp {
-    http: HttpClient,
-}
-
-impl UserData for HostHttp {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.http:fetch(url)` — spawn a background GET and return a
-        // Job. Body is decoded as UTF-8; non-text or fetch errors
-        // surface as the Job never producing a result (try_take keeps
-        // returning nil).
-        methods.add_method("fetch", |_, this, url: String| {
-            Ok(LuaJob::spawn(&this.http, url, None))
-        });
-
-        // `ttymap.http:fetch_cached(url, ttl_secs)` — disk-cached GET.
-        // Read-through: on a fresh-enough cache hit (`age < ttl_secs`)
-        // emits the cached body without touching the network. On miss,
-        // does a real fetch and write-throughs the response. On HTTP
-        // error, falls back to the stale on-disk copy if one exists —
-        // critical for upstreams like CelesTrak's `gp.php`, which 403s
-        // a same-IP repeat fetch within its own 2h refresh window and
-        // would otherwise strand the plugin on "awaiting" forever.
-        // Cache lives under `<XDG_CACHE_HOME>/ttymap/lua-http/` keyed
-        // by FNV-1a of the URL.
-        methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
-            Ok(LuaJob::spawn(&this.http, url, Some(ttl_secs)))
-        });
-
-        // `ttymap.http:url_encode(s)` — percent-encode a query string per
-        // RFC 3986: unreserved (A-Za-z0-9-_.~) pass through, space
-        // becomes `+`, everything else `%HH`. Lives here because most
-        // callers urlencode arguments before handing them to `fetch`.
-        methods.add_method("url_encode", |_, _this, s: String| {
-            Ok(crate::shared::http::url::urlencoded(&s))
-        });
-    }
-}
-
 // ── ttymap.map ────────────────────────────────────────────────────────
 
 struct HostMap {
@@ -804,69 +765,6 @@ impl UserData for HostMap {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
         });
-    }
-}
-
-// ── ttymap.json ───────────────────────────────────────────────────────
-
-struct HostJson;
-
-impl UserData for HostJson {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.json:parse(s) -> value | nil` — turn a JSON string
-        // into nested Lua tables. Objects become string-keyed tables,
-        // arrays become 1-indexed tables, `null` is `nil`. Parse
-        // errors return `nil` and log a warning, so a flaky upstream
-        // doesn't crash a plugin.
-        methods.add_method(
-            "parse",
-            |lua, _this, source: String| match serde_json::from_str::<serde_json::Value>(&source) {
-                Ok(v) => json_to_lua(lua, &v).map(Some),
-                Err(e) => {
-                    log::warn!("lua-host: json:parse failed: {}", e);
-                    Ok(None)
-                }
-            },
-        );
-    }
-}
-
-/// Recursive translation of a `serde_json::Value` into a
-/// `mlua::Value`. Objects map to string-keyed tables, arrays to
-/// 1-indexed tables (Lua convention), null to nil, integers to
-/// `Integer` when they fit and `Number` otherwise.
-fn json_to_lua(lua: &mlua::Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value> {
-    match value {
-        serde_json::Value::Null => Ok(mlua::Value::Nil),
-        serde_json::Value::Bool(b) => Ok(mlua::Value::Boolean(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(mlua::Value::Integer(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(mlua::Value::Number(f))
-            } else {
-                // Numbers that fit neither i64 nor f64 are
-                // exotic (large unsigned). Surface as nil rather
-                // than panic; plugins can do their own handling.
-                Ok(mlua::Value::Nil)
-            }
-        }
-        serde_json::Value::String(s) => Ok(mlua::Value::String(lua.create_string(s)?)),
-        serde_json::Value::Array(items) => {
-            let table = lua.create_table()?;
-            // Lua arrays are 1-indexed.
-            for (i, item) in items.iter().enumerate() {
-                table.set(i + 1, json_to_lua(lua, item)?)?;
-            }
-            Ok(mlua::Value::Table(table))
-        }
-        serde_json::Value::Object(map) => {
-            let table = lua.create_table()?;
-            for (k, v) in map {
-                table.set(k.as_str(), json_to_lua(lua, v)?)?;
-            }
-            Ok(mlua::Value::Table(table))
-        }
     }
 }
 
@@ -973,99 +871,6 @@ impl UserData for HostLog {
         methods.add_method("error", |_, this, msg: String| {
             log::error!(target: &this.target, "{}", msg);
             Ok(())
-        });
-    }
-}
-
-// ── Job ─────────────────────────────────────────────────────────────
-
-/// One-shot fetch handle. Stays alive in the Lua state until the
-/// plugin drops its reference (or until the setup-state Lua VM
-/// itself is dropped at program exit).
-pub struct LuaJob {
-    rx: mpsc::Receiver<String>,
-}
-
-impl LuaJob {
-    /// Background HTTP GET. With `cache_ttl == None` it's a plain
-    /// fetch; with `Some(ttl_secs)` it's read-through against a
-    /// disk cache (write-through on success, stale-fallback on HTTP
-    /// error so a rate-limiting upstream doesn't strand callers on
-    /// "no body, no error"). Cache miss / stale rolls into the
-    /// network path automatically.
-    fn spawn(http: &HttpClient, url: String, cache_ttl: Option<u64>) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let http = http.clone();
-        let path = cache_ttl.and_then(|_| http_cache_path(&url));
-        thread::spawn(move || {
-            // Fresh cache hit → return immediately, skip the network.
-            if let (Some(ttl), Some(p)) = (cache_ttl, path.as_ref())
-                && let Ok(meta) = std::fs::metadata(p)
-                && let Ok(modified) = meta.modified()
-                && let Ok(age) = SystemTime::now().duration_since(modified)
-                && age.as_secs() < ttl
-                && let Ok(body) = std::fs::read_to_string(p)
-            {
-                let _ = tx.send(body);
-                return;
-            }
-
-            // Cache miss / stale → real fetch.
-            match http.get_bytes(&url) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(body) => {
-                        if let Some(p) = path.as_ref() {
-                            if let Some(parent) = p.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            let _ = std::fs::write(p, &body);
-                        }
-                        let _ = tx.send(body);
-                    }
-                    Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
-                },
-                Err(e) => {
-                    log::warn!("lua-host: http:fetch {}: {}", url, e);
-                    // Cached caller? Try to serve a stale copy so a
-                    // flaky upstream doesn't strand them.
-                    if let Some(p) = path.as_ref()
-                        && let Ok(body) = std::fs::read_to_string(p)
-                    {
-                        log::info!("lua-host: http:fetch {}: using stale cache", url);
-                        let _ = tx.send(body);
-                    }
-                }
-            }
-        });
-        Self { rx }
-    }
-}
-
-/// Where we stash an HTTP response for `fetch_cached`. FNV-1a 64-bit
-/// keeps the cache key deterministic across runs (Rust's default
-/// hasher is not), and small enough to fit on every filesystem.
-/// `None` means we couldn't resolve a per-user cache dir — the
-/// caller treats it as a permanent miss + no write.
-fn http_cache_path(url: &str) -> Option<std::path::PathBuf> {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in url.as_bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    let key = format!("{:016x}", hash);
-    let dir = directories::ProjectDirs::from("", "", "ttymap")?
-        .cache_dir()
-        .join("lua-http");
-    Some(dir.join(format!("{}.txt", key)))
-}
-
-impl UserData for LuaJob {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `job:try_take() -> string | nil` — non-blocking. Returns
-        // the body once it arrives, or nil while the fetch is
-        // still in flight (or has failed).
-        methods.add_method_mut("try_take", |_, this, _: mlua::Variadic<mlua::Value>| {
-            Ok(this.rx.try_recv().ok())
         });
     }
 }
@@ -1599,28 +1404,5 @@ mod tests {
         lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");
-    }
-
-    #[test]
-    fn job_try_take_returns_nil_before_send() {
-        // Build a job by hand (skip the HTTP path) so we can
-        // assert try_take's non-blocking behaviour.
-        let (tx, rx) = mpsc::channel::<String>();
-        let job = LuaJob { rx };
-        let lua = mlua::Lua::new();
-        let ud = lua.create_userdata(job).expect("create_userdata");
-        let result: Option<String> = lua
-            .load("return select(1, ...):try_take()")
-            .call(ud.clone())
-            .expect("call");
-        assert!(result.is_none(), "try_take should be nil before send");
-
-        // Send a value and the next try_take returns it.
-        tx.send("hi".to_string()).unwrap();
-        let result: Option<String> = lua
-            .load("return select(1, ...):try_take()")
-            .call(ud)
-            .expect("call");
-        assert_eq!(result.as_deref(), Some("hi"));
     }
 }

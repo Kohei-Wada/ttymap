@@ -1,0 +1,162 @@
+//! `ttymap.http` — HTTP fetch surface for Lua plugins.
+//!
+//! Two methods:
+//!
+//! - `:fetch(url)` — background GET, returns a `LuaJob` userdata
+//!   the plugin polls with `:try_take()`. Body is decoded as
+//!   UTF-8; non-text or fetch errors surface as the Job never
+//!   producing a result.
+//! - `:fetch_cached(url, ttl_secs)` — read-through disk cache. On
+//!   fresh-enough hit (`age < ttl_secs`) emits the cached body
+//!   without touching the network. On miss, real fetch + write-
+//!   through. On HTTP error, falls back to the stale on-disk copy
+//!   if one exists — critical for upstreams (e.g. CelesTrak's
+//!   `gp.php`) that 403 a same-IP repeat fetch within their own
+//!   refresh window.
+//! - `:url_encode(s)` — percent-encode a query string per RFC 3986.
+//!
+//! `LuaJob` is the matching one-shot fetch handle. It stays alive
+//! in the Lua state until the plugin drops its reference (or until
+//! the setup-state Lua VM itself is dropped at program exit).
+
+use std::sync::mpsc;
+use std::thread;
+use std::time::SystemTime;
+
+use mlua::UserData;
+
+use crate::shared::http::HttpClient;
+
+pub struct HostHttp {
+    pub http: HttpClient,
+}
+
+impl UserData for HostHttp {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("fetch", |_, this, url: String| {
+            Ok(LuaJob::spawn(&this.http, url, None))
+        });
+        methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
+            Ok(LuaJob::spawn(&this.http, url, Some(ttl_secs)))
+        });
+        methods.add_method("url_encode", |_, _this, s: String| {
+            Ok(crate::shared::http::url::urlencoded(&s))
+        });
+    }
+}
+
+/// One-shot fetch handle. Stays alive in the Lua state until the
+/// plugin drops its reference (or until the setup-state Lua VM
+/// itself is dropped at program exit).
+pub struct LuaJob {
+    rx: mpsc::Receiver<String>,
+}
+
+impl LuaJob {
+    /// Background HTTP GET. With `cache_ttl == None` it's a plain
+    /// fetch; with `Some(ttl_secs)` it's read-through against a
+    /// disk cache (write-through on success, stale-fallback on HTTP
+    /// error so a rate-limiting upstream doesn't strand callers on
+    /// "no body, no error"). Cache miss / stale rolls into the
+    /// network path automatically.
+    fn spawn(http: &HttpClient, url: String, cache_ttl: Option<u64>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let http = http.clone();
+        let path = cache_ttl.and_then(|_| http_cache_path(&url));
+        thread::spawn(move || {
+            // Fresh cache hit → return immediately, skip the network.
+            if let (Some(ttl), Some(p)) = (cache_ttl, path.as_ref())
+                && let Ok(meta) = std::fs::metadata(p)
+                && let Ok(modified) = meta.modified()
+                && let Ok(age) = SystemTime::now().duration_since(modified)
+                && age.as_secs() < ttl
+                && let Ok(body) = std::fs::read_to_string(p)
+            {
+                let _ = tx.send(body);
+                return;
+            }
+
+            // Cache miss / stale → real fetch.
+            match http.get_bytes(&url) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(body) => {
+                        if let Some(p) = path.as_ref() {
+                            if let Some(parent) = p.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(p, &body);
+                        }
+                        let _ = tx.send(body);
+                    }
+                    Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
+                },
+                Err(e) => {
+                    log::warn!("lua-host: http:fetch {}: {}", url, e);
+                    // Cached caller? Try to serve a stale copy so a
+                    // flaky upstream doesn't strand them.
+                    if let Some(p) = path.as_ref()
+                        && let Ok(body) = std::fs::read_to_string(p)
+                    {
+                        log::info!("lua-host: http:fetch {}: using stale cache", url);
+                        let _ = tx.send(body);
+                    }
+                }
+            }
+        });
+        Self { rx }
+    }
+}
+
+impl UserData for LuaJob {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("try_take", |_, this, _: mlua::Variadic<mlua::Value>| {
+            Ok(this.rx.try_recv().ok())
+        });
+    }
+}
+
+/// Where we stash an HTTP response for `fetch_cached`. FNV-1a 64-bit
+/// keeps the cache key deterministic across runs (Rust's default
+/// hasher is not), and small enough to fit on every filesystem.
+/// `None` means we couldn't resolve a per-user cache dir — the
+/// caller treats it as a permanent miss + no write.
+fn http_cache_path(url: &str) -> Option<std::path::PathBuf> {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in url.as_bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let key = format!("{:016x}", hash);
+    let dir = directories::ProjectDirs::from("", "", "ttymap")?
+        .cache_dir()
+        .join("lua-http");
+    Some(dir.join(format!("{}.txt", key)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_try_take_returns_nil_before_send() {
+        // Build a job by hand (skip the HTTP path) so we can
+        // assert try_take's non-blocking behaviour.
+        let (tx, rx) = mpsc::channel::<String>();
+        let job = LuaJob { rx };
+        let lua = mlua::Lua::new();
+        let ud = lua.create_userdata(job).expect("create_userdata");
+        let result: Option<String> = lua
+            .load("return select(1, ...):try_take()")
+            .call(ud.clone())
+            .expect("call");
+        assert!(result.is_none(), "try_take should be nil before send");
+
+        // Send a value and the next try_take returns it.
+        tx.send("hi".to_string()).unwrap();
+        let result: Option<String> = lua
+            .load("return select(1, ...):try_take()")
+            .call(ud)
+            .expect("call");
+        assert_eq!(result.as_deref(), Some("hi"));
+    }
+}
