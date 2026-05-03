@@ -43,14 +43,25 @@ struct Cli {
     /// Jump to IP-based current location on startup
     #[arg(long)]
     here: bool,
+
+    /// Write debug logs to ~/.local/state/ttymap/ttymap.log. Optional
+    /// level argument: `--log` alone is `debug`; `--log info` /
+    /// `--log trace` etc. select an explicit level. Without the flag
+    /// no logger is installed (log macros become no-ops).
+    #[arg(long, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug")]
+    log: Option<String>,
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    // Logging initialised up-front so both subcommands and the
-    // interactive app write to ~/.local/state/ttymap/ttymap.log.
-    ttymap::logging::init().ok();
+    // Logging is opt-in via `--log [LEVEL]`. Without the flag no
+    // logger is registered and the `log::*!` macros are no-ops.
+    // When set, logs land in ~/.local/state/ttymap/ttymap.log
+    // (truncated on each launch, so debug sessions don't accumulate).
+    if let Some(level) = cli.log.as_deref() {
+        ttymap::logging::init(level).ok();
+    }
 
     // Resolve runtime path before any Lua state spins up. Both the
     // interactive app and the `snap` subcommand reach for it; doing

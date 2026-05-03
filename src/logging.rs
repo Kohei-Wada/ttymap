@@ -7,23 +7,19 @@
 //! user ever collects. Most Rust TUI apps follow the same pattern
 //! (yazi, gitui, bottom, nushell — all opt-in via env or flag).
 //!
-//! To enable, set `TTYMAP_LOG`:
+//! Driven by the `--log [LEVEL]` CLI flag (parsed in `main.rs`):
 //!
 //! ```sh
-//! TTYMAP_LOG=debug ttymap        # any level: error / warn / info / debug / trace
-//! TTYMAP_LOG=1     ttymap        # alias for `debug`
+//! ttymap --log              # implicit `debug`
+//! ttymap --log debug        # explicit level
+//! ttymap --log trace
+//! ttymap                    # no logger; log::*! is a no-op
 //! ```
 //!
 //! When set, the file at `$XDG_STATE_HOME/ttymap/ttymap.log` is
 //! **truncated on startup** (one debug session = one file). No
 //! rotation: the user is consciously enabling logging for a
-//! bounded run, and Ctrl-C + relaunch starts fresh. If a session
-//! genuinely needs to span days, redirect with `tail -f` or pipe
-//! to `logrotate(8)` like you would for any other long-running
-//! program.
-//!
-//! When unset, [`init`] returns `Ok(None)` and `log::*!` macros
-//! become no-ops (no logger registered).
+//! bounded run, and Ctrl-C + relaunch starts fresh.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -33,8 +29,6 @@ use std::sync::Mutex;
 use chrono::Local;
 use directories::ProjectDirs;
 use log::{LevelFilter, Log, Metadata, Record};
-
-const ENV_VAR: &str = "TTYMAP_LOG";
 
 struct FileLogger {
     file: Mutex<File>,
@@ -76,48 +70,40 @@ fn log_path() -> Option<PathBuf> {
     Some(state_dir.join("ttymap.log"))
 }
 
-/// Parse the `TTYMAP_LOG` value into a `LevelFilter`. Accepts the
-/// usual level names (`error` / `warn` / `info` / `debug` / `trace`)
-/// case-insensitively, plus `1` as a shorthand for `debug`.
-/// Anything unparseable returns `None` and the caller treats it as
-/// "logging disabled" — easier to forgive a typo than to spam
-/// stderr with parse errors when the user just typoed an env var.
-fn level_from_env(value: &str) -> Option<LevelFilter> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed == "1" {
-        return Some(LevelFilter::Debug);
-    }
-    trimmed.to_ascii_lowercase().parse::<LevelFilter>().ok()
+/// Parse a level name (`error` / `warn` / `info` / `debug` /
+/// `trace`) case-insensitively. Unknown strings fall back to
+/// `Debug` rather than erroring — the user is asking for logs,
+/// the worst case is they get more than they wanted.
+fn parse_level(value: &str) -> LevelFilter {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .parse::<LevelFilter>()
+        .unwrap_or(LevelFilter::Debug)
 }
 
-/// Install a file logger when `TTYMAP_LOG` is set, otherwise
-/// silently leave the global logger alone.
+/// Install a file logger at the given level (or no-op when the
+/// caller passes `"off"`). Truncates the file on startup so each
+/// `--log` invocation starts fresh.
 ///
 /// Returns:
-/// - `Ok(Some(path))` when a logger was installed (debug session).
-/// - `Ok(None)` when `TTYMAP_LOG` was unset / unparseable / `off`.
+/// - `Ok(Some(path))` when a logger was installed.
+/// - `Ok(None)` when `level == "off"`.
 /// - `Err(_)` for filesystem failures while creating the log dir
-///   or opening the file (caller can `.ok()` to ignore).
-pub fn init() -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-    let raw = match std::env::var(ENV_VAR) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let level = match level_from_env(&raw) {
-        Some(LevelFilter::Off) | None => return Ok(None),
-        Some(level) => level,
-    };
+///   or opening the file.
+pub fn init(level: &str) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let level = parse_level(level);
+    if level == LevelFilter::Off {
+        return Ok(None);
+    }
 
     let path = log_path().ok_or("could not determine log directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    // Truncate on startup: one TTYMAP_LOG run = one fresh file.
-    // No runtime rotation needed when sessions are bounded by the
+    // Truncate on startup: one --log run = one fresh file. No
+    // runtime rotation needed when sessions are bounded by the
     // user's choice to enable logging.
     let file = OpenOptions::new()
         .create(true)
