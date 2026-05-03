@@ -83,7 +83,6 @@ end
 local function open()
     if w then return end
     w = ttymap.api.window.open({
-        layout = { kind = "sidebar" },
         footer_hints = {
             { key = "↑↓ PgUp PgDn", label = "scroll" },
             { key = "q / Esc",      label = "close" },

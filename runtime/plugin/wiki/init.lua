@@ -230,7 +230,6 @@ local function open()
     -- Trigger a fresh fetch on (re)open.
     state.needs_refresh = true
     w = ttymap.api.window.open({
-        layout = { kind = "sidebar" },
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "open" },

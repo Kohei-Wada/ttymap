@@ -303,7 +303,6 @@ function M.make(specs)
     local function open()
         if w then return end
         w = ttymap.api.window.open({
-            layout = { kind = "sidebar" },
             footer_hints = hints,
             render = build_lines,
             handle_event = function(key)

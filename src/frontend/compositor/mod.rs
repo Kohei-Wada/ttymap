@@ -28,7 +28,6 @@
 //! the one place that imports each plugin.
 
 pub mod base;
-pub mod layout;
 pub mod map_api;
 pub mod window;
 
@@ -116,13 +115,21 @@ pub struct Context {
 /// returns, so components cannot break stack / focus invariants
 /// regardless of what order they call the methods.
 ///
-/// Where the component renders. Default is `Modal` — the existing
-/// behaviour of floating panels anchored over the map. `Sidebar`
-/// components share the left sidebar via equal vertical split so
-/// multiple sections can live there at once.
+/// Where the component renders. Today only two slots:
+///
+/// - `Floating`: drawn over the map area, on top of everything.
+///   Used for the command palette (the only floating component
+///   in tree). Lua plugins are *not* allowed to be Floating —
+///   the spec the bridge accepts always lands in `Sidebar`.
+/// - `Sidebar`: shares the left sidebar via equal vertical split
+///   so multiple sections can live there at once.
+///
+/// Default is `Floating` because the only Rust-side `Component`
+/// impl that doesn't override is the palette, and palette is the
+/// canonical floating component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
-    Modal,
+    Floating,
     Sidebar,
 }
 
@@ -149,11 +156,12 @@ pub trait Component {
     /// no panel UI (just `paint_on_map`).
     fn render(&self, _win: &mut window::RenderWindow) {}
 
-    /// Where to draw this component. Defaults to [`Placement::Modal`]
-    /// (free-floating panel over the map). Plugins that want to live
-    /// in the left sidebar override to [`Placement::Sidebar`].
+    /// Where to draw this component. Defaults to
+    /// [`Placement::Floating`] (free-floating panel over the
+    /// map). Plugins that want to live in the left sidebar
+    /// override to [`Placement::Sidebar`].
     fn placement(&self) -> Placement {
-        Placement::Modal
+        Placement::Floating
     }
 
     /// Paint world-space primitives on the map via [`MapApi`].
@@ -318,13 +326,13 @@ impl Compositor {
     /// This lets multiple panels overlap freely; whichever the user
     /// is currently driving with the keyboard pops to the front.
     ///
-    /// Components are routed by their [`Placement`]: `Modal` ones
-    /// render into `map_area` (existing behaviour); `Sidebar` ones
-    /// share `sidebar_area` via equal vertical split, in stack order
-    /// (oldest at top). When `sidebar_area` is `None` (sidebar
-    /// hidden), `Sidebar` components are skipped — they stay alive
-    /// on the stack but are invisible until the user toggles the
-    /// sidebar back on.
+    /// Components are routed by their [`Placement`]: `Floating`
+    /// (today: only the palette) renders into `map_area`;
+    /// `Sidebar` ones share `sidebar_area` via equal vertical
+    /// split, in stack order (oldest at top). When `sidebar_area`
+    /// is `None` (sidebar hidden), `Sidebar` components are
+    /// skipped — they stay alive on the stack but are invisible
+    /// until the user toggles the sidebar back on.
     pub fn render(
         &self,
         f: &mut Frame,
@@ -333,25 +341,22 @@ impl Compositor {
         theme: &UiTheme,
         ctx: &Context,
     ) {
-        // Modal components: bottom-up, focused last so it sits on top.
-        let modal_indices: Vec<usize> = self
+        // The palette is the sole `Floating`-placement user; it
+        // appears as a single instance at most (`SwitchProvider`
+        // swaps in place rather than stacking) so the previous
+        // bottom-up + focused-last loop collapses to a single
+        // lookup — find the topmost floating component and paint
+        // it. Always focused when present (the palette consumes
+        // input the moment it opens).
+        if let Some((idx, c)) = self
             .stack
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.placement() == Placement::Modal)
-            .map(|(i, _)| i)
-            .collect();
-        for &i in &modal_indices {
-            if i == self.focused_idx {
-                continue;
-            }
-            let mut win = window::RenderWindow::new(f, map_area, theme, ctx);
-            self.stack[i].render(&mut win);
-        }
-        if let Some(c) = self.stack.get(self.focused_idx)
-            && c.placement() == Placement::Modal
+            .rev()
+            .find(|(_, c)| c.placement() == Placement::Floating)
         {
-            let mut win = window::RenderWindow::new(f, map_area, theme, ctx).focused(true);
+            let focused = idx == self.focused_idx;
+            let mut win = window::RenderWindow::new(f, map_area, theme, ctx).focused(focused);
             c.render(&mut win);
         }
 

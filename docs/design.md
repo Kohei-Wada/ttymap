@@ -152,11 +152,16 @@ methods push us over.
 
 ## Compositor: object lifetime is the visibility lifecycle
 
-Modal surfaces (palette, wiki, help, …) are `Component`s on
+Focus surfaces (palette, wiki, help, …) are `Component`s on
 a stack owned by the `Compositor`. Pushed on activation, popped when
 the component calls `win.close()`. Focus is a separate `focused_idx`
 into the stack, so `Tab` can move focus to the base layer without
-popping the modal above it.
+popping the panel above it.
+
+`Placement` has two variants: `Floating` (palette-only, drawn over
+the map area) and `Sidebar` (left rail, vertical split, up to 3
+visible cards). All Lua plugins land in `Sidebar`; Lua scripts have
+no way to ask for `Floating`.
 
 ### Why a stack instead of `is_visible` / `activate` / `deactivate`
 

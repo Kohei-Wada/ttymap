@@ -1,12 +1,16 @@
 //! [`LuaWindowComponent`] — a focused [`Component`] pushed onto the
 //! compositor stack by `ttymap.api.window.open(spec)` (A3).
 //!
-//! Spec table fields (all optional unless layout dictates):
+//! Spec table fields (all optional):
 //! - `name = "..."` — display label shown in the focused-footer chip
-//! - `layout = { anchor, width, height? }` — side-panel placement
 //! - `render = function() return lines end` — panel body
 //! - `handle_event = function(key) return action end` — focused keys
 //! - `footer_hints = { {key, label}, ... }` — focused footer hints
+//!
+//! All `LuaWindowComponent`s render in the left sidebar — there's no
+//! free-floating / anchored layout for plugin-defined panels. The
+//! `spec.layout` field is no longer read; existing scripts that set
+//! it just see their setting silently ignored.
 //!
 //! **No `paint_on_map`, no `poll`, no `loop`** — those belong on a
 //! `ttymap.api.frame.on_tick(fn)` subscription (host-side).
@@ -41,86 +45,8 @@ use ratatui::widgets::Paragraph;
 use super::handle::{CallOutcome, LuaHandle};
 use super::window_handle::CloseFlag;
 use crate::frontend::compositor::Component;
-use crate::frontend::compositor::layout::PanelAnchor;
 use crate::frontend::compositor::window::{RenderWindow, Window};
 use crate::theme::StyleKind;
-
-// ── Layout ─────────────────────────────────────────────────────────
-
-/// Per-window layout knobs read from `spec.layout`.
-#[derive(Debug, Clone)]
-pub struct WindowLayout {
-    anchor: PanelAnchor,
-    width: u16,
-    height: Option<u16>,
-    placement: crate::frontend::compositor::Placement,
-}
-
-impl WindowLayout {
-    /// Sane default when a plugin omits the `layout` field —
-    /// top-left, 32×10, modal placement. Big enough for a few lines
-    /// of text, small enough not to swallow the map.
-    fn fallback() -> Self {
-        Self {
-            anchor: PanelAnchor::TopLeft,
-            width: 32,
-            height: Some(10),
-            placement: crate::frontend::compositor::Placement::Modal,
-        }
-    }
-}
-
-/// Parse a `spec.layout.anchor` string into [`PanelAnchor`]. Unknown
-/// strings yield `None` and the caller falls back to the layout
-/// default.
-fn parse_panel_anchor(s: &str) -> Option<PanelAnchor> {
-    match s.to_ascii_lowercase().as_str() {
-        "left" => Some(PanelAnchor::Left),
-        "right" => Some(PanelAnchor::Right),
-        "top-left" | "topleft" | "tl" => Some(PanelAnchor::TopLeft),
-        "top-right" | "topright" | "tr" => Some(PanelAnchor::TopRight),
-        "bottom-left" | "bottomleft" | "bl" => Some(PanelAnchor::BottomLeft),
-        "bottom-right" | "bottomright" | "br" => Some(PanelAnchor::BottomRight),
-        "center" | "centre" => Some(PanelAnchor::Center),
-        _ => None,
-    }
-}
-
-/// Read `spec.layout = { anchor, width, height }` with graceful
-/// recovery: missing fields fall back to [`WindowLayout::fallback`],
-/// unknown anchor strings fall back too rather than erroring (matches
-/// the rest of the bridge's recovery rule).
-fn parse_layout(spec: &Table) -> WindowLayout {
-    let mut out = WindowLayout::fallback();
-    let Ok(layout): mlua::Result<Table> = spec.get("layout") else {
-        return out;
-    };
-    if let Ok(s) = layout.get::<String>("anchor")
-        && let Some(a) = parse_panel_anchor(&s)
-    {
-        out.anchor = a;
-    }
-    if let Ok(w) = layout.get::<u16>("width") {
-        out.width = w;
-    }
-    // `height` is optional: when absent the panel uses the full
-    // available height of `outer`. Lua nil reads as missing; an
-    // explicit numeric overrides that.
-    if let Ok(h) = layout.get::<u16>("height") {
-        out.height = Some(h);
-    } else {
-        out.height = None;
-    }
-    // `kind = "sidebar"` opts the component into the left sidebar's
-    // vertical-section layout; absent or any other value keeps the
-    // default modal placement.
-    if let Ok(s) = layout.get::<String>("kind")
-        && s.eq_ignore_ascii_case("sidebar")
-    {
-        out.placement = crate::frontend::compositor::Placement::Sidebar;
-    }
-    out
-}
 
 // ── Component ──────────────────────────────────────────────────────
 
@@ -142,8 +68,6 @@ pub struct LuaWindowComponent {
     /// bounded cost since `LuaWindowComponent` is rebuilt at most a
     /// few times per program lifetime.
     display: &'static str,
-    /// Panel placement read from `spec.layout` at construction.
-    layout: WindowLayout,
     /// Whether the spec exposes a `render` function. Marker-only
     /// windows (no panel UI) omit it; without this flag the adapter
     /// would still paint an empty framed Paragraph over the map.
@@ -154,8 +78,9 @@ pub struct LuaWindowComponent {
     /// omits the field.
     footer_hints: Vec<(&'static str, &'static str)>,
     /// First visible line index when the rendered content overflows
-    /// the slot. Bridge-managed (j/k for sidebar sections); ignored
-    /// for modal placement. `Cell` because `render` takes `&self`.
+    /// the slot. Bridge-managed via the section scroll keys
+    /// (PageUp / PageDown / C-n / C-p / Up / Down / Home / End).
+    /// `Cell` because `render` takes `&self`.
     scroll_offset: std::cell::Cell<u16>,
     /// Last rendered inner height of this section's panel (i.e.
     /// `area - frame border`). Cached so PageUp / PageDown / C-d /
@@ -194,7 +119,6 @@ impl LuaWindowComponent {
             .filter(|s| !s.is_empty())
             .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
             .unwrap_or(log_tag);
-        let layout = parse_layout(&spec);
         let has_render = matches!(
             spec.get::<mlua::Value>("render"),
             Ok(mlua::Value::Function(_))
@@ -205,7 +129,6 @@ impl LuaWindowComponent {
             handle,
             flag,
             display,
-            layout,
             has_render,
             footer_hints,
             scroll_offset: std::cell::Cell::new(0),
@@ -282,12 +205,12 @@ impl Component for LuaWindowComponent {
     fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
         let action = self.dispatch_event(event);
 
-        // Sidebar sections: when the Lua spec didn't consume the
-        // event, the bridge applies built-in scroll keys so overflow
-        // content is reachable without every plugin re-implementing
-        // it. Plugins that *want* one of these (e.g. aircraft uses
-        // Up / Down to pick a row) consume by returning nil — those
-        // never reach this branch.
+        // When the Lua spec didn't consume the event, the bridge
+        // applies built-in scroll keys so overflow content is
+        // reachable without every plugin re-implementing it.
+        // Plugins that *want* one of these (e.g. aircraft uses
+        // Up / Down to pick a row) consume by returning nil —
+        // those never reach this branch.
         //
         // j / k and C-u / C-d stay untouched here and pass through
         // to the base layer (map pan / half-page pan). Letting them
@@ -295,9 +218,7 @@ impl Component for LuaWindowComponent {
         // keys the user is in the middle of using; the dedicated
         // PageUp / PageDown / C-n / C-p / Home / End cover the
         // intra-section case without that ambiguity.
-        if self.layout.placement == crate::frontend::compositor::Placement::Sidebar
-            && action == KeyAction::Ignore
-        {
+        if action == KeyAction::Ignore {
             let cur = self.scroll_offset.get();
             let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
             let page = self.last_inner_height.get().max(1);
@@ -335,20 +256,10 @@ impl Component for LuaWindowComponent {
             // Paragraph over the map.
             return;
         }
-        let outer = win.area();
         // Sidebar sections fill the entire allocated slot — the
-        // sidebar layout already picked the rect, no inner anchor /
-        // width logic needed. Modal placement keeps the historical
-        // anchor + width math.
-        let area = if self.layout.placement == crate::frontend::compositor::Placement::Sidebar {
-            outer
-        } else {
-            let height = self
-                .layout
-                .height
-                .unwrap_or_else(|| outer.height.saturating_sub(2));
-            self.layout.anchor.rect(outer, self.layout.width, height)
-        };
+        // sidebar layout already picked the rect, no inner anchor
+        // or width logic needed.
+        let area = win.area();
         let inner = win.panel(area, self.display);
         // Snapshot the slot's content height so handle_event can use
         // it as the page step for PageUp / PageDown / C-d / C-u
@@ -429,7 +340,7 @@ impl Component for LuaWindowComponent {
     }
 
     fn placement(&self) -> crate::frontend::compositor::Placement {
-        self.layout.placement
+        crate::frontend::compositor::Placement::Sidebar
     }
 }
 
@@ -583,41 +494,6 @@ mod tests {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(source).eval().expect("eval spec");
         LuaWindowComponent::from_spec(lua, spec, log_tag, CloseFlag::default()).expect("from_spec")
-    }
-
-    #[test]
-    fn parse_layout_left_56() {
-        let lua = mlua::Lua::new();
-        let spec: Table = lua
-            .load(r#"return { layout = { anchor = "left", width = 56 } }"#)
-            .eval()
-            .unwrap();
-        let layout = parse_layout(&spec);
-        assert_eq!(layout.anchor, PanelAnchor::Left);
-        assert_eq!(layout.width, 56);
-        assert_eq!(layout.height, None);
-    }
-
-    #[test]
-    fn parse_layout_falls_back_when_missing() {
-        let lua = mlua::Lua::new();
-        let spec: Table = lua.load(r#"return {}"#).eval().unwrap();
-        let layout = parse_layout(&spec);
-        // Default fallback (matches WindowLayout::fallback).
-        assert_eq!(layout.anchor, PanelAnchor::TopLeft);
-        assert_eq!(layout.width, 32);
-        assert_eq!(layout.height, Some(10));
-    }
-
-    #[test]
-    fn parse_layout_unknown_anchor_falls_back_silently() {
-        let lua = mlua::Lua::new();
-        let spec: Table = lua
-            .load(r#"return { layout = { anchor = "norkeast" } }"#)
-            .eval()
-            .unwrap();
-        let layout = parse_layout(&spec);
-        assert_eq!(layout.anchor, PanelAnchor::TopLeft);
     }
 
     #[test]

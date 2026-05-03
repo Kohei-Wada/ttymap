@@ -81,7 +81,6 @@ local function close() if w then w:close(); w = nil end end
 local function open()
     if w then return end
     w = ttymap.api.window.open({
-        layout = { anchor = "left", width = 56 },
         render = build_lines,
         handle_event = function(key) if key.code == "Esc" then close() end end,
     })

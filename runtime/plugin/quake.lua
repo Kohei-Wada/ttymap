@@ -174,7 +174,6 @@ local function open_panel()
     if w then return end
     w = ttymap.api.window.open({
         name = "quake",
-        layout = { kind = "sidebar" },
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "jump" },
