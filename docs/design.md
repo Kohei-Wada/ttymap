@@ -175,10 +175,12 @@ Stack presence collapses both into one fact: the component object
 **exists** while it is visible, is **dropped** the instant it
 closes. There is no second flag to forget.
 
-This lets `Component::paint_on_map` (world-space markers like the
-wiki article pins) be unconditional — every component on the stack
-paints. Markers naturally appear when the panel opens and disappear
-when it closes, with no "is this paint still active?" check.
+Plugin map paint runs through `ttymap.api.frame.on_tick(fn)` (Lua),
+which fires only while the plugin is "open" by the plugin's own
+convention (typically: a captured `w` window-handle ref that's nil
+when closed). Stack presence and map paint stay in step because the
+Lua plugin gates its `on_tick` body on the same `w` it nils inside
+its `close()`.
 
 ### Why a `&mut Window` queue instead of returning a result enum
 

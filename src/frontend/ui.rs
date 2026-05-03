@@ -108,12 +108,10 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
             overlay_sink,
         );
         // Fire the per-frame `"tick"` event on the Lua subsystem
-        // against the live MapApi *before* the compositor paints —
-        // so any plugin-emitted points lie underneath focused-component
-        // overlays in the same frame, matching the layering plugin
-        // authors expect from `Component::paint_on_map`.
+        // against the live MapApi. This is the *only* per-frame
+        // map-paint hook for plugins now; the older
+        // `Component::paint_on_map` trait-method path is gone.
         lua.tick(&mut api);
-        compositor.paint_on_map(&mut api);
     }
 
     // Modal panels on top of the map (bottom-up) + sidebar sections

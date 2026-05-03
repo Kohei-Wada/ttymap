@@ -91,10 +91,6 @@ impl<C: crate::frontend::compositor::Component> crate::frontend::compositor::Com
         self.inner.render(win);
     }
 
-    fn paint_on_map(&self, p: &mut crate::frontend::compositor::MapApi<'_>) {
-        self.inner.paint_on_map(p);
-    }
-
     fn poll(&mut self, win: &mut crate::frontend::compositor::window::Window) {
         self.inner.poll(win);
         if self.flag.take() {
