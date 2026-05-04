@@ -86,6 +86,8 @@ mod host_help;
 mod host_log;
 mod host_map;
 mod host_tile;
+mod imperative;
+mod register;
 
 use host_config::HostConfig;
 use host_help::HostHelp;
@@ -101,7 +103,6 @@ use std::time::Instant;
 
 use mlua::{Lua, Table};
 
-use crate::app::UserIntent;
 use crate::geo::LonLat;
 use crate::shared::http::HttpClient;
 
@@ -374,260 +375,18 @@ pub fn install(
         lua.create_userdata(HostLog::new(format!("lua[{}]", tag)))?,
     )?;
 
-    // Activation surfaces. Each is opt-in and explicit — the host
-    // never auto-adds a palette row or keybind from the plugin's
-    // `name` / `label` fields. The Lua callback (`spec.invoke` /
-    // 2nd arg of register_keybind) is the plugin's chance to inspect
-    // its own state and decide whether to push a fresh component:
-    // truthy return → host pushes, falsy → no-op.
-    let cap = slot.clone();
-    ttymap.set(
-        "register_palette_command",
-        lua.create_function(move |lua, spec: Table| -> mlua::Result<()> {
-            let label: String = spec.get("label").map_err(|_| {
-                mlua::Error::external("ttymap.register_palette_command: spec.label is required")
-            })?;
-            let hint: String = spec.get("hint").unwrap_or_default();
-            let invoke: mlua::Function = spec.get("invoke").map_err(|_| {
-                mlua::Error::external(
-                    "ttymap.register_palette_command: spec.invoke (a function) is required",
-                )
-            })?;
-            let invoke_key = lua.create_registry_value(invoke)?;
-            cap.borrow_mut().palette_commands.push(PaletteCommandSpec {
-                label,
-                hint,
-                invoke: invoke_key,
-            });
-            Ok(())
-        })?,
-    )?;
-    let cap = slot.clone();
-    ttymap.set(
-        "register_keybind",
-        lua.create_function(
-            move |lua, (key, callback): (String, mlua::Function)| -> mlua::Result<()> {
-                let Some(c) = key.chars().next() else {
-                    return Err(mlua::Error::external(
-                        "ttymap.register_keybind: key must be a non-empty string",
-                    ));
-                };
-                let callback_key = lua.create_registry_value(callback)?;
-                cap.borrow_mut().keybinds.push(KeybindSpec {
-                    key: c,
-                    callback: callback_key,
-                });
-                Ok(())
-            },
-        )?,
-    )?;
+    // Activation surfaces (`register_palette_command` /
+    // `register_keybind` / `on_event`) — capturers that push into
+    // the shared [`CaptureSlot`] which the host inspects after the
+    // script finishes loading. Each is opt-in and explicit; the
+    // host never auto-adds a palette row or keybind from the
+    // plugin's `name` / `label` fields.
+    register::install(lua, &ttymap, slot.clone())?;
 
-    // `ttymap.on_event(name, fn)` — generic pub/sub subscription.
-    // Lower into a [`EventSubscription`] keyed by the leaked event
-    // name; the host walks them at register time and pushes one
-    // [`Subscriber`](crate::lua::registry::Subscriber) into the
-    // matching [`LuaEventBus`](crate::lua::LuaEventBus) bucket.
-    //
-    // The leak is bounded by `(unique event names) × plugins`,
-    // happens at register time only, and produces `&'static str`
-    // (which the bus needs as a HashMap key matching plugin-name
-    // and source-text leaks done elsewhere in `register_plugins_in`).
-    //
-    // `ttymap.api.frame.on_tick(fn)` is sugar for
-    // `ttymap.on_event("tick", fn)` — same Subscriber shape, same
-    // dispatch path, just a different surface for the common case.
-    let cap = slot.clone();
-    ttymap.set(
-        "on_event",
-        lua.create_function(
-            move |lua, (event_name, callback): (String, mlua::Function)| -> mlua::Result<()> {
-                if event_name.is_empty() {
-                    return Err(mlua::Error::external(
-                        "ttymap.on_event: event name must be a non-empty string",
-                    ));
-                }
-                let leaked: &'static str = Box::leak(event_name.into_boxed_str());
-                let key = lua.create_registry_value(callback)?;
-                cap.borrow_mut()
-                    .event_subscriptions
-                    .push(EventSubscription {
-                        event_name: leaked,
-                        callback: key,
-                    });
-                Ok(())
-            },
-        )?,
-    )?;
-    // ── ttymap.api ────────────────────────────────────────────────
-    //
-    // The (nvim-style) plugin API surface. Currently hosts:
-    //
-    // - `ttymap.api.card.open(spec) -> CardHandle` — push a
-    //   focused [`LuaCardComponent`] onto the compositor stack.
-    // - `ttymap.api.palette.open(spec) -> PaletteHandle` — push a
-    //   palette provider (a `PaletteComponent` wrapping a
-    //   [`LuaPaletteProvider`]) onto the stack. Returning
-    //   `{ switch = sub_spec }` from the provider's `execute` swaps
-    //   the provider in place (sub-mode transition, no stacking).
-    // - `ttymap.api.frame.export()` — request the current frame be
-    //   snapshotted to disk.
-    let api = lua.create_table()?;
-
-    let card_api = lua.create_table()?;
-    let ops_for_window = ops.clone();
-    card_api.set(
-        "open",
-        lua.create_function(
-            move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
-                use crate::compositor::CardId;
-                use crate::compositor::op::Op;
-                use crate::lua::bridge::card_component::LuaCardComponent;
-                use crate::lua::bridge::card_handle::CardHandle;
-                // Reserve the [`CardId`] at the call site so the
-                // handle returned to Lua can target this exact
-                // component for close, even though the actual push
-                // applies when the App drains the `OpsBuffer` next
-                // iteration.
-                let id = CardId::next();
-                // Build the component on the **same** Lua VM that ran
-                // `card.open` — i.e. the setup state. The spec's
-                // callbacks (`render`, `handle_event`, …) capture
-                // upvalues in this state, so the per-window Lua handle
-                // must be a clone of it (cheap Arc bump, no copy of the
-                // VM). When `LuaCardComponent` later calls into those
-                // callbacks, the same upvalue scope is in scope.
-                let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
-                ops_for_window.borrow_mut().push(Op::Push {
-                    id,
-                    component: Box::new(component) as Box<dyn crate::compositor::Component>,
-                });
-                Ok(CardHandle::new(id, ops_for_window.clone()))
-            },
-        )?,
-    )?;
-    api.set("card", card_api)?;
-
-    // ── ttymap.api.palette ───────────────────────────────────────────
-    //
-    // Mirror of `ttymap.api.card.open`: build a palette provider on
-    // the same Lua VM (the setup state), wrap it in a
-    // [`PaletteComponent`], and enqueue an `Op::Push { id, component }`
-    // onto the shared `OpsBuffer`. The App drains the buffer per
-    // iteration and pushes via `compositor.push_with_id`, associating
-    // the component with the [`CardId`] reserved here. The returned
-    // [`PaletteHandle`] holds the same id and can request close via
-    // [`Op::Close`].
-    let palette_api = lua.create_table()?;
-    let ops_for_palette = ops.clone();
-    palette_api.set(
-        "open",
-        lua.create_function(
-            move |lua,
-                  spec: Table|
-                  -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
-                use crate::compositor::CardId;
-                use crate::compositor::op::Op;
-                use crate::lua::bridge::palette_handle::PaletteHandle;
-                use crate::lua::bridge::palette_provider::LuaPaletteProvider;
-                // Reserve the id up-front so the returned [`PaletteHandle`]
-                // can target this exact PaletteComponent for close.
-                let id = CardId::next();
-                // Build the provider on the **same** Lua VM that ran
-                // `palette.open` — the setup state. The spec's
-                // callbacks (`filter`, `items`, `execute`, …) capture
-                // upvalues there, so the per-provider Lua handle must
-                // be a clone of it (cheap Arc bump).
-                let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
-                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
-                ops_for_palette.borrow_mut().push(Op::Push {
-                    id,
-                    component: Box::new(palette) as Box<dyn crate::compositor::Component>,
-                });
-                Ok(PaletteHandle::new(id, ops_for_palette.clone()))
-            },
-        )?,
-    )?;
-    api.set("palette", palette_api)?;
-
-    // ── ttymap.api.frame ─────────────────────────────────────────────
-    //
-    // Per-frame primitives:
-    //
-    // - `export()`     fire-and-forget request to snapshot the current
-    //                  frame to disk; pushes `UserIntent::ExportFrame` onto
-    //                  the shared `intent_tx`, drained per frame.
-    // - `on_tick(fn)`  subscribe a callback to the per-frame `"tick"`
-    //                  event. Sugar for `ttymap.on_event("tick", fn)`;
-    //                  the callback lands as a `Subscriber` in the
-    //                  global `LuaEventBus`. Multiple calls per script
-    //                  are stacked in registration order.
-    let frame_api = lua.create_table()?;
-    let ops_for_export = ops.clone();
-    frame_api.set(
-        "export",
-        lua.create_function(move |_, _: ()| {
-            ops_for_export
-                .borrow_mut()
-                .push(crate::compositor::op::Op::Intent(UserIntent::ExportFrame));
-            Ok(())
-        })?,
-    )?;
-    // `on_tick` is a thin sugar for `on_event("tick", fn)` — kept
-    // because the existing plugin set + docs use it everywhere and
-    // it reads more naturally for the per-frame use case. New
-    // event surfaces should use `ttymap.on_event` directly.
-    let cap = slot.clone();
-    frame_api.set(
-        "on_tick",
-        lua.create_function(move |lua, callback: mlua::Function| -> mlua::Result<()> {
-            let key = lua.create_registry_value(callback)?;
-            cap.borrow_mut()
-                .event_subscriptions
-                .push(EventSubscription {
-                    event_name: "tick",
-                    callback: key,
-                });
-            Ok(())
-        })?,
-    )?;
-    api.set("frame", frame_api)?;
-
-    // ── ttymap.api.notify ─────────────────────────────────────────────
-    //
-    // Read-side of the notification ring. The bundled `notify` plugin
-    // walks `recent(ttl_ms)` per frame and renders entries whose age
-    // is below the TTL. Returning age (rather than a wall-clock
-    // timestamp) lets renderers decide on fade / sort policy without
-    // owning a clock.
-    let notify_api = lua.create_table()?;
-    let shared_for_recent = shared.clone();
-    notify_api.set(
-        "recent",
-        lua.create_function(move |lua, ttl_ms: u64| {
-            let table = lua.create_table()?;
-            let now = Instant::now();
-            let buf = match shared_for_recent.notifications.lock() {
-                Ok(g) => g,
-                Err(_) => return Ok(table),
-            };
-            let mut idx = 1;
-            for e in buf.iter() {
-                let age_ms = now.saturating_duration_since(e.posted_at).as_millis() as u64;
-                if age_ms < ttl_ms {
-                    let row = lua.create_table()?;
-                    row.set("message", e.message.as_str())?;
-                    row.set("level", e.level.as_str())?;
-                    row.set("age_ms", age_ms)?;
-                    table.set(idx, row)?;
-                    idx += 1;
-                }
-            }
-            Ok(table)
-        })?,
-    )?;
-    api.set("notify", notify_api)?;
-
-    ttymap.set("api", api)?;
+    // Imperative primitives (`ttymap.api.{card,palette,frame,notify}`)
+    // — runtime-time `open` / `export` / `on_tick` / `recent` calls a
+    // plugin makes from inside its callbacks.
+    imperative::install(lua, &ttymap, tag, slot, ops, shared.clone())?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
@@ -663,6 +422,7 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::UserIntent;
     use crate::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
