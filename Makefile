@@ -37,7 +37,11 @@ help:
 install: install-bin install-runtime
 
 install-bin:
-	cargo install --path ttymap-tui
+	# --force so re-installing replaces the binary in place. Cargo
+	# also uses --force when the previous install came from a
+	# differently-named source crate (the binary used to ship from
+	# the root `ttymap` crate; it now ships from `ttymap-tui`).
+	cargo install --path ttymap-tui --force
 
 install-runtime:
 	# Wipe + re-create both tiers so files removed from runtime/
