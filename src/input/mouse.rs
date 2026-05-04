@@ -32,7 +32,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::frontend::UserIntent;
-use crate::map::Action;
+use crate::map::MapAction;
 
 #[derive(Default)]
 pub struct MouseAdapter {
@@ -69,7 +69,7 @@ impl MouseAdapter {
                     let dy = event.row as i16 - prev_y as i16;
                     self.drag_from = Some((event.column, event.row));
                     if dx != 0 || dy != 0 {
-                        return Some(UserIntent::Map(Action::PanCells(dx, dy)));
+                        return Some(UserIntent::Map(MapAction::PanCells(dx, dy)));
                     }
                 }
                 None
@@ -78,12 +78,12 @@ impl MouseAdapter {
                 self.drag_from = None;
                 None
             }
-            MouseEventKind::ScrollUp => Some(UserIntent::Map(Action::ZoomAt {
+            MouseEventKind::ScrollUp => Some(UserIntent::Map(MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
                 zoom_in: true,
             })),
-            MouseEventKind::ScrollDown => Some(UserIntent::Map(Action::ZoomAt {
+            MouseEventKind::ScrollDown => Some(UserIntent::Map(MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
                 zoom_in: false,

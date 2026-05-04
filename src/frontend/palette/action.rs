@@ -1,7 +1,7 @@
 //! `PaletteAction` enum — what a [`PaletteProvider`] tells the palette
 //! to do after the user activates an item or cancels.
 //!
-//! Mirrors `map::Action` in role: a closed verb vocabulary owned by
+//! Mirrors `map::MapAction` in role: a closed verb vocabulary owned by
 //! the palette subsystem. `PaletteComponent::apply_action` is the
 //! single consumer; providers (Rust + Lua bridge) only emit. Splitting
 //! it out of the trait file keeps the public verb set discoverable

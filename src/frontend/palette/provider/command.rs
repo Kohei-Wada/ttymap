@@ -1,7 +1,7 @@
 //! [`CommandProvider`] — the default palette provider.
 //!
 //! Built once at startup from:
-//! - map actions (harvested from [`Action::all_listed`] with keymap
+//! - map actions (harvested from [`MapAction::all_listed`] with keymap
 //!   hints)
 //! - plugin palette entries harvested from the
 //!   [`Registrar`](crate::frontend::compositor::Registrar) by the palette
@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::frontend::UserIntent;
 use crate::frontend::compositor::{Context, PaletteEntry as RegistrarEntry};
 use crate::input::keymap::KeyMap;
-use crate::map::Action;
+use crate::map::MapAction;
 use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
@@ -25,13 +25,13 @@ use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 /// at composition time, held as `Rc` so the palette activation
 /// closure can clone cheaply for each push.
 pub struct CommandSeed {
-    map_actions: Vec<(Action, String)>, // (action, key hint)
+    map_actions: Vec<(MapAction, String)>, // (action, key hint)
     plugin_entries: Vec<RegistrarEntry>,
 }
 
 impl CommandSeed {
     pub fn build(keymap: &KeyMap, plugin_entries: Vec<RegistrarEntry>) -> Self {
-        let map_actions = Action::all_listed()
+        let map_actions = MapAction::all_listed()
             .iter()
             .map(|a| {
                 let hint = keymap.keys_for(&UserIntent::Map(a.clone())).join(", ");
@@ -48,7 +48,7 @@ impl CommandSeed {
 #[derive(Clone)]
 enum Kind {
     /// Plain map action — selecting runs `UserIntent::Map(action)`.
-    MapAction(Action),
+    MapAction(MapAction),
     /// Plugin-registered Spawn / Run entry — selecting invokes the
     /// closure in `CommandSeed::plugin_entries[idx]`.
     PluginEntry(usize),

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::frontend::UserIntent;
-use crate::map::Action;
+use crate::map::MapAction;
 
 /// A key binding: a key code + optional modifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -122,8 +122,8 @@ impl KeyMap {
 
 impl Default for KeyMap {
     fn default() -> Self {
-        use Action::*;
-        let map = |key: &str, action: Action| -> (KeyBinding, UserIntent) {
+        use MapAction::*;
+        let map = |key: &str, action: MapAction| -> (KeyBinding, UserIntent) {
             (parse_key_binding(key).unwrap(), UserIntent::Map(action))
         };
         let intent = |key: &str, intent: UserIntent| -> (KeyBinding, UserIntent) {
@@ -156,11 +156,11 @@ impl Default for KeyMap {
 }
 
 /// Raw keybinding overrides from the `[keymap]` section of
-/// `config.toml`. Keys are `Action::config_name` strings (e.g.
+/// `config.toml`. Keys are `MapAction::config_name` strings (e.g.
 /// `"pan_left"`); values replace the default bindings for that
 /// action (wrapped as `UserIntent::Map` internally). Applied via
-/// `KeyMap::with_overrides`. Adding a new bindable `Action` only
-/// requires extending `Action::all_listed` + `Action::config_name`
+/// `KeyMap::with_overrides`. Adding a new bindable `MapAction` only
+/// requires extending `MapAction::all_listed` + `MapAction::config_name`
 /// — the data shape here is unchanged.
 pub type KeybindingOverrides = HashMap<String, Vec<String>>;
 
@@ -209,7 +209,7 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
 mod tests {
     use super::*;
 
-    fn map(action: Action) -> UserIntent {
+    fn map(action: MapAction) -> UserIntent {
         UserIntent::Map(action)
     }
 
@@ -250,11 +250,11 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&map(Action::PanLeft))
+            Some(&map(MapAction::PanLeft))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            Some(&map(Action::PanDownHalf))
+            Some(&map(MapAction::PanDownHalf))
         );
         assert_eq!(km.lookup(KeyCode::Char('x'), KeyModifiers::NONE), None);
     }
@@ -269,7 +269,7 @@ mod tests {
 
         assert_eq!(
             km.lookup(KeyCode::Char('i'), KeyModifiers::NONE),
-            Some(&map(Action::ZoomIn))
+            Some(&map(MapAction::ZoomIn))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
@@ -286,7 +286,7 @@ mod tests {
         let km = KeyMap::with_overrides(&KeybindingOverrides::new());
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&map(Action::PanLeft))
+            Some(&map(MapAction::PanLeft))
         );
     }
 
@@ -299,7 +299,7 @@ mod tests {
         let km = KeyMap::with_overrides(&overrides);
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&map(Action::PanLeft))
+            Some(&map(MapAction::PanLeft))
         );
     }
 
@@ -310,19 +310,19 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('h'), NONE),
-            Some(map(Action::PanLeft))
+            Some(map(MapAction::PanLeft))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('j'), NONE),
-            Some(map(Action::PanDown))
+            Some(map(MapAction::PanDown))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('k'), NONE),
-            Some(map(Action::PanUp))
+            Some(map(MapAction::PanUp))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('l'), NONE),
-            Some(map(Action::PanRight))
+            Some(map(MapAction::PanRight))
         );
     }
 
@@ -331,11 +331,11 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('a'), NONE),
-            Some(map(Action::ZoomIn))
+            Some(map(MapAction::ZoomIn))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('z'), NONE),
-            Some(map(Action::ZoomOut))
+            Some(map(MapAction::ZoomOut))
         );
     }
 
@@ -350,19 +350,19 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('w'), NONE),
-            Some(map(Action::PanRightFast))
+            Some(map(MapAction::PanRightFast))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('b'), NONE),
-            Some(map(Action::PanLeftFast))
+            Some(map(MapAction::PanLeftFast))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            Some(map(Action::PanDownHalf))
+            Some(map(MapAction::PanDownHalf))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('u'), KeyModifiers::CONTROL),
-            Some(map(Action::PanUpHalf))
+            Some(map(MapAction::PanUpHalf))
         );
     }
 
@@ -371,7 +371,7 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('0'), NONE),
-            Some(map(Action::ResetPosition))
+            Some(map(MapAction::ResetPosition))
         );
     }
 

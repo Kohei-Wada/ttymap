@@ -55,9 +55,9 @@ Current examples:
 
 | UserIntent              | Source                          | Why it is a UserIntent                    |
 | ------------------- | ------------------------------- | -------------------------------------- |
-| `Map(Action::Pan…)` | keymap, mouse drag              | User intent → map state change         |
-| `Map(Action::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
-| `Map(Action::Redraw)` | initial draw                  | Forces an unconditional fresh frame    |
+| `Map(MapAction::Pan…)` | keymap, mouse drag              | User intent → map state change         |
+| `Map(MapAction::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
+| `Map(MapAction::Redraw)` | initial draw                  | Forces an unconditional fresh frame    |
 | `Resize(w, h)`      | crossterm `Resize` event        | Cross-cutting: map state + render canvas |
 | `SetTheme`          | palette entry                   | Cross-cutting: UI theme + render styler |
 | `CursorMoved`       | mouse router (every event)      | Overlay readout through the same boundary |

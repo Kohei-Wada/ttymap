@@ -47,7 +47,7 @@ impl LuaHandle {
     }
 
     /// Notify Lua observers that the zoom level was set explicitly
-    /// (via `:zoom` or `Action::SetZoom`).
+    /// (via `:zoom` or `MapAction::SetZoom`).
     pub fn notify_map_zoom_set(&self, zoom: f64) {
         self.bus.dispatch(names::MAP_ZOOM_SET, zoom);
     }

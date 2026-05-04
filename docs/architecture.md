@@ -28,7 +28,7 @@ src/
 │
 ├── frontend/            controller: event loop, intent dispatch, UI shell, compositor
 │   ├── mod.rs           Frontend::new / run / dispatch — single side-effect boundary
-│   ├── intent.rs        UserIntent enum (Map(Action) / Jump / SetTheme / CycleFocus / …)
+│   ├── intent.rs        UserIntent enum (Map(MapAction) / Jump / SetTheme / CycleFocus / …)
 │   ├── event.rs         AppEvent — unified queue payload (Intent / FrameReady / Input / Wake)
 │   ├── frame_timer.rs   per-iteration wake source
 │   ├── ui.rs            ratatui draw entry — lays out map area + footer, routes through compositor
@@ -102,14 +102,14 @@ runtime/
 ## Layering
 
 - **`map/`** — domain. Knows nothing about UI, plugins, or focus.
-  `Action` carries every map-level mutation, including mouse-continuous
+  `MapAction` carries every map-level mutation, including mouse-continuous
   variants (`PanCells`, `ZoomAt`).
 - **`frontend/`** — the **controller**. `UserIntent` (in
   `frontend/intent.rs`) is the closed enum every input source (keymap,
   palette, compositor components, mouse adapter, Lua callbacks, async
   tasks) emits; `Frontend::dispatch` in `frontend/mod.rs` is the sole
   place that executes them. Map-level actions nest under
-  `UserIntent::Map(Action)`; other variants sit at the top level.
+  `UserIntent::Map(MapAction)`; other variants sit at the top level.
   Command pattern with `Frontend` as the Receiver — see
   [design.md](design.md) for the UserIntent-vs-direct-call judgment
   rules.
@@ -184,8 +184,8 @@ key event
 mouse event
   ↓ MouseAdapter::translate(event) → Vec<UserIntent>:
     every event   → UserIntent::CursorMoved(col, row)
-    drag (left)   → UserIntent::Map(Action::PanCells(dx, dy))
-    scroll        → UserIntent::Map(Action::ZoomAt { anchor_*, zoom_in })
+    drag (left)   → UserIntent::Map(MapAction::PanCells(dx, dy))
+    scroll        → UserIntent::Map(MapAction::ZoomAt { anchor_*, zoom_in })
 ```
 
 ## Render flow

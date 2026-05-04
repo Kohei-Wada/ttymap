@@ -39,18 +39,18 @@ pub mod names {
     /// frame is heavy + the live snapshot is read via `ttymap.map`
     /// accessors.
     pub const FRAME_READY: &str = "frame_ready";
-    /// Map state recentred via `Action::Jump`. Payload: `(lon, lat)`.
+    /// Map state recentred via `MapAction::Jump`. Payload: `(lon, lat)`.
     pub const MAP_JUMPED: &str = "map_jumped";
-    /// Direct zoom set via `Action::SetZoom`. Payload: `zoom: f64`.
+    /// Direct zoom set via `MapAction::SetZoom`. Payload: `zoom: f64`.
     pub const MAP_ZOOM_SET: &str = "map_zoom_set";
-    /// Composite recentre+zoom via `Action::FlyTo`. Payload:
+    /// Composite recentre+zoom via `MapAction::FlyTo`. Payload:
     /// `(lon, lat, zoom)`.
     pub const MAP_FLEW_TO: &str = "map_flew_to";
     /// Theme switched. Payload: `theme name string`.
     pub const THEME_CHANGED: &str = "theme_changed";
     /// Terminal resized. Payload: `(cols, rows)`.
     pub const RESIZED: &str = "resized";
-    /// `Action::ExportFrame` ran (regardless of success). No payload.
+    /// `MapAction::ExportFrame` ran (regardless of success). No payload.
     pub const FRAME_EXPORTED: &str = "frame_exported";
 }
 
