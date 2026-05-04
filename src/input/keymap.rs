@@ -155,10 +155,11 @@ impl Default for KeyMap {
     }
 }
 
-/// Raw keybinding overrides from the `[keymap]` section of
-/// `config.toml`. Keys are `MapAction::config_name` strings (e.g.
-/// `"pan_left"`); values replace the default bindings for that
-/// action (wrapped as `UserCommand::Map` internally). Applied via
+/// Raw keybinding overrides built up from `ttymap.keymap.set(...)`
+/// / `ttymap.keymap.del(...)` calls in `init.lua`. Keys are
+/// `MapAction::config_name` strings (e.g. `"pan_left"`); values
+/// replace the default bindings for that action (wrapped as
+/// `UserCommand::Map` internally). Applied via
 /// `KeyMap::with_overrides`. Adding a new bindable `MapAction` only
 /// requires extending `MapAction::all_listed` + `MapAction::config_name`
 /// — the data shape here is unchanged.

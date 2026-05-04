@@ -20,8 +20,8 @@ impl HostConfig {
 impl UserData for HostConfig {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.config:geoip_endpoint() -> string` — configured geoip
-        // URL (`[geoip].endpoint` in config.toml). The here plugin
-        // GETs this to resolve the user's location.
+        // URL (`ttymap.opt.geoip.endpoint` in init.lua). The here
+        // plugin GETs this to resolve the user's location.
         methods.add_method("geoip_endpoint", |_, this, _: ()| {
             Ok(this.shared.geoip_endpoint.clone())
         });

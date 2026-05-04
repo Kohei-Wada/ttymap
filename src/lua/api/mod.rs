@@ -130,8 +130,8 @@ pub struct LuaHostShared {
     /// `TileClient` has no attribution to display (custom backends
     /// without OSM data, mostly).
     pub attribution: Option<String>,
-    /// IP-geolocation endpoint URL (`[geoip].endpoint` in
-    /// `config.toml`). The here plugin GETs this to resolve the
+    /// IP-geolocation endpoint URL (`ttymap.opt.geoip.endpoint` in
+    /// `init.lua`). The here plugin GETs this to resolve the
     /// user's coordinates.
     pub geoip_endpoint: String,
     /// Pre-baked `(key-binding, action-label)` pairs for built-in
