@@ -37,8 +37,6 @@
 //! the compositor is the sole applier of the queue, so invariants
 //! (focus, dedup, clamp) remain framework-enforced.
 
-use std::sync::mpsc;
-
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::Style;
@@ -47,35 +45,34 @@ use ratatui::widgets::{
     TableState,
 };
 
-use crate::frontend::compositor::{Component, Context};
-use crate::frontend::{AppEvent, UserIntent};
+use crate::frontend::UserIntent;
+use crate::frontend::compositor::{CardId, Component, Context};
+use crate::lua::op::Op;
 use crate::theme::{StyleKind, UiTheme};
 
-/// Queue of stack-mutation actions a [`Component`] hook recorded
-/// through [`Window`]. Drained and applied by the compositor after
-/// the hook returns. Intent emission (`win.emit`) is **not** queued
-/// here — it fires directly onto the App's [`AppEvent`] bus.
+/// Queue of [`Op`]s a [`Component`] hook recorded through [`Window`].
+/// Drained and applied by the compositor after the hook returns —
+/// stack mutations (`close` / `open`) hit the compositor's own
+/// methods, intent emissions (`emit`) flow onto the App's
+/// [`AppEvent`] bus.
+///
+/// Single Op-typed queue replaces the prior split (close: bool +
+/// opens: Vec + did_emit: bool + direct event_tx send for emit).
+/// All four behaviours land as separate variants in `ops`, preserving
+/// the order the component called them.
 #[derive(Default)]
 pub(crate) struct WindowOps {
-    /// `true` if the plugin called [`Window::close`]. Pops the
-    /// calling component. Applied before `opens` so `close + open`
-    /// replaces the component in the stack slot.
-    pub close: bool,
-    /// Components queued by [`Window::open`]. Each pushes a fresh
-    /// stack entry — nvim-style, no identity dedup. Plugins that
-    /// want toggle semantics ("close if already open") handle that
-    /// themselves in their own `handle_event`.
-    pub opens: Vec<Box<dyn Component>>,
-    /// `true` if the plugin called [`Window::emit`] at least once.
-    /// Tracked so the fall-through logic in `Compositor::handle_event`
-    /// can tell "the hook only signalled ignore()" from "the hook
-    /// did emit something" — without this flag, an emit-then-ignore
-    /// component would leak its key down to the base layer.
-    pub did_emit: bool,
-    /// `true` if the plugin called [`Window::ignore`]. Meaningful
-    /// only when no other op was queued — in that case the
-    /// compositor re-delivers the event to the base layer (unless
-    /// the handler already was the base). Ignored otherwise.
+    /// Stack mutations + intent emissions the hook recorded, in
+    /// call order. Drained by [`Compositor`](super::Compositor)
+    /// after the hook returns:
+    /// - [`Op::Close`] → `Compositor::close_by_id`
+    /// - [`Op::Push`] → `Compositor::push_with_id`
+    /// - [`Op::Intent`] → relayed to the App's `AppEvent` channel
+    pub ops: Vec<Op>,
+    /// `true` if the hook called [`Window::ignore`]. Meaningful only
+    /// when no [`Op`] was queued — in that case the compositor
+    /// re-delivers the event to the base layer (unless the handler
+    /// already was the base). Ignored otherwise.
     pub ignored: bool,
 }
 
@@ -84,7 +81,32 @@ impl WindowOps {
     /// hook's only effect was `ignore()`, this is also true (ignore
     /// itself is a signal, not an op).
     pub(crate) fn is_ignorable_noop(&self) -> bool {
-        !self.close && self.opens.is_empty() && !self.did_emit
+        self.ops.is_empty()
+    }
+
+    /// Test helper: did the hook queue any [`Op::Close`]?
+    #[cfg(test)]
+    pub(crate) fn closed(&self) -> bool {
+        self.ops.iter().any(|op| matches!(op, Op::Close(_)))
+    }
+
+    /// Test helper: did the hook queue any [`Op::Push`]?
+    #[cfg(test)]
+    pub(crate) fn pushed(&self) -> bool {
+        self.ops.iter().any(|op| matches!(op, Op::Push { .. }))
+    }
+
+    /// Test helper: every [`UserIntent`] the hook queued via
+    /// [`Window::emit`], in call order.
+    #[cfg(test)]
+    pub(crate) fn intents(&self) -> Vec<UserIntent> {
+        self.ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Intent(intent) => Some(intent.clone()),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -100,16 +122,17 @@ impl WindowOps {
 pub struct Window<'a> {
     ops: &'a mut WindowOps,
     ctx: &'a Context,
-    event_tx: &'a mpsc::Sender<AppEvent>,
+    /// Stable id of the component this `Window` was created for.
+    /// `close()` enqueues `Op::Close(my_id)`; the compositor pops
+    /// the matching entry by id rather than by stack index, so
+    /// hooks remain valid even when ops queued before `close`
+    /// reorder the stack.
+    my_id: CardId,
 }
 
 impl<'a> Window<'a> {
-    pub(crate) fn new(
-        ops: &'a mut WindowOps,
-        ctx: &'a Context,
-        event_tx: &'a mpsc::Sender<AppEvent>,
-    ) -> Self {
-        Self { ops, ctx, event_tx }
+    pub(crate) fn new(ops: &'a mut WindowOps, ctx: &'a Context, my_id: CardId) -> Self {
+        Self { ops, ctx, my_id }
     }
 
     /// App-level snapshot passed for this hook (map center, theme id).
@@ -118,11 +141,11 @@ impl<'a> Window<'a> {
     }
 
     /// Pop the calling component from the stack after the hook
-    /// returns. Idempotent — a second call is a no-op. Applied
-    /// before `open()`s so `close(); open(c);` replaces this
-    /// component with `c`.
+    /// returns. Idempotent — a second call queues a redundant
+    /// `Op::Close(my_id)` that the compositor silently ignores
+    /// once this component is already off the stack.
     pub fn close(&mut self) {
-        self.ops.close = true;
+        self.ops.ops.push(Op::Close(self.my_id));
     }
 
     /// Push `c` on top of the stack after the hook returns. Always
@@ -131,19 +154,20 @@ impl<'a> Window<'a> {
     /// inside its own `handle_event` (return `close` when already
     /// open, push otherwise).
     pub fn open(&mut self, c: Box<dyn Component>) {
-        self.ops.opens.push(c);
+        self.ops.ops.push(Op::Push {
+            id: CardId::next(),
+            component: c,
+        });
     }
 
-    /// Send `msg` onto the App's unified [`AppEvent`] bus, wrapped
-    /// as [`AppEvent::Intent`]. The App's main loop drains the bus
-    /// in the same iteration's `try_recv` pass after this hook
-    /// returns, so `emit + close` still results in the msg being
-    /// dispatched (against the post-pop state). A failed send means
-    /// the bus receiver has been dropped (App teardown) — silently
-    /// ignored.
+    /// Queue `msg` as an [`Op::Intent`]; the compositor relays it
+    /// onto the App's unified [`AppEvent`] bus when it drains this
+    /// `WindowOps`. The App's main loop picks it up in the same
+    /// iteration's `try_recv` pass after this hook returns, so
+    /// `emit + close` still dispatches the msg (against the
+    /// post-pop state).
     pub fn emit(&mut self, msg: UserIntent) {
-        self.ops.did_emit = true;
-        let _ = self.event_tx.send(AppEvent::Intent(msg));
+        self.ops.ops.push(Op::Intent(msg));
     }
 
     /// Signal "this event isn't mine". With no other op queued,

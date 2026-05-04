@@ -148,10 +148,9 @@ impl Component for BaseLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Context;
     use super::super::window::WindowOps;
+    use super::super::{CardId, Context};
     use super::*;
-    use crate::frontend::AppEvent;
     use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -164,37 +163,29 @@ mod tests {
         BaseLayer::new(KeyMap::default(), Vec::new(), Vec::new())
     }
 
-    /// Dispatch a key into `bg` against a disposable bus. Returns
-    /// the queued stack ops (close / opens / ignored) plus every
-    /// `UserIntent` the hook emitted onto the bus, drained in order.
-    fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> (WindowOps, Vec<UserIntent>) {
-        let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
+    /// Dispatch a key into `bg`. Intent emissions and stack ops both
+    /// land on the returned [`WindowOps`]; tests inspect via the
+    /// `closed()` / `pushed()` / `intents()` helpers.
+    fn dispatch(bg: &mut BaseLayer, code: KeyCode) -> WindowOps {
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
+            let mut win = Window::new(&mut ops, &CTX, CardId::next());
             bg.handle_event(KeyEvent::new(code, NONE), &mut win);
         }
-        let mut msgs = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            match ev {
-                AppEvent::Intent(m) => msgs.push(m),
-                other => panic!("unexpected event: {other:?}"),
-            }
-        }
-        (ops, msgs)
+        ops
     }
 
     #[test]
     fn gg_produces_zoom_to_world_on_second_g() {
         let mut bg = bg();
         // 1st g: nothing fires, pending_g latched.
-        let (ops, msgs) = dispatch(&mut bg, KeyCode::Char('g'));
-        assert!(msgs.is_empty());
-        assert!(!ops.close);
-        assert!(ops.opens.is_empty());
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert!(ops.intents().is_empty());
+        assert!(!ops.closed());
+        assert!(!ops.pushed());
         // 2nd g: ZoomToWorld.
-        let (_ops, msgs) = dispatch(&mut bg, KeyCode::Char('g'));
-        assert_eq!(msgs, vec![UserIntent::Map(MapAction::ZoomToWorld)]);
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert_eq!(ops.intents(), vec![UserIntent::Map(MapAction::ZoomToWorld)]);
     }
 
     #[test]
@@ -203,7 +194,7 @@ mod tests {
         dispatch(&mut bg, KeyCode::Char('g'));
         dispatch(&mut bg, KeyCode::Char('h')); // breaks
         // Now pending_g was reset; this g latches afresh, doesn't fire.
-        let (_ops, msgs) = dispatch(&mut bg, KeyCode::Char('g'));
-        assert!(msgs.is_empty());
+        let ops = dispatch(&mut bg, KeyCode::Char('g'));
+        assert!(ops.intents().is_empty());
     }
 }

@@ -40,6 +40,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::frontend::{AppEvent, UserIntent};
+use crate::lua::op::Op;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
@@ -305,58 +306,61 @@ impl Compositor {
             return;
         }
         let focused = self.focused_idx;
+        let focused_id = self.stack[focused].0;
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, ctx, event_tx);
+            let mut win = Window::new(&mut ops, ctx, focused_id);
             self.stack[focused].1.handle_event(event, &mut win);
         }
         // Fall-through: only when the hook queued nothing *and*
         // explicitly called `ignore()`, and the focus isn't already
         // on the base layer.
         if ops.is_ignorable_noop() && ops.ignored && focused != 0 {
+            let base_id = self.stack[0].0;
             let mut ops = WindowOps::default();
             {
-                let mut win = Window::new(&mut ops, ctx, event_tx);
+                let mut win = Window::new(&mut ops, ctx, base_id);
                 self.stack[0].1.handle_event(event, &mut win);
             }
-            self.apply_ops(0, ops);
+            self.apply_ops(ops, event_tx);
             return;
         }
-        self.apply_ops(focused, ops);
+        self.apply_ops(ops, event_tx);
     }
 
-    /// Drain a [`WindowOps`] queue in the documented order:
-    /// `close` → `opens`. Intent emission already happened during
-    /// the hook (via `Window::emit` → bus); nothing left to return.
-    /// Always pushes new instances on `open` — nvim-style, no
-    /// identity dedup. Plugins that want toggle behavior implement
-    /// it inside their own `handle_event` (return `close = true`
-    /// when the activation key fires).
-    fn apply_ops(&mut self, idx: usize, ops: WindowOps) {
-        if ops.close {
-            self.stack.remove(idx);
-            self.clamp_focus_after_shrink();
-        }
-        for c in ops.opens {
-            self.push(c);
+    /// Drain the [`WindowOps`] queue in call order: stack mutations
+    /// hit `close_by_id` / `push_with_id`, intent ops relay onto the
+    /// App's [`AppEvent`] bus. The `Op::Close` path is silent on
+    /// stale ids (component already off the stack), so duplicate
+    /// or out-of-order closes from buggy plugins don't blow up.
+    fn apply_ops(&mut self, ops: WindowOps, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+        for op in ops.ops {
+            match op {
+                Op::Close(id) => self.close_by_id(id),
+                Op::Push { id, component } => self.push_with_id(id, component),
+                Op::Intent(intent) => {
+                    let _ = event_tx.send(AppEvent::Intent(intent));
+                }
+            }
         }
     }
 
-    /// Poll every component. Intent emission inside the hook fires
-    /// directly onto the event bus via `Window::emit`; the only
-    /// queue-back work here is applying the `close` / `open` ops.
+    /// Poll every component. Intent emissions queued by the hook
+    /// (`win.emit`) ride the same [`WindowOps`] as stack ops; the
+    /// drain below relays them through `event_tx`.
     pub fn poll(&mut self, ctx: &Context, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; apply
         // after the borrow of `stack` is released.
         let len = self.stack.len();
         for i in (0..len).rev() {
+            let id = self.stack[i].0;
             let mut ops = WindowOps::default();
             {
-                let mut win = Window::new(&mut ops, ctx, event_tx);
+                let mut win = Window::new(&mut ops, ctx, id);
                 self.stack[i].1.poll(&mut win);
             }
-            self.apply_ops(i, ops);
+            self.apply_ops(ops, event_tx);
         }
     }
 
