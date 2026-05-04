@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::theme::ThemeId;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::renderer::{LayerData, Renderer, TileData};
 use ttymap_engine::map::render::view::VisibleTile;
 use ttymap_engine::map::styler::Styler;
 use ttymap_engine::map::tile::decode;
+use ttymap_tui::theme::ThemeId;
 
 const SAMPLE: &[u8] = include_bytes!("fixtures/z14.pbf");
 

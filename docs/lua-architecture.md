@@ -30,12 +30,12 @@ At least one of those is required at script load. Everything dynamic
 (panels, palettes) is *imperative*, opened from inside callbacks via
 `ttymap.api.card.open` / `ttymap.api.palette.open`.
 
-## Module layout (`src/lua/`)
+## Module layout (`ttymap-tui/src/lua/`)
 
 Split by intent, not by domain:
 
 ```
-src/lua/
+ttymap-tui/src/lua/
   mod.rs           discovery, register_one, package.searchers wiring
   registry.rs      LuaEventBus — pub/sub for tick / frame_ready / map_jumped / …
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
@@ -86,7 +86,7 @@ src/lua/
 
 ## Plugin runtime API (`ttymap` global)
 
-Built by `ttymap::install` (`src/lua/api/mod.rs`). Domain-namespaced
+Built by `ttymap::install` (`ttymap-tui/src/lua/api/mod.rs`). Domain-namespaced
 userdatas:
 
 | Namespace        | Methods                                                                                        |
@@ -117,7 +117,7 @@ Top-level functions the script's setup body calls:
 ### Event bus
 
 `ttymap.on_event(name, fn)` registers a callback against the
-`LuaEventBus` (`src/lua/registry.rs`). Every emit site inside the
+`LuaEventBus` (`ttymap-tui/src/lua/registry.rs`). Every emit site inside the
 host calls `LuaEventBus::dispatch_tick` (for the per-frame `"tick"`
 bucket, which threads a live `MapApi` through `Lua::scope`) or
 `LuaEventBus::dispatch(name, args)` (for plain-Lua-value payloads).

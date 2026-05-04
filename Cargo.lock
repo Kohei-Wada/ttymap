@@ -2983,28 +2983,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "ttymap"
-version = "0.1.0"
-dependencies = [
- "cargo-husky",
- "chrono",
- "clap",
- "criterion",
- "crossbeam-channel",
- "crossterm",
- "directories",
- "log",
- "mlua",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "sgp4",
- "ttymap-engine",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "ttymap-engine"
 version = "0.1.0"
 dependencies = [
@@ -3022,6 +3000,28 @@ dependencies = [
  "rstar",
  "serde",
  "serde_json",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ttymap-tui"
+version = "0.1.0"
+dependencies = [
+ "cargo-husky",
+ "chrono",
+ "clap",
+ "criterion",
+ "crossbeam-channel",
+ "crossterm",
+ "directories",
+ "log",
+ "mlua",
+ "ratatui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sgp4",
+ "ttymap-engine",
  "unicode-width 0.2.2",
 ]
 

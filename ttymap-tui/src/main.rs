@@ -1,9 +1,9 @@
 use clap::Parser;
-use ttymap::app::frame_timer::FrameTimer;
-use ttymap::app::{App, KeybindingOverrides};
-use ttymap::cli::Command as Subcommand;
-use ttymap::config::Config;
-use ttymap::input::thread::InputHandle;
+use ttymap_tui::app::frame_timer::FrameTimer;
+use ttymap_tui::app::{App, KeybindingOverrides};
+use ttymap_tui::cli::Command as Subcommand;
+use ttymap_tui::config::Config;
+use ttymap_tui::input::thread::InputHandle;
 
 #[derive(Parser)]
 #[command(
@@ -60,21 +60,21 @@ fn main() {
     // When set, logs land in ~/.local/state/ttymap/ttymap.log
     // (truncated on each launch, so debug sessions don't accumulate).
     if let Some(level) = cli.log.as_deref() {
-        ttymap::logging::init(level).ok();
+        ttymap_tui::logging::init(level).ok();
     }
 
     // Resolve runtime path before any Lua state spins up. Both the
     // interactive app and the `snap` subcommand reach for it; doing
     // this once at the top means we fail fast with a single error
     // message rather than hitting the same wall in two places.
-    let runtime_path = match ttymap::lua::resolve_runtime_path() {
+    let runtime_path = match ttymap_tui::lua::resolve_runtime_path() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ttymap: {}", e);
             std::process::exit(1);
         }
     };
-    ttymap::lua::set_runtime_path(runtime_path);
+    ttymap_tui::lua::set_runtime_path(runtime_path);
 
     // Subcommands run a single task and exit without booting the full
     // interactive app.
@@ -89,7 +89,7 @@ fn main() {
     // Run init.lua first, then override with CLI args. `keymap_overrides`
     // travels to App::new alongside Config because the keymap is
     // scripted at the same place but lives in its own data shape.
-    let (mut config, keymap_overrides) = ttymap::lua::load_init_lua(Config::default());
+    let (mut config, keymap_overrides) = ttymap_tui::lua::load_init_lua(Config::default());
 
     if let Some(v) = cli.lat {
         config.engine.map.lat = v;
@@ -107,7 +107,7 @@ fn main() {
     }
 
     if cli.here || config.geoip.on_startup {
-        match ttymap::shared::geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
+        match ttymap_tui::shared::geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
             Some((lat, lon)) => {
                 log::info!("geoip: resolved to {}, {}", lat, lon);
                 config.engine.map.lat = lat;
@@ -143,7 +143,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
 
     // Active theme — owned by App, consumed by the map only at
     // construction (initial styler) and on theme switch.
-    let theme_id = ttymap::theme::ThemeId::from_name(&config.engine.render.style);
+    let theme_id = ttymap_tui::theme::ThemeId::from_name(&config.engine.render.style);
 
     // Engine doesn't depend on crossterm; the binary owns the
     // terminal-size probe and hands cols/rows to `engine::map::build`.
@@ -156,7 +156,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     let frame_tx = event_tx.clone();
     let frame_sink: ttymap_engine::map::render::thread::FrameSink = Box::new(move |frame| {
         frame_tx
-            .send(ttymap::app::AppEvent::FrameReady(frame))
+            .send(ttymap_tui::app::AppEvent::FrameReady(frame))
             .is_ok()
     });
 
@@ -169,18 +169,18 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the
     // compositor's BaseLayer at runtime — build it once here.
-    let keymap = ttymap::input::KeyMap::with_overrides(&keymap_overrides);
+    let keymap = ttymap_tui::input::KeyMap::with_overrides(&keymap_overrides);
 
     // Lua subsystem: load every plugin, register activations / palette
     // entries / event-bus subscriptions, return the populated bundle.
     // All Lua → App traffic rides the shared `OpsBuffer` built
     // inside `build_subsystem`; no separate intent sender needed.
-    let mut lua = ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap);
+    let mut lua = ttymap_tui::lua::build_subsystem(&config, map.attribution.clone(), &keymap);
 
     // Palette is a built-in (not a plugin): drain every plugin's
     // palette_entries into a CommandSeed and append the `:` activation.
     // Must run after every plugin's register call.
-    ttymap::palette::install(
+    ttymap_tui::palette::install(
         &keymap,
         &mut lua.activations,
         std::mem::take(&mut lua.palette_entries),

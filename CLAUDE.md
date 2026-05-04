@@ -33,12 +33,15 @@ The repository is a two-crate Cargo workspace:
   framework. Communication out is a `FrameSink` callback (`Box<dyn
   FnMut(MapFrame) -> bool + Send>`) so the engine never names the
   binary's `AppEvent` bus.
-- `.` (`ttymap`) — TUI binary. Owns the App event loop, ratatui draw
-  entry, compositor / palette / input / lua bridge, plus the
-  ratatui-side theme adapter (`UiTheme`, `StyleKind`). Wraps
+- `ttymap-tui/` (`ttymap-tui`) — TUI binary. Owns the App event loop,
+  ratatui draw entry, compositor / palette / input / lua bridge, plus
+  the ratatui-side theme adapter (`UiTheme`, `StyleKind`). Wraps
   `ttymap_engine::Config` with binary-only knobs (`geoip`, `runtime`,
   `plugins`, keybinding overrides) — engine-side fields are reached
-  via `config.engine.<sub>.<field>`.
+  via `config.engine.<sub>.<field>`. The crate is named `ttymap-tui`
+  but the produced executable is still `ttymap` (set via
+  `[[bin]] name = "ttymap"`), so `cargo install` and
+  `~/.cargo/bin/ttymap` are unchanged.
 
 ## Design philosophy
 
@@ -72,22 +75,25 @@ ttymap-engine/                (ttymap-engine — ratatui-free)
   proto/vector_tile.proto
   build.rs                    compiles MVT proto via protox
 
-src/                          (ttymap binary — TUI shell)
-  command.rs                  UserCommand vocabulary
-  config.rs                   wraps ttymap_engine::Config (+ geoip/runtime/plugins)
-  logging.rs                  XDG state log
-  app/                        event loop + dispatcher + ratatui draw entry
-    mod.rs / dispatcher.rs / event.rs / frame_timer.rs / frame_widget.rs / ui.rs
-  cli/                        CLI subcommands (snap)
-  compositor/                 focus stack + Component trait + Op + render
-  input/                      keymap + mouse adapter + input thread
-  palette/                    `:`-triggered picker UI
-  theme/                      ratatui adapter — UiTheme + StyleKind
+ttymap-tui/                   (ttymap-tui — ratatui + crossterm shell)
+  src/
+    command.rs                UserCommand vocabulary
+    config.rs                 wraps ttymap_engine::Config (+ geoip/runtime/plugins)
+    logging.rs                XDG state log
+    app/                      event loop + dispatcher + ratatui draw entry
+      mod.rs / dispatcher.rs / event.rs / frame_timer.rs / frame_widget.rs / ui.rs
+    cli/                      CLI subcommands (snap)
+    compositor/               focus stack + Component trait + Op + render
+    input/                    keymap + mouse adapter + input thread
+    palette/                  `:`-triggered picker UI
+    theme/                    ratatui adapter — UiTheme + StyleKind
                               (re-exports ColorPalette/ThemeId/DARK/BRIGHT
                                from the engine)
-  lua/                        plugin runtime — bridges binary (Component,
+    lua/                      plugin runtime — bridges binary (Component,
                               palette) and engine (MapApi, http)
-  shared/geoip.rs             IP → lon/lat resolution (binary-only)
+    shared/geoip.rs           IP → lon/lat resolution (binary-only)
+  benches/                    decode_tile / render_frame / tile_disk_hit
+  runtime/                    bundled Lua plugins + init.lua scaffolding
 ```
 
 The single layering rule: **the engine crate does not depend on
@@ -98,7 +104,7 @@ named for what they do.
 
 ### Three-thread model
 
-1. **Main thread** (`src/app/`): Runs the event loop — drains completed frames from the render thread (delivered via the `FrameSink` callback the binary hands the engine at startup), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `app::Dispatcher` (the single GoF Receiver, owned by `App`), which speaks the `UserCommand` vocabulary defined at the crate root in `src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
+1. **Main thread** (`ttymap-tui/src/app/`): Runs the event loop — drains completed frames from the render thread (delivered via the `FrameSink` callback the binary hands the engine at startup), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `app::Dispatcher` (the single GoF Receiver, owned by `App`), which speaks the `UserCommand` vocabulary defined at the crate root in `ttymap-tui/src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
 
 2. **Render thread** (`ttymap-engine/src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw { viewport, overlays }` / `Resize` / `SetStyler` / `Shutdown`) via crossbeam-channel, and sends completed `MapFrame`s back. `Draw` carries a `Vec<UserPolyline>` overlay batch drained from the App after each `ui::draw` so Lua-plugin polylines render in the same pass as tile features. The loop is **purely event-driven**: a `crossbeam::select!` parks on the task channel and on a wake channel pinged by the decoder thread on each tile arrival — no timeout-based polling.
 
@@ -115,21 +121,21 @@ Key modules:
 - **`ttymap-engine/src/map/render/frame.rs`**: `MapFrame` — the completed grid of `MapCell { ch, fg, bg }` plus the view (center/zoom) it was rendered at, so overlays can project coordinates against the same frame regardless of staleness.
 - **`ttymap-engine/src/map/styler/`**: Defines map styles as Rust data structures. `schema/mapscii.rs` is the single rule source (filter expressions, style_type, min/max zoom); themes vary only by `ColorPalette` swap. Applied during tile decode to produce styled `Feature` objects. Future schemas (Protomaps etc.) land as `schema/<name>.rs`.
 - **`ttymap-engine/src/theme/`**: Engine-side colour data — `palette.rs` (`ColorPalette` + `DARK` / `BRIGHT` consts, xterm-256 indices) and `mod.rs` (`ThemeId`). No ratatui dependency. The renderer's styler reads `ColorPalette`; the binary's UI adapter consumes the same data through `crate::theme::*` re-exports.
-- **`src/theme/`**: Binary-side ratatui adapter — `ui.rs` (`UiTheme`) and `style.rs` (`StyleKind` semantic tags). `mod.rs` re-exports `ColorPalette` / `ThemeId` / `DARK` / `BRIGHT` from `ttymap_engine::theme` so the rest of the binary keeps using `crate::theme::*` without caring that the data half lives in the engine crate.
+- **`ttymap-tui/src/theme/`**: Binary-side ratatui adapter — `ui.rs` (`UiTheme`) and `style.rs` (`StyleKind` semantic tags). `mod.rs` re-exports `ColorPalette` / `ThemeId` / `DARK` / `BRIGHT` from `ttymap_engine::theme` so the rest of the binary keeps using `crate::theme::*` without caring that the data half lives in the engine crate.
 - **`ttymap-engine/src/map/tile/cache.rs`**: Orchestrator — LRU memory cache (`lru` crate), view state (center / zoom), prefetch ring, and the channel drain (`poll_completed`). On a memory miss it consults the optional `DiskFastPath` (synchronous disk read + push to decoder, bypassing the worker queue) before enqueueing for the slow lane.
 - **`ttymap-engine/src/map/tile/disk.rs`**: Free-function disk read/write helpers used by both `fetch::DiskCachedFetcher` (worker-side, read+write through) and `cache::TileCache` (render-thread fast path, read-only). Layout: `{cache_dir}/{z}/{x}-{y}.pbf`.
 - **`ttymap-engine/src/map/tile/fetch/`**: `TileFetcher` (per-backend trait — "key → bytes"), the generic `FetchLane<F>` (queue / workers / dedup / priority), and the `DiskCachedFetcher<F>` decorator that adds a disk read-through / write-through layer to any inner fetcher. `http.rs` is the only inner backend today; new backends (mbtiles, pmtiles, …) add a `TileFetcher` impl + a branch in `app::build_tile_cache`.
 - **`ttymap-engine/src/map/tile/decoder.rs`**: Single-thread relay that reads bytes from the fetch lane, calls `decode::decode`, and forwards `DecodedTile`s to the cache. Empty bytes (negative cache from failed fetches) bypass `decode()` and surface as `DecodedTile::empty()`.
-- **`src/app/dispatcher.rs`**: GoF Receiver for `UserCommand`. Owns the state that mutates in response to commands (map handle, lua handle, compositor, theme, sidebar, cursor, overlay sink) and every handler. Ratatui-free — only `App::render_into` touches ratatui.
-- **`src/app/`**: Loop driver. `App::run` drains the [`AppEvent`] bus, forwards commands to `app::Dispatcher`, and asks ratatui to paint each iteration. Owns the latest `MapFrame` (the rendered product, delivered into the bus by the `FrameSink` callback the binary handed the engine at startup), `MouseAdapter`, and `poll_timeout`. `src/app/event.rs` holds `AppEvent` (`Command` / `FrameReady` / `Input` / `Wake`); `src/app/ui.rs` is the ratatui draw entry; `src/app/frame_timer.rs` is the per-iteration wake source; `src/app/frame_widget.rs` is the binary-side `Widget` newtype that adapts engine `MapFrame`s to ratatui's draw protocol (orphan rules force the wrapper). See [docs/design.md](docs/design.md) for the UserCommand-vs-direct-API judgment rules.
-- **`src/compositor/`**: Stack-based focus/modal system (helix-inspired). One primitive: a stack of `Component`s, where the top owns key focus. Components render side panels through `Component::render` and can emit ops via `Window` (`close` / `open` / `emit` / `ignore`); the compositor drains the queue after each hook and applies them via the single `Op` enum (`Push` / `Close` / `Command` — see `compositor/op.rs`). World-space overlays (markers etc.) are *not* a Component concern — every Lua plugin's per-frame map paint runs through `LuaEventBus::dispatch_tick` (called from `ui::draw`) which hands the plugin a `MapApi` it draws into directly. Render orchestration lives in `compositor/render.rs` (a free function `paint(...)`); the focus stack itself is ratatui-free. `Placement` has two variants: `Floating` (palette-only, drawn over the map) and `Sidebar` (left rail, equal-vertical-split among up to 3 visible cards). Lua plugins always land in `Sidebar`. **No framework-side dedup**: re-pressing an activation key stacks a fresh instance — toggle behaviour is plugin-side policy.
-- **`src/palette/`**: `:`-triggered command palette as an ephemeral `Component` (state per-open, discarded on pop). Provider sub-modes (theme picker, forward-geocode search) swap in place via `PaletteAction::SwitchProvider` or are pushed pre-loaded by their key activation. Providers can be sync (`OnEachKey` filter — command, theme) or async (`Debounced` filter, `poll()` to drain results, `is_loading()` for the spinner — search).
-- **`src/cli/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `src/command.rs`) — doesn't share a name with the CLI subcommand bucket.
-- **`src/input/`**: Input subsystem. `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input` onto the App bus; `keymap.rs` holds the `KeyMap` table + `KeybindingOverrides` (read from `[keymap]` config and Lua `keymap.set`); `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserCommand`. Keyboard supports count prefixes for pan (e.g., `5j`); `:` opens the command palette, `/` opens the palette pre-loaded with the search provider. Lives in the binary because crossterm input is a binary-side concern; the engine itself stays IO-free.
+- **`ttymap-tui/src/app/dispatcher.rs`**: GoF Receiver for `UserCommand`. Owns the state that mutates in response to commands (map handle, lua handle, compositor, theme, sidebar, cursor, overlay sink) and every handler. Ratatui-free — only `App::render_into` touches ratatui.
+- **`ttymap-tui/src/app/`**: Loop driver. `App::run` drains the [`AppEvent`] bus, forwards commands to `app::Dispatcher`, and asks ratatui to paint each iteration. Owns the latest `MapFrame` (the rendered product, delivered into the bus by the `FrameSink` callback the binary handed the engine at startup), `MouseAdapter`, and `poll_timeout`. `ttymap-tui/src/app/event.rs` holds `AppEvent` (`Command` / `FrameReady` / `Input` / `Wake`); `ttymap-tui/src/app/ui.rs` is the ratatui draw entry; `ttymap-tui/src/app/frame_timer.rs` is the per-iteration wake source; `ttymap-tui/src/app/frame_widget.rs` is the binary-side `Widget` newtype that adapts engine `MapFrame`s to ratatui's draw protocol (orphan rules force the wrapper). See [docs/design.md](docs/design.md) for the UserCommand-vs-direct-API judgment rules.
+- **`ttymap-tui/src/compositor/`**: Stack-based focus/modal system (helix-inspired). One primitive: a stack of `Component`s, where the top owns key focus. Components render side panels through `Component::render` and can emit ops via `Window` (`close` / `open` / `emit` / `ignore`); the compositor drains the queue after each hook and applies them via the single `Op` enum (`Push` / `Close` / `Command` — see `compositor/op.rs`). World-space overlays (markers etc.) are *not* a Component concern — every Lua plugin's per-frame map paint runs through `LuaEventBus::dispatch_tick` (called from `ui::draw`) which hands the plugin a `MapApi` it draws into directly. Render orchestration lives in `compositor/render.rs` (a free function `paint(...)`); the focus stack itself is ratatui-free. `Placement` has two variants: `Floating` (palette-only, drawn over the map) and `Sidebar` (left rail, equal-vertical-split among up to 3 visible cards). Lua plugins always land in `Sidebar`. **No framework-side dedup**: re-pressing an activation key stacks a fresh instance — toggle behaviour is plugin-side policy.
+- **`ttymap-tui/src/palette/`**: `:`-triggered command palette as an ephemeral `Component` (state per-open, discarded on pop). Provider sub-modes (theme picker, forward-geocode search) swap in place via `PaletteAction::SwitchProvider` or are pushed pre-loaded by their key activation. Providers can be sync (`OnEachKey` filter — command, theme) or async (`Debounced` filter, `poll()` to drain results, `is_loading()` for the spinner — search).
+- **`ttymap-tui/src/cli/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `ttymap-tui/src/command.rs`) — doesn't share a name with the CLI subcommand bucket.
+- **`ttymap-tui/src/input/`**: Input subsystem. `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input` onto the App bus; `keymap.rs` holds the `KeyMap` table + `KeybindingOverrides` (read from `[keymap]` config and Lua `keymap.set`); `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserCommand`. Keyboard supports count prefixes for pan (e.g., `5j`); `:` opens the command palette, `/` opens the palette pre-loaded with the search provider. Lives in the binary because crossterm input is a binary-side concern; the engine itself stays IO-free.
 - **`ttymap-engine/src/geo.rs`**: Foundation: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`ttymap-engine/src/map/render/label.rs`**: Collision-free label placement buffer.
-- **`src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here. nvim-style: any `.lua` under `<runtime>/plugin/` is a plugin, identified by file stem. Plugins join host loops by calling `ttymap.api.frame.on_tick(fn)` (sugar for `ttymap.on_event("tick", fn)`), `ttymap.on_event(name, fn)` for any host event (`frame_ready` / `map_jumped` / `theme_changed` / `resized` / …), `register_palette_command`, or `register_keybind`. Layout: `src/lua/api/` builds the `ttymap` global (Rust→Lua API binding — `mod.rs`, `http.rs`, `json.rs`, `map_api.rs`, `sgp4.rs`); `src/lua/bridge/` adapts Lua specs to Rust traits (`Component`, `PaletteProvider`); top-level `mod.rs` / `registry.rs` (the `LuaEventBus` pub/sub registry) / `runtimepath.rs` / `init_lua.rs` / `handle.rs` / `sender.rs` own discovery, the event bus, runtime layer resolution, the config-DSL state, and channel plumbing. See **[docs/lua-architecture.md](docs/lua-architecture.md)** for the full surface — every namespace, activation surfaces, drain pattern, runtime path resolution, config chain, bundled plugins. Migration guide: [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md).
-- **`src/shared/geoip.rs`**: Binary-only — IP→lon/lat lookup used by `--here` and the `here` plugin. The engine doesn't know about geoip; the binary resolves IP to a coordinate up front and hands a plain lat/lon to `engine::map::build`.
+- **`ttymap-tui/src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here. nvim-style: any `.lua` under `<runtime>/plugin/` is a plugin, identified by file stem. Plugins join host loops by calling `ttymap.api.frame.on_tick(fn)` (sugar for `ttymap.on_event("tick", fn)`), `ttymap.on_event(name, fn)` for any host event (`frame_ready` / `map_jumped` / `theme_changed` / `resized` / …), `register_palette_command`, or `register_keybind`. Layout: `ttymap-tui/src/lua/api/` builds the `ttymap` global (Rust→Lua API binding — `mod.rs`, `http.rs`, `json.rs`, `map_api.rs`, `sgp4.rs`); `ttymap-tui/src/lua/bridge/` adapts Lua specs to Rust traits (`Component`, `PaletteProvider`); top-level `mod.rs` / `registry.rs` (the `LuaEventBus` pub/sub registry) / `runtimepath.rs` / `init_lua.rs` / `handle.rs` / `sender.rs` own discovery, the event bus, runtime layer resolution, the config-DSL state, and channel plumbing. See **[docs/lua-architecture.md](docs/lua-architecture.md)** for the full surface — every namespace, activation surfaces, drain pattern, runtime path resolution, config chain, bundled plugins. Migration guide: [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md).
+- **`ttymap-tui/src/shared/geoip.rs`**: Binary-only — IP→lon/lat lookup used by `--here` and the `here` plugin. The engine doesn't know about geoip; the binary resolves IP to a coordinate up front and hands a plain lat/lon to `engine::map::build`.
 - **`ttymap-engine/src/shared/http/`**: User-Agent-tagged `reqwest` wrapper. The engine's tile fetcher (`map/tile/fetch/http.rs`) consumes it directly; the binary's Lua `ttymap.http` bridge (`lua/api/http.rs`) and `geoip.rs` re-borrow it from `ttymap_engine::shared::http` so there's a single source of truth.
 
 ## Rust Edition

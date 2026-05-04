@@ -37,8 +37,8 @@ Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
-CLI subcommand under `src/cli/` and the palette entries under
-`src/palette/`. The internal intent type is `UserCommand` so those three
+CLI subcommand under `ttymap-tui/src/cli/` and the palette entries under
+`ttymap-tui/src/palette/`. The internal intent type is `UserCommand` so those three
 layers stay unambiguous.
 
 ### When to emit a `UserCommand`

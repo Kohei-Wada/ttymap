@@ -37,7 +37,7 @@ help:
 install: install-bin install-runtime
 
 install-bin:
-	cargo install --path .
+	cargo install --path ttymap-tui
 
 install-runtime:
 	# Wipe + re-create both tiers so files removed from runtime/
@@ -47,12 +47,12 @@ install-runtime:
 	# bundled scripts; user overrides live under XDG_CONFIG_HOME/ttymap.
 	rm -rf $(DATA_DIR)/plugin $(DATA_DIR)/lua
 	mkdir -p $(DATA_DIR)/plugin $(DATA_DIR)/lua
-	cp -r runtime/plugin/. $(DATA_DIR)/plugin/
-	cp -r runtime/lua/. $(DATA_DIR)/lua/
-	cp runtime/init.lua $(DATA_DIR)/init.lua
+	cp -r ttymap-tui/runtime/plugin/. $(DATA_DIR)/plugin/
+	cp -r ttymap-tui/runtime/lua/. $(DATA_DIR)/lua/
+	cp ttymap-tui/runtime/init.lua $(DATA_DIR)/init.lua
 
 uninstall:
-	cargo uninstall ttymap || true
+	cargo uninstall ttymap-tui || true
 	rm -rf $(DATA_DIR)
 
 clean:
