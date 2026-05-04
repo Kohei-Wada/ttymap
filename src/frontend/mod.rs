@@ -218,7 +218,7 @@ impl Frontend {
             // the bus directly. Same-iteration `try_recv` ran above
             // already; an emission here will be picked up next
             // iteration.
-            self.poll_compositor(event_tx);
+            self.poll_compositor();
 
             // Drain Lua-enqueued ops *before* render so that ops
             // emitted by handler / palette / keybind callbacks during
@@ -243,13 +243,19 @@ impl Frontend {
         Ok(())
     }
 
-    /// Apply every [`Op`] queued by Lua callbacks since the last
-    /// drain. Called from the run loop after `poll_compositor` and
-    /// before `render_into`, so ops emitted from key / palette /
-    /// keybind callbacks visible this frame (mirrors the prior
-    /// `drain_pushes` + `CloseFlag`-via-poll timing).
+    /// Apply every queued [`Op`] from any source: Lua callbacks
+    /// (drained via [`crate::lua::handle::LuaHandle::drain_ops`]),
+    /// component handlers (returned from [`Compositor::handle_event`]),
+    /// component polls (returned from [`Compositor::poll`]). All three
+    /// converge on the same vocabulary; this method is the single
+    /// applier.
     fn apply_lua_ops(&mut self) {
-        for op in self.lua.drain_ops() {
+        let ops = self.lua.drain_ops();
+        self.apply_ops(ops);
+    }
+
+    fn apply_ops(&mut self, ops: Vec<crate::lua::op::Op>) {
+        for op in ops {
             match op {
                 crate::lua::op::Op::Push { id, component } => {
                     self.compositor.push_with_id(id, component);
@@ -341,7 +347,8 @@ impl Frontend {
                 } else {
                     debug!("key event: {:?}", key_event.code);
                     let ctx = self.context();
-                    self.compositor.handle_event(key_event, &ctx, event_tx);
+                    let ops = self.compositor.handle_event(key_event, &ctx);
+                    self.apply_ops(ops);
                 }
             }
             Event::Resize(cols, rows) => {
@@ -364,12 +371,13 @@ impl Frontend {
         }
     }
 
-    /// Drive a single `compositor.poll` pass. Components emitting
-    /// intents through `Window::emit` route directly onto the bus —
-    /// the run loop's same-iteration `try_recv` picks them up.
-    fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+    /// Drive a single `compositor.poll` pass. Each component's hook
+    /// returns ops via [`WindowOps`]; we apply them through the
+    /// shared [`Self::apply_ops`] router.
+    fn poll_compositor(&mut self) {
         let ctx = self.context();
-        self.compositor.poll(&ctx, event_tx);
+        let ops = self.compositor.poll(&ctx);
+        self.apply_ops(ops);
 
         // Auto-open the sidebar only on a *count increase* (a new
         // section just landed). Triggering off "any component

@@ -39,7 +39,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::frontend::{AppEvent, UserIntent};
+use crate::frontend::UserIntent;
 use crate::lua::op::Op;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
@@ -292,18 +292,12 @@ impl Compositor {
     /// like a `w` window handle, an `enabled` feed flag, …).
     /// Closing from the outside via `stack.remove` would leave
     /// the lua-side state pointing at a stale handle.
-    pub fn handle_event(
-        &mut self,
-        event: KeyEvent,
-        ctx: &Context,
-        event_tx: &std::sync::mpsc::Sender<AppEvent>,
-    ) {
+    pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<Op> {
         if let Some(msg) = intercept_focus_key(event) {
-            let _ = event_tx.send(AppEvent::Intent(msg));
-            return;
+            return vec![Op::Intent(msg)];
         }
         if self.stack.is_empty() {
-            return;
+            return Vec::new();
         }
         let focused = self.focused_idx;
         let focused_id = self.stack[focused].0;
@@ -322,36 +316,19 @@ impl Compositor {
                 let mut win = Window::new(&mut ops, ctx, base_id);
                 self.stack[0].1.handle_event(event, &mut win);
             }
-            self.apply_ops(ops, event_tx);
-            return;
+            return ops.ops;
         }
-        self.apply_ops(ops, event_tx);
-    }
-
-    /// Drain the [`WindowOps`] queue in call order: stack mutations
-    /// hit `close_by_id` / `push_with_id`, intent ops relay onto the
-    /// App's [`AppEvent`] bus. The `Op::Close` path is silent on
-    /// stale ids (component already off the stack), so duplicate
-    /// or out-of-order closes from buggy plugins don't blow up.
-    fn apply_ops(&mut self, ops: WindowOps, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
-        for op in ops.ops {
-            match op {
-                Op::Close(id) => self.close_by_id(id),
-                Op::Push { id, component } => self.push_with_id(id, component),
-                Op::Intent(intent) => {
-                    let _ = event_tx.send(AppEvent::Intent(intent));
-                }
-            }
-        }
+        ops.ops
     }
 
     /// Poll every component. Intent emissions queued by the hook
     /// (`win.emit`) ride the same [`WindowOps`] as stack ops; the
-    /// drain below relays them through `event_tx`.
-    pub fn poll(&mut self, ctx: &Context, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
+    /// concatenated [`Op`] vec is returned for Frontend to apply.
+    pub fn poll(&mut self, ctx: &Context) -> Vec<Op> {
         // Walk in reverse so closing a component doesn't disturb
-        // indices of later ones. Collect ops per index first; apply
-        // after the borrow of `stack` is released.
+        // indices of later ones. Collect ops per index first; the
+        // caller applies them in arrival order.
+        let mut all = Vec::new();
         let len = self.stack.len();
         for i in (0..len).rev() {
             let id = self.stack[i].0;
@@ -360,8 +337,9 @@ impl Compositor {
                 let mut win = Window::new(&mut ops, ctx, id);
                 self.stack[i].1.poll(&mut win);
             }
-            self.apply_ops(ops, event_tx);
+            all.extend(ops.ops);
         }
+        all
     }
 
     /// Render bottom-up so later pushes draw on top — with one
@@ -719,30 +697,20 @@ mod tests {
     }
 
     /// Build a disposable `(Sender, Receiver)` pair for tests that
-    /// drive the compositor without an actual App. Drain the
-    /// receiver after the dispatch under test to inspect what bus
-    /// events fired.
-    fn test_bus() -> (
-        std::sync::mpsc::Sender<AppEvent>,
-        std::sync::mpsc::Receiver<AppEvent>,
-    ) {
-        std::sync::mpsc::channel()
-    }
-
-    /// Drain every `AppEvent::Intent` from `rx` and return the
-    /// underlying `UserIntent`s in arrival order. Other variants — none
-    /// of which the compositor produces today — are surfaced as a
-    /// panic so a future variant addition doesn't silently slip
-    /// through.
-    fn drain_intents(rx: &std::sync::mpsc::Receiver<AppEvent>) -> Vec<UserIntent> {
-        let mut out = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            match ev {
-                AppEvent::Intent(m) => out.push(m),
-                other => panic!("unexpected non-Intent event from compositor: {other:?}"),
+    /// Drive a key event into the compositor and apply the returned
+    /// ops the same way Frontend would: stack mutations are applied
+    /// to `c` itself, intents are returned to the test for assertion.
+    fn drive(c: &mut Compositor, event: KeyEvent, ctx: &Context) -> Vec<UserIntent> {
+        let ops = c.handle_event(event, ctx);
+        let mut intents = Vec::new();
+        for op in ops {
+            match op {
+                Op::Push { id, component } => c.push_with_id(id, component),
+                Op::Close(id) => c.close_by_id(id),
+                Op::Intent(intent) => intents.push(intent),
             }
         }
-        out
+        intents
     }
 
     /// `open` always pushes a new instance, even if a component
@@ -755,7 +723,6 @@ mod tests {
             theme_id: ThemeId::Dark,
             cursor: None,
         };
-        let (tx, _rx) = test_bus();
 
         let mut c = Compositor::new();
         c.push(Box::new(Spawner {
@@ -764,10 +731,10 @@ mod tests {
             spawn_label: "wiki",
         }));
         // Open the spawned component for the first time.
-        c.handle_event(
+        drive(
+            &mut c,
             KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
             &ctx,
-            &tx,
         );
         assert_eq!(c.len(), 2);
         assert_eq!(focused_tag(&c), "wiki");
@@ -779,10 +746,10 @@ mod tests {
         // Press `i` again — pushes a second wiki on top. Plugins
         // that want toggle behavior implement self-close in their
         // own handle_event.
-        c.handle_event(
+        drive(
+            &mut c,
             KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
             &ctx,
-            &tx,
         );
         assert_eq!(c.len(), 3, "second activation pushes a new instance");
         assert_eq!(focused_tag(&c), "wiki");
@@ -810,19 +777,22 @@ mod tests {
             theme_id: ThemeId::Dark,
             cursor: None,
         };
-        let (tx, rx) = test_bus();
 
         let mut c = Compositor::new();
         c.push(Box::new(SwallowsAll));
 
-        c.handle_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &ctx, &tx);
-        assert_eq!(drain_intents(&rx), vec![UserIntent::CycleFocus(true)]);
+        let intents = drive(
+            &mut c,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &ctx,
+        );
+        assert_eq!(intents, vec![UserIntent::CycleFocus(true)]);
 
-        c.handle_event(
+        let intents = drive(
+            &mut c,
             KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
             &ctx,
-            &tx,
         );
-        assert_eq!(drain_intents(&rx), vec![UserIntent::CycleFocus(false)]);
+        assert_eq!(intents, vec![UserIntent::CycleFocus(false)]);
     }
 }
