@@ -13,10 +13,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::compositor::{Compositor, Context, MapApi};
+use crate::core::map::render::frame::MapFrame;
+use crate::core::map::render::overlay::UserPolyline;
 use crate::front::theme::UiTheme;
 use crate::lua::LuaHandle;
-use crate::map::render::frame::MapFrame;
-use crate::map::render::overlay::UserPolyline;
 
 /// Draw the full screen. Caller passes the latest map snapshot
 /// (or `None` if the render thread hasn't produced one yet) plus

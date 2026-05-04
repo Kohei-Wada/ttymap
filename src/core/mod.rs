@@ -16,6 +16,7 @@
 //! front/core).
 
 mod dispatcher;
+pub mod map;
 mod overlay;
 mod sidebar;
 

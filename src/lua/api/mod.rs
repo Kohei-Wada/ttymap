@@ -423,7 +423,7 @@ pub fn install(
 mod tests {
     use super::*;
     use crate::UserCommand;
-    use crate::map::MapAction;
+    use crate::core::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors

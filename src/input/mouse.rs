@@ -32,7 +32,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::UserCommand;
-use crate::map::MapAction;
+use crate::core::map::MapAction;
 
 #[derive(Default)]
 pub struct MouseAdapter {

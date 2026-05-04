@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::map::tile::PropertyValue;
+use crate::core::map::tile::PropertyValue;
 
 #[derive(Debug, Clone)]
 pub enum Filter {

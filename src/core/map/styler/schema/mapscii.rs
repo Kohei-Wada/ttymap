@@ -9,7 +9,7 @@ use crate::theme::ColorPalette;
 
 use super::super::filter::Filter;
 use super::super::{StyleRule, StyleType};
-use crate::map::tile::PropertyValue as PV;
+use crate::core::map::tile::PropertyValue as PV;
 
 fn s(v: &str) -> PV {
     PV::String(std::sync::Arc::from(v))

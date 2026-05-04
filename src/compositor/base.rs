@@ -30,8 +30,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
 use crate::UserCommand;
+use crate::core::map::MapAction;
 use crate::input::keymap::KeyMap;
-use crate::map::MapAction;
 
 pub struct BaseLayer {
     keymap: KeyMap,

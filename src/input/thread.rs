@@ -9,7 +9,7 @@
 //! park on a single `recv_timeout` and react to whichever event
 //! arrives first.
 //!
-//! Lifecycle mirrors [`crate::map::render::thread::RenderHandle`]:
+//! Lifecycle mirrors [`crate::core::map::render::thread::RenderHandle`]:
 //! a shared `should_quit` flag, polled inside the loop, plus a
 //! `Drop` impl that signals the flag and joins. `crossterm` exposes
 //! no primitive to interrupt a blocking `read()`, so the loop uses

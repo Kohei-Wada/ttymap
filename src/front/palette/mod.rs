@@ -241,7 +241,7 @@ mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::UserCommand;
-    use crate::map::MapAction;
+    use crate::core::map::MapAction;
     use crate::theme::ThemeId;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;

@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::config;
-use crate::map::Viewport;
-use crate::map::render::frame::MapFrame;
-use crate::map::render::pipeline::RenderPipeline;
-use crate::map::styler::Styler;
-use crate::map::{MapState, MapStateOptions};
+use crate::core::map::Viewport;
+use crate::core::map::render::frame::MapFrame;
+use crate::core::map::render::pipeline::RenderPipeline;
+use crate::core::map::styler::Styler;
+use crate::core::map::{MapState, MapStateOptions};
 use crate::shared::geoip;
 use crate::theme::ThemeId;
 
@@ -130,7 +130,7 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     // tile::build spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
-    let (tile_cache, _wake_rx) = crate::map::tile::build(&config);
+    let (tile_cache, _wake_rx) = crate::core::map::tile::build(&config);
     let theme_id = ThemeId::from_name(&config.render.style);
     let styler = Arc::new(Styler::new(theme_id));
     let mut pipeline = RenderPipeline::new(

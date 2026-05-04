@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::UserCommand;
-use crate::map::MapAction;
+use crate::core::map::MapAction;
 
 /// A key binding: a key code + optional modifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

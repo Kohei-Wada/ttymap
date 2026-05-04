@@ -9,9 +9,9 @@ use rstar::AABB;
 use super::frame::MapFrame;
 use super::renderer::{LayerData, Renderer, TileData};
 use super::view::{VisibleTile, visible_tiles};
-use crate::map::Viewport;
-use crate::map::styler::Styler;
-use crate::map::tile::{Feature, TileCache};
+use crate::core::map::Viewport;
+use crate::core::map::styler::Styler;
+use crate::core::map::tile::{Feature, TileCache};
 
 pub struct RenderPipeline {
     tile_cache: TileCache,
@@ -20,7 +20,7 @@ pub struct RenderPipeline {
 
 impl RenderPipeline {
     /// Build a pipeline from its two owned subsystems. The caller
-    /// constructs the `TileCache` (see [`crate::map::tile::build`]) so
+    /// constructs the `TileCache` (see [`crate::core::map::tile::build`]) so
     /// the backend selection stays visible at the composition root.
     pub fn new(
         tile_cache: TileCache,
@@ -41,7 +41,7 @@ impl RenderPipeline {
     pub fn render(
         &mut self,
         vp: &Viewport,
-        overlays: &[crate::map::render::overlay::UserPolyline],
+        overlays: &[crate::core::map::render::overlay::UserPolyline],
     ) -> Option<MapFrame> {
         let z = crate::geo::base_zoom(vp.zoom);
         self.tile_cache.set_view(vp.center.lon, vp.center.lat, z);
@@ -62,7 +62,7 @@ impl RenderPipeline {
     }
 
     /// Whether the tile backend has finished all outstanding fetches.
-    /// See [`crate::map::tile::cache::TileCache::is_fetch_idle`].
+    /// See [`crate::core::map::tile::cache::TileCache::is_fetch_idle`].
     pub fn is_tile_fetch_idle(&self) -> bool {
         self.tile_cache.is_fetch_idle()
     }

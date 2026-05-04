@@ -41,7 +41,7 @@ fn xterm_to_color(idx: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::render::frame::MapCell;
+    use crate::core::map::render::frame::MapCell;
 
     #[test]
     fn test_xterm_to_color() {

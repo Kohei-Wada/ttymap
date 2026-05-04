@@ -193,7 +193,7 @@ fn intersect_y(a: (i32, i32), b: (i32, i32), y: i32) -> (i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::render::VIEWPORT_PADDING;
+    use crate::core::map::render::VIEWPORT_PADDING;
 
     /// The padded-viewport bounds that `Canvas` of size `w×h` computes
     /// internally — replicated here so tests can target the same shape.

@@ -33,7 +33,7 @@ pub mod proto {
 /// Coordinates are integers in the layer's `extent` (typically 0..4096).
 /// They are distinct from *screen pixels* and from *world Mercator*
 /// coordinates (see `geo::TileCoord`); converting between them happens
-/// at render time in [`crate::map::render::renderer`].
+/// at render time in [`crate::core::map::render::renderer`].
 #[derive(Debug, Clone)]
 pub struct TilePoint {
     pub x: i32,

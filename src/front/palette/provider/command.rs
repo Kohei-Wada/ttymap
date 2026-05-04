@@ -15,8 +15,8 @@ use std::rc::Rc;
 
 use crate::UserCommand;
 use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
+use crate::core::map::MapAction;
 use crate::input::keymap::KeyMap;
-use crate::map::MapAction;
 use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};

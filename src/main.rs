@@ -148,7 +148,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // Map subsystem: tile cache + render pipeline + render thread.
     // `_render_handle` is a peer to `_input` / `_frame_timer` — held
     // here for `Drop`-driven shutdown, not used otherwise.
-    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone(), theme_id);
+    let (_render_handle, map) = ttymap::core::map::build(&config, event_tx.clone(), theme_id);
 
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the

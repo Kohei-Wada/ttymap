@@ -18,7 +18,7 @@ use log::debug;
 use super::priority::TilePriority;
 use super::queue::{PriorityFn, PriorityQueue};
 use super::{TileFetchLane, TileFetcher};
-use crate::map::tile::key::TileKey;
+use crate::core::map::tile::key::TileKey;
 
 struct SharedState {
     queue: Mutex<PriorityQueue<TileKey, TilePriority>>,

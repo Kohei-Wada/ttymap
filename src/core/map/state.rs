@@ -155,7 +155,7 @@ impl MapState {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        let (w, h) = crate::map::render::canvas_size(cols, rows);
+        let (w, h) = crate::core::map::render::canvas_size(cols, rows);
         self.width = w;
         self.height = h;
         self.min_zoom = Self::calculate_min_zoom(self.width);
@@ -268,7 +268,7 @@ mod tests {
     fn test_resize() {
         let mut map = default_core();
         map.resize(120, 40);
-        let (expected_w, expected_h) = crate::map::render::canvas_size(120, 40);
+        let (expected_w, expected_h) = crate::core::map::render::canvas_size(120, 40);
         assert_eq!(map.width(), expected_w);
         assert_eq!(map.height(), expected_h);
     }

@@ -15,8 +15,8 @@ use mlua::UserData;
 
 use crate::UserCommand;
 use crate::compositor::op::{Op, OpsBuffer};
+use crate::core::map::MapAction;
 use crate::geo::LonLat;
-use crate::map::MapAction;
 
 pub(super) struct HostMap {
     /// Shared op buffer the lua subsystem drains every iteration.

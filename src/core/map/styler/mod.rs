@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use filter::Filter;
 
-use crate::map::tile::PropertyValue;
+use crate::core::map::tile::PropertyValue;
 
 use crate::theme::{ColorPalette, ThemeId};
 

@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use super::{FetchError, TileFetcher};
-use crate::map::tile::key::TileKey;
+use crate::core::map::tile::key::TileKey;
 use crate::shared::http::HttpClient;
 
 // Use HTTPS directly: `http://mapscii.me/...` 301-redirects to the

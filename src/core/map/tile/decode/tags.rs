@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::proto;
-use crate::map::tile::property::PropertyValue;
+use crate::core::map::tile::property::PropertyValue;
 
 pub(super) fn decode_tags_into(
     tags: &[u32],

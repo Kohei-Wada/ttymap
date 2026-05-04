@@ -14,8 +14,8 @@
 use std::path::PathBuf;
 
 use super::{FetchError, TileFetcher};
-use crate::map::tile::disk;
-use crate::map::tile::key::TileKey;
+use crate::core::map::tile::disk;
+use crate::core::map::tile::key::TileKey;
 
 pub struct DiskCachedFetcher<F: TileFetcher> {
     inner: F,

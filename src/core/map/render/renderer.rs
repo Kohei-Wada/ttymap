@@ -16,9 +16,9 @@ use super::frame::MapFrame;
 use super::polygon::classify_polygon_groups;
 use super::project::scale_ring_into;
 use super::view::VisibleTile;
-use crate::map::styler::{StyleRule, StyleType, Styler};
-use crate::map::tile::decode::Feature;
-use crate::map::tile::property::{extract_label, extract_sort};
+use crate::core::map::styler::{StyleRule, StyleType, Styler};
+use crate::core::map::tile::decode::Feature;
+use crate::core::map::tile::property::{extract_label, extract_sort};
 
 /// Pre-collected tile data ready for rendering.
 #[derive(Clone)]
@@ -140,7 +140,7 @@ impl Renderer {
         tile_data: &[TileData],
         zoom: f64,
         center: crate::geo::LonLat,
-        overlays: &[crate::map::render::overlay::UserPolyline],
+        overlays: &[crate::core::map::render::overlay::UserPolyline],
     ) -> Option<MapFrame> {
         // Clear canvas
         self.canvas.clear();
@@ -239,11 +239,11 @@ impl Renderer {
             if std::time::Instant::now() > deadline {
                 break;
             }
-            for sub in crate::map::render::overlay::split_antimeridian(&poly.coords) {
+            for sub in crate::core::map::render::overlay::split_antimeridian(&poly.coords) {
                 if std::time::Instant::now() > deadline {
                     break;
                 }
-                buf = crate::map::render::overlay::project_polyline_continuous(
+                buf = crate::core::map::render::overlay::project_polyline_continuous(
                     &sub,
                     center,
                     zoom,
@@ -417,8 +417,8 @@ mod tests {
     fn fill_renders_both_outers_of_a_multi_polygon_feature() {
         use std::collections::HashMap;
 
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::{Feature, TilePoint};
+        use crate::core::map::render::view::VisibleTile;
+        use crate::core::map::tile::decode::{Feature, TilePoint};
 
         // Canvas 320×320 px (160×80 cells). vis.size=256, extent=4096
         // → scale = 4096/256 = 16, so tile-coord 16 = 1 screen pixel.
@@ -521,8 +521,8 @@ mod tests {
     fn extent_invariance_across_layer_extents() {
         use std::collections::HashMap;
 
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::{Feature, TilePoint};
+        use crate::core::map::render::view::VisibleTile;
+        use crate::core::map::tile::decode::{Feature, TilePoint};
 
         // A diamond polygon expressed as fractions of `extent`. At any
         // valid extent, the resulting screen-space polygon is identical.
@@ -603,9 +603,9 @@ mod tests {
     fn extent_invariance_for_symbols() {
         use std::collections::HashMap;
 
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::{Feature, TilePoint};
-        use crate::map::tile::property::PropertyValue;
+        use crate::core::map::render::view::VisibleTile;
+        use crate::core::map::tile::decode::{Feature, TilePoint};
+        use crate::core::map::tile::property::PropertyValue;
 
         // `place_label` in the mapscii schema renders as a Symbol whose
         // text comes from `name`. A single point near tile center.
@@ -671,8 +671,8 @@ mod tests {
     /// the minimum signal that the overlay reached the canvas.
     #[test]
     fn user_overlay_polyline_renders_braille_dots() {
+        use crate::core::map::render::overlay::UserPolyline;
         use crate::geo::LonLat;
-        use crate::map::render::overlay::UserPolyline;
 
         let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
         let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
@@ -711,10 +711,10 @@ mod tests {
     fn overlay_polyline_punches_thin_line_through_saturated_cell() {
         use std::collections::HashMap;
 
+        use crate::core::map::render::overlay::UserPolyline;
+        use crate::core::map::render::view::VisibleTile;
+        use crate::core::map::tile::decode::{Feature, TilePoint};
         use crate::geo::LonLat;
-        use crate::map::render::overlay::UserPolyline;
-        use crate::map::render::view::VisibleTile;
-        use crate::map::tile::decode::{Feature, TilePoint};
 
         let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
             vec![

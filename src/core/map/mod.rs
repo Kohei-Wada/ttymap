@@ -25,10 +25,10 @@ use std::sync::mpsc;
 
 use crate::app::AppEvent;
 use crate::config::Config;
+use crate::core::map::render::pipeline::RenderPipeline;
+use crate::core::map::render::thread::{RenderClient, RenderHandle};
+use crate::core::map::styler::Styler;
 use crate::geo::LonLat;
-use crate::map::render::pipeline::RenderPipeline;
-use crate::map::render::thread::{RenderClient, RenderHandle};
-use crate::map::styler::Styler;
 use crate::theme::ThemeId;
 
 /// Runtime handle to the map subsystem.

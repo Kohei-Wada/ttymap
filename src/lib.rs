@@ -42,11 +42,6 @@ pub mod compositor;
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
 
-/// Map subsystem — viewport state, action dispatch, and the full map
-/// rendering pipeline (tile fetch, styler, render thread). `MapFrame`
-/// produced here is what the UI displays.
-pub mod map;
-
 /// Theme — colour palette data (`ColorPalette`, `DARK`, `BRIGHT`) plus
 /// the ratatui adapter (`UiTheme`). `ThemeId` drives everything. Lives
 /// at the crate root because it's a **plugin-facing service** —

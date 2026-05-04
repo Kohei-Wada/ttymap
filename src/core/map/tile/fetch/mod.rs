@@ -31,7 +31,7 @@ use std::fmt;
 
 use queue::PriorityFn;
 
-use crate::map::tile::key::TileKey;
+use crate::core::map::tile::key::TileKey;
 
 /// Per-backend trait — "given a key, return bytes". Stays minimal so
 /// new backends only deal with their own protocol; the queue,

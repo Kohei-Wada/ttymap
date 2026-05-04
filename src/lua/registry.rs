@@ -170,10 +170,10 @@ impl LuaEventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::map::render::frame::MapFrame;
+    use crate::core::map::render::overlay::UserPolyline;
     use crate::front::theme::UiTheme;
     use crate::geo::LonLat;
-    use crate::map::render::frame::MapFrame;
-    use crate::map::render::overlay::UserPolyline;
     use crate::theme::DARK;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;

@@ -19,13 +19,13 @@ use log::{debug, error, info};
 
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
-use crate::map::Viewport;
-use crate::map::styler::Styler;
+use crate::core::map::Viewport;
+use crate::core::map::styler::Styler;
 
 pub enum RenderTask {
     Draw {
         viewport: Viewport,
-        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+        overlays: Vec<crate::core::map::render::overlay::UserPolyline>,
     },
     Resize {
         width: usize,
@@ -49,7 +49,7 @@ impl RenderClient {
     pub fn request_draw(
         &self,
         viewport: Viewport,
-        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+        overlays: Vec<crate::core::map::render::overlay::UserPolyline>,
     ) {
         if self
             .task_tx
@@ -170,7 +170,7 @@ enum TaskOutcome {
     Continue,
     Draw {
         viewport: Viewport,
-        overlays: Vec<crate::map::render::overlay::UserPolyline>,
+        overlays: Vec<crate::core::map::render::overlay::UserPolyline>,
     },
     Shutdown,
 }
@@ -197,8 +197,17 @@ fn drain_tasks(
     first: RenderTask,
     task_rx: &cb::Receiver<RenderTask>,
     pipeline: &mut RenderPipeline,
-) -> Result<Option<(Viewport, Vec<crate::map::render::overlay::UserPolyline>)>, ()> {
-    let mut latest_draw: Option<(Viewport, Vec<crate::map::render::overlay::UserPolyline>)> = None;
+) -> Result<
+    Option<(
+        Viewport,
+        Vec<crate::core::map::render::overlay::UserPolyline>,
+    )>,
+    (),
+> {
+    let mut latest_draw: Option<(
+        Viewport,
+        Vec<crate::core::map::render::overlay::UserPolyline>,
+    )> = None;
     for task in std::iter::once(first).chain(task_rx.try_iter()) {
         match apply_task(task, pipeline) {
             TaskOutcome::Draw { viewport, overlays } => {

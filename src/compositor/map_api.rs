@@ -21,10 +21,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::core::map::render::frame::MapFrame;
+use crate::core::map::render::overlay::UserPolyline;
 use crate::front::theme::UiTheme;
 use crate::geo::{LonLat, MapProjection};
-use crate::map::render::frame::MapFrame;
-use crate::map::render::overlay::UserPolyline;
 
 /// Corner-anchor for screen-space primitives like
 /// [`MapApi::text_anchored`].
@@ -320,9 +320,9 @@ impl<'a> MapApi<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::map::render::frame::MapFrame;
+    use crate::core::map::render::overlay::UserPolyline;
     use crate::front::theme::UiTheme;
-    use crate::map::render::frame::MapFrame;
-    use crate::map::render::overlay::UserPolyline;
     use crate::theme::DARK;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {

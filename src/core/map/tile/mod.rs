@@ -59,9 +59,9 @@ pub fn build(config: &Config) -> (TileCache, crossbeam_channel::Receiver<()>) {
     use directories::ProjectDirs;
     use std::fs;
 
-    use crate::map::tile::cache::DiskFastPath;
-    use crate::map::tile::decoder;
-    use crate::map::tile::fetch::{DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane};
+    use crate::core::map::tile::cache::DiskFastPath;
+    use crate::core::map::tile::decoder;
+    use crate::core::map::tile::fetch::{DiskCachedFetcher, FetchLane, HttpFetcher, TileFetchLane};
 
     /// Worker count for the HTTP backend. HTTP is I/O-bound, so a
     /// small pool covers the typical visible-tile + prefetch fan-out

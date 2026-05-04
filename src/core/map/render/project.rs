@@ -14,7 +14,7 @@
 //! is precomputed so each point is a multiply rather than a divide.
 
 use super::view::VisibleTile;
-use crate::map::tile::decode::TilePoint;
+use crate::core::map::tile::decode::TilePoint;
 
 /// Project tile-local points into integer screen pixels and append
 /// them to `out`, optionally clipping against the padded viewport.

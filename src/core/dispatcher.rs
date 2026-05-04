@@ -25,11 +25,11 @@ use super::sidebar::SidebarPolicy;
 use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{Compositor, Context};
+use crate::core::map::MapAction;
+use crate::core::map::MapHandle;
+use crate::core::map::render::frame::MapFrame;
 use crate::front::theme::UiTheme;
 use crate::lua::LuaHandle;
-use crate::map::MapAction;
-use crate::map::MapHandle;
-use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 
 pub(crate) struct Dispatcher {
