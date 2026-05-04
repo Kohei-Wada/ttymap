@@ -14,14 +14,14 @@ use std::time::{Duration, Instant};
 
 use crate::map::render::overlay::UserPolyline;
 
-pub(super) struct OverlayThrottle {
+pub(crate) struct OverlayThrottle {
     sink: Vec<UserPolyline>,
     last_redraw: Instant,
     interval: Duration,
 }
 
 impl OverlayThrottle {
-    pub(super) fn new(interval: Duration) -> Self {
+    pub(crate) fn new(interval: Duration) -> Self {
         Self {
             sink: Vec::new(),
             last_redraw: Instant::now(),
@@ -32,13 +32,13 @@ impl OverlayThrottle {
     /// Mutable handle to the per-frame overlay sink. `ui::draw`
     /// passes this through to the per-frame `MapApi` so plugin
     /// `on_tick` callbacks can push.
-    pub(super) fn sink_mut(&mut self) -> &mut Vec<UserPolyline> {
+    pub(crate) fn sink_mut(&mut self) -> &mut Vec<UserPolyline> {
         &mut self.sink
     }
 
     /// Drain every queued overlay. Resets the buffer so the next
     /// frame starts empty.
-    pub(super) fn drain(&mut self) -> Vec<UserPolyline> {
+    pub(crate) fn drain(&mut self) -> Vec<UserPolyline> {
         std::mem::take(&mut self.sink)
     }
 
@@ -46,7 +46,7 @@ impl OverlayThrottle {
     /// interval has elapsed since the last overlay-driven redraw.
     /// On a `true` return, the throttle's `last_redraw` is advanced
     /// — callers don't have to track it.
-    pub(super) fn should_redraw(&mut self) -> bool {
+    pub(crate) fn should_redraw(&mut self) -> bool {
         if self.sink.is_empty() {
             return false;
         }

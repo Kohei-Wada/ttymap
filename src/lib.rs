@@ -16,6 +16,12 @@
 pub mod command;
 pub use command::UserCommand;
 
+/// Engine layer — state that mutates in response to commands and
+/// the GoF Receiver ([`core::Dispatcher`]) that runs them. Owned by
+/// [`app::App`] but separated from it so the layering is visible
+/// at the directory level. Ratatui-free.
+pub mod core;
+
 /// Application event loop and central message dispatcher.
 pub mod app;
 

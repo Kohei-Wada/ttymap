@@ -15,14 +15,11 @@
 //! Focus/modal state lives on [`Compositor`] — owned by `Dispatcher`,
 //! borrowed by `App::render_into` for paint.
 
-mod dispatcher;
 pub mod event;
 pub mod frame_timer;
-mod overlay;
-mod sidebar;
 pub mod ui;
 
-use dispatcher::Dispatcher;
+use crate::core::Dispatcher;
 pub use event::AppEvent;
 
 use std::io;

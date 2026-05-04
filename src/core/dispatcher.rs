@@ -2,18 +2,18 @@
 //!
 //! Owns the state that mutates in response to commands (map, lua,
 //! compositor, theme, sidebar, overlay sink, cursor) and every
-//! handler that touches that state. [`super::App`] is the loop
-//! driver above it: drains the [`AppEvent`](super::AppEvent) bus,
-//! ratatui-draws each frame, and forwards events here.
+//! handler that touches that state. [`crate::app::App`] is the loop
+//! driver above this layer: it drains the
+//! [`crate::app::AppEvent`] bus, ratatui-draws each frame, and
+//! forwards events here.
 //!
 //! `Dispatcher` is **ratatui-free** — only `App::render_into`
 //! touches ratatui. Field access from the App side is via
-//! `pub(super)` fields rather than accessor methods, since both
-//! types live in the same `app/` module.
+//! `pub(crate)` fields rather than accessor methods; the engine ↔
+//! shell relationship is one binary's two halves.
 //!
-//! Phase 1 of GitHub issue #212. Lives under `app/` as a private
-//! submodule for now; intended to migrate to `src/core/` once
-//! Phase 4 lands.
+//! Phase 4 of GitHub issue #212 (front/core split). Lives under
+//! `src/core/` so the layering is visible at the directory level.
 
 use std::time::Duration;
 
@@ -31,20 +31,20 @@ use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
 use crate::theme::{ThemeId, UiTheme};
 
-pub(super) struct Dispatcher {
-    pub(super) map: MapHandle,
-    pub(super) running: bool,
-    pub(super) theme_id: ThemeId,
-    pub(super) ui_theme: UiTheme,
-    pub(super) lua: LuaHandle,
-    pub(super) compositor: Compositor,
-    pub(super) sidebar: SidebarPolicy,
-    pub(super) cursor: Option<(u16, u16)>,
-    pub(super) overlay: OverlayThrottle,
+pub(crate) struct Dispatcher {
+    pub(crate) map: MapHandle,
+    pub(crate) running: bool,
+    pub(crate) theme_id: ThemeId,
+    pub(crate) ui_theme: UiTheme,
+    pub(crate) lua: LuaHandle,
+    pub(crate) compositor: Compositor,
+    pub(crate) sidebar: SidebarPolicy,
+    pub(crate) cursor: Option<(u16, u16)>,
+    pub(crate) overlay: OverlayThrottle,
 }
 
 impl Dispatcher {
-    pub(super) fn new(
+    pub(crate) fn new(
         theme_id: ThemeId,
         map: MapHandle,
         lua: LuaHandle,
@@ -69,20 +69,20 @@ impl Dispatcher {
     /// Whether the event loop should keep running — flipped off by
     /// [`UserCommand::Quit`]. Checked at the top of each `App::run`
     /// iteration.
-    pub(super) fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.running
     }
 
     /// Initial dispatch fired by `App::run` right after entering the
     /// loop — kicks off the very first render task so the terminal
     /// isn't blank waiting for input.
-    pub(super) fn dispatch_initial_redraw(&mut self) {
+    pub(crate) fn dispatch_initial_redraw(&mut self) {
         // `Map(Redraw)` reads no frame; pass None.
         self.dispatch(UserCommand::Map(MapAction::Redraw), None);
     }
 
     /// Build the [`Context`] snapshot read by component hooks.
-    pub(super) fn context(&self) -> Context {
+    pub(crate) fn context(&self) -> Context {
         Context {
             theme_id: self.theme_id,
             cursor: self.cursor,
@@ -92,13 +92,13 @@ impl Dispatcher {
     /// Forward a frame-ready signal to Lua subscribers. Called from
     /// `App::handle_event` when a fresh `MapFrame` arrives off the
     /// render thread.
-    pub(super) fn notify_frame_ready(&self) {
+    pub(crate) fn notify_frame_ready(&self) {
         self.lua.notify_frame_ready();
     }
 
     /// Drain queued Lua-side ops and apply them. App calls this once
     /// per loop iteration after event handling, before render.
-    pub(super) fn apply_lua_ops(&mut self, frame: Option<&MapFrame>) {
+    pub(crate) fn apply_lua_ops(&mut self, frame: Option<&MapFrame>) {
         let ops = self.lua.drain_ops();
         self.apply_ops(ops, frame);
     }
@@ -106,7 +106,7 @@ impl Dispatcher {
     /// Apply a batch of [`Op`]s from any source (Lua callbacks,
     /// component handlers, component polls). All converge on this
     /// single applier.
-    pub(super) fn apply_ops(&mut self, ops: Vec<Op>, frame: Option<&MapFrame>) {
+    pub(crate) fn apply_ops(&mut self, ops: Vec<Op>, frame: Option<&MapFrame>) {
         for op in ops {
             match op {
                 Op::Push { id, component } => {
@@ -121,7 +121,7 @@ impl Dispatcher {
     /// Deliver a key event to the compositor and apply any resulting
     /// ops. Called from `App::handle_input` for non-Ctrl-C key
     /// events.
-    pub(super) fn handle_key_event(&mut self, key: KeyEvent, frame: Option<&MapFrame>) {
+    pub(crate) fn handle_key_event(&mut self, key: KeyEvent, frame: Option<&MapFrame>) {
         let ctx = self.context();
         let ops = self.compositor.handle_event(key, &ctx);
         self.apply_ops(ops, frame);
@@ -129,7 +129,7 @@ impl Dispatcher {
 
     /// Drive a single `compositor.poll` pass plus the sidebar
     /// auto-open observation. Called once per loop iteration.
-    pub(super) fn poll_compositor(&mut self, frame: Option<&MapFrame>) {
+    pub(crate) fn poll_compositor(&mut self, frame: Option<&MapFrame>) {
         let ctx = self.context();
         let ops = self.compositor.poll(&ctx);
         self.apply_ops(ops, frame);
@@ -145,7 +145,7 @@ impl Dispatcher {
     /// interval has elapsed. App calls this after `render_into` and,
     /// on `true`, requests a fresh map redraw to flush queued
     /// polylines.
-    pub(super) fn overlay_should_redraw(&mut self) -> bool {
+    pub(crate) fn overlay_should_redraw(&mut self) -> bool {
         self.overlay.should_redraw()
     }
 
@@ -156,7 +156,7 @@ impl Dispatcher {
     /// `frame` carries the latest `MapFrame` (held by `App`) for the
     /// `ExportFrame` arm. Other arms ignore it. Pass `None` if no
     /// frame has arrived yet (`App::run`'s initial redraw etc.).
-    pub(super) fn dispatch(&mut self, msg: UserCommand, frame: Option<&MapFrame>) {
+    pub(crate) fn dispatch(&mut self, msg: UserCommand, frame: Option<&MapFrame>) {
         let snapshot = msg.clone();
         match msg {
             UserCommand::Map(action) => {
@@ -254,7 +254,7 @@ impl Dispatcher {
         }
     }
 
-    pub(super) fn request_map_redraw(&mut self) {
+    pub(crate) fn request_map_redraw(&mut self) {
         // Refresh the Lua-side view mirror in the same beat as
         // queueing the next render task — Lua plugins read
         // `ttymap.map:center()` / `:zoom()` from these mirrors and
