@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
 
     // Modal panels on top of the map (bottom-up) + sidebar sections
     // laid out vertically in the side panel when it's open.
-    compositor.render(f, map_inner, sidebar_inner, theme, ctx);
+    crate::compositor::render::paint(compositor, f, map_inner, sidebar_inner, theme, ctx);
 
     // Empty-sidebar placeholder so toggling on with no sections shows
     // SOMETHING — otherwise the user would just see an empty box and

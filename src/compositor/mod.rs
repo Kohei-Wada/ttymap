@@ -27,6 +27,7 @@
 pub mod base;
 pub mod map_api;
 pub mod op;
+pub mod render;
 mod sidebar;
 pub mod window;
 
@@ -34,13 +35,10 @@ pub use base::BaseLayer;
 pub use map_api::MapApi;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Frame;
-use ratatui::layout::Rect;
 
 use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::theme::ThemeId;
-use crate::theme::UiTheme;
 
 // ── Framework-reserved keys ────────────────────────────────────────
 
@@ -222,12 +220,12 @@ use window::{Window, WindowOps};
 /// [`BaseLayer`] even while modals are rendered above it, which is
 /// how the old `Focus::Background` state maps into this design.
 pub struct Compositor {
-    stack: Vec<(CardId, Box<dyn Component>)>,
+    pub(super) stack: Vec<(CardId, Box<dyn Component>)>,
     /// Index of the component that receives key events first.
     /// Invariant: `focused_idx < stack.len()` whenever the stack is
     /// non-empty. After every push, this becomes the new top; after
     /// a close/pop it is clamped down to the new last index.
-    focused_idx: usize,
+    pub(super) focused_idx: usize,
 }
 
 impl Compositor {
@@ -343,51 +341,6 @@ impl Compositor {
             all.extend(ops.ops);
         }
         all
-    }
-
-    /// Render bottom-up so later pushes draw on top — with one
-    /// twist: the **focused** component renders last (on top of
-    /// everything else), regardless of where it sits in the stack.
-    /// This lets multiple panels overlap freely; whichever the user
-    /// is currently driving with the keyboard pops to the front.
-    ///
-    /// Components are routed by their [`Placement`]: `Floating`
-    /// (today: only the palette) renders into `map_area`;
-    /// `Sidebar` ones share `sidebar_area` via equal vertical
-    /// split, in stack order (oldest at top). When `sidebar_area`
-    /// is `None` (sidebar hidden), `Sidebar` components are
-    /// skipped — they stay alive on the stack but are invisible
-    /// until the user toggles the sidebar back on.
-    pub fn render(
-        &self,
-        f: &mut Frame,
-        map_area: Rect,
-        sidebar_area: Option<Rect>,
-        theme: &UiTheme,
-        ctx: &Context,
-    ) {
-        // The palette is the sole `Floating`-placement user; it
-        // appears as a single instance at most (`SwitchProvider`
-        // swaps in place rather than stacking) so the previous
-        // bottom-up + focused-last loop collapses to a single
-        // lookup — find the topmost floating component and paint
-        // it. Always focused when present (the palette consumes
-        // input the moment it opens).
-        if let Some((idx, (_, c))) = self
-            .stack
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, (_, c))| c.placement() == Placement::Floating)
-        {
-            let focused = idx == self.focused_idx;
-            let mut win = window::RenderWindow::new(f, map_area, theme, ctx).focused(focused);
-            c.render(&mut win);
-        }
-
-        if let Some(side_area) = sidebar_area {
-            sidebar::render(f, side_area, theme, ctx, &self.stack, self.focused_idx);
-        }
     }
 
     /// Whether focus is on the map (i.e. the [`BaseLayer`] at
