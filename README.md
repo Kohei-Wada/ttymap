@@ -13,7 +13,7 @@ Bright theme:
 
 ![ttymap bright theme](assets/ttymap-bright.png)
 
-Tokyo zoomed in with the wiki panel open and live aircraft markers:
+Tokyo zoomed in with the wiki panel open:
 
 ![ttymap zoomed-in Tokyo with wiki panel](assets/ttymap-zoom-wiki.png)
 
