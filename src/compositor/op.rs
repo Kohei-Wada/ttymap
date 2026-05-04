@@ -1,16 +1,24 @@
-//! Lua → App operation vocabulary.
+//! Component → host effect vocabulary.
 //!
-//! [`Op`] is the typed output of a Lua subsystem tick / callback: each
-//! variant describes a single same-thread "do this on the App" request
-//! that the Lua bridge enqueues into a shared [`OpsBuffer`] and that
-//! App drains once per iteration.
+//! [`Op`] is the typed output of a component hook or Lua callback:
+//! each variant describes a single same-thread "do this on my behalf"
+//! request that the producer enqueues and the host (`Compositor` for
+//! Push/Close, `App::dispatch` for Intent) applies after the producer
+//! returns.
 //!
-//! Replaces the older mix of three same-thread mechanisms — the
-//! per-component `CloseFlag` (Arc<AtomicBool> polled every frame),
-//! the per-plugin `push_rx` queue (Box<dyn Component>), and the
-//! `LuaSender` mpsc wrapper used for `UserIntent` emit — with a
-//! single typed buffer carrying [`Op::Push`] / [`Op::Close`] /
-//! [`Op::Intent`].
+//! Two producers ride this enum:
+//! - **Component hooks** (`handle_event` / `poll`) enqueue via the
+//!   [`Window`](super::window::Window) handle into a stack-local
+//!   `WindowOps`; the compositor drains it the moment the hook returns.
+//! - **Lua callbacks** (handle `:close()`, `api.card.open`,
+//!   `ttymap.map:jump`, …) enqueue into the shared [`OpsBuffer`];
+//!   `App::apply_lua_ops` drains it once per loop iteration.
+//!
+//! Both paths converge in `App::apply_ops`, which dispatches by
+//! variant. Replaces the older mix — per-component `CloseFlag`
+//! polling, per-plugin `push_rx` mpsc, `LuaSender` mpsc, and the
+//! compositor's own `WindowOps`-as-bool-trio — with a single typed
+//! buffer carrying [`Op::Push`] / [`Op::Close`] / [`Op::Intent`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,17 +26,12 @@ use std::rc::Rc;
 use crate::app::UserIntent;
 use crate::compositor::{CardId, Component};
 
-/// A same-thread request from the Lua subsystem to the App.
-///
-/// Lua callbacks (handle `:close()`, `api.card.open`,
-/// `ttymap.map:jump`, …) push these into a shared [`OpsBuffer`];
-/// App drains the buffer once per loop iteration and applies
-/// each op.
-///
-/// All three Lua → App same-thread variants now ride this one
-/// buffer (close / push / intent). The earlier mix — `CloseFlag`
-/// polling, per-plugin `push_rx` mpsc, and `LuaSender` mpsc — has
-/// fully retired.
+/// A same-thread request from a component (Rust or Lua-backed) to
+/// the host. Component hooks emit these via the
+/// [`Window`](super::window::Window) handle; Lua callbacks emit via
+/// the shared [`OpsBuffer`]. The host (`Compositor` for stack ops,
+/// `App::dispatch` for intents) applies them after the producer
+/// returns.
 pub enum Op {
     /// Push a component onto the compositor stack with a
     /// caller-supplied [`CardId`]. The id is reserved at the
@@ -62,7 +65,9 @@ impl std::fmt::Debug for Op {
 }
 
 /// Shared, single-threaded buffer that accumulates [`Op`]s from Lua
-/// callbacks and is drained by App per iteration.
+/// callbacks and is drained by App per iteration. (Component hooks
+/// use a separate, stack-local `WindowOps` instead — see
+/// [`Window`](super::window::Window).)
 ///
 /// `Rc<RefCell<...>>`: same-thread sharing across the API closures
 /// (held inside the Lua VM via captured clones), the returned handles

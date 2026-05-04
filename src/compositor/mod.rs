@@ -29,6 +29,7 @@
 
 pub mod base;
 pub mod map_api;
+pub mod op;
 mod sidebar;
 pub mod window;
 
@@ -40,7 +41,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::app::UserIntent;
-use crate::lua::op::Op;
+use crate::compositor::op::Op;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 

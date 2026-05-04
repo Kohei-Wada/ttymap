@@ -46,8 +46,8 @@ use ratatui::widgets::{
 };
 
 use crate::app::UserIntent;
+use crate::compositor::op::Op;
 use crate::compositor::{CardId, Component, Context};
-use crate::lua::op::Op;
 use crate::theme::{StyleKind, UiTheme};
 
 /// Queue of [`Op`]s a [`Component`] hook recorded through [`Window`].

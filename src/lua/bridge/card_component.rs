@@ -21,8 +21,8 @@
 //! (returned to Lua by `card.open`) holds the same
 //! [`CardId`](crate::compositor::CardId) reserved at the
 //! call site. Lua-side `handle:close()` enqueues an
-//! [`Op::Close`](crate::lua::op::Op::Close) onto the shared
-//! [`OpsBuffer`](crate::lua::op::OpsBuffer); the App applies it per
+//! [`Op::Close`](crate::compositor::op::Op::Close) onto the shared
+//! [`OpsBuffer`](crate::compositor::op::OpsBuffer); the App applies it per
 //! iteration via
 //! [`crate::compositor::Compositor::close_by_id`].
 //! Idempotent — repeated `close()` calls just enqueue duplicate
@@ -59,7 +59,7 @@ use crate::theme::StyleKind;
 /// A [`Component`] backed by a Lua spec table. Pushed onto the
 /// compositor stack by `ttymap.api.card.open(spec)`; popped when
 /// the matching [`CardHandle`](super::card_handle::CardHandle)
-/// enqueues an [`Op::Close`](crate::lua::op::Op::Close) keyed by the
+/// enqueues an [`Op::Close`](crate::compositor::op::Op::Close) keyed by the
 /// reserved [`CardId`](crate::compositor::CardId), or when
 /// the spec's `handle_event` returns `{ close = true }`.
 pub struct LuaCardComponent {

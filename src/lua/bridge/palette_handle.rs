@@ -13,7 +13,7 @@
 use mlua::UserData;
 
 use crate::compositor::CardId;
-use crate::lua::op::{Op, OpsBuffer};
+use crate::compositor::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.palette.open(...)`.
 /// Idempotent `:close()` — pushing two `Op::Close(id)` for the same
@@ -44,7 +44,7 @@ impl UserData for PaletteHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lua::op::new_ops_buffer;
+    use crate::compositor::op::new_ops_buffer;
 
     #[test]
     fn close_enqueues_op_close_idempotent() {

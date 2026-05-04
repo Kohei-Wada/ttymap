@@ -246,7 +246,7 @@ mod tests {
             "lua-test",
             LuaHostShared::empty(),
             slot,
-            crate::lua::op::new_ops_buffer(),
+            crate::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");

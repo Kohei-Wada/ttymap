@@ -8,9 +8,9 @@
 //! all bus dispatch and host-state plumbing lives behind this type.
 
 use crate::compositor::MapApi;
+use crate::compositor::op::{Op, OpsBuffer};
 use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
-use crate::lua::op::{Op, OpsBuffer};
 use crate::lua::registry::{LuaEventBus, names};
 
 /// Runtime-held part of the Lua subsystem (built by

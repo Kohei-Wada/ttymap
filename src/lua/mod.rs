@@ -17,7 +17,6 @@ pub mod api;
 pub mod bridge;
 pub mod handle;
 pub mod init_lua;
-pub mod op;
 pub mod registry;
 pub mod runtimepath;
 
@@ -34,6 +33,7 @@ use std::sync::Arc;
 use mlua::{Lua, Table};
 
 use crate::app::UserIntent;
+use crate::compositor::op;
 use crate::compositor::{Activation, PaletteEntry, Registrar};
 use crate::config::Config;
 use crate::input::KeyMap;

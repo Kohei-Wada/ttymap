@@ -134,7 +134,7 @@ pub enum CallOutcome<R> {
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
 /// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
-/// - `ops` is the shared [`crate::lua::op::OpsBuffer`] every plugin
+/// - `ops` is the shared [`crate::compositor::op::OpsBuffer`] every plugin
 ///   clones a handle to; all Lua → App traffic (`Op::Push` /
 ///   `Op::Close` / `Op::Intent`) lands on it.
 pub fn fresh_load(
@@ -142,7 +142,7 @@ pub fn fresh_load(
     chunk_name: &str,
     host_tag: &'static str,
     shared: Arc<host::LuaHostShared>,
-    ops: crate::lua::op::OpsBuffer,
+    ops: crate::compositor::op::OpsBuffer,
 ) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
     let lua = new_lua();
     let slot = host::new_capture_slot();
