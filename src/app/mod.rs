@@ -27,10 +27,14 @@
 pub mod event;
 pub mod frame_timer;
 pub mod intent;
+mod overlay;
+mod sidebar;
 pub mod ui;
 
 pub use event::AppEvent;
 pub use intent::UserIntent;
+use overlay::OverlayThrottle;
+use sidebar::SidebarPolicy;
 
 use std::io;
 
@@ -61,20 +65,9 @@ pub struct App {
     /// here (not on `MapState`) because liveness is an app concern,
     /// not a map-data concern.
     running: bool,
-    /// Whether the left sidebar is visible. Toggled via
-    /// [`UserIntent::ToggleSidebar`]; flipping it shrinks/expands the
-    /// map canvas as a follow-up resize.
-    sidebar_open: bool,
-    /// Sidebar component count observed at the previous
-    /// `poll_compositor` tick. The sidebar auto-opens on the
-    /// transition `0 → ≥1` and on any *increase* (so opening a new
-    /// section while the sidebar is hidden brings it back), but
-    /// stays hidden if the user explicitly toggled it off and the
-    /// count is stable.
-    prev_sidebar_count: usize,
-    /// Sidebar width in terminal cells when visible. Sourced from
-    /// `ttymap.opt.runtime.sidebar_width` at startup.
-    sidebar_width: u16,
+    /// Left-sidebar visibility / width / auto-open invariant. See
+    /// [`SidebarPolicy`].
+    sidebar: SidebarPolicy,
     /// Active theme id. Crosses both UI chrome (drives `ui_theme`)
     /// and map rendering (drives the styler the render thread uses);
     /// owned here because the choice is an app concern, not a
@@ -93,34 +86,18 @@ pub struct App {
     mouse: MouseAdapter,
     compositor: Compositor,
     ui_theme: UiTheme,
-    /// Ephemeral polyline overlays pushed by Lua plugins during the
-    /// current frame's `on_tick` pass. Drained into the next
-    /// `RenderTask::Draw` immediately after `ui::draw` returns — so
-    /// the Lua side fire-and-forgets every frame and the render thread
-    /// always gets the freshest set.
-    overlay_sink: Vec<crate::map::render::overlay::UserPolyline>,
+    /// Per-frame overlay sink + the rate-limit on overlay-driven
+    /// redraws. See [`OverlayThrottle`].
+    overlay: OverlayThrottle,
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
-    /// [`Context`](crate::compositor::Context) so plugins can build
+    /// [`Context`] so plugins can build
     /// cursor-aware overlays.
     cursor: Option<(u16, u16)>,
-    /// Timestamp of the last overlay-driven `request_map_redraw`. Used
-    /// to rate-limit redraws when a plugin pushes polyline overlays
-    /// every tick — without this, each push triggers a full tile re-
-    /// render at the main loop's ~60Hz cadence (`event::poll(16ms)`),
-    /// which is wasted work since tile data does not change between
-    /// frames. Throttling to ~30Hz halves render-thread CPU while
-    /// keeping animation visually smooth. User-event-driven redraws
-    /// (pan, zoom, resize, theme change) bypass this check and fire
-    /// immediately.
-    last_overlay_redraw: std::time::Instant,
     /// Main event-loop wake interval. Derived from
     /// `ttymap.opt.runtime.poll_timeout_ms` at startup.
     poll_timeout: std::time::Duration,
-    /// Minimum interval between overlay-driven redraws. Derived from
-    /// `ttymap.opt.runtime.overlay_redraw_ms` at startup.
-    overlay_redraw_interval: std::time::Duration,
 }
 
 impl App {
@@ -160,9 +137,7 @@ impl App {
         App {
             map,
             running: true,
-            sidebar_open: false,
-            prev_sidebar_count: 0,
-            sidebar_width: config.runtime.sidebar_width,
+            sidebar: SidebarPolicy::new(config.runtime.sidebar_width),
             theme_id,
             lua,
             map_frame: None,
@@ -170,12 +145,10 @@ impl App {
             compositor,
             ui_theme,
             cursor: None,
-            overlay_sink: Vec::new(),
-            last_overlay_redraw: std::time::Instant::now(),
-            poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
-            overlay_redraw_interval: std::time::Duration::from_millis(
+            overlay: OverlayThrottle::new(std::time::Duration::from_millis(
                 config.runtime.overlay_redraw_ms,
-            ),
+            )),
+            poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
         }
     }
 
@@ -380,22 +353,11 @@ impl App {
         let ops = self.compositor.poll(&ctx);
         self.apply_ops(ops);
 
-        // Auto-open the sidebar only on a *count increase* (a new
-        // section just landed). Triggering off "any component
-        // exists" instead would force the sidebar back open on
-        // every poll tick after the user closed it via `\` — they
-        // could never hide the sidebar while a wiki / aircraft
-        // panel was alive on the stack. Tracking the previous
-        // count lets the user toggle freely; opening a *new*
-        // section still asserts itself, since asking for new
-        // content is an implicit "show me this".
         let count = self.compositor.sidebar_component_count();
-        if count > self.prev_sidebar_count && !self.sidebar_open {
-            self.sidebar_open = true;
+        if self.sidebar.observe_count(count) {
             let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
             self.handle_resize(cols, rows);
         }
-        self.prev_sidebar_count = count;
     }
 
     /// Single per-iteration draw. The `tick` bus event fires from
@@ -403,14 +365,14 @@ impl App {
     fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let ctx = self.context();
         // Field-disjoint borrows so the closure can hold `&self.X`
-        // alongside `&mut self.overlay_sink`.
+        // alongside `&mut self.overlay`.
         let map_frame = self.map_frame.as_ref();
         let compositor = &self.compositor;
         let lua = &self.lua;
         let ui_theme = &self.ui_theme;
-        let sidebar_open = self.sidebar_open;
-        let sidebar_width = self.sidebar_width;
-        let overlay_sink = &mut self.overlay_sink;
+        let sidebar_open = self.sidebar.open;
+        let sidebar_width = self.sidebar.width;
+        let overlay_sink = self.overlay.sink_mut();
         terminal.draw(|f| {
             crate::app::ui::draw(
                 f,
@@ -429,17 +391,13 @@ impl App {
         Ok(())
     }
 
-    /// After draw: if Lua plugins pushed polylines into
-    /// `overlay_sink` during `on_tick` and the throttle interval
-    /// has elapsed, queue a fresh `RenderTask::Draw` so the next
-    /// frame carries them.
+    /// After draw: if Lua plugins pushed polylines into the overlay
+    /// sink during `on_tick` and the throttle interval has elapsed,
+    /// queue a fresh `RenderTask::Draw` so the next frame carries
+    /// them.
     fn tick_overlay_redraw(&mut self) {
-        if !self.overlay_sink.is_empty() {
-            let now = std::time::Instant::now();
-            if now.duration_since(self.last_overlay_redraw) >= self.overlay_redraw_interval {
-                self.request_map_redraw();
-                self.last_overlay_redraw = now;
-            }
+        if self.overlay.should_redraw() {
+            self.request_map_redraw();
         }
     }
 
@@ -475,7 +433,7 @@ impl App {
     }
 
     fn toggle_sidebar(&mut self) {
-        self.sidebar_open = !self.sidebar_open;
+        self.sidebar.toggle();
         // The visible map area shrinks/expands — re-run the resize
         // path so the render thread allocates the right canvas size.
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -519,21 +477,9 @@ impl App {
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        let map_cols = self.effective_map_cols(cols);
+        let map_cols = self.sidebar.effective_map_cols(cols);
         self.map.handle_resize(map_cols, rows);
         self.request_map_redraw();
-    }
-
-    /// Terminal-cell width of the visible map area, accounting for
-    /// the sidebar when it is open. Mirrors the `ui::draw` layout
-    /// fallback: very narrow terminals skip the sidebar entirely so
-    /// the map keeps a usable width.
-    fn effective_map_cols(&self, full_cols: u16) -> u16 {
-        if self.sidebar_open && full_cols > self.sidebar_width + 4 {
-            full_cols.saturating_sub(self.sidebar_width)
-        } else {
-            full_cols
-        }
     }
 
     fn request_map_redraw(&mut self) {
@@ -542,7 +488,7 @@ impl App {
         // `ttymap.map:center()` / `:zoom()` from these mirrors and
         // expect them to reflect the view about to be drawn.
         self.lua.sync_view(self.map.center(), self.map.zoom());
-        let overlays = std::mem::take(&mut self.overlay_sink);
+        let overlays = self.overlay.drain();
         self.map.request_redraw(overlays);
     }
 }
