@@ -157,9 +157,9 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
 
     // Lua subsystem: load every plugin, register activations / palette
     // entries / event-bus subscriptions, return the populated bundle.
-    let lua_sender = ttymap::lua::sender::LuaSender::new(event_tx.clone());
-    let mut lua =
-        ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap, lua_sender);
+    // All Lua → Frontend traffic rides the shared `OpsBuffer` built
+    // inside `build_subsystem`; no separate intent sender needed.
+    let mut lua = ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap);
 
     // Palette is a built-in (not a plugin): drain every plugin's
     // palette_entries into a CommandSeed and append the `:` activation.

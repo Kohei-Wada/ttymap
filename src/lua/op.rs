@@ -7,25 +7,28 @@
 //!
 //! Replaces the older mix of three same-thread mechanisms — the
 //! per-component `CloseFlag` (Arc<AtomicBool> polled every frame),
-//! the per-plugin `push_rx` queue (Box<dyn Component>), and (still)
-//! [`crate::lua::sender::LuaSender`] — with a single typed buffer.
-//! Close + push are migrated; the LuaSender → `Op::Intent` migration
-//! is the next PR.
+//! the per-plugin `push_rx` queue (Box<dyn Component>), and the
+//! `LuaSender` mpsc wrapper used for `UserIntent` emit — with a
+//! single typed buffer carrying [`Op::Push`] / [`Op::Close`] /
+//! [`Op::Intent`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::frontend::UserIntent;
 use crate::frontend::compositor::{CardId, Component};
 
 /// A same-thread request from the Lua subsystem to the App.
 ///
-/// Lua callbacks (handle `:close()`, `api.card.open`, etc.) push these
-/// into a shared [`OpsBuffer`]; Frontend drains the buffer once per
-/// loop iteration and applies each op.
+/// Lua callbacks (handle `:close()`, `api.card.open`,
+/// `ttymap.map:jump`, …) push these into a shared [`OpsBuffer`];
+/// Frontend drains the buffer once per loop iteration and applies
+/// each op.
 ///
-/// `Op::Push` and `Op::Close` are wired today. The remaining
-/// `LuaSender → Op::Intent` migration (the next PR) makes this the
-/// single Lua → Frontend transport.
+/// All three Lua → Frontend same-thread variants now ride this one
+/// buffer (close / push / intent). The earlier mix — `CloseFlag`
+/// polling, per-plugin `push_rx` mpsc, and `LuaSender` mpsc — has
+/// fully retired.
 pub enum Op {
     /// Push a component onto the compositor stack with a
     /// caller-supplied [`CardId`]. The id is reserved at the
@@ -40,6 +43,12 @@ pub enum Op {
     /// no-op when `id` is not on the stack (handle closed twice, or
     /// the component already self-closed via `win.close()`).
     Close(CardId),
+    /// Dispatch a [`UserIntent`] through `Frontend::dispatch`.
+    /// Emitted by Lua-facing host methods (`ttymap.map:jump` /
+    /// `:zoom` / `:fly_to`, `ttymap.api.frame.export`, …) — the
+    /// canonical intent vocabulary every other emitter (keymap,
+    /// mouse, palette) already speaks.
+    Intent(UserIntent),
 }
 
 impl std::fmt::Debug for Op {
@@ -47,6 +56,7 @@ impl std::fmt::Debug for Op {
         match self {
             Self::Push { id, .. } => f.debug_struct("Push").field("id", id).finish(),
             Self::Close(id) => f.debug_tuple("Close").field(id).finish(),
+            Self::Intent(i) => f.debug_tuple("Intent").field(i).finish(),
         }
     }
 }

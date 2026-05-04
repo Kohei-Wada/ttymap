@@ -255,6 +255,11 @@ impl Frontend {
                     self.compositor.push_with_id(id, component);
                 }
                 crate::lua::op::Op::Close(id) => self.compositor.close_by_id(id),
+                crate::lua::op::Op::Intent(intent) => {
+                    let snapshot = intent.clone();
+                    self.dispatch(intent);
+                    self.notify_post_intent(&snapshot);
+                }
             }
         }
     }
