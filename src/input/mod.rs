@@ -7,7 +7,7 @@
 //!   App's unified queue as [`AppEvent::Input`](crate::app::AppEvent::Input).
 //! - [`keymap`] holds the static [`KeyMap`] table + the
 //!   [`KeybindingOverrides`] shape Lua's `keymap.set` populates.
-//!   The frontend resolves a raw [`crossterm::event::KeyEvent`]
+//!   [`crate::app::App`] resolves a raw [`crossterm::event::KeyEvent`]
 //!   against this table to produce an [`UserIntent`](crate::app::UserIntent).
 //! - [`mouse`] holds the [`MouseAdapter`] that translates raw
 //!   `crossterm::event::MouseEvent`s — drag, scroll, click — into
@@ -15,14 +15,14 @@
 //!   projection.
 //!
 //! The subsystem doesn't own state across frames; it's a pure
-//! translation layer that the frontend pulls from. Keeping it
-//! separate from `app/` makes the data flow obvious:
+//! translation layer that the app pulls from. Keeping it separate
+//! from `app/` makes the data flow obvious:
 //!
 //! ```text
 //! crossterm  ─►  input::thread  ─►  AppEvent::Input
 //!                                          │
 //!                                          ▼
-//!                                  frontend::handle_event
+//!                                    App::handle_event
 //!                                          │
 //!                            ┌─────────────┴─────────────┐
 //!                            ▼                           ▼

@@ -8,24 +8,20 @@
 //! have to maintain a separate `is_visible` / `activate` / `deactivate`
 //! contract — fresh instances on every push, dropped on every pop.
 //!
-//! World-space map overlays (wiki markers etc.) live on
-//! [`Component::paint_on_map`] — called for every component on the
-//! stack. Tying map-side rendering to stack presence means markers
-//! appear when the panel opens and disappear when it closes, in
-//! step, without a second "is this paint active?" flag to keep in
-//! sync.
+//! World-space map overlays (wiki markers etc.) are *not* a
+//! `Component` concern. Every Lua plugin's per-frame map paint runs
+//! through [`crate::lua::LuaEventBus::dispatch_tick`] (called from
+//! [`crate::app::ui::draw`]) which hands the plugin a [`MapApi`] it
+//! draws into directly — tying map-side rendering to plugin
+//! lifetime is plugin-side policy (a captured `CardHandle` that's
+//! nil while closed), not a framework hook.
 //!
-//! Plugin self-registration goes through [`Registrar`]: each plugin
-//! module exposes
-//!
-//! ```ignore
-//! pub fn register(config: &Config, r: &mut Registrar)
-//! ```
-//!
-//! and constructs its own state + closures internally. `App` takes a
-//! finished `Registrar` and never names a concrete plugin type — the
-//! composition root (today `main.rs` / a dedicated plugins module) is
-//! the one place that imports each plugin.
+//! Plugin discovery feeds in through [`Registrar`], which the Lua
+//! subsystem populates at startup with one `Activation` per
+//! `register_keybind`, one `PaletteEntry` per
+//! `register_palette_command`, and one `Subscriber` per
+//! `on_event` (`LuaEventBus`). `App` takes a finished `Registrar`
+//! and never names a concrete plugin type.
 
 pub mod base;
 pub mod map_api;
@@ -178,8 +174,9 @@ pub trait Component {
     /// area, and the current theme — plugins read all three through
     /// `win` so theme does not thread through helper signatures.
     ///
-    /// Default impl is no-op — for marker-only components that have
-    /// no panel UI (just `paint_on_map`).
+    /// Default impl is no-op — for components that exist only to
+    /// hold focus / poll async work, with no sidebar UI of their
+    /// own.
     fn render(&self, _win: &mut window::RenderWindow) {}
 
     /// Where to draw this component. Defaults to
@@ -597,10 +594,7 @@ mod tests {
     use super::*;
 
     /// Minimal test component that identifies itself via
-    /// `footer_hints`. Distinct string parameters are just labels;
-    /// dedup in the compositor is by concrete type (`Any::type_id`),
-    /// so two `TagComponent` instances are always considered the
-    /// same kind regardless of the inner string.
+    /// `footer_hints`. Distinct string parameters are just labels.
     struct TagComponent(&'static str);
 
     impl Component for TagComponent {
@@ -679,10 +673,9 @@ mod tests {
         assert_eq!(focused_tag(&c), "B");
     }
 
-    /// Component that Pushes a `TagComponent` when the given key is
-    /// hit — used to exercise dedup. Distinct concrete type from
-    /// `TagComponent` so the compositor's TypeId-based dedup does
-    /// not conflate them.
+    /// Component that pushes a `TagComponent` when the given key is
+    /// hit — used to exercise the no-dedup invariant: a fresh
+    /// instance is stacked on every activation.
     struct Spawner {
         label: &'static str,
         spawn_key: KeyCode,

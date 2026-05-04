@@ -26,7 +26,7 @@ pub mod compositor;
 /// pushed onto the compositor stack; provider sub-modes (theme
 /// picker, search, plugin commands) swap in place via
 /// `PaletteAction::SwitchProvider`. Top-level peer rather than
-/// frontend-internal because the Lua bridge implements
+/// living under `app/` because the Lua bridge implements
 /// `PaletteProvider` directly.
 pub mod palette;
 
@@ -55,7 +55,7 @@ pub mod theme;
 
 /// Input subsystem — raw-terminal-event ingest and translation
 /// (input thread, keymap table, mouse adapter). Sits as a peer of
-/// `map/` and `lua/`; the frontend pulls translated [`UserIntent`]s
+/// `map/` and `lua/`; [`app::App`] pulls translated [`UserIntent`]s
 /// out of it for each `AppEvent::Input`. `pub` so `main` can name
 /// the [`input::thread::InputHandle`] it spawns at the composition
 /// root.

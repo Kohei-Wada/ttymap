@@ -29,7 +29,7 @@ use crate::compositor::MapApi;
 use crate::compositor::map_api::Anchor;
 use crate::geo::LonLat;
 
-/// Build the Lua-facing `map` table for a single `paint_on_map`
+/// Build the Lua-facing `map` table for a single per-frame `on_tick`
 /// call. The closures borrow `cell` for `'scope`; once the host's
 /// `Lua::scope` returns the closures are dropped and the borrow is
 /// released, so it's safe to take the ratatui buffer back out.

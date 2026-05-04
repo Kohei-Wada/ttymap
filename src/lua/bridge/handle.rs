@@ -30,9 +30,6 @@ pub struct LuaBridgeHandle {
     /// Identifier used in log warnings (`lua[wiki]: poll() failed:
     /// …`). For bundled plugins this is the file stem; for user
     /// plugins it's the leaked stem from the registration walker.
-    /// Same value the component returns from
-    /// [`crate::compositor::Component::dedup_tag`], so logs and
-    /// stack identity agree.
     log_tag: &'static str,
     lua: Lua,
     module: RegistryKey,

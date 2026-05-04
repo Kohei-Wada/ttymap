@@ -52,8 +52,9 @@ pub struct MapApi<'a> {
     /// `frame_center`.
     frame_zoom: f64,
     /// Latest mouse cursor in absolute terminal cells. Surfaced
-    /// here (in addition to `Context.cursor`) so paint_on_map can
-    /// reach it without the plugin stashing a copy in its own state.
+    /// here (in addition to `Context.cursor`) so per-frame Lua
+    /// `on_tick` callbacks can reach it without the plugin stashing
+    /// a copy in its own state.
     cursor: Option<(u16, u16)>,
     /// Polylines pushed by Lua plugins / components this frame.
     /// Drained by `App` after `ui::draw` returns and bundled into the

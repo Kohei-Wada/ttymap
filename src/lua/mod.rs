@@ -43,7 +43,7 @@ use crate::input::KeyMap;
 /// The runtime-held [`LuaHandle`] is **already constructed** by
 /// `build_subsystem` itself — the App just stores it, no longer
 /// reaches into a registrar to assemble it. The remaining fields are
-/// the parts that flow into the frontend's compositor (activations,
+/// the parts that flow into the [`crate::compositor`] (activations,
 /// plugin_hints) and the palette installer (palette_entries).
 pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface

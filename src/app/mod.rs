@@ -16,8 +16,11 @@
 //!
 //! Focus/modal state lives on [`Compositor`] — a stack of
 //! [`Component`]s that replaced the old `FocusManager` + `Plugin`
-//! trilogy. Components render map overlays through
-//! `Component::paint_on_map`. The compositor never names a concrete
+//! trilogy. World-space map overlays are *not* a `Component`
+//! concern: every Lua plugin's per-frame map paint runs through
+//! [`crate::lua::LuaEventBus::dispatch_tick`] (called from
+//! [`crate::app::ui::draw`]) which hands the plugin a `MapApi` it
+//! draws into directly. The compositor never names a concrete
 //! plugin type — it carries only `Box<dyn Component>`s populated by
 //! the Lua dispatcher at composition time.
 
@@ -186,9 +189,9 @@ impl App {
     /// Drive the per-iteration event loop until the map state
     /// requests shutdown.
     ///
-    /// The frontend owns the iteration shape (housekeeping → drain
+    /// The app owns the iteration shape (housekeeping → drain
     /// queue → poll components → render → throttle overlay redraw)
-    /// because the ordering between those steps is a frontend
+    /// because the ordering between those steps is an app-level
     /// concern, not a wiring concern. `main` stays the composition
     /// root: it builds the bus, the channel, and the off-thread
     /// subsystems, then hands them in here as borrows.

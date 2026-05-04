@@ -21,28 +21,31 @@ src/
 │   ├── style.rs         StyleKind semantic tags (accent / muted / …)
 │   └── ui.rs            UiTheme (ratatui style adapter)
 │
-├── input/               input subsystem — peer of map/, frontend/, lua/
+├── input/               input subsystem — peer of map/, app/, lua/
 │   ├── thread.rs        producer thread blocking on crossterm::event::read
 │   ├── keymap.rs        KeyMap table + KeybindingOverrides (init.lua + Lua keymap.set)
 │   └── mouse.rs         MouseAdapter — MouseEvent → UserIntent (drag pan, scroll zoom-at)
 │
-├── frontend/            controller: event loop, intent dispatch, UI shell, compositor
+├── app/                 controller: event loop, intent dispatch, UI shell
 │   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
-│   ├── intent.rs        UserIntent enum (Map(MapAction) / Jump / SetTheme / CycleFocus / …)
+│   ├── intent.rs        UserIntent enum (Map(MapAction) / Quit / SetTheme / ToggleSidebar / …)
 │   ├── event.rs         AppEvent — unified queue payload (Intent / FrameReady / Input / Wake)
 │   ├── frame_timer.rs   per-iteration wake source
-│   ├── ui.rs            ratatui draw entry — lays out map area + footer, routes through compositor
-│   ├── compositor/      helix-style focus / modal stack
-│   │   ├── mod.rs       Compositor + Component trait + Placement (Floating / Sidebar)
-│   │   ├── base.rs      BaseLayer — keymap + activation table + count prefixes (5j etc.)
-│   │   ├── sidebar.rs   left-rail layout (up to 3 Sidebar cards, equal vertical split)
-│   │   ├── window.rs    Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
-│   │   └── map_api.rs   MapApi — world-space + screen-space draw primitives consumed by Lua tick
-│   └── palette/         `:`-triggered universal picker (itself a Component)
-│       ├── mod.rs       CommandPalette ephemeral state
-│       ├── action.rs    PaletteAction (close / submit / SwitchProvider / …)
-│       ├── panel.rs     popup layout
-│       └── provider/    sync (OnEachKey filter) + async (Debounced + poll + spinner) plumbing
+│   └── ui.rs            ratatui draw entry — map area + footer, routes through compositor
+│
+├── compositor/          helix-style focus / modal stack (top-level peer of app/)
+│   ├── mod.rs           Compositor + Component trait + Placement (Floating / Sidebar) + Registrar
+│   ├── base.rs          BaseLayer — keymap + activation table + count prefixes (5j etc.)
+│   ├── sidebar.rs       left-rail layout (up to 3 Sidebar cards, equal vertical split)
+│   ├── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
+│   ├── op.rs            Op enum — single drain vocabulary (Push / Close / Intent)
+│   └── map_api.rs       MapApi — world-space + screen-space draw primitives consumed by Lua tick
+│
+├── palette/             `:`-triggered universal picker (itself a Component)
+│   ├── mod.rs           CommandPalette ephemeral state
+│   ├── action.rs        PaletteAction (close / submit / SwitchProvider / …)
+│   ├── panel.rs         popup layout
+│   └── provider/        sync (OnEachKey filter) + async (Debounced + poll + spinner) plumbing
 │
 ├── commands/            CLI subcommands (one file per subcommand)
 │   ├── mod.rs
@@ -50,7 +53,7 @@ src/
 │
 ├── lua/                 Lua bridge (mlua + Lua 5.4 vendored). All in-tree plugins.
 │   ├── mod.rs           plugin discovery + register_one + package.searchers wiring
-│   ├── registry.rs      LuaTickRegistry — per-frame tick dispatcher (called from ui::draw)
+│   ├── registry.rs      LuaEventBus — pub/sub for "tick" / "frame_ready" / "map_jumped" / …
 │   ├── runtimepath.rs   Neovim-style runtime layer resolution (env / dev / xdg_config / xdg_data)
 │   ├── init_lua.rs      separate config-DSL Lua state (ttymap.opt + ttymap.keymap)
 │   ├── handle.rs        shared host handle plumbing
@@ -124,9 +127,12 @@ runtime/
   `MouseEvent → Vec<UserIntent>` (`CursorMoved` on every event;
   drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
 - **`app/ui.rs`** — non-modal shell. `draw()` paints the latest
-  `MapFrame`, runs the `LuaTickRegistry::tick` so every Lua plugin's
-  `on_tick` callback gets one frame to paint world-space markers via
-  `MapApi`, then forwards modal rendering to the Compositor.
+  `MapFrame`, runs the `LuaEventBus::dispatch_tick` so every Lua
+  plugin's `on_tick` callback gets one frame to paint world-space
+  markers via `MapApi`, then forwards modal rendering to the
+  Compositor. **The main thread doing per-frame Lua draw work is the
+  one legitimate exception to "main thread only displays" —
+  see [design.md](design.md).**
 - **`palette/`** — `:`-triggered universal picker. Itself a
   `Component`; provider sub-modes (theme picker, search, plugin
   commands) swap in place via `PaletteAction::SwitchProvider`. Sync
@@ -135,7 +141,10 @@ runtime/
 - **`lua/`** — every in-tree plugin. Plugins are auto-discovered
   `.lua` files under any runtime layer's `plugin/` dir; identity is
   the file stem. A script joins host loops by calling
-  `ttymap.api.frame.on_tick(fn)` (per-frame work),
+  `ttymap.api.frame.on_tick(fn)` (per-frame work — sugar for
+  `ttymap.on_event("tick", fn)`),
+  `ttymap.on_event(name, fn)` (any host event:
+  `frame_ready`, `map_jumped`, `theme_changed`, `resized`, …),
   `ttymap.register_palette_command({label, invoke})` (palette row),
   or `ttymap.register_keybind(key, fn)` (top-level keybind). Panels
   and palettes are opened *imperatively* from inside callbacks via
@@ -159,12 +168,18 @@ raw event
   ↓
 App::dispatch(intent)
   ↓
-    UserIntent::Map(action)      → MapState::process_action(&action)
-    UserIntent::Jump(loc)        → MapState::jump_to(loc)
-    UserIntent::SetTheme(id)     → App::switch_theme (rebuilds styler + UI theme)
-    UserIntent::CursorMoved(c,r) → cursor overlay
-    UserIntent::CycleFocus(fwd)  → Compositor::cycle
-    UserIntent::Resize(cols,rows)→ App::handle_resize
+    UserIntent::Map(action)        → MapState::process_action(&action)
+                                     (Map(MapAction::Jump(loc)) recentres,
+                                      Map(MapAction::Pan…) scrolls, etc.)
+    UserIntent::Quit               → break the event loop
+    UserIntent::SetTheme(id)       → App::switch_theme (rebuilds styler + UI theme)
+    UserIntent::CursorMoved(c,r)   → cursor overlay
+    UserIntent::CycleFocus(fwd)    → Compositor::cycle
+    UserIntent::Resize(cols,rows)  → App::handle_resize
+    UserIntent::ToggleSidebar      → show/hide the sidebar; recomputes
+                                     the map canvas so the render thread
+                                     allocates the right buffer size
+    UserIntent::ExportFrame        → write the current MapFrame as ANSI / HTML
 ```
 
 Keyboard and mouse take different paths to `UserIntent` — keys go
@@ -199,14 +214,17 @@ center/zoom (`MapFrame` carries the view it was rendered at).
 main thread (ratatui draw):
   ui::draw(f, &compositor, &theme, &ctx):
     1. latest MapFrame is painted into the map area
-    2. LuaTickRegistry::tick — every Lua plugin's on_tick callback runs
-       once with a scoped MapApi handle, drawing world-space primitives
-       (aircraft / satellite / quake / wiki markers, scale bar, attribution, …)
-    3. compositor renders every Component on the stack:
-       - Sidebar cards split the left rail equally (max 3 visible)
-       - Floating components (palette) draw over the map
-       - focused component's panel sits on top
+    2. LuaEventBus::dispatch_tick — every Lua plugin's on_tick callback
+       runs once with a scoped MapApi handle, drawing world-space
+       primitives (aircraft / satellite / quake / wiki markers, scale
+       bar, attribution, …) and queueing UserPolyline overlays
+    3. compositor renders the focused stack surfaces:
+       - the topmost Floating component (palette is the only one) is
+         drawn over the map area
+       - Sidebar cards share the left rail via equal vertical split
+         (oldest at top, max 3 visible) when the sidebar is open
     4. footer hints from the focused component
+    5. drained polyline sink → next RenderTask::Draw{viewport, overlays}
 ```
 
 ## Focus model
@@ -217,11 +235,15 @@ focus back to the base layer without popping the modal (the old
 `Focus::Background` behaviour). Stack order never changes through
 cycling — only which component receives keys first.
 
-Dedup is by `Component::dedup_tag` (a per-instance string) for Lua
-components — pressing an activation key while the plugin is already
-on the stack focuses the existing instance instead of stacking a
-duplicate. Different Lua plugins coexist on the stack while
-re-toggling the same one closes it.
+**No framework-side dedup.** nvim-style: pressing an activation key
+twice produces two instances of the plugin on the stack. Plugins
+that want toggle behaviour close themselves in their own
+`handle_event` (typically: capture the `CardHandle` returned by
+`api.card.open`, and on the activation key call `:close()` and nil
+out the handle). This keeps the Rust core ignorant of plugin
+identity — the concrete-type / `dedup_tag` schemes the compositor
+used to enforce all came at the cost of plugins still having to
+re-implement close-and-toggle on top, so we removed them.
 
 ## Concurrency
 

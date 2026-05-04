@@ -53,21 +53,24 @@ Emit a `UserIntent` if **all** of the following are true:
 
 Current examples:
 
-| UserIntent              | Source                          | Why it is a UserIntent                    |
-| ------------------- | ------------------------------- | -------------------------------------- |
-| `Map(MapAction::Pan…)` | keymap, mouse drag              | User intent → map state change         |
-| `Map(MapAction::Quit)` | keymap `q`, palette `:q`, Ctrl-C | Same intent from 3 sources             |
-| `Map(MapAction::Redraw)` | initial draw                  | Forces an unconditional fresh frame    |
-| `Resize(w, h)`      | crossterm `Resize` event        | Cross-cutting: map state + render canvas |
-| `SetTheme`          | palette entry                   | Cross-cutting: UI theme + render styler |
-| `CursorMoved`       | mouse router (every event)      | Overlay readout through the same boundary |
-| `Jump(LonLat)`      | search provider result, geoip plugin | Plugin async → map state change   |
-| `CycleFocus`        | Tab / Shift-Tab                 | UI transition                          |
+| UserIntent                          | Source                                | Why it is a UserIntent                    |
+| ----------------------------------- | ------------------------------------- | ----------------------------------------- |
+| `Map(MapAction::Pan…)`              | keymap, mouse drag                    | User intent → map state change            |
+| `Map(MapAction::Redraw)`            | initial draw                          | Forces an unconditional fresh frame       |
+| `Map(MapAction::Jump(LonLat))`      | search provider result, geoip plugin  | Plugin async → map state change           |
+| `Quit`                              | keymap `q`, palette `:q`, Ctrl-C      | Same intent from 3 sources                |
+| `Resize(w, h)`                      | crossterm `Resize` event              | Cross-cutting: map state + render canvas  |
+| `SetTheme`                          | palette entry                         | Cross-cutting: UI theme + render styler   |
+| `CursorMoved`                       | mouse router (every event)            | Overlay readout through the same boundary |
+| `CycleFocus`                        | Tab / Shift-Tab                       | UI transition                             |
+| `ToggleSidebar`                     | keymap, palette                       | Cross-cutting: visibility + map canvas    |
+| `ExportFrame`                       | export plugin's palette entry         | Cross-cutting: render snapshot to disk    |
 
 Surface activations (palette open, plugin activate) deliberately do
 *not* go through `UserIntent` — they're expressed as a `Component` push
-onto the compositor stack, queued through `Window::open` /
-`Window::toggle` from the `BaseLayer`'s activation table and applied
+onto the compositor stack, queued through `Window::open` from inside
+a `Component`'s `handle_event` (or directly from
+`api.card.open` / `api.palette.open` on the Lua side) and applied
 atomically after the hook returns. Routing focus through `UserIntent`
 would force the dispatch table to know which surfaces exist; keeping
 it on the compositor side means new plugins add zero `UserIntent`
@@ -187,24 +190,31 @@ its `close()`.
 Hooks (`handle_event`, `poll`) receive a `&mut Window`. Plugins
 record intent through it — `win.close()`, `win.open(c)`,
 `win.emit(msg)`, `win.ignore()` — and the compositor drains the
-queue after the hook returns, applying ops atomically in a fixed
-order: `close` → `opens` (TypeId dedup) → `toggles` → `msgs`.
+queue after the hook returns, applying ops atomically. The drain
+vocabulary is a single `Op` enum with three variants (`Push`,
+`Close`, `Intent`); ops are applied in arrival order and there is no
+framework-side dedup or toggle stage.
 
 A return-value alternative (`EventResult::CloseAndPush(...)`) does
 not scale: every new compound op needs a new variant. A queue
 expresses compounds by composition.
 
 The handle never grants `&mut Compositor`. Plugins cannot mutate
-the stack directly; the compositor is the sole applier. Stack /
-focus / dedup invariants stay framework-enforced regardless of
-plugin bugs.
+the stack directly; the compositor is the sole applier. Stack and
+focus invariants stay framework-enforced regardless of plugin bugs.
 
-### Type-id dedup
+### Why no framework-side dedup
 
-`push_or_focus` uses `Any::type_id` to detect that a component of
-the same concrete type is already on the stack — focus jumps to the
-existing instance instead of stacking a duplicate. A plugin author
-cannot forget to opt in: the concrete type *is* the dedup identity.
+Earlier iterations enforced "one component per type" via
+`Any::type_id` so a second activation focused the existing instance
+instead of stacking a duplicate. We removed it: plugins that wanted
+"open or focus existing" still had to write the close branch
+themselves (toggle behaviour for re-press of the activation key),
+and plugins that legitimately wanted multiple instances (multi-card
+panels) were fighting the dedup. The Rust core now stays ignorant of
+plugin identity; toggle is a plugin-side policy decision (capture
+the `CardHandle` returned by `open`, call `:close()` on the same
+key). See [architecture.md](architecture.md) for the focus model.
 
 ## Cleanup via `Drop`, not manual
 
@@ -233,3 +243,15 @@ The main thread's job is to **display** them. It should not peek
 inside `cells` or recompute anything. This lets the render thread
 stay CPU-heavy without blocking input, and lets the main thread drop
 older frames when multiple are queued (latest wins).
+
+The one legitimate exception is **per-frame Lua plugin work**:
+`ui::draw` runs `LuaEventBus::dispatch_tick` so every plugin's
+`on_tick` callback gets one frame to paint world-space primitives
+via `MapApi`, and to push polylines into the overlay sink (drained
+into the next `RenderTask::Draw`'s `overlays` field). This is
+small per-plugin work — a few `MapApi::point` / `polyline` /
+`label` calls — and pushes the heavy work (tile fetch, projection,
+labelling, polygon fill, Braille packing) to the render thread
+where it belongs. If a plugin's `on_tick` ever became the bottleneck,
+the right move is to push *that* plugin's compute back to a worker
+thread, not to redesign the boundary.

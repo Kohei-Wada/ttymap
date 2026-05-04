@@ -17,7 +17,11 @@ stem (used for log tags, stem-dedup across runtime layers, and
 
 A script joins host loops by calling some combination of:
 
-- `ttymap.api.frame.on_tick(fn)` — per-frame work; multiple calls per
+- `ttymap.on_event(name, fn)` — generic pub/sub subscription; the
+  callback fires once per host event with event-specific args
+  (see [Event bus](#event-bus) below)
+- `ttymap.api.frame.on_tick(fn)` — sugar for
+  `ttymap.on_event("tick", fn)`; per-frame work, multiple calls per
   script stack
 - `register_palette_command({ label, invoke })` — palette row
 - `register_keybind(key, callback)` — top-level keybind
@@ -33,7 +37,7 @@ Split by intent, not by domain:
 ```
 src/lua/
   mod.rs           discovery, register_one, package.searchers wiring
-  registry.rs      LuaTickRegistry — the per-frame tick dispatcher
+  registry.rs      LuaEventBus — pub/sub for tick / frame_ready / map_jumped / …
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
   init_lua.rs      separate config-DSL Lua state (opt + keymap)
   handle.rs        shared host handle plumbing
@@ -69,10 +73,13 @@ src/lua/
   component (used for palette providers, which have no `poll`).
 - **`LuaHandle`** (`bridge/handle.rs`) — shared dispatch plumbing for
   both window and palette callback paths.
-- **`LuaTickRegistry`** (`registry.rs`) — the per-frame tick
-  dispatcher. Every `ttymap.api.frame.on_tick(fn)` call lands as a
-  `TickEntry`. Errors from one callback are logged + swallowed so a
-  single broken plugin can't freeze the host.
+- **`LuaEventBus`** (`registry.rs`) — pub/sub registry keyed by
+  event name. Every `ttymap.on_event(name, fn)` (and its
+  `on_tick` sugar) call lands as a `Subscriber` under that name.
+  `dispatch_tick(map)` runs the `"tick"` bucket against a live
+  `MapApi`; `dispatch(name, args)` runs any other bucket. Errors
+  from one callback are logged + swallowed so a single broken
+  plugin can't freeze the host.
 - **`LuaHostShared`** (`ttymap/mod.rs`) — runtime-data carrier
   (attribution, geoip endpoint, keymap entries, palette entries),
   Arc-cloned into each namespace userdata.
@@ -97,11 +104,40 @@ userdatas:
 
 Top-level functions the script's setup body calls:
 
+- `ttymap.on_event(name, fn)` — subscribe to a host event by name.
+  See the [Event bus](#event-bus) for the canonical event-name set.
+- `ttymap.api.frame.on_tick(fn)` — sugar for
+  `ttymap.on_event("tick", fn)`.
 - `ttymap.register_palette_command({ label, invoke, hint })` — adds a
   palette row whose `invoke` callback runs in the setup state when
   selected.
 - `ttymap.register_keybind(key, callback)` — single-char top-level
   keybind. Callback runs in the setup state.
+
+### Event bus
+
+`ttymap.on_event(name, fn)` registers a callback against the
+`LuaEventBus` (`src/lua/registry.rs`). Every emit site inside the
+host calls `LuaEventBus::dispatch_tick` (for the per-frame `"tick"`
+bucket, which threads a live `MapApi` through `Lua::scope`) or
+`LuaEventBus::dispatch(name, args)` (for plain-Lua-value payloads).
+
+Canonical event names (`names::*` in `registry.rs`):
+
+| Name              | Fired                                                 | Payload              |
+|-------------------|-------------------------------------------------------|----------------------|
+| `tick`            | once per frame inside `ui::draw`                      | `MapApi` table       |
+| `frame_ready`     | render thread produced a fresh `MapFrame`             | none                 |
+| `map_jumped`      | `MapAction::Jump` ran                                 | `(lon, lat)`         |
+| `map_zoom_set`    | `MapAction::SetZoom` ran                              | `zoom: number`       |
+| `map_flew_to`     | `MapAction::FlyTo` ran                                | `(lon, lat, zoom)`   |
+| `theme_changed`   | `UserIntent::SetTheme` ran                            | `theme: string`      |
+| `resized`         | `UserIntent::Resize` ran                              | `(cols, rows)`       |
+| `frame_exported`  | `UserIntent::ExportFrame` ran                         | none                 |
+
+Subscribers under different names are independent. One broken
+subscriber doesn't stop the others — errors are logged and the
+dispatch loop continues.
 
 ### Imperative primitives (`ttymap.api`)
 

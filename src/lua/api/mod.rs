@@ -563,12 +563,11 @@ pub fn install(
     // - `export()`     fire-and-forget request to snapshot the current
     //                  frame to disk; pushes `UserIntent::ExportFrame` onto
     //                  the shared `intent_tx`, drained per frame.
-    // - `on_tick(fn)`  subscribe a callback to per-frame dispatch. The
-    //                  host walks the captured registry keys after the
-    //                  script runs and pushes one [`TickEntry`] per
-    //                  call into the global `LuaTickRegistry`. Multiple
-    //                  calls per script are stacked in registration
-    //                  order.
+    // - `on_tick(fn)`  subscribe a callback to the per-frame `"tick"`
+    //                  event. Sugar for `ttymap.on_event("tick", fn)`;
+    //                  the callback lands as a `Subscriber` in the
+    //                  global `LuaEventBus`. Multiple calls per script
+    //                  are stacked in registration order.
     let frame_api = lua.create_table()?;
     let ops_for_export = ops.clone();
     frame_api.set(

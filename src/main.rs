@@ -77,7 +77,7 @@ fn main() {
     ttymap::lua::set_runtime_path(runtime_path);
 
     // Subcommands run a single task and exit without booting the full
-    // interactive frontend.
+    // interactive app.
     if let Some(cmd) = cli.command {
         if let Err(e) = cmd.run() {
             eprintln!("error: {e}");

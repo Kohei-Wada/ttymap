@@ -239,8 +239,7 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
     }
 
     /// App-level snapshot (center, theme id). Kept for parity with
-    /// [`Window::ctx`] so `paint_on_map` and future render-side
-    /// hooks can read it uniformly.
+    /// [`Window::ctx`] so render-side hooks can read it uniformly.
     #[allow(dead_code)]
     pub fn ctx(&self) -> &Context {
         self.ctx

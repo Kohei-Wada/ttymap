@@ -20,10 +20,10 @@ use crate::theme::UiTheme;
 
 /// Draw the full screen. Caller passes the latest map snapshot
 /// (or `None` if the render thread hasn't produced one yet) plus
-/// the compositor; world-space overlays (wiki markers via
-/// `Component::paint_on_map`) and on-top panels
-/// (via `Component::render`) go through the same draw pass as the
-/// map.
+/// the compositor; world-space overlays (wiki markers etc., painted
+/// by Lua plugins through `LuaEventBus::dispatch_tick`) and on-top
+/// panels (via `Component::render`) go through the same draw pass
+/// as the map.
 /// Per-frame inputs collected by [`App::render_into`]. Bundled
 /// to keep [`draw`] under clippy's argument-count threshold and to
 /// give related fields a single place to grow.
@@ -108,9 +108,8 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
             overlay_sink,
         );
         // Fire the per-frame `"tick"` event on the Lua subsystem
-        // against the live MapApi. This is the *only* per-frame
-        // map-paint hook for plugins now; the older
-        // `Component::paint_on_map` trait-method path is gone.
+        // against the live MapApi. This is the only per-frame
+        // map-paint hook for plugins.
         lua.tick(&mut api);
     }
 

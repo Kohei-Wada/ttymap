@@ -12,10 +12,11 @@
 //! `spec.layout` field is no longer read; existing scripts that set
 //! it just see their setting silently ignored.
 //!
-//! **No `paint_on_map`, no `poll`, no `loop`** — those belong on a
-//! `ttymap.api.frame.on_tick(fn)` subscription (host-side).
-//! A window opened via `card.open` does focused-UI work only; map
-//! paint and async drain run in the per-frame tick on the main thread.
+//! **No map-paint or `poll` / `loop` keys** — per-frame work belongs
+//! on a `ttymap.api.frame.on_tick(fn)` (or `ttymap.on_event`)
+//! subscription. A card opened via `card.open` does focused-UI work
+//! only; map paint and async drain run in the per-frame tick on the
+//! main thread.
 //!
 //! Lifetime: the matching [`CardHandle`](super::card_handle::CardHandle)
 //! (returned to Lua by `card.open`) holds the same
