@@ -2,13 +2,12 @@
 //!
 //! Frontend stores one of these as a private field. It exposes
 //! **semantic** methods (`notify_*`, `tick`, `sync_view`,
-//! `drain_pushes`) so Frontend never names the [`LuaEventBus`], the
+//! `drain_ops`) so Frontend never names the [`LuaEventBus`], the
 //! event-name constants, or the per-plugin host channels. The
 //! "Frontend doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
 use crate::frontend::compositor::MapApi;
-use crate::frontend::compositor::{CardId, Component};
 use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
 use crate::lua::op::{Op, OpsBuffer};
@@ -99,20 +98,6 @@ impl LuaHandle {
             }
             if let Ok(mut cell) = handles.zoom.lock() {
                 *cell = zoom;
-            }
-        }
-    }
-
-    /// Drain every plugin's `push_rx` queue — components that Lua
-    /// queued via `ttymap.api.card.open` / `palette.open`. Each
-    /// pull carries the [`CardId`] reserved at the call site (so the
-    /// matching [`crate::lua::bridge::card_handle::CardHandle`] can
-    /// later request a close via [`Op::Close`]); the caller pushes
-    /// onto the compositor stack via `push_with_id`.
-    pub fn drain_pushes<F: FnMut(CardId, Box<dyn Component>)>(&self, mut on_push: F) {
-        for handles in &self.host_handles {
-            while let Ok((id, component)) = handles.push_rx.try_recv() {
-                on_push(id, component);
             }
         }
     }

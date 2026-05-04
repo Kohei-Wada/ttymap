@@ -84,7 +84,7 @@ pub mod sgp4;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use mlua::{Lua, Table, UserData};
@@ -220,7 +220,7 @@ impl LuaHostShared {
 /// that runs the script's top-level `register_*` calls and continues
 /// to run palette / keybind callbacks for the program lifetime).
 /// `install()` returns this once per state; the App routes the
-/// receivers to the right consumers.
+/// shared cells to the right consumers.
 ///
 /// - **UserIntent sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
@@ -229,17 +229,16 @@ impl LuaHostShared {
 ///   that every plugin clones from the **single** App-level channel.
 ///   The receiver lives directly on `App`; a single drain per frame
 ///   covers every plugin's intents.
-/// - `center` — shared with `ttymap.map`'s userdata so
-///   `ttymap.map:center()` returns the live centre. Components
-///   refresh it on each dispatch path that carries a `Window`.
-/// - `push_rx` — components queued by `ttymap.api.card.open` (and
-///   later `ttymap.api.palette.open` in A6). Drained by the App per
-///   frame and pushed onto the compositor stack. Kept per-plugin
-///   because [`crate::frontend::compositor::Component`] is `!Send` and the
-///   channel must stay on the main thread.
+/// - `center` / `zoom` — shared with `ttymap.map`'s userdata so
+///   `ttymap.map:center()` and `:zoom()` return the live values.
+///   Components refresh them on each dispatch path that carries a
+///   `Window`.
 ///
-/// `push_rx` is owned by the **setup state** (the Lua VM that ran
-/// the script's top-level `register_*` calls) and drained per frame.
+/// Component pushes from `ttymap.api.card.open` /
+/// `ttymap.api.palette.open` no longer live here — they ride the
+/// shared [`OpsBuffer`](crate::lua::op::OpsBuffer) as
+/// [`Op::Push`](crate::lua::op::Op::Push) and the App drains them
+/// alongside [`Op::Close`](crate::lua::op::Op::Close).
 pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
     /// Latest zoom level mirrored from the host so
@@ -248,22 +247,6 @@ pub struct LuaHostHandles {
     /// [`HostMap`] userdata; refreshed on the dispatch paths that
     /// also refresh `center`.
     pub zoom: Arc<Mutex<f64>>,
-    /// Components queued by `ttymap.api.card.open` (and, in A6,
-    /// `ttymap.api.palette.open`). The App drains this per frame and
-    /// pushes each component onto the compositor stack.
-    ///
-    /// `Box<dyn Component>` is **not** `Send` in general; that's fine
-    /// because the channel never crosses threads — `install()` runs
-    /// on the main thread, every `card.open` call runs on the main
-    /// thread (Lua callbacks dispatched from the App loop), and the
-    /// App drains on the main thread too. `mpsc::channel` accepts
-    /// `!Send` payloads at construction; only `Sender<T>: Send`
-    /// requires `T: Send`, and we never move the sender across
-    /// threads.
-    pub push_rx: mpsc::Receiver<(
-        crate::frontend::compositor::CardId,
-        Box<dyn crate::frontend::compositor::Component>,
-    )>,
 }
 
 // ── Self-registration capture ────────────────────────────────────────
@@ -363,10 +346,6 @@ pub fn install(
     // callback + App drain all run on the same thread). `mpsc`
     // accepts `!Send` payloads at construction; only `Sender<T>: Send`
     // requires `T: Send`, and the Sender never moves across threads.
-    let (push_tx, push_rx) = mpsc::channel::<(
-        crate::frontend::compositor::CardId,
-        Box<dyn crate::frontend::compositor::Component>,
-    )>();
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
     let zoom = Arc::new(Mutex::new(0.0_f64));
 
@@ -512,7 +491,6 @@ pub fn install(
     let api = lua.create_table()?;
 
     let card_api = lua.create_table()?;
-    let push_tx_for_window = push_tx.clone();
     let ops_for_window = ops.clone();
     card_api.set(
         "open",
@@ -521,11 +499,12 @@ pub fn install(
                 use crate::frontend::compositor::CardId;
                 use crate::lua::bridge::card_component::LuaCardComponent;
                 use crate::lua::bridge::card_handle::CardHandle;
+                use crate::lua::op::Op;
                 // Reserve the [`CardId`] at the call site so the
                 // handle returned to Lua can target this exact
                 // component for close, even though the actual push
-                // applies on a later iteration when the App drains
-                // `push_rx`.
+                // applies when the App drains the `OpsBuffer` next
+                // iteration.
                 let id = CardId::next();
                 // Build the component on the **same** Lua VM that ran
                 // `card.open` — i.e. the setup state. The spec's
@@ -535,25 +514,11 @@ pub fn install(
                 // VM). When `LuaCardComponent` later calls into those
                 // callbacks, the same upvalue scope is in scope.
                 let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
-                // Same-thread send: the channel never crosses threads.
-                // `send` returns Err only when the receiver has been
-                // dropped, which happens at App teardown — log + carry
-                // on (the handle the caller gets back is still valid as
-                // a no-op close target). A failed send means the App
-                // dropped the receiver mid-run; that should never happen
-                // in production, hence `error!` rather than `warn!`.
-                if push_tx_for_window
-                    .send((
-                        id,
-                        Box::new(component) as Box<dyn crate::frontend::compositor::Component>,
-                    ))
-                    .is_err()
-                {
-                    log::error!(
-                        "lua[{}]: ttymap.api.card.open: push channel closed (receiver dropped)",
-                        tag
-                    );
-                }
+                ops_for_window.borrow_mut().push(Op::Push {
+                    id,
+                    component: Box::new(component)
+                        as Box<dyn crate::frontend::compositor::Component>,
+                });
                 Ok(CardHandle::new(id, ops_for_window.clone()))
             },
         )?,
@@ -564,13 +529,13 @@ pub fn install(
     //
     // Mirror of `ttymap.api.card.open`: build a palette provider on
     // the same Lua VM (the setup state), wrap it in a
-    // [`PaletteComponent`], and queue (id, component) onto `push_tx`.
-    // The App drains per frame and pushes via `compositor.push_with_id`,
-    // associating the component with the [`CardId`] reserved here. The
-    // returned [`PaletteHandle`] holds the same id and can request
-    // close via [`Op::Close`].
+    // [`PaletteComponent`], and enqueue an `Op::Push { id, component }`
+    // onto the shared `OpsBuffer`. The App drains the buffer per
+    // iteration and pushes via `compositor.push_with_id`, associating
+    // the component with the [`CardId`] reserved here. The returned
+    // [`PaletteHandle`] holds the same id and can request close via
+    // [`Op::Close`].
     let palette_api = lua.create_table()?;
-    let push_tx_for_palette = push_tx.clone();
     let ops_for_palette = ops.clone();
     palette_api.set(
         "open",
@@ -581,6 +546,7 @@ pub fn install(
                 use crate::frontend::compositor::CardId;
                 use crate::lua::bridge::palette_handle::PaletteHandle;
                 use crate::lua::bridge::palette_provider::LuaPaletteProvider;
+                use crate::lua::op::Op;
                 // Reserve the id up-front so the returned [`PaletteHandle`]
                 // can target this exact PaletteComponent for close.
                 let id = CardId::next();
@@ -592,18 +558,10 @@ pub fn install(
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
                 let palette =
                     crate::frontend::palette::PaletteComponent::with_provider(Box::new(provider));
-                if push_tx_for_palette
-                    .send((
-                        id,
-                        Box::new(palette) as Box<dyn crate::frontend::compositor::Component>,
-                    ))
-                    .is_err()
-                {
-                    log::error!(
-                        "lua[{}]: ttymap.api.palette.open: push channel closed (receiver dropped)",
-                        tag
-                    );
-                }
+                ops_for_palette.borrow_mut().push(Op::Push {
+                    id,
+                    component: Box::new(palette) as Box<dyn crate::frontend::compositor::Component>,
+                });
                 Ok(PaletteHandle::new(id, ops_for_palette.clone()))
             },
         )?,
@@ -720,11 +678,7 @@ pub fn install(
     // the program lifetime.
     drop(sender);
 
-    Ok(LuaHostHandles {
-        center,
-        zoom,
-        push_rx,
-    })
+    Ok(LuaHostHandles { center, zoom })
 }
 
 // ── ttymap.map ────────────────────────────────────────────────────────
@@ -906,6 +860,7 @@ impl UserData for HostLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     use crate::frontend::AppEvent;
     use crate::lua::sender::LuaSender;
@@ -916,21 +871,27 @@ mod tests {
     /// any registration, they only exercise the host-side APIs. The
     /// returned `event_rx` is the test-local Receiver for the
     /// shared bus (production wires it to the App).
-    fn install_for_test() -> (mlua::Lua, LuaHostHandles, mpsc::Receiver<AppEvent>) {
+    fn install_for_test() -> (
+        mlua::Lua,
+        LuaHostHandles,
+        crate::lua::op::OpsBuffer,
+        mpsc::Receiver<AppEvent>,
+    ) {
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
         let (event_tx, event_rx) = mpsc::channel();
         let sender = LuaSender::new(event_tx);
+        let ops = crate::lua::op::new_ops_buffer();
         let handles = install(
             &lua,
             "lua-test",
             LuaHostShared::empty(),
             slot,
             sender,
-            crate::lua::op::new_ops_buffer(),
+            ops.clone(),
         )
         .expect("install ttymap table");
-        (lua, handles, event_rx)
+        (lua, handles, ops, event_rx)
     }
 
     /// Disconnected [`LuaSender`] for tests that don't observe
@@ -943,7 +904,7 @@ mod tests {
 
     #[test]
     fn ttymap_table_is_installed_with_namespaces() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         // Each namespace lookup must return a userdata; the shape
         // confirms the install wired all namespaces in.
         for ns in [
@@ -963,7 +924,7 @@ mod tests {
         // `ttymap.map:jump(lon, lat)` lands on the shared `event_rx`
         // as a fully-formed `UserIntent::Map(MapAction::Jump(LonLat))`; the
         // App's central drain forwards it to dispatch unchanged.
-        let (lua, _handles, event_rx) = install_for_test();
+        let (lua, _handles, _ops, event_rx) = install_for_test();
 
         // Lua-side call: longitude first, then latitude.
         lua.load("ttymap.map:jump(139.7595, 35.6828)")
@@ -985,7 +946,7 @@ mod tests {
         // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side —
         // the level lands on `event_rx` as
         // `UserIntent::Map(MapAction::SetZoom(level))`.
-        let (lua, _handles, event_rx) = install_for_test();
+        let (lua, _handles, _ops, event_rx) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let ev = event_rx.try_recv().expect("zoom must be queued");
         match ev {
@@ -1005,7 +966,7 @@ mod tests {
         // the `:center()` pattern. Confirms (a) no-arg call doesn't
         // accidentally fall through to the setter and (b) the value
         // round-trips as a Lua number.
-        let (lua, handles, event_rx) = install_for_test();
+        let (lua, handles, _ops, event_rx) = install_for_test();
         *handles.zoom.lock().unwrap() = 9.25;
         let z: f64 = lua.load("return ttymap.map:zoom()").eval().expect("eval");
         assert!((z - 9.25).abs() < 1e-9);
@@ -1018,7 +979,7 @@ mod tests {
         // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
         // `UserIntent::Map(MapAction::FlyTo)` so the host can emit one
         // dispatch per call (single redraw, no intermediate frame).
-        let (lua, _handles, event_rx) = install_for_test();
+        let (lua, _handles, _ops, event_rx) = install_for_test();
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
             .exec()
             .expect("exec");
@@ -1035,7 +996,7 @@ mod tests {
 
     #[test]
     fn api_frame_export_pushes_appmsg_export_frame() {
-        let (lua, _handles, event_rx) = install_for_test();
+        let (lua, _handles, _ops, event_rx) = install_for_test();
         lua.load("ttymap.api.frame.export()").exec().expect("exec");
         let ev = event_rx.try_recv().expect("export must be queued");
         assert!(
@@ -1141,7 +1102,7 @@ mod tests {
 
     #[test]
     fn url_encode_round_trips_query_chars() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         // Spaces become `+`, reserved chars become `%HH`, unicode is
         // percent-encoded byte by byte.
         let encoded: String = lua
@@ -1158,7 +1119,7 @@ mod tests {
 
     #[test]
     fn parse_json_round_trips_primitives() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         let n: i64 = lua
             .load(r#"return ttymap.json:parse("42")"#)
             .eval()
@@ -1178,7 +1139,7 @@ mod tests {
 
     #[test]
     fn parse_json_object_becomes_string_keyed_table() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         let (name, age): (String, i64) = lua
             .load(
                 r#"
@@ -1194,7 +1155,7 @@ mod tests {
 
     #[test]
     fn parse_json_array_is_one_indexed_in_lua() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         // Lua arrays are 1-indexed; t[1] is the first element.
         let (first, third, len): (i64, i64, i64) = lua
             .load(
@@ -1212,7 +1173,7 @@ mod tests {
 
     #[test]
     fn parse_json_invalid_returns_nil() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         let v: mlua::Value = lua
             .load(r#"return ttymap.json:parse("not json !")"#)
             .eval()
@@ -1222,7 +1183,7 @@ mod tests {
 
     #[test]
     fn parse_json_null_is_nil() {
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         let v: mlua::Value = lua
             .load(r#"return ttymap.json:parse("null")"#)
             .eval()
@@ -1331,7 +1292,7 @@ mod tests {
         // exist and accept a string. Anything observable downstream
         // (target = "lua[<plugin>]") is exercised by integration; here
         // we just want a panic-free round trip.
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         lua.load(
             r#"
             ttymap.log:info("info-ok")
@@ -1349,7 +1310,7 @@ mod tests {
         // gets a position table back. Catches bridge wiring bugs
         // (userdata borrow, namespace install, table return shape)
         // that the standalone sgp4 module tests miss.
-        let (lua, _handles, _event_rx) = install_for_test();
+        let (lua, _handles, _ops, _event_rx) = install_for_test();
         let pos: mlua::Table = lua
             .load(
                 r#"
@@ -1379,13 +1340,13 @@ mod tests {
     #[test]
     fn api_card_open_pushes_component_and_returns_handle() {
         // `ttymap.api.card.open(spec)` must do two things on the same
-        // call: queue a `LuaCardComponent` onto `push_rx` so the App
-        // can push it onto the compositor stack, and hand back a
-        // `CardHandle` whose `:close()` flips a shared flag without
-        // needing the App to be running. Both behaviours are independent
-        // of any `App` plumbing — this is the unit-level proof that the
-        // primitive itself is wired right.
-        let (lua, handles, _event_rx) = install_for_test();
+        // call: enqueue an `Op::Push` onto the shared `OpsBuffer` so
+        // the App can push the component onto the compositor stack,
+        // and hand back a `CardHandle` whose `:close()` enqueues
+        // `Op::Close` keyed by the same id. Both behaviours are
+        // independent of any `App` plumbing — this is the unit-level
+        // proof that the primitive itself is wired right.
+        let (lua, _handles, ops, _event_rx) = install_for_test();
         lua.load(
             r#"
             local h = ttymap.api.card.open({
@@ -1398,34 +1359,35 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        // Exactly one component must be queued — `card.open`
-        // pushes per call, no implicit dedup.
-        assert!(
-            handles.push_rx.try_recv().is_ok(),
-            "push_rx should have received the queued component"
-        );
-        assert!(
-            handles.push_rx.try_recv().is_err(),
-            "push_rx should be drained after a single recv"
-        );
-        // Close the handle from Lua. The push_rx receiver was already
-        // drained above, so the component is gone; this just confirms
-        // the userdata method survives the call (idempotent close is
-        // the CardHandle contract — internally it pushes Op::Close to
-        // the shared OpsBuffer; the App applies it via close_by_id).
+        // Exactly one Op::Push must be enqueued — `card.open` pushes
+        // per call, no implicit dedup.
+        let drained: Vec<crate::lua::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        assert_eq!(drained.len(), 1, "one card.open -> one Op");
+        let push_id = match &drained[0] {
+            crate::lua::op::Op::Push { id, .. } => *id,
+            other => panic!("expected Op::Push, got {:?}", other),
+        };
+        // Close the handle from Lua — must enqueue Op::Close keyed by
+        // the same id reserved at the call site.
         lua.load("ttymap_test_handle:close()")
             .exec()
             .expect("close");
+        let drained: Vec<crate::lua::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        assert_eq!(drained.len(), 1, "one close() -> one Op");
+        match &drained[0] {
+            crate::lua::op::Op::Close(id) => assert_eq!(*id, push_id),
+            other => panic!("expected Op::Close, got {:?}", other),
+        }
     }
 
     #[test]
     fn api_palette_open_pushes_component_and_returns_handle() {
         // Mirror of `api_card_open_pushes_component_and_returns_handle`:
-        // `ttymap.api.palette.open(spec)` must queue a wrapped
-        // `PaletteComponent` on `push_rx` and hand back a
-        // `PaletteHandle` whose `:close()` flips a shared flag without
-        // requiring the App loop to be running.
-        let (lua, handles, _event_rx) = install_for_test();
+        // `ttymap.api.palette.open(spec)` must enqueue an `Op::Push`
+        // for the wrapped `PaletteComponent` and hand back a
+        // `PaletteHandle` whose `:close()` enqueues `Op::Close` keyed
+        // by the same id — no `App` plumbing required.
+        let (lua, _handles, ops, _event_rx) = install_for_test();
         lua.load(
             r#"
             local h = ttymap.api.palette.open({
@@ -1440,20 +1402,25 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        // Exactly one component must be queued — `palette.open` pushes
-        // per call, no implicit dedup.
-        assert!(
-            handles.push_rx.try_recv().is_ok(),
-            "push_rx should have received the queued palette component"
-        );
-        assert!(
-            handles.push_rx.try_recv().is_err(),
-            "push_rx should be drained after a single recv"
-        );
-        // `:close()` must round-trip through the userdata without a
-        // panic — same idempotent contract as `CardHandle`.
+        let drained: Vec<crate::lua::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        assert_eq!(drained.len(), 1, "one palette.open -> one Op");
+        let push_id = match &drained[0] {
+            crate::lua::op::Op::Push { id, .. } => *id,
+            other => panic!("expected Op::Push, got {:?}", other),
+        };
+        // `:close()` is idempotent: each call enqueues an Op::Close —
+        // close_by_id treats the second one as a no-op once the
+        // component is already off the stack.
         lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");
+        let drained: Vec<crate::lua::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        assert_eq!(drained.len(), 2, "two close() -> two Op::Close");
+        for op in drained {
+            match op {
+                crate::lua::op::Op::Close(id) => assert_eq!(id, push_id),
+                other => panic!("expected Op::Close, got {:?}", other),
+            }
+        }
     }
 }
