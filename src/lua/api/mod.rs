@@ -81,17 +81,28 @@ pub mod json;
 pub mod map_api;
 pub mod sgp4;
 
+mod host_config;
+mod host_help;
+mod host_log;
+mod host_map;
+mod host_tile;
+
+use host_config::HostConfig;
+use host_help::HostHelp;
+use host_log::HostLog;
+use host_map::HostMap;
+use host_tile::HostTile;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use mlua::{Lua, Table, UserData};
+use mlua::{Lua, Table};
 
 use crate::app::UserIntent;
 use crate::geo::LonLat;
-use crate::map::MapAction;
 use crate::shared::http::HttpClient;
 
 /// Maximum number of pending notifications retained in the host's
@@ -348,37 +359,19 @@ pub fn install(
     )?;
     ttymap.set(
         "map",
-        lua.create_userdata(HostMap {
-            ops: ops.clone(),
-            center: center.clone(),
-            zoom: zoom.clone(),
-        })?,
+        lua.create_userdata(HostMap::new(ops.clone(), center.clone(), zoom.clone()))?,
     )?;
     ttymap.set("json", lua.create_userdata(json::HostJson)?)?;
     ttymap.set("sgp4", lua.create_userdata(sgp4::HostSgp4)?)?;
-    ttymap.set(
-        "tile",
-        lua.create_userdata(HostTile {
-            shared: shared.clone(),
-        })?,
-    )?;
+    ttymap.set("tile", lua.create_userdata(HostTile::new(shared.clone()))?)?;
     ttymap.set(
         "config",
-        lua.create_userdata(HostConfig {
-            shared: shared.clone(),
-        })?,
+        lua.create_userdata(HostConfig::new(shared.clone()))?,
     )?;
-    ttymap.set(
-        "help",
-        lua.create_userdata(HostHelp {
-            shared: shared.clone(),
-        })?,
-    )?;
+    ttymap.set("help", lua.create_userdata(HostHelp::new(shared.clone()))?)?;
     ttymap.set(
         "log",
-        lua.create_userdata(HostLog {
-            target: format!("lua[{}]", tag),
-        })?,
+        lua.create_userdata(HostLog::new(format!("lua[{}]", tag)))?,
     )?;
 
     // Activation surfaces. Each is opt-in and explicit — the host
@@ -665,196 +658,12 @@ pub fn install(
     Ok(LuaHostHandles { center, zoom })
 }
 
-// ── ttymap.map ────────────────────────────────────────────────────────
-
-struct HostMap {
-    /// Shared op buffer the lua subsystem drains every iteration.
-    /// Fire-and-forget Lua intents (`jump` / `zoom` / `fly_to`)
-    /// enqueue an `Op::Intent(UserIntent::Map(...))`; the host treats
-    /// them identically to a keymap-driven dispatch.
-    ops: crate::compositor::op::OpsBuffer,
-    center: Arc<Mutex<LonLat>>,
-    zoom: Arc<Mutex<f64>>,
-}
-
-impl UserData for HostMap {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.map:jump(lon, lat)` — request the map recentre on
-        // the given coordinate. Enqueues `UserIntent::Map(Jump)` onto
-        // the shared op buffer so the host treats it identically to a
-        // keymap-driven jump.
-        methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
-            this.ops
-                .borrow_mut()
-                .push(crate::compositor::op::Op::Intent(UserIntent::Map(
-                    MapAction::Jump(LonLat { lon, lat }),
-                )));
-            Ok(())
-        });
-
-        // `ttymap.map:zoom([level])` — overloaded:
-        //   `:zoom(level)` queues a zoom request (clamped host-side
-        //   in `MapState::process_action`). Fire-and-forget.
-        //   `:zoom()` (no arg) returns the current zoom level read
-        //   from the shared `Arc<Mutex<f64>>` the host refreshes on
-        //   the same dispatch paths it refreshes `:center()` on.
-        // mlua dispatches by the supplied argument signature: nil →
-        // `None` (getter), number → `Some(level)` (setter).
-        methods.add_method("zoom", |_, this, level: Option<f64>| match level {
-            Some(z) => {
-                this.ops
-                    .borrow_mut()
-                    .push(crate::compositor::op::Op::Intent(UserIntent::Map(
-                        MapAction::SetZoom(z),
-                    )));
-                Ok(mlua::Value::Nil)
-            }
-            None => {
-                let z = *this.zoom.lock().expect("zoom mutex poisoned");
-                Ok(mlua::Value::Number(z))
-            }
-        });
-
-        // `ttymap.map:fly_to(lon, lat, zoom)` — composite recenter +
-        // zoom in one dispatch. Emitting `jump` + `zoom` separately
-        // would render two frames; this routes through `MapFlyTo`
-        // so the user sees a single transition.
-        methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
-            this.ops
-                .borrow_mut()
-                .push(crate::compositor::op::Op::Intent(UserIntent::Map(
-                    MapAction::FlyTo {
-                        center: LonLat { lon, lat },
-                        zoom,
-                    },
-                )));
-            Ok(())
-        });
-
-        // `ttymap.map:center()` -> lon, lat — current map centre, kept
-        // fresh by the host before each dispatch path that carries a
-        // `Window` / `MapApi`. Plugins use this to scope upstream
-        // queries (e.g. an OpenSky bounding box around the user's
-        // view).
-        methods.add_method("center", |_, this, _: ()| {
-            let ll = *this.center.lock().expect("center mutex poisoned");
-            Ok((ll.lon, ll.lat))
-        });
-    }
-}
-
-// ── ttymap.tile / ttymap.config / ttymap.help ─────────────────────────────
-
-struct HostTile {
-    shared: Arc<LuaHostShared>,
-}
-
-impl UserData for HostTile {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.tile:attribution() -> string | nil` — active
-        // TileClient's attribution string (typically "© OpenStreetMap
-        // …"). The attribution overlay paints this; other plugins may
-        // use it for their own attribution rows.
-        methods.add_method("attribution", |_, this, _: ()| {
-            Ok(this.shared.attribution.clone())
-        });
-    }
-}
-
-struct HostConfig {
-    shared: Arc<LuaHostShared>,
-}
-
-impl UserData for HostConfig {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.config:geoip_endpoint() -> string` — configured geoip
-        // URL (`[geoip].endpoint` in config.toml). The here plugin
-        // GETs this to resolve the user's location.
-        methods.add_method("geoip_endpoint", |_, this, _: ()| {
-            Ok(this.shared.geoip_endpoint.clone())
-        });
-    }
-}
-
-struct HostHelp {
-    shared: Arc<LuaHostShared>,
-}
-
-impl UserData for HostHelp {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.help:keymap_entries() -> [{key, label}, …]` —
-        // keybindings for built-in map actions, formatted for
-        // help-style display. Always returns the same data
-        // (immutable after startup).
-        methods.add_method("keymap_entries", |lua, this, _: ()| {
-            let table = lua.create_table()?;
-            for (i, (key, label)) in this.shared.keymap_entries.iter().enumerate() {
-                let row = lua.create_table()?;
-                row.set("key", key.as_str())?;
-                row.set("label", label.as_str())?;
-                table.set(i + 1, row)?;
-            }
-            Ok(table)
-        });
-
-        // `ttymap.help:palette_entries() -> [{name, key, label}, …]`
-        // — snapshot of every plugin's metadata, appended during
-        // registration. Read lazily so help can be loaded mid-
-        // registration and still see every sibling at render time.
-        // Returns an empty list when the snapshot hasn't been
-        // populated yet.
-        methods.add_method("palette_entries", |lua, this, _: ()| {
-            let table = lua.create_table()?;
-            let entries = this.shared.palette_entries.lock();
-            let entries = match &entries {
-                Ok(g) => g.as_slice(),
-                Err(_) => &[],
-            };
-            for (i, entry) in entries.iter().enumerate() {
-                let row = lua.create_table()?;
-                row.set("name", entry.name.as_str())?;
-                row.set("key", entry.key.as_str())?;
-                row.set("label", entry.label.as_str())?;
-                table.set(i + 1, row)?;
-            }
-            Ok(table)
-        });
-    }
-}
-
-// ── ttymap.log ───────────────────────────────────────────────────────
-
-/// Plugin-side logging sink. `target` is pre-formatted as
-/// `lua[<plugin>]` so callers don't pay for the format on every line
-/// and `RUST_LOG=lua[aircraft]=debug` filters cleanly. Mirrors the
-/// host-side `log::warn!("lua[{tag}]: ...")` convention used elsewhere
-/// in the bridge — same target shape, just opened up to scripts.
-struct HostLog {
-    target: String,
-}
-
-impl UserData for HostLog {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("info", |_, this, msg: String| {
-            log::info!(target: &this.target, "{}", msg);
-            Ok(())
-        });
-        methods.add_method("warn", |_, this, msg: String| {
-            log::warn!(target: &this.target, "{}", msg);
-            Ok(())
-        });
-        methods.add_method("error", |_, this, msg: String| {
-            log::error!(target: &this.target, "{}", msg);
-            Ok(())
-        });
-    }
-}
-
 // ── tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors
