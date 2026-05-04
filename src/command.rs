@@ -40,8 +40,8 @@
 //! off `UserCommand` means the focus state machine isn't coupled to
 //! the dispatch table.
 
+use crate::core::input::KeyMap;
 use crate::core::map::MapAction;
-use crate::input::KeyMap;
 use crate::theme::ThemeId;
 
 /// What the app can do in response to an event. Emitted by palette

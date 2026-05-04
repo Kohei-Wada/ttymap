@@ -28,7 +28,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::core::compositor::window::{RenderWindow, Window};
 use crate::core::compositor::{Activation, Component, Context};
-use crate::input::keymap::KeyMap;
+use crate::core::input::keymap::KeyMap;
 use crate::theme::ThemeId;
 
 use provider::{CommandProvider, CommandSeed, PaletteProvider, SubmitMode};

@@ -17,6 +17,7 @@
 
 pub mod compositor;
 mod dispatcher;
+pub mod input;
 pub mod map;
 mod overlay;
 mod sidebar;

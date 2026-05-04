@@ -43,14 +43,6 @@ pub mod config;
 #[doc(hidden)]
 pub mod theme;
 
-/// Input subsystem — raw-terminal-event ingest and translation
-/// (input thread, keymap table, mouse adapter). Sits as a peer of
-/// `map/` and `lua/`; [`app::App`] pulls translated
-/// [`UserCommand`]s out of it for each `AppEvent::Input`. `pub` so
-/// `main` can name the [`input::thread::InputHandle`] it spawns at
-/// the composition root.
-pub mod input;
-
 /// File-based logging to XDG state directory.
 pub mod logging;
 

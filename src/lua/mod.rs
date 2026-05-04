@@ -38,7 +38,7 @@ use crate::UserCommand;
 use crate::config::Config;
 use crate::core::compositor::op;
 use crate::core::compositor::{Activation, PaletteEntry};
-use crate::input::KeyMap;
+use crate::core::input::KeyMap;
 
 /// Result of [`build_subsystem`].
 ///

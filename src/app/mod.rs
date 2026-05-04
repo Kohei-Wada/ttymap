@@ -30,10 +30,10 @@ use log::{debug, info};
 use crate::UserCommand;
 use crate::config::Config;
 use crate::core::compositor::{BaseLayer, Compositor};
+pub use crate::core::input::KeybindingOverrides;
+use crate::core::input::{KeyMap, MouseAdapter};
 use crate::core::map::MapHandle;
 use crate::core::map::render::frame::MapFrame;
-pub use crate::input::KeybindingOverrides;
-use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaSubsystem;
 use crate::theme::ThemeId;
 
