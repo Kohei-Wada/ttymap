@@ -6,14 +6,14 @@
 //! the handle holds a reserved [`CardId`] and a clone of the Lua
 //! subsystem's shared [`OpsBuffer`]; `close()` enqueues an
 //! [`Op::Close`] that the App applies via
-//! [`crate::core::compositor::Compositor::close_by_id`]. Kept as
+//! [`crate::compositor::Compositor::close_by_id`]. Kept as
 //! its own type so callers know which kind of primitive they have —
 //! the Rust-side wiring is shared, but the Lua-side identity is not.
 
 use mlua::UserData;
 
-use crate::core::compositor::CardId;
-use crate::core::compositor::op::{Op, OpsBuffer};
+use crate::compositor::CardId;
+use crate::compositor::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.palette.open(...)`.
 /// Idempotent `:close()` — pushing two `Op::Close(id)` for the same
@@ -44,7 +44,7 @@ impl UserData for PaletteHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::compositor::op::new_ops_buffer;
+    use crate::compositor::op::new_ops_buffer;
 
     #[test]
     fn close_enqueues_op_close_idempotent() {

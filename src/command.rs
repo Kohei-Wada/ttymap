@@ -33,15 +33,15 @@
 //!
 //! Surface activation (palette open, plugin activate) intentionally
 //! does *not* live here — those are focus transitions, handled
-//! internally by the [`crate::core::compositor::Compositor`] via
-//! [`Window::open`](crate::core::compositor::window::Window::open) /
-//! [`Window::close`](crate::core::compositor::window::Window::close) calls
-//! from a [`Component`](crate::core::compositor::Component). Keeping them
+//! internally by the [`crate::compositor::Compositor`] via
+//! [`Window::open`](crate::compositor::window::Window::open) /
+//! [`Window::close`](crate::compositor::window::Window::close) calls
+//! from a [`Component`](crate::compositor::Component). Keeping them
 //! off `UserCommand` means the focus state machine isn't coupled to
 //! the dispatch table.
 
-use crate::core::input::KeyMap;
-use crate::core::map::MapAction;
+use crate::input::KeyMap;
+use crate::map::MapAction;
 use crate::theme::ThemeId;
 
 /// What the app can do in response to an event. Emitted by palette
@@ -49,9 +49,9 @@ use crate::theme::ThemeId;
 /// by [`crate::app::App::dispatch`] inside the event loop.
 ///
 /// Map-level commands are nested under [`UserCommand::Map`] because
-/// [`MapState`](crate::core::map::MapState) owns its own command vocabulary
+/// [`MapState`](crate::map::MapState) owns its own command vocabulary
 /// ([`MapAction`]) and consumes it through a single entry
-/// ([`MapState::process_action`](crate::core::map::MapState::process_action)).
+/// ([`MapState::process_action`](crate::map::MapState::process_action)).
 /// Other variants sit at the top level: each is handled directly by
 /// an `App::dispatch` arm and there is no intermediate sub-system to
 /// delegate to.
@@ -79,7 +79,7 @@ pub enum UserCommand {
     /// thread's canvas dimensions. Arguments are the new terminal
     /// size in cells.
     Resize(u16, u16),
-    /// Write the currently displayed [`MapFrame`](crate::core::map::render::frame::MapFrame)
+    /// Write the currently displayed [`MapFrame`](crate::map::render::frame::MapFrame)
     /// to an auto-named file under `$XDG_DATA_HOME/ttymap/exports/`.
     /// Emitted by the export plugin's palette entry. Filename encodes
     /// zoom + centre + timestamp so repeated exports don't collide.

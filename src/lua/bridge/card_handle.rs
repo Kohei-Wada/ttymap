@@ -6,7 +6,7 @@
 //! Lua subsystem's shared [`OpsBuffer`]. `close()` enqueues an
 //! [`Op::Close`] keyed by the id; the App drains the buffer per
 //! iteration and pops the matching component via
-//! [`crate::core::compositor::Compositor::close_by_id`].
+//! [`crate::compositor::Compositor::close_by_id`].
 //!
 //! Replaces the older `Arc<AtomicBool>` flag + per-component
 //! `Component::poll` polling pattern: there's no per-frame
@@ -15,8 +15,8 @@
 
 use mlua::UserData;
 
-use crate::core::compositor::CardId;
-use crate::core::compositor::op::{Op, OpsBuffer};
+use crate::compositor::CardId;
+use crate::compositor::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.card.open(...)`.
 /// Idempotent `:close()` — pushing two `Op::Close(id)` for the same
@@ -47,7 +47,7 @@ impl UserData for CardHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::compositor::op::new_ops_buffer;
+    use crate::compositor::op::new_ops_buffer;
 
     #[test]
     fn close_enqueues_op_close_idempotent() {

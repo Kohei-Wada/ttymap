@@ -29,13 +29,13 @@ use std::{env, fs};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::core::map::tile::cache::{DiskFastPath, TileCache};
-use ttymap::core::map::tile::decode;
-use ttymap::core::map::tile::decoder;
-use ttymap::core::map::tile::disk;
-use ttymap::core::map::tile::fetch::queue::PriorityFn;
-use ttymap::core::map::tile::fetch::{TileFetchLane, TilePriority};
-use ttymap::core::map::tile::key::TileKey;
+use ttymap::map::tile::cache::{DiskFastPath, TileCache};
+use ttymap::map::tile::decode;
+use ttymap::map::tile::decoder;
+use ttymap::map::tile::disk;
+use ttymap::map::tile::fetch::queue::PriorityFn;
+use ttymap::map::tile::fetch::{TileFetchLane, TilePriority};
+use ttymap::map::tile::key::TileKey;
 
 /// Same fixture used by `decode_tile` / `render_frame` benches —
 /// real z14 mapscii.me tile, ~5 KB gzipped, ~11 KB raw, ~1000

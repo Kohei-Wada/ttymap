@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use mlua::{IntoLuaMulti, Lua, RegistryKey};
 
-use crate::core::compositor::MapApi;
+use crate::compositor::MapApi;
 use crate::lua::api::map_api;
 
 /// Canonical Lua-facing event names. Centralised so the host emit
@@ -170,11 +170,11 @@ impl LuaEventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::map::render::frame::MapFrame;
-    use crate::core::map::render::overlay::UserPolyline;
-    use crate::front::theme::UiTheme;
     use crate::geo::LonLat;
+    use crate::map::render::frame::MapFrame;
+    use crate::map::render::overlay::UserPolyline;
     use crate::theme::DARK;
+    use crate::theme::UiTheme;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 

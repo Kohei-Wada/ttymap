@@ -1,9 +1,9 @@
 use clap::Parser;
 use ttymap::app::frame_timer::FrameTimer;
 use ttymap::app::{App, KeybindingOverrides};
+use ttymap::cli::Command as Subcommand;
 use ttymap::config::Config;
-use ttymap::core::input::thread::InputHandle;
-use ttymap::front::cli::Command as Subcommand;
+use ttymap::input::thread::InputHandle;
 
 #[derive(Parser)]
 #[command(
@@ -148,12 +148,12 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // Map subsystem: tile cache + render pipeline + render thread.
     // `_render_handle` is a peer to `_input` / `_frame_timer` — held
     // here for `Drop`-driven shutdown, not used otherwise.
-    let (_render_handle, map) = ttymap::core::map::build(&config, event_tx.clone(), theme_id);
+    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone(), theme_id);
 
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the
     // compositor's BaseLayer at runtime — build it once here.
-    let keymap = ttymap::core::input::KeyMap::with_overrides(&keymap_overrides);
+    let keymap = ttymap::input::KeyMap::with_overrides(&keymap_overrides);
 
     // Lua subsystem: load every plugin, register activations / palette
     // entries / event-bus subscriptions, return the populated bundle.
@@ -164,7 +164,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // Palette is a built-in (not a plugin): drain every plugin's
     // palette_entries into a CommandSeed and append the `:` activation.
     // Must run after every plugin's register call.
-    ttymap::front::palette::install(
+    ttymap::palette::install(
         &keymap,
         &mut lua.activations,
         std::mem::take(&mut lua.palette_entries),

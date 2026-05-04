@@ -8,10 +8,10 @@
 use crossterm::event::KeyCode;
 use mlua::Table;
 
-use crate::front::theme::StyleKind;
+use crate::theme::StyleKind;
 
 /// Read `spec.footer_hints` as a sequence of `{key, label}` pairs and
-/// leak each pair so [`crate::core::compositor::Component::footer_hints`]
+/// leak each pair so [`crate::compositor::Component::footer_hints`]
 /// can hand back `&'static str` slices without per-call allocation.
 /// Bounded leak: footer hints are read at panel construction. Two
 /// accepted shapes per pair:

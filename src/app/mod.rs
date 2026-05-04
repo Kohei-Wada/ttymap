@@ -15,11 +15,14 @@
 //! Focus/modal state lives on [`Compositor`] — owned by `Dispatcher`,
 //! borrowed by `App::render_into` for paint.
 
+pub mod dispatcher;
 pub mod event;
 pub mod frame_timer;
+mod overlay;
+mod sidebar;
 pub mod ui;
 
-use crate::core::Dispatcher;
+use dispatcher::Dispatcher;
 pub use event::AppEvent;
 
 use std::io;
@@ -28,13 +31,13 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::UserCommand;
+use crate::compositor::{BaseLayer, Compositor};
 use crate::config::Config;
-use crate::core::compositor::{BaseLayer, Compositor};
-pub use crate::core::input::KeybindingOverrides;
-use crate::core::input::{KeyMap, MouseAdapter};
-use crate::core::map::MapHandle;
-use crate::core::map::render::frame::MapFrame;
+pub use crate::input::KeybindingOverrides;
+use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaSubsystem;
+use crate::map::MapHandle;
+use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 
 pub struct App {

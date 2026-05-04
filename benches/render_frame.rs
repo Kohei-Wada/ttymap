@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::core::map::render::renderer::{LayerData, Renderer, TileData};
-use ttymap::core::map::render::view::VisibleTile;
-use ttymap::core::map::styler::Styler;
-use ttymap::core::map::tile::decode;
 use ttymap::geo::LonLat;
+use ttymap::map::render::renderer::{LayerData, Renderer, TileData};
+use ttymap::map::render::view::VisibleTile;
+use ttymap::map::styler::Styler;
+use ttymap::map::tile::decode;
 use ttymap::theme::ThemeId;
 
 const SAMPLE: &[u8] = include_bytes!("fixtures/z14.pbf");
@@ -19,7 +19,7 @@ const SAMPLE: &[u8] = include_bytes!("fixtures/z14.pbf");
 /// Build a single-tile `TileData` matching the sample tile's coordinates,
 /// positioned at the top-left of the canvas. The actual x/y/z values
 /// don't matter for draw timing, only the geometry density does.
-fn build_tile_data(decoded: ttymap::core::map::tile::decode::DecodedTile) -> Vec<TileData> {
+fn build_tile_data(decoded: ttymap::map::tile::decode::DecodedTile) -> Vec<TileData> {
     let vis = VisibleTile {
         x: 0,
         y: 0,

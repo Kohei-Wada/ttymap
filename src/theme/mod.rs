@@ -1,23 +1,29 @@
-//! Theme — colour data (foundation, no ratatui).
+//! Theme — colour data + ratatui adapter + semantic tags.
 //!
 //! [`ThemeId`] is the single source of truth for "which theme is
-//! active": pick one from the config, derive everything else from it —
-//! the [`ColorPalette`] the styler and overlays read, the [`UiTheme`]
-//! (in [`crate::front::theme`]) the UI renders through, and the
-//! display name shown to the user.
+//! active": pick one from the config, derive everything else from
+//! it — the [`ColorPalette`] the styler and overlays read, the
+//! [`UiTheme`] the UI renders through, and the display name shown
+//! to the user.
 //!
 //! Layout:
 //! - [`palette`] — palette data (`ColorPalette` struct, `DARK` /
-//!   `BRIGHT` consts). No ratatui dependency; the styler and the map
-//!   renderer consume it.
-//! - The ratatui adapter ([`UiTheme`](crate::front::theme::UiTheme))
-//!   and the semantic tag enum
-//!   ([`StyleKind`](crate::front::theme::StyleKind)) live under
-//!   `front/` because they directly import ratatui style types.
+//!   `BRIGHT` consts). No ratatui dependency; the styler and the
+//!   map renderer consume it directly.
+//! - [`ui`] — ratatui adapter ([`UiTheme`]). Built from a
+//!   [`ColorPalette`] at theme-switch time; consumed by the draw
+//!   path.
+//! - [`style`] — [`StyleKind`] semantic tags + resolver. Plugins
+//!   ask for a tag string ("accent" / "muted" / …) and the bridge
+//!   maps it through the active [`UiTheme`].
 
 pub mod palette;
+pub mod style;
+pub mod ui;
 
 pub use palette::{BRIGHT, ColorPalette, DARK};
+pub use style::StyleKind;
+pub use ui::UiTheme;
 
 /// Identifies which theme the app is running with. Derives the concrete
 /// [`ColorPalette`] and, separately, the set of styling rules consumed by

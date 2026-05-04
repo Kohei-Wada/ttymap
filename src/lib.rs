@@ -7,50 +7,77 @@
 // tests can share a module tree; external consumers only need the handful
 // of items used by main.rs, so everything else is `pub(crate)`.
 
+// Module organization is **flat by feature**, Neovim-inspired
+// (cf. `src/nvim/`). The single concession to layering is `app/ui.rs`
+// — the only place ratatui's `terminal.draw(...)` is called — which
+// stays inside `app/` rather than getting its own `tui/` subdir.
+// Everything else (compositor / map / input / palette / theme / lua)
+// is a peer subsystem, named for what it does rather than for which
+// layer it's "supposed" to belong to. We tried a strict `core/front`
+// split (issue #212 Phase 4) and found it forced too many exceptional
+// cases — sidebar policy is "UI" but lived in core because dispatcher
+// owns it, theme_id leaked into core because every command tracked it,
+// etc. Flat sidesteps all that.
+
 /// Crate-wide command vocabulary — the GoF Command pattern's
 /// **Command** role. The single enum every emission site (palette,
 /// plugins, mouse, future RPC) speaks and that [`app::App::dispatch`]
-/// interprets as the GoF Receiver. Foundational on purpose: every
-/// layer that *produces* a command reaches this type via
-/// `crate::UserCommand`, no upward dependency on `app/`.
+/// interprets as the GoF Receiver. Sits at the crate root so every
+/// emission site reaches it via `crate::UserCommand`.
 pub mod command;
 pub use command::UserCommand;
 
-/// Engine layer — state that mutates in response to commands and
-/// the GoF Receiver ([`core::Dispatcher`]) that runs them. Owned by
-/// [`app::App`] but separated from it so the layering is visible
-/// at the directory level. Ratatui-free.
-pub mod core;
-
-/// UI / IO shell layer. Houses presentation-bound modules: palette
-/// picker, CLI subcommand entry. Sits above [`core`] and consumes
-/// it; never imported from `core/`.
-pub mod front;
-
-/// Application event loop and central message dispatcher.
+/// Application event loop, dispatch, and ratatui draw entry.
+/// `App` owns [`app::dispatcher::Dispatcher`] (the GoF Receiver),
+/// drains the unified [`app::AppEvent`] bus each iteration, and is
+/// the only place `terminal.draw(...)` is called.
 pub mod app;
+
+/// Compositor — stack-based focus / modal system (helix-inspired).
+/// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
+/// events to the focused component, and exposes the `Component` /
+/// `Window` framework that plugin-side wrappers (`LuaCardComponent`)
+/// implement.
+pub mod compositor;
+
+/// Palette — `:`-triggered universal picker. Itself a [`Component`]
+/// pushed onto the compositor stack; provider sub-modes (theme
+/// picker, search, plugin commands) swap in place via
+/// `PaletteAction::SwitchProvider`.
+pub mod palette;
+
+/// CLI subcommand implementations. Each subcommand lives in its own
+/// submodule; `main.rs` parses the top-level enum and calls
+/// [`cli::Command::run`].
+pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
 
-/// Theme — colour palette data (`ColorPalette`, `DARK`, `BRIGHT`) plus
-/// the ratatui adapter (`UiTheme`). `ThemeId` drives everything. Lives
-/// at the crate root because it's a **plugin-facing service** —
-/// plugins read colours from it during `render()`, so putting it under
-/// `ui/` would recreate the ui↔plugin cycle we just broke. Marked
-/// `pub #[doc(hidden)]` so benches under `benches/` can reach
-/// `ThemeId` without treating it as stable API.
+/// Map subsystem — viewport state, action dispatch, and the full map
+/// rendering pipeline (tile fetch, styler, render thread). `MapFrame`
+/// produced here is what the UI displays.
+pub mod map;
+
+/// Theme — colour palette data (`ColorPalette`, `DARK`, `BRIGHT`),
+/// `ThemeId`, plus the ratatui adapter (`UiTheme`) and semantic-tag
+/// resolver (`StyleKind`). All in one place because separating data
+/// from adapter created more boilerplate than it saved.
 #[doc(hidden)]
 pub mod theme;
+
+/// Input subsystem — raw-terminal-event ingest and translation
+/// (input thread, keymap table, mouse adapter). [`app::App`] pulls
+/// translated [`UserCommand`]s out of it for each `AppEvent::Input`.
+pub mod input;
 
 /// File-based logging to XDG state directory.
 pub mod logging;
 
-/// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored).
-/// **Scaffold only** — owns the shared [`mlua::Lua`] state and the
-/// bridge surface to `Component` / `PaletteProvider` / `MapApi`. No
-/// production plugin uses this yet; expanded incrementally as the
-/// fetch+render plugins migrate from Rust to Lua.
+/// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored). The
+/// bridge lives here: api/ exposes the `ttymap` global to scripts,
+/// bridge/ adapts Lua specs to Rust traits (`Component`,
+/// `PaletteProvider`).
 pub mod lua;
 
 // ── Internal modules (not part of the external surface) ──────────────────
