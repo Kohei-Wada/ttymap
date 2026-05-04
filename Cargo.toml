@@ -1,5 +1,5 @@
 [workspace]
-members = ["engine", "."]
+members = ["ttymap-engine", "."]
 
 [workspace.package]
 version = "0.1.0"
@@ -34,7 +34,7 @@ include = [
 ]
 
 [dependencies]
-ttymap-engine = { path = "engine" }
+ttymap-engine = { path = "ttymap-engine" }
 crossterm = "0.29"
 ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }

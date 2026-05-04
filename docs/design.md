@@ -233,7 +233,7 @@ let `Drop` do it.
 
 ## Frames are "completed products", not signals
 
-`MapFrame` (`engine/src/map/render/frame.rs`) is a finished grid of
+`MapFrame` (`ttymap-engine/src/map/render/frame.rs`) is a finished grid of
 `MapCell { ch, fg, bg }`. All tile fetching, spatial indexing,
 styling, polygon fill, line drawing, label placement, Braille
 packing, and color assignment happen on the render thread before a
