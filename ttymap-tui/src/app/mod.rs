@@ -229,30 +229,9 @@ impl App {
     /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
     fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let ctx = self.dispatcher.context();
-        // Field-disjoint borrows so the closure can hold immutable
-        // refs alongside the mutable `overlay_sink`.
         let map_frame = self.map_frame.as_ref();
-        let compositor = &self.dispatcher.compositor;
-        let lua = &self.dispatcher.lua;
-        let ui_theme = &self.dispatcher.ui_theme;
-        let sidebar_open = self.dispatcher.sidebar.open;
-        let sidebar_width = self.dispatcher.sidebar.width;
-        let overlay_sink = self.dispatcher.overlay.sink_mut();
-        terminal.draw(|f| {
-            crate::app::ui::draw(
-                f,
-                crate::app::ui::DrawInputs {
-                    map_frame,
-                    compositor,
-                    lua,
-                    theme: ui_theme,
-                    ctx: &ctx,
-                    overlay_sink,
-                    sidebar_open,
-                    sidebar_width,
-                },
-            )
-        })?;
+        let inputs = self.dispatcher.draw_inputs(map_frame, &ctx);
+        terminal.draw(|f| crate::app::ui::draw(f, inputs))?;
         Ok(())
     }
 }

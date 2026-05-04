@@ -8,9 +8,10 @@
 //! forwards events here.
 //!
 //! `Dispatcher` is **ratatui-free** — only `App::render_into`
-//! touches ratatui. Field access from the App side is via
-//! `pub(super)` fields rather than accessor methods; the engine ↔
-//! shell relationship is one binary's two halves.
+//! touches ratatui. App reaches into Dispatcher state exclusively
+//! through methods (`is_running`, `context`, `dispatch`,
+//! `draw_inputs`, …); fields are private. The engine ↔ shell
+//! relationship is one binary's two halves.
 //!
 //! Phase 1 of GitHub issue #212 (Dispatcher extraction). The
 //! struct lives next to `App` (its sole consumer); the previous
@@ -35,15 +36,15 @@ use ttymap_engine::map::MapHandle;
 use ttymap_engine::map::render::frame::MapFrame;
 
 pub(super) struct Dispatcher {
-    pub(super) map: MapHandle,
-    pub(super) running: bool,
-    pub(super) theme_id: ThemeId,
-    pub(super) ui_theme: UiTheme,
-    pub(super) lua: LuaHandle,
-    pub(super) compositor: Compositor,
-    pub(super) sidebar: SidebarPolicy,
-    pub(super) cursor: Option<(u16, u16)>,
-    pub(super) overlay: OverlayThrottle,
+    map: MapHandle,
+    running: bool,
+    theme_id: ThemeId,
+    ui_theme: UiTheme,
+    lua: LuaHandle,
+    compositor: Compositor,
+    sidebar: SidebarPolicy,
+    cursor: Option<(u16, u16)>,
+    overlay: OverlayThrottle,
 }
 
 impl Dispatcher {
@@ -89,6 +90,28 @@ impl Dispatcher {
         Context {
             theme_id: self.theme_id,
             cursor: self.cursor,
+        }
+    }
+
+    /// Bundle the per-frame borrows ratatui's `terminal.draw` closure
+    /// needs into a single [`super::ui::DrawInputs`] so `App::render_into`
+    /// stays a one-liner. Field-disjoint borrows (immut compositor /
+    /// lua / theme + mut overlay sink) live behind this method
+    /// instead of leaking the dispatcher's internals to App.
+    pub(super) fn draw_inputs<'a>(
+        &'a mut self,
+        map_frame: Option<&'a MapFrame>,
+        ctx: &'a Context,
+    ) -> super::ui::DrawInputs<'a> {
+        super::ui::DrawInputs {
+            map_frame,
+            compositor: &self.compositor,
+            lua: &self.lua,
+            theme: &self.ui_theme,
+            ctx,
+            overlay_sink: self.overlay.sink_mut(),
+            sidebar_open: self.sidebar.open,
+            sidebar_width: self.sidebar.width,
         }
     }
 
