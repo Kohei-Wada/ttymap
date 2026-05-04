@@ -36,7 +36,10 @@ Split by intent, not by domain:
 
 ```
 ttymap-tui/src/lua/
-  mod.rs           discovery, register_one, package.searchers wiring
+  mod.rs           LuaSubsystem + build_subsystem orchestration
+  vm.rs            new_lua + package.searchers / package.path setup
+  loader.rs        register_builtin_plugins, register_one,
+                   register_plugins_in — disk walk + per-plugin wiring
   registry.rs      LuaEventBus — pub/sub for tick / frame_ready / map_jumped / …
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
   init_lua.rs      separate config-DSL Lua state (opt + keymap)
