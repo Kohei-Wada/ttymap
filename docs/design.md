@@ -37,8 +37,8 @@ Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
-CLI subcommand under `src/cli/` and the palette entries under
-`src/palette/`. The internal intent type is `UserCommand` so those three
+CLI subcommand under `src/front/cli/` and the palette entries under
+`src/front/palette/`. The internal intent type is `UserCommand` so those three
 layers stay unambiguous.
 
 ### When to emit a `UserCommand`
@@ -233,7 +233,7 @@ let `Drop` do it.
 
 ## Frames are "completed products", not signals
 
-`MapFrame` (`src/map/render/frame.rs`) is a finished grid of
+`MapFrame` (`src/core/map/render/frame.rs`) is a finished grid of
 `MapCell { ch, fg, bg }`. All tile fetching, spatial indexing,
 styling, polygon fill, line drawing, label placement, Braille
 packing, and color assignment happen on the render thread before a

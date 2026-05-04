@@ -7,93 +7,105 @@ decisions and trade-offs see [design.md](design.md).
 
 ## Source tree
 
+The codebase is split into four logical layers, made visible at the
+directory level (issue #212):
+
+- **Foundation** (top-level files): vocabulary types and pure data
+  (`command.rs`, `geo.rs`, `config.rs`, `logging.rs`, `theme/` data
+  parts).
+- **`core/`** — engine. State that mutates in response to commands,
+  rendering pipeline, focus stack, input translation. **Ratatui-free
+  at the import-graph level.**
+- **`front/`** — UI / IO shell. Ratatui adapter, palette picker,
+  CLI subcommands. Imports from foundation + `core/` only; never
+  imported FROM `core/`.
+- **`app/`** — loop driver above core. Owns the ratatui terminal,
+  drains the bus, forwards commands to core::Dispatcher.
+- **`lua/`** — Lua bridge. Spans both layers (plugins implement
+  core's `Component` trait but draw via front's `MapApi`).
+- **`shared/`** — common utilities (http, geoip).
+
 ```
 src/
 ├── main.rs              CLI entry + interactive / snap dispatch
-├── lib.rs               crate root
-├── logging.rs           XDG state log (--log flag)
-├── config.rs            Config struct + Default impls (loaded from init.lua)
-├── geo.rs               Web Mercator, lon/lat ↔ tile coords, distance
+├── lib.rs               crate root + layering doc
+├── logging.rs           XDG state log (--log flag)            (foundation)
+├── config.rs            Config struct + Default impls         (foundation)
+├── geo.rs               Web Mercator, lon/lat ↔ tile coords   (foundation)
+├── command.rs           UserCommand enum — GoF Command vocab  (foundation)
 │
-├── theme/               colour palette + ratatui adapter + StyleKind tags
-│   ├── mod.rs           ThemeId + re-exports
-│   ├── palette.rs       ColorPalette + DARK / BRIGHT consts (xterm-256 indices)
-│   ├── style.rs         StyleKind semantic tags (accent / muted / …)
-│   └── ui.rs            UiTheme (ratatui style adapter)
+├── theme/               (foundation: data only — no ratatui)
+│   ├── mod.rs           ThemeId
+│   └── palette.rs       ColorPalette + DARK / BRIGHT consts (xterm-256 indices)
 │
-├── input/               input subsystem — peer of map/, app/, lua/
-│   ├── thread.rs        producer thread blocking on crossterm::event::read
-│   ├── keymap.rs        KeyMap table + KeybindingOverrides (init.lua + Lua keymap.set)
-│   └── mouse.rs         MouseAdapter — MouseEvent → UserCommand (drag pan, scroll zoom-at)
+├── core/                (engine — ratatui-free)
+│   ├── dispatcher.rs    GoF Receiver for UserCommand
+│   ├── overlay.rs       per-frame overlay sink + redraw throttle
+│   ├── sidebar.rs       sidebar visibility policy
+│   │
+│   ├── compositor/      helix-style focus / modal stack
+│   │   ├── mod.rs       Compositor + Component trait + Placement (Floating / Sidebar)
+│   │   ├── base.rs      BaseLayer — keymap + activation table + count prefixes (5j etc.)
+│   │   ├── op.rs        Op enum — single drain vocabulary (Push / Close / Command)
+│   │   ├── window.rs    Window (event-side, queues ops) + RenderWindow (render-side)
+│   │   ├── render.rs    paint(...) — render orchestration walking the focus stack
+│   │   ├── sidebar.rs   left-rail layout (up to 3 Sidebar cards, equal vertical split)
+│   │   └── map_api.rs   MapApi — world-space + screen-space draw primitives for Lua tick
+│   │
+│   ├── input/           input subsystem
+│   │   ├── thread.rs    producer thread blocking on crossterm::event::read
+│   │   ├── keymap.rs    KeyMap table + KeybindingOverrides (init.lua + Lua keymap.set)
+│   │   └── mouse.rs     MouseAdapter — MouseEvent → UserCommand (drag pan, scroll zoom-at)
+│   │
+│   └── map/             domain — viewport state + render pipeline + tile + styler
+│       ├── mod.rs, state.rs, action.rs
+│       ├── render/      tiles → MapFrame on a dedicated thread
+│       │   ├── pipeline.rs, thread.rs, renderer.rs
+│       │   ├── canvas.rs, braille.rs, frame.rs, frame_widget.rs, view.rs
+│       │   ├── label.rs, overlay.rs, polygon.rs, project.rs, geom/
+│       │   └── earcut_worker.rs, panic_silence.rs
+│       ├── styler/      Mapbox GL-style rules; theme swaps ColorPalette only
+│       └── tile/        MVT fetch + cache + decode
+│           ├── cache.rs, decoder.rs, disk.rs, key.rs, property.rs
+│           ├── decode/  Protobuf → DecodedTile (geometry / tags / decompress)
+│           └── fetch/   TileFetcher + FetchLane + http + disk_cached decorator
 │
-├── command.rs           UserCommand enum — the GoF Command vocabulary
-│                         (Map(MapAction) / Quit / SetTheme / ToggleSidebar / …)
-│                         used by every emission site in the crate.
+├── front/               (UI / IO shell — ratatui-aware)
+│   ├── theme/           ratatui adapter (UiTheme + StyleKind)
+│   ├── palette/         `:`-triggered universal picker (a Component)
+│   │   ├── mod.rs       PaletteComponent ephemeral state
+│   │   ├── action.rs    PaletteAction (close / submit / SwitchProvider / …)
+│   │   ├── panel.rs     popup layout
+│   │   └── provider/    sync (OnEachKey filter) + async (Debounced + poll + spinner)
+│   └── cli/             CLI subcommands — `ttymap snap` (headless ANSI renderer)
 │
-├── app/                 controller: event loop, command dispatch, UI shell
-│   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
+├── app/                 (loop driver — sits between core and front)
+│   ├── mod.rs           App::new / run / handle_event / handle_input / render_into
 │   ├── event.rs         AppEvent — unified queue payload (Command / FrameReady / Input / Wake)
 │   ├── frame_timer.rs   per-iteration wake source
-│   └── ui.rs            ratatui draw entry — map area + footer, routes through compositor
+│   └── ui.rs            ratatui draw entry — routes through compositor::render::paint
 │
-├── compositor/          helix-style focus / modal stack (top-level peer of app/)
-│   ├── mod.rs           Compositor + Component trait + Placement (Floating / Sidebar) + Registrar
-│   ├── base.rs          BaseLayer — keymap + activation table + count prefixes (5j etc.)
-│   ├── sidebar.rs       left-rail layout (up to 3 Sidebar cards, equal vertical split)
-│   ├── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
-│   ├── op.rs            Op enum — single drain vocabulary (Push / Close / Command)
-│   └── map_api.rs       MapApi — world-space + screen-space draw primitives consumed by Lua tick
-│
-├── palette/             `:`-triggered universal picker (itself a Component)
-│   ├── mod.rs           CommandPalette ephemeral state
-│   ├── action.rs        PaletteAction (close / submit / SwitchProvider / …)
-│   ├── panel.rs         popup layout
-│   └── provider/        sync (OnEachKey filter) + async (Debounced + poll + spinner) plumbing
-│
-├── cli/                 CLI subcommands (one file per subcommand)
-│   ├── mod.rs
-│   └── snap.rs          `ttymap snap` — headless single-frame ANSI renderer
-│
-├── lua/                 Lua bridge (mlua + Lua 5.4 vendored). All in-tree plugins.
+├── lua/                 Lua bridge (mlua + Lua 5.4 vendored). Spans core + front.
 │   ├── mod.rs           plugin discovery + register_one + package.searchers wiring
 │   ├── registry.rs      LuaEventBus — pub/sub for "tick" / "frame_ready" / "map_jumped" / …
-│   ├── runtimepath.rs   Neovim-style runtime layer resolution (env / dev / xdg_config / xdg_data)
+│   ├── runtimepath.rs   Neovim-style runtime layer resolution
 │   ├── init_lua.rs      separate config-DSL Lua state (ttymap.opt + ttymap.keymap)
 │   ├── handle.rs        shared host handle plumbing
-│   ├── sender.rs        channel sender helpers (push to App via crossbeam)
-│   ├── api/             Rust→Lua API binding (the `ttymap` global)
-│   │   ├── mod.rs       install() + namespace userdata (register_palette_command, register_keybind, …)
-│   │   ├── http.rs      ttymap.http:fetch — background GET returning a poll-able Job
-│   │   ├── json.rs      ttymap.json:parse / encode
-│   │   ├── map_api.rs   per-frame MapApi → Lua table (Lua::scope, no leak across ticks)
-│   │   └── sgp4.rs      ttymap.sgp4 — TLE → lon/lat propagation (used by satellite plugin)
-│   └── bridge/          Lua → Rust trait adapters
-│       ├── handle.rs    LuaHandle dispatch plumbing
-│       ├── card_component.rs  LuaCardComponent (Component impl for ttymap.api.card.open spec)
-│       ├── card_handle.rs     CardHandle + CloseFlag (returned to Lua)
-│       ├── card_parse.rs      Lua-table → CardSpec parsing
-│       ├── palette_provider.rs LuaPaletteProvider (PaletteProvider impl)
-│       └── palette_handle.rs   PaletteHandle (mirror of CardHandle)
+│   ├── sender.rs        channel sender helpers
+│   ├── registrar.rs     activation collection bucket (Activation / PaletteEntry)
+│   ├── api/             Rust→Lua binding (the `ttymap` global)
+│   │   ├── mod.rs       install() orchestrator
+│   │   ├── host_*.rs    one file per Lua-side namespace userdata (map / tile / config / help / log)
+│   │   ├── register.rs  register_palette_command / register_keybind / on_event capturers
+│   │   ├── imperative.rs ttymap.api.{card,palette,frame,notify} — runtime imperative primitives
+│   │   ├── http.rs / json.rs / sgp4.rs / map_api.rs
+│   └── bridge/          Lua spec → Rust trait adapters
+│       ├── handle.rs / card_component.rs / card_handle.rs / card_parse.rs
+│       └── palette_provider.rs / palette_handle.rs
 │
-├── shared/              host-and-Lua-bridge utilities
-│   ├── geoip.rs         IP-based lat/lon lookup (used by --here flag and `here` plugin)
-│   └── http/            user-agent-tagged reqwest wrapper
-│
-└── map/                 domain — viewport state + rendering pipeline
-    ├── mod.rs, state.rs, action.rs
-    ├── render/          tiles → MapFrame on a dedicated thread
-    │   ├── pipeline.rs, thread.rs, renderer.rs
-    │   ├── canvas.rs, braille.rs, frame.rs, frame_widget.rs, view.rs
-    │   ├── label.rs, overlay.rs, polygon.rs, project.rs, geom/
-    │   └── earcut_worker.rs, panic_silence.rs
-    ├── styler/          Mapbox GL-style rules — schema/mapscii.rs single source; theme swaps ColorPalette only
-    └── tile/            MVT fetch + cache + decode
-        ├── cache.rs         Memory LRU + view state + prefetch + DiskFastPath (render-thread sync read)
-        ├── decoder.rs       Relay thread: bytes → DecodedTile (off the render thread)
-        ├── disk.rs          On-disk tile read/write helpers (shared by fast path + decorator)
-        ├── key.rs, property.rs
-        ├── decode/          Protobuf → DecodedTile (geometry / tags / decompress)
-        └── fetch/           TileFetcher trait + FetchLane (lane / queue / priority) + http + disk_cached decorator
+└── shared/              foundation utilities (used by host, Lua bridge, tile fetcher)
+    ├── geoip.rs         IP-based lat/lon lookup
+    └── http/            user-agent-tagged reqwest wrapper
 
 runtime/
 ├── init.lua             bundled defaults (Berlin auto-zoom, dark theme); user init.lua runs after this
@@ -107,39 +119,68 @@ runtime/
 
 ## Layering
 
-- **`map/`** — domain. Knows nothing about UI, plugins, or focus.
-  `MapAction` carries every map-level mutation, including mouse-continuous
-  variants (`PanCells`, `ZoomAt`).
-- **`app/`** — the **controller**. `UserCommand` (in
+The dependency graph runs **foundation → core → app → front**, with
+`lua/` as a bridge that legitimately spans both. Concretely:
+
+- **Foundation** types are imported by everyone but depend on
+  nothing internal. `command.rs` (UserCommand vocabulary), `geo.rs`,
+  `config.rs`, `theme/{palette,mod}.rs` (data only).
+- **`core/`** imports foundation. Imports no `front/`, no `app/`.
+  Verified ratatui-free at the import-graph level except for
+  `core/compositor/{render,sidebar,window,map_api}.rs` which use
+  ratatui internally for paint primitives — but the trait surface
+  (`Component`) and state machinery (`Compositor`, `Op`,
+  `BaseLayer`) doesn't.
+- **`front/`** imports foundation + core. Houses the ratatui
+  `UiTheme` adapter, the palette picker UI, and the CLI subcommand
+  bucket.
+- **`app/`** imports foundation + core + front. The loop driver
+  above core: drains the bus, forwards commands to
+  `core::Dispatcher`, calls `terminal.draw(...)`. Owns the rendered
+  `MapFrame` snapshot.
+- **`lua/`** is the bridge — Lua plugins implement core's
+  `Component` trait but draw via front's `MapApi`, so this layer
+  legitimately spans core + front.
+
+Per-module roles:
+
+- **`core/map/`** — domain. Knows nothing about UI, plugins, or
+  focus. `MapAction` carries every map-level mutation, including
+  mouse-continuous variants (`PanCells`, `ZoomAt`).
+- **`core/dispatcher.rs`** — GoF Receiver. `UserCommand` (in
   `src/command.rs` at crate root) is the closed enum every input
-  source (keymap, palette, compositor components, mouse adapter, Lua
-  callbacks, async tasks) emits; `App::dispatch` in `app/mod.rs` is
-  the sole place that executes them. Map-level actions nest under
+  source emits; `Dispatcher::dispatch` is the sole place that
+  executes them. Map-level actions nest under
   `UserCommand::Map(MapAction)`; other variants sit at the top
-  level. GoF Command pattern with `App` as the Receiver — the
-  `UserCommand` type lives at the crate root rather than under
-  `app/` so producers reach it via `crate::UserCommand` without an
-  upward dependency on the Receiver. See
-  [design.md](design.md) for the UserCommand-vs-direct-call judgment
-  rules.
-- **`compositor/`** — focus and modal state. A stack of
-  `Component`s; the top owns key focus. No `is_visible` / `activate`
-  / `deactivate` contract — presence on the stack *is* the lifecycle.
-  `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted
-  before any component sees them). `Placement::Sidebar` cards stack
-  equal-split in the left rail (max 3 visible);
-  `Placement::Floating` draws over the map (palette).
-- **`input/mouse.rs`** — pure adapter.
+  level. The `UserCommand` type lives at the crate root rather than
+  under `core/` so producers reach it via `crate::UserCommand`
+  without an upward dependency on the Receiver. See
+  [design.md](design.md) for the judgment rules.
+- **`core/compositor/`** — focus and modal state. A stack of
+  `Component`s; the top owns key focus. No `is_visible` /
+  `activate` / `deactivate` contract — presence on the stack *is*
+  the lifecycle. `Tab` / `Shift-Tab` cycle focus (framework-
+  reserved). `Placement::Sidebar` cards stack equal-split in the
+  left rail (max 3 visible); `Placement::Floating` draws over the
+  map (palette).
+- **`core/input/mouse.rs`** — pure adapter.
   `MouseEvent → Vec<UserCommand>` (`CursorMoved` on every event;
   drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
+- **`app/`** — loop driver. `App::run` drains the unified
+  `AppEvent` bus, routes events to `core::Dispatcher`, and asks
+  ratatui to paint each iteration. `App::handle_input` translates
+  raw terminal events into `UserCommand`s pushed back through the
+  bus. App stays at the top level (not under `front/`) for now;
+  it's the orchestrator that owns the dispatcher and renders.
 - **`app/ui.rs`** — non-modal shell. `draw()` paints the latest
-  `MapFrame`, runs the `LuaEventBus::dispatch_tick` so every Lua
+  `MapFrame`, runs `LuaEventBus::dispatch_tick` so every Lua
   plugin's `on_tick` callback gets one frame to paint world-space
-  markers via `MapApi`, then forwards modal rendering to the
-  Compositor. **The main thread doing per-frame Lua draw work is the
-  one legitimate exception to "main thread only displays" —
-  see [design.md](design.md).**
-- **`palette/`** — `:`-triggered universal picker. Itself a
+  markers via `MapApi`, then calls
+  `core::compositor::render::paint(...)` for the focus stack.
+  **The main thread doing per-frame Lua draw work is the one
+  legitimate exception to "main thread only displays" — see
+  [design.md](design.md).**
+- **`front/palette/`** — `:`-triggered universal picker. Itself a
   `Component`; provider sub-modes (theme picker, search, plugin
   commands) swap in place via `PaletteAction::SwitchProvider`. Sync
   providers filter on each keystroke; async providers debounce and
@@ -148,21 +189,25 @@ runtime/
   `.lua` files under any runtime layer's `plugin/` dir; identity is
   the file stem. A script joins host loops by calling
   `ttymap.api.frame.on_tick(fn)` (per-frame work — sugar for
-  `ttymap.on_event("tick", fn)`),
-  `ttymap.on_event(name, fn)` (any host event:
-  `frame_ready`, `map_jumped`, `theme_changed`, `resized`, …),
-  `ttymap.register_palette_command({label, invoke})` (palette row),
-  or `ttymap.register_keybind(key, fn)` (top-level keybind). Panels
-  and palettes are opened *imperatively* from inside callbacks via
-  `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`.
-  Drawing primitives (`MapApi`) live under `compositor/`;
-  the Lua bridge wraps them via `Lua::scope` so the Lua-side handle
-  never outlives a single tick. See
-  [lua-architecture.md](lua-architecture.md) for the full surface.
-- **`theme/`** — palette data + `UiTheme` ratatui adapter +
-  `StyleKind` semantic tags. Lua scripts ask for a tag string
-  ("accent" / "accent_alt" / "muted" / …) and the bridge resolves
-  it through the active `UiTheme` to a concrete colour. Lua plugins
+  `ttymap.on_event("tick", fn)`), `ttymap.on_event(name, fn)`
+  (any host event: `frame_ready`, `map_jumped`, `theme_changed`,
+  `resized`, …), `ttymap.register_palette_command({label, invoke})`
+  (palette row), or `ttymap.register_keybind(key, fn)` (top-level
+  keybind). Panels and palettes are opened *imperatively* from
+  inside callbacks via `ttymap.api.card.open(spec)` /
+  `ttymap.api.palette.open(spec)`. Drawing primitives (`MapApi`)
+  live under `core/compositor/`; the Lua bridge wraps them via
+  `Lua::scope` so the Lua-side handle never outlives a single tick.
+  See [lua-architecture.md](lua-architecture.md) for the full
+  surface.
+- **`theme/` (foundation)** — colour palette data only
+  (`ColorPalette`, `DARK` / `BRIGHT`, `ThemeId`). No ratatui
+  dependency. The map renderer's styler reads `ColorPalette`
+  directly; the UI chrome reads it via `front::theme::UiTheme`.
+- **`front/theme/`** — ratatui adapter (`UiTheme`) + semantic-tag
+  enum (`StyleKind`). Lua scripts ask for a tag string (`"accent"`
+  / `"accent_alt"` / `"muted"` / …) and the bridge resolves it
+  through the active `UiTheme` to a concrete colour. Lua plugins
   never see `UiTheme` directly.
 
 ## Message flow
