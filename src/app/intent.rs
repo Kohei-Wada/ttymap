@@ -13,7 +13,7 @@
 //! (keymap, palette, plugins) **return `Vec<UserIntent>`** and never
 //! execute anything themselves — the dispatcher is the sole
 //! side-effect boundary. Note the naming split: "command" is reserved
-//! for user-facing concepts (the CLI subcommand in `crate::commands`
+//! for user-facing concepts (the CLI subcommand in `crate::cli`
 //! and the `:`-palette entries), while internal intent is `UserIntent`.
 //!
 //! Surface activation (palette open, plugin activate) intentionally

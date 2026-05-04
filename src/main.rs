@@ -1,7 +1,7 @@
 use clap::Parser;
 use ttymap::app::frame_timer::FrameTimer;
 use ttymap::app::{App, KeybindingOverrides};
-use ttymap::commands::Command as Subcommand;
+use ttymap::cli::Command as Subcommand;
 use ttymap::config::Config;
 use ttymap::input::thread::InputHandle;
 

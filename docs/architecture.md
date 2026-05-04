@@ -47,7 +47,7 @@ src/
 │   ├── panel.rs         popup layout
 │   └── provider/        sync (OnEachKey filter) + async (Debounced + poll + spinner) plumbing
 │
-├── commands/            CLI subcommands (one file per subcommand)
+├── cli/                 CLI subcommands (one file per subcommand)
 │   ├── mod.rs
 │   └── snap.rs          `ttymap snap` — headless single-frame ANSI renderer
 │

@@ -32,8 +32,8 @@ pub mod palette;
 
 /// CLI subcommand implementations. Each subcommand lives in its own
 /// submodule; `main.rs` just parses the top-level enum and calls
-/// [`commands::Command::run`].
-pub mod commands;
+/// [`cli::Command::run`].
+pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
