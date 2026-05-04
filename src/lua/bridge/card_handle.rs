@@ -65,6 +65,7 @@ mod tests {
         for op in drained {
             match op {
                 Op::Close(got) => assert_eq!(got, id),
+                other => panic!("expected Op::Close, got {:?}", other),
             }
         }
     }

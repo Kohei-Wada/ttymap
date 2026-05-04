@@ -83,7 +83,7 @@ pub struct Frontend {
     /// Runtime handle to the Lua subsystem. Encapsulates the event
     /// bus and per-plugin host channels so Frontend never names them
     /// directly — every Lua-side interaction goes through semantic
-    /// methods (`notify_*`, `tick`, `sync_view`, `drain_pushes`).
+    /// methods (`notify_*`, `tick`, `sync_view`, `drain_ops`).
     lua: LuaHandle,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Owned here directly —
@@ -220,16 +220,20 @@ impl Frontend {
             // iteration.
             self.poll_compositor(event_tx);
 
+            // Drain Lua-enqueued ops *before* render so that ops
+            // emitted by handler / palette / keybind callbacks during
+            // event handling apply this frame (matches the prior
+            // behaviour of `lua.drain_pushes` running in
+            // `poll_compositor`). on_tick-emitted ops fire during
+            // `render_into` below — those land in the buffer and
+            // drain at the start of the *next* iteration's
+            // `poll_compositor`, with the same one-frame visibility
+            // lag as the prior CloseFlag-via-poll design.
+            self.apply_lua_ops();
+
             // Render a frame. Inside `ui::draw`, the per-frame Lua
             // `tick` event fires against the live MapApi.
             self.render_into(terminal)?;
-
-            // Drain any [`Op`]s that Lua callbacks enqueued during this
-            // iteration (handler calls, on_tick callbacks, palette
-            // execute callbacks). Today only `Op::Close` is in use —
-            // the older `CloseFlag` polling has been replaced with this
-            // single buffered drain.
-            self.apply_lua_ops();
 
             // If plugin `on_tick` callbacks pushed polylines, throttle
             // the redraw request to the configured interval.
@@ -240,12 +244,16 @@ impl Frontend {
     }
 
     /// Apply every [`Op`] queued by Lua callbacks since the last
-    /// drain. Called once per loop iteration, after `render_into` so
-    /// `on_tick` callbacks (which run inside `ui::draw`) have already
-    /// pushed.
+    /// drain. Called from the run loop after `poll_compositor` and
+    /// before `render_into`, so ops emitted from key / palette /
+    /// keybind callbacks visible this frame (mirrors the prior
+    /// `drain_pushes` + `CloseFlag`-via-poll timing).
     fn apply_lua_ops(&mut self) {
         for op in self.lua.drain_ops() {
             match op {
+                crate::lua::op::Op::Push { id, component } => {
+                    self.compositor.push_with_id(id, component);
+                }
                 crate::lua::op::Op::Close(id) => self.compositor.close_by_id(id),
             }
         }
@@ -354,19 +362,7 @@ impl Frontend {
     /// Drive a single `compositor.poll` pass. Components emitting
     /// intents through `Window::emit` route directly onto the bus —
     /// the run loop's same-iteration `try_recv` picks them up.
-    ///
-    /// Drains any components Lua queued via
-    /// `ttymap.api.card.open` / `palette.open` first, so they
-    /// participate in this same poll pass.
     fn poll_compositor(&mut self, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
-        // Disjoint borrows: `&self.lua` for the iterator, `&mut
-        // self.compositor` for the push side.
-        let lua = &self.lua;
-        let compositor = &mut self.compositor;
-        lua.drain_pushes(|id, component| {
-            compositor.push_with_id(id, component);
-        });
-
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
 
