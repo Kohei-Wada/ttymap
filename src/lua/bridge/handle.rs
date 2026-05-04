@@ -22,7 +22,6 @@ use mlua::{Lua, RegistryKey, Table};
 
 use crate::lua::api as host;
 use crate::lua::new_lua;
-use crate::lua::sender::LuaSender;
 
 /// Per-adapter Lua state + the registry handle for the dispatch
 /// table. Both adapters (Component, PaletteProvider) compose this
@@ -135,21 +134,19 @@ pub enum CallOutcome<R> {
 /// - `chunk_name` is reported in Lua error messages; pass the file
 ///   stem so a stack trace pinpoints the script.
 /// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
-/// - `sender` is the lua-side [`LuaSender`] every plugin clones into
-///   its `HostMap` / export closure. The lua subsystem doesn't see
-///   the underlying `AppEvent` channel; the boundary lives in
-///   [`LuaSender`].
+/// - `ops` is the shared [`crate::lua::op::OpsBuffer`] every plugin
+///   clones a handle to; all Lua → Frontend traffic (`Op::Push` /
+///   `Op::Close` / `Op::Intent`) lands on it.
 pub fn fresh_load(
     source: &str,
     chunk_name: &str,
     host_tag: &'static str,
     shared: Arc<host::LuaHostShared>,
-    sender: LuaSender,
     ops: crate::lua::op::OpsBuffer,
 ) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
     let lua = new_lua();
     let slot = host::new_capture_slot();
-    let handles = host::install(&lua, host_tag, shared, slot.clone(), sender, ops)?;
+    let handles = host::install(&lua, host_tag, shared, slot.clone(), ops)?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()

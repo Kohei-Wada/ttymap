@@ -20,7 +20,6 @@ pub mod init_lua;
 pub mod op;
 pub mod registry;
 pub mod runtimepath;
-pub mod sender;
 
 pub use api::LuaHostShared;
 pub use bridge::palette_provider::LuaPaletteProvider;
@@ -38,7 +37,6 @@ use crate::config::Config;
 use crate::frontend::UserIntent;
 use crate::frontend::compositor::{Activation, PaletteEntry, Registrar};
 use crate::input::KeyMap;
-use crate::lua::sender::LuaSender;
 
 /// Result of [`build_subsystem`].
 ///
@@ -75,7 +73,6 @@ pub fn build_subsystem(
     config: &Config,
     attribution: Option<String>,
     keymap: &KeyMap,
-    lua_sender: LuaSender,
 ) -> LuaSubsystem {
     let mut r = Registrar::default();
 
@@ -101,7 +98,6 @@ pub fn build_subsystem(
         runtime_path,
         &config.plugins.disable,
         shared.clone(),
-        lua_sender,
         ops.clone(),
         &mut r,
     );
@@ -281,7 +277,6 @@ pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
     shared: Arc<api::LuaHostShared>,
-    sender: LuaSender,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -300,7 +295,6 @@ pub fn register_builtin_plugins(
             Some(&mut seen),
             disable,
             shared.clone(),
-            sender.clone(),
             ops.clone(),
             r,
         );
@@ -315,7 +309,6 @@ fn register_one(
     name: &'static str,
     source: &'static str,
     shared: Arc<api::LuaHostShared>,
-    sender: LuaSender,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -332,7 +325,7 @@ fn register_one(
     // display name). Same value — the file stem is the plugin's
     // canonical identifier on every surface.
     let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, sender, ops) {
+        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, ops) {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
@@ -486,7 +479,6 @@ fn register_plugins_in(
     mut seen: Option<&mut std::collections::HashSet<String>>,
     disable: &[String],
     shared: Arc<api::LuaHostShared>,
-    sender: LuaSender,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -547,25 +539,14 @@ fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(name, source, shared.clone(), sender.clone(), ops.clone(), r);
+        register_one(name, source, shared.clone(), ops.clone(), r);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-
     use super::*;
     use mlua::Result;
-
-    /// Disconnected [`LuaSender`] for tests that exercise plugin
-    /// registration without verifying intent flow. The underlying
-    /// receiver drops immediately so any `emit()` is a no-op — the
-    /// registration path under test never inspects the channel.
-    fn dummy_lua_sender() -> LuaSender {
-        let (tx, _rx) = mpsc::channel();
-        LuaSender::new(tx)
-    }
 
     #[test]
     fn lua_evaluates_a_basic_expression() {
@@ -609,14 +590,7 @@ mod tests {
         let shared = api::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        register_builtin_plugins(
-            &rtp,
-            &[],
-            shared,
-            dummy_lua_sender(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        register_builtin_plugins(&rtp, &[], shared, op::new_ops_buffer(), &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -662,15 +636,9 @@ mod tests {
     /// registration time.
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, api::CapturedRegistration) {
         let shared = api::LuaHostShared::empty();
-        let (lua, captured, _handles) = bridge::handle::fresh_load(
-            source,
-            name,
-            "lua-test",
-            shared,
-            dummy_lua_sender(),
-            op::new_ops_buffer(),
-        )
-        .expect("load");
+        let (lua, captured, _handles) =
+            bridge::handle::fresh_load(source, name, "lua-test", shared, op::new_ops_buffer())
+                .expect("load");
         (lua, captured)
     }
 
@@ -744,7 +712,6 @@ mod tests {
             None,
             &[],
             shared.clone(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -800,7 +767,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -827,7 +793,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -859,7 +824,6 @@ mod tests {
             None,
             &disable,
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -889,7 +853,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -921,7 +884,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -947,7 +909,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -1036,7 +997,6 @@ mod tests {
             None,
             &[],
             api::LuaHostShared::empty(),
-            dummy_lua_sender(),
             op::new_ops_buffer(),
             &mut r,
         );

@@ -6,7 +6,7 @@
 //!
 //! - [`AppEvent::Intent`] — wraps a [`UserIntent`]: every
 //!   fire-and-forget intent emitter (keymap / mouse when dispatch
-//!   can't run inline, Lua plugins via [`crate::lua::sender::LuaSender`])
+//!   can't run inline; Lua plugins use the shared [`crate::lua::op::OpsBuffer`])
 //!   goes through this. Synchronous emitters (compositor.poll,
 //!   palette.execute) still call [`super::Frontend::dispatch`]
 //!   directly without the channel.
