@@ -40,13 +40,20 @@ ttymap-tui/src/lua/
   registry.rs      LuaEventBus — pub/sub for tick / frame_ready / map_jumped / …
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
   init_lua.rs      separate config-DSL Lua state (opt + keymap)
-  handle.rs        shared host handle plumbing
+  handle.rs        shared host handle plumbing (LuaHandle)
+  registrar.rs     Registrar — collects activations / palette entries
   sender.rs        channel sender helpers (push to App via crossbeam)
   map_api.rs       host-side MapApi struct (per-frame draw surface,
                    ratatui buffer + projection + theme; no mlua)
+  host.rs          host-side Lua-runtime state (LuaHostShared,
+                   LuaHostHandles, NotifyEntry, PluginEntry) — Rust
+                   structs the api/ namespaces read/write
+  capture.rs       receptacle types for plugin → host registration
+                   (PaletteCommandSpec, KeybindSpec, EventSubscription,
+                   CapturedRegistration, CaptureSlot)
   api/             Rust→Lua API binding (the `ttymap` global).
                    File ↔ Lua-namespace 1:1 (file name = `ttymap.<X>`).
-    mod.rs         install() + cross-namespace shared types
+    mod.rs         install() — assembles the namespace userdatas
     http.rs        ttymap.http   :fetch / :url_encode
     json.rs        ttymap.json   :parse
     sgp4.rs        ttymap.sgp4   TLE parse / propagate

@@ -15,16 +15,18 @@
 
 pub mod api;
 pub mod bridge;
+pub mod capture;
 pub mod handle;
+pub mod host;
 pub mod init_lua;
 pub mod map_api;
 pub mod registrar;
 pub mod registry;
 pub mod runtimepath;
 
-pub use api::LuaHostShared;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use handle::LuaHandle;
+pub use host::LuaHostShared;
 pub use init_lua::load_init_lua;
 pub use map_api::MapApi;
 pub use registrar::Registrar;
@@ -280,7 +282,7 @@ fn prepend_package_path(lua: &Lua, dir: &Path) {
 pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
-    shared: Arc<api::LuaHostShared>,
+    shared: Arc<host::LuaHostShared>,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -312,7 +314,7 @@ pub fn register_builtin_plugins(
 fn register_one(
     name: &'static str,
     source: &'static str,
-    shared: Arc<api::LuaHostShared>,
+    shared: Arc<host::LuaHostShared>,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -445,8 +447,8 @@ fn run_lua_callback(lua: &Lua, key: &mlua::RegistryKey, name: &'static str) {
 /// entries with a top-level keybinding — matching the harvest filter
 /// help relied on previously. Overlays don't show up in the palette
 /// and aren't help-relevant, so they're never pushed.
-fn push_plugin_entry(shared: &Arc<api::LuaHostShared>, name: &str, key: &str, label: &str) {
-    shared.push_palette_entry(api::PluginEntry {
+fn push_plugin_entry(shared: &Arc<host::LuaHostShared>, name: &str, key: &str, label: &str) {
+    shared.push_palette_entry(host::PluginEntry {
         name: name.to_string(),
         key: key.to_string(),
         label: label.to_string(),
@@ -481,7 +483,7 @@ fn register_plugins_in(
     dir: &Path,
     mut seen: Option<&mut std::collections::HashSet<String>>,
     disable: &[String],
-    shared: Arc<api::LuaHostShared>,
+    shared: Arc<host::LuaHostShared>,
     ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
@@ -590,7 +592,7 @@ mod tests {
     #[test]
     fn every_bundled_script_registers() {
         runtimepath::ensure_runtime_path_for_tests();
-        let shared = api::LuaHostShared::empty();
+        let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
         register_builtin_plugins(&rtp, &[], shared, op::new_ops_buffer(), &mut r);
@@ -637,8 +639,8 @@ mod tests {
     /// the test can assert on the activation surfaces and tick
     /// subscriptions. Mirrors what `register_one` does at
     /// registration time.
-    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, api::CapturedRegistration) {
-        let shared = api::LuaHostShared::empty();
+    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, capture::CapturedRegistration) {
+        let shared = host::LuaHostShared::empty();
         let (lua, captured, _handles) =
             bridge::handle::fresh_load(source, name, "lua-test", shared, op::new_ops_buffer())
                 .expect("load");
@@ -708,7 +710,7 @@ mod tests {
             "#,
         );
 
-        let shared = api::LuaHostShared::empty();
+        let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
         register_plugins_in(
             &dir,
@@ -769,7 +771,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -795,7 +797,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -826,7 +828,7 @@ mod tests {
             &dir,
             None,
             &disable,
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -855,7 +857,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -886,7 +888,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -911,7 +913,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );
@@ -999,7 +1001,7 @@ mod tests {
             &dir,
             None,
             &[],
-            api::LuaHostShared::empty(),
+            host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             &mut r,
         );

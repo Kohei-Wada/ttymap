@@ -98,234 +98,15 @@ use log::HostLog;
 use map::HostMap;
 use tile::HostTile;
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use mlua::{Lua, Table};
 
+use crate::lua::capture::CaptureSlot;
+use crate::lua::host::{LuaHostHandles, LuaHostShared, NotifyEntry};
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::shared::http::HttpClient;
-
-/// Maximum number of pending notifications retained in the host's
-/// shared ring buffer. Sized to absorb a brief flurry (a search
-/// returning, a fetch erroring, a file exporting) without needing
-/// per-call resizing — at typical 3-second display TTL the buffer
-/// rarely hits cap, and on overflow we drop the oldest so newer
-/// signals are never starved.
-const NOTIFY_RING_CAP: usize = 16;
-
-// ── Shared snapshot ─────────────────────────────────────────────────
-
-/// Shared, mostly-immutable runtime data that every Lua plugin can
-/// query via the `ttymap` global. Built once in [`crate::app::App::new`]
-/// and Arc-cloned into each namespace userdata that reads from it.
-///
-/// Why not upvalue prepend? With ~10 builtin plugins each needing
-/// different runtime data, prepending bespoke `local _X = [[...]]`
-/// per plugin meant per-plugin Rust glue. A shared accessor surface
-/// keeps the bridge uniform: bundled and user plugins both see the
-/// same `ttymap.*` API, and adding a new builtin requires zero Rust.
-pub struct LuaHostShared {
-    /// Tile provider's attribution string. `None` when the active
-    /// `TileClient` has no attribution to display (custom backends
-    /// without OSM data, mostly).
-    pub attribution: Option<String>,
-    /// IP-geolocation endpoint URL (`ttymap.opt.geoip.endpoint` in
-    /// `init.lua`). The here plugin GETs this to resolve the
-    /// user's coordinates.
-    pub geoip_endpoint: String,
-    /// Pre-baked `(key-binding, action-label)` pairs for built-in
-    /// map actions. Help renders this as the keymap section of its
-    /// cheatsheet. Built once at startup from the live `KeyMap` so
-    /// runtime overrides surface correctly.
-    pub keymap_entries: Vec<(String, String)>,
-    /// Per-plugin metadata snapshot, appended during plugin
-    /// registration. Held behind a `Mutex` so `LuaHostShared` can be
-    /// Arc'd into each plugin's host namespaces at register time and
-    /// populated later. Help reads this lazily (at render time, not
-    /// register time) so it sees every plugin regardless of load
-    /// order.
-    pub palette_entries: Mutex<Vec<PluginEntry>>,
-    /// Transient status messages posted via `ttymap.notify(msg, opts)`.
-    /// The bundled `notify` plugin reads this each tick via
-    /// `ttymap.api.notify.recent(ttl_ms)` and renders entries that are
-    /// still within their TTL. A small ring (cap [`NOTIFY_RING_CAP`])
-    /// — overflow drops the oldest. Plain `Vec` because the volume is
-    /// tiny and the renderer iterates oldest-first by design.
-    pub notifications: Mutex<VecDeque<NotifyEntry>>,
-}
-
-/// One transient status message awaiting display. Held in
-/// [`LuaHostShared::notifications`]; the bundled `notify` plugin
-/// surfaces these via `ttymap.api.notify.recent(ttl_ms)`. `level` is a
-/// raw string ("info" / "warn" / "error") so renderers can map to
-/// theme colours without the host pre-committing to a palette.
-#[derive(Clone)]
-pub struct NotifyEntry {
-    pub message: String,
-    pub level: String,
-    pub posted_at: Instant,
-}
-
-/// One plugin's help-relevant metadata. Surfaced to Lua via
-/// `ttymap.help:palette_entries()` so help.lua can render it without
-/// caring about how the data was harvested. Only plugins with a
-/// top-level keybinding land here; keyless plugins are filtered at
-/// push time (matching the prior harvest's `!hint.is_empty()` rule).
-#[derive(Clone)]
-pub struct PluginEntry {
-    pub name: String,
-    pub key: String,
-    pub label: String,
-}
-
-impl LuaHostShared {
-    pub fn new(
-        attribution: Option<String>,
-        geoip_endpoint: String,
-        keymap_entries: Vec<(String, String)>,
-    ) -> Self {
-        Self {
-            attribution,
-            geoip_endpoint,
-            keymap_entries,
-            palette_entries: Mutex::new(Vec::new()),
-            notifications: Mutex::new(VecDeque::with_capacity(NOTIFY_RING_CAP)),
-        }
-    }
-
-    /// Append one notification to the shared ring buffer. Oldest
-    /// entry evicted on overflow so a flurry never starves the most
-    /// recent signal. Poisoned mutex is silently skipped — losing a
-    /// transient message is preferable to crashing the host.
-    pub fn push_notification(&self, entry: NotifyEntry) {
-        if let Ok(mut buf) = self.notifications.lock() {
-            if buf.len() >= NOTIFY_RING_CAP {
-                buf.pop_front();
-            }
-            buf.push_back(entry);
-        }
-    }
-
-    /// Append one plugin's metadata to the snapshot. Called once per
-    /// plugin during registration. A poisoned mutex is silently
-    /// skipped — losing a help row is preferable to crashing the host.
-    pub fn push_palette_entry(&self, entry: PluginEntry) {
-        if let Ok(mut slot) = self.palette_entries.lock() {
-            slot.push(entry);
-        }
-    }
-
-    /// All-empty default for tests and registration-time loads that
-    /// don't need real runtime data. The `ttymap.*` host surface
-    /// still installs in a Lua state used only to capture the
-    /// script's `register_*` call.
-    pub fn empty() -> Arc<Self> {
-        Arc::new(Self::new(None, String::new(), Vec::new()))
-    }
-}
-
-// ── Per-component handles ───────────────────────────────────────────
-
-/// Channels + shared state owned by **the setup state** (the Lua VM
-/// that runs the script's top-level `register_*` calls and continues
-/// to run palette / keybind callbacks for the program lifetime).
-/// `install()` returns this once per state; the App routes the
-/// shared cells to the right consumers.
-///
-/// - **UserCommand sender** (not part of these handles) — every
-///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
-///   `:fly_to` / `ttymap.api.frame.export`) is pre-built into an
-///   [`UserCommand`] on the Lua side and pushed through a `Sender<UserCommand>`
-///   that every plugin clones from the **single** App-level channel.
-///   The receiver lives directly on `App`; a single drain per frame
-///   covers every plugin's intents.
-/// - `center` / `zoom` — shared with `ttymap.map`'s userdata so
-///   `ttymap.map:center()` and `:zoom()` return the live values.
-///   Components refresh them on each dispatch path that carries a
-///   `Window`.
-///
-/// Component pushes from `ttymap.api.card.open` /
-/// `ttymap.api.palette.open` no longer live here — they ride the
-/// shared [`OpsBuffer`](crate::compositor::op::OpsBuffer) as
-/// [`Op::Push`](crate::compositor::op::Op::Push) and the App drains them
-/// alongside [`Op::Close`](crate::compositor::op::Op::Close).
-pub struct LuaHostHandles {
-    pub center: Arc<Mutex<LonLat>>,
-    /// Latest zoom level mirrored from the host so
-    /// `ttymap.map:zoom()` (no-arg getter form) returns the current
-    /// zoom from any callback context. Same Arc held by the
-    /// [`HostMap`] userdata; refreshed on the dispatch paths that
-    /// also refresh `center`.
-    pub zoom: Arc<Mutex<f64>>,
-}
-
-// ── Self-registration capture ────────────────────────────────────────
-
-/// One palette row declared by a plugin via
-/// `ttymap.register_palette_command(spec)`. The `invoke` callback is
-/// stored as a [`RegistryKey`] so it survives the registration call
-/// and can be invoked from the persistent Lua state at activation
-/// time. The state must be kept alive (held by the registrar) for
-/// the program lifetime.
-pub struct PaletteCommandSpec {
-    pub label: String,
-    pub hint: String,
-    pub invoke: mlua::RegistryKey,
-}
-
-/// One keybind declared via `ttymap.register_keybind(key, callback)`.
-/// `key` is a single Char activation; `callback` runs at press time
-/// and (truthy return) opts into pushing the file's plugin component.
-pub struct KeybindSpec {
-    pub key: char,
-    pub callback: mlua::RegistryKey,
-}
-
-/// One subscription declared via `ttymap.on_event(name, fn)` (or its
-/// `ttymap.api.frame.on_tick(fn)` sugar, which lowers to event name
-/// `"tick"`). The host walks these at register time and pushes one
-/// [`Subscriber`](crate::lua::registry::Subscriber) into the
-/// [`LuaEventBus`](crate::lua::LuaEventBus) bucket for `event_name`.
-pub struct EventSubscription {
-    pub event_name: &'static str,
-    pub callback: mlua::RegistryKey,
-}
-
-/// Everything a single plugin file's setup phase declared. nvim-
-/// style: each activation surface is a separate explicit call with
-/// its own Lua callback. Plugins own whether/when to push by
-/// inspecting their own state inside the callback and calling
-/// `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`.
-/// Per-frame work subscribes via `ttymap.api.frame.on_tick(fn)` —
-/// stacked: each call appends a callback that fires every frame.
-/// Other events go through `ttymap.on_event(name, fn)`.
-#[derive(Default)]
-pub struct CapturedRegistration {
-    /// Each `ttymap.register_palette_command({label, invoke})` call.
-    pub palette_commands: Vec<PaletteCommandSpec>,
-    /// Each `ttymap.register_keybind(key, callback)` call.
-    pub keybinds: Vec<KeybindSpec>,
-    /// Each `ttymap.on_event(name, fn)` call (and `on_tick` sugar).
-    /// Order = registration order across event names.
-    pub event_subscriptions: Vec<EventSubscription>,
-}
-
-/// Slot used by a fresh Lua state to capture the script's
-/// registration calls. `Rc<RefCell<...>>` is fine — the Lua state
-/// is single-threaded and the capture lifetime is bounded by
-/// `lua.load(source).exec()`.
-pub type CaptureSlot = Rc<RefCell<CapturedRegistration>>;
-
-/// Build an empty capture slot. The caller (typically `fresh_load`)
-/// passes one to [`install`] and reads it back after running the
-/// script.
-pub fn new_capture_slot() -> CaptureSlot {
-    Rc::new(RefCell::new(CapturedRegistration::default()))
-}
 
 // ── Install entry point ─────────────────────────────────────────────
 
@@ -426,6 +207,8 @@ pub fn install(
 mod tests {
     use super::*;
     use crate::UserCommand;
+    use crate::lua::capture::new_capture_slot;
+    use crate::lua::host::NOTIFY_RING_CAP;
     use ttymap_engine::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua

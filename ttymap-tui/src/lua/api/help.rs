@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use mlua::UserData;
 
-use super::LuaHostShared;
+use crate::lua::host::LuaHostShared;
 
 pub(super) struct HostHelp {
     shared: Arc<LuaHostShared>,

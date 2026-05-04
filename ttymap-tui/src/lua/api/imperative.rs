@@ -30,9 +30,10 @@ use std::time::Instant;
 
 use mlua::{Lua, Table};
 
-use super::{CaptureSlot, EventSubscription, LuaHostShared};
 use crate::UserCommand;
 use crate::compositor::op::{Op, OpsBuffer};
+use crate::lua::capture::{CaptureSlot, EventSubscription};
+use crate::lua::host::LuaHostShared;
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
 /// [`super::install`] after activation surfaces are registered.

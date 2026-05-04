@@ -9,7 +9,7 @@
 
 use mlua::{Lua, Table};
 
-use super::{CaptureSlot, EventSubscription, KeybindSpec, PaletteCommandSpec};
+use crate::lua::capture::{CaptureSlot, EventSubscription, KeybindSpec, PaletteCommandSpec};
 
 /// Install the activation-surface entries onto an existing `ttymap`
 /// table. Called from [`super::install`] before the imperative

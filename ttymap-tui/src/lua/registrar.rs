@@ -23,7 +23,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::compositor::{Activation, Component, Context, PaletteEntry, SpawnComponent};
 use crate::lua::LuaEventBus;
-use crate::lua::api::LuaHostHandles;
+use crate::lua::host::LuaHostHandles;
 
 #[derive(Default)]
 pub struct Registrar {

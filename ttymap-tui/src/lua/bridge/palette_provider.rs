@@ -224,7 +224,9 @@ impl LuaPaletteProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lua::api::{LuaHostShared, install, new_capture_slot};
+    use crate::lua::api::install;
+    use crate::lua::capture::new_capture_slot;
+    use crate::lua::host::LuaHostShared;
     use crate::theme::ThemeId;
 
     fn ctx() -> Context {

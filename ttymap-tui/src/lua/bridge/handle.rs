@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use mlua::{Lua, RegistryKey, Table};
 
-use crate::lua::api as host;
+use crate::lua::api::install;
+use crate::lua::capture::{CapturedRegistration, new_capture_slot};
+use crate::lua::host::{LuaHostHandles, LuaHostShared};
 use crate::lua::new_lua;
 
 /// Per-adapter Lua state + the registry handle for the dispatch
@@ -138,12 +140,12 @@ pub fn fresh_load(
     source: &str,
     chunk_name: &str,
     host_tag: &'static str,
-    shared: Arc<host::LuaHostShared>,
+    shared: Arc<LuaHostShared>,
     ops: crate::compositor::op::OpsBuffer,
-) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
+) -> mlua::Result<(Lua, CapturedRegistration, LuaHostHandles)> {
     let lua = new_lua();
-    let slot = host::new_capture_slot();
-    let handles = host::install(&lua, host_tag, shared, slot.clone(), ops)?;
+    let slot = new_capture_slot();
+    let handles = install(&lua, host_tag, shared, slot.clone(), ops)?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()
