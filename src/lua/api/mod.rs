@@ -233,10 +233,10 @@ impl LuaHostShared {
 /// `install()` returns this once per state; the App routes the
 /// shared cells to the right consumers.
 ///
-/// - **UserIntent sender** (not part of these handles) — every
+/// - **UserCommand sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
 ///   `:fly_to` / `ttymap.api.frame.export`) is pre-built into an
-///   [`UserIntent`] on the Lua side and pushed through a `Sender<UserIntent>`
+///   [`UserCommand`] on the Lua side and pushed through a `Sender<UserCommand>`
 ///   that every plugin clones from the **single** App-level channel.
 ///   The receiver lives directly on `App`; a single drain per frame
 ///   covers every plugin's intents.
@@ -344,7 +344,7 @@ pub fn install(
     ops: crate::compositor::op::OpsBuffer,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
-    // `frame.export`) enqueue `Op::Intent(UserIntent::...)` onto
+    // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
     // `ops`; the App drains and dispatches per iteration alongside
     // every other source. Plugin trust model is nvim-style (anything
     // the user could do, a plugin can also do).
@@ -422,7 +422,7 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::UserIntent;
+    use crate::UserCommand;
     use crate::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn host_map_jump_pushes_appmsg_jump() {
         // `ttymap.map:jump(lon, lat)` enqueues a fully-formed
-        // `Op::Intent(UserIntent::Map(MapAction::Jump(LonLat)))` on
+        // `Op::Command(UserCommand::Map(MapAction::Jump(LonLat)))` on
         // the shared op buffer; the App drains and dispatches.
         let (lua, _handles, ops) = install_for_test();
 
@@ -470,11 +470,11 @@ mod tests {
         let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Intent(UserIntent::Map(MapAction::Jump(ll))) => {
+            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::Jump(ll))) => {
                 assert!((ll.lon - 139.7595).abs() < 1e-9);
                 assert!((ll.lat - 35.6828).abs() < 1e-9);
             }
-            other => panic!("expected Op::Intent(Map(Jump)), got {other:?}"),
+            other => panic!("expected Op::Command(Map(Jump)), got {other:?}"),
         }
     }
 
@@ -482,16 +482,16 @@ mod tests {
     fn host_map_zoom_setter_pushes_appmsg_set_zoom() {
         // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side —
         // the level lands on the op buffer as
-        // `Op::Intent(UserIntent::Map(MapAction::SetZoom(level)))`.
+        // `Op::Command(UserCommand::Map(MapAction::SetZoom(level)))`.
         let (lua, _handles, ops) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Intent(UserIntent::Map(MapAction::SetZoom(z))) => {
+            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::SetZoom(z))) => {
                 assert!((z - 7.5).abs() < 1e-9)
             }
-            other => panic!("expected Op::Intent(Map(SetZoom)), got {other:?}"),
+            other => panic!("expected Op::Command(Map(SetZoom)), got {other:?}"),
         }
     }
 
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn host_map_fly_to_pushes_appmsg_fly_to() {
         // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
-        // `Op::Intent(UserIntent::Map(MapAction::FlyTo))` so the host
+        // `Op::Command(UserCommand::Map(MapAction::FlyTo))` so the host
         // emits one dispatch per call (single redraw, no intermediate
         // frame).
         let (lua, _handles, ops) = install_for_test();
@@ -525,7 +525,7 @@ mod tests {
         let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Intent(UserIntent::Map(MapAction::FlyTo {
+            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::FlyTo {
                 center,
                 zoom,
             })) => {
@@ -533,7 +533,7 @@ mod tests {
                 assert!((center.lat - 35.6828).abs() < 1e-9);
                 assert!((zoom - 12.0).abs() < 1e-9);
             }
-            other => panic!("expected Op::Intent(Map(FlyTo)), got {other:?}"),
+            other => panic!("expected Op::Command(Map(FlyTo)), got {other:?}"),
         }
     }
 
@@ -546,7 +546,7 @@ mod tests {
         assert!(
             matches!(
                 &drained[0],
-                crate::compositor::op::Op::Intent(UserIntent::ExportFrame)
+                crate::compositor::op::Op::Command(UserCommand::ExportFrame)
             ),
             "got {:?}",
             drained[0]

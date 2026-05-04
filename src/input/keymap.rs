@@ -1,14 +1,14 @@
-//! Key binding table — the `key → UserIntent` data used by the keyboard
+//! Key binding table — the `key → UserCommand` data used by the keyboard
 //! handler, plus the TOML-deserialisable `KeybindingOverrides` shape
 //! used by config to customise it.
 //!
-//! The keymap speaks the same `UserIntent` vocabulary as the palette
-//! and plugins — every key binding resolves to a `UserIntent` that
+//! The keymap speaks the same `UserCommand` vocabulary as the palette
+//! and plugins — every key binding resolves to a `UserCommand` that
 //! rides through [`App::dispatch`](crate::app::App). Today all
-//! defaults are `UserIntent::Map` wrappers, but nothing prevents binding
-//! a key to `UserIntent::SetTheme(...)` or `UserIntent::CycleFocus(...)` in
+//! defaults are `UserCommand::Map` wrappers, but nothing prevents binding
+//! a key to `UserCommand::SetTheme(...)` or `UserCommand::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
-//! are *not* `UserIntent`s — those go through the compositor's
+//! are *not* `UserCommand`s — those go through the compositor's
 //! [`Window::open`](crate::compositor::window::Window) / `toggle`
 //! queue, applied atomically after the `BaseLayer` hook returns.)
 
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::map::MapAction;
 
 /// A key binding: a key code + optional modifiers.
@@ -55,14 +55,14 @@ impl KeyBinding {
 }
 
 pub struct KeyMap {
-    pub bindings: Vec<(KeyBinding, UserIntent)>,
+    pub bindings: Vec<(KeyBinding, UserCommand)>,
 }
 
 impl KeyMap {
     /// Look up the command for a key event. Returns `None` if no
     /// binding matches. Stateless — multi-key sequences (e.g. `gg`)
     /// are owned by the keyboard handler, not the keymap.
-    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&UserIntent> {
+    pub fn lookup(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&UserCommand> {
         let clean_mods = modifiers & !KeyModifiers::SHIFT;
         self.bindings
             .iter()
@@ -70,19 +70,19 @@ impl KeyMap {
             .map(|(_, c)| c)
     }
 
-    /// Resolve a key event to a `UserIntent`. Stateless wrapper around
+    /// Resolve a key event to a `UserCommand`. Stateless wrapper around
     /// [`lookup`] that clones for ownership. Plugin activation (e.g.
     /// `/` opens search) is **not** handled here — widgets own their
     /// activation keys and the keyboard handler checks them before
     /// falling through to this resolver.
-    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserIntent> {
+    pub fn resolve(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserCommand> {
         self.lookup(code, modifiers).cloned()
     }
 
     /// Every key string currently bound to `cmd`, in registration
     /// order. Used by the command palette and help overlay to show
     /// "this command is invocable via these keys" hints.
-    pub fn keys_for(&self, cmd: &UserIntent) -> Vec<String> {
+    pub fn keys_for(&self, cmd: &UserCommand) -> Vec<String> {
         self.bindings
             .iter()
             .filter(|(_, c)| c == cmd)
@@ -93,7 +93,7 @@ impl KeyMap {
     /// Replace every existing binding for `cmd` with the supplied list
     /// of key strings (e.g. `["h", "Left"]`). Invalid key strings are
     /// logged and skipped.
-    pub fn set_bindings(&mut self, cmd: UserIntent, keys: &[String]) {
+    pub fn set_bindings(&mut self, cmd: UserCommand, keys: &[String]) {
         self.bindings.retain(|(_, c)| c != &cmd);
         for key_str in keys {
             if let Some(binding) = parse_key_binding(key_str) {
@@ -105,13 +105,13 @@ impl KeyMap {
     }
 
     /// Default bindings with user `[keymap]` overrides applied on
-    /// top. Each entry's key is a [`UserIntent`] config name (e.g.
+    /// top. Each entry's key is a [`UserCommand`] config name (e.g.
     /// `"pan_left"`, `"quit"`); unknown names are logged and skipped
     /// so a stale config can't crash startup.
     pub fn with_overrides(overrides: &KeybindingOverrides) -> Self {
         let mut km = Self::default();
         for (name, keys) in overrides {
-            match UserIntent::from_config_name(name) {
+            match UserCommand::from_config_name(name) {
                 Some(intent) => km.set_bindings(intent, keys),
                 None => log::warn!("unknown [keymap] entry: {:?}", name),
             }
@@ -123,10 +123,10 @@ impl KeyMap {
 impl Default for KeyMap {
     fn default() -> Self {
         use MapAction::*;
-        let map = |key: &str, action: MapAction| -> (KeyBinding, UserIntent) {
-            (parse_key_binding(key).unwrap(), UserIntent::Map(action))
+        let map = |key: &str, action: MapAction| -> (KeyBinding, UserCommand) {
+            (parse_key_binding(key).unwrap(), UserCommand::Map(action))
         };
-        let intent = |key: &str, intent: UserIntent| -> (KeyBinding, UserIntent) {
+        let intent = |key: &str, intent: UserCommand| -> (KeyBinding, UserCommand) {
             (parse_key_binding(key).unwrap(), intent)
         };
         Self {
@@ -148,8 +148,8 @@ impl Default for KeyMap {
                 map("z", ZoomOut),
                 map("-", ZoomOut),
                 map("0", ResetPosition),
-                intent("q", UserIntent::Quit),
-                intent("\\", UserIntent::ToggleSidebar),
+                intent("q", UserCommand::Quit),
+                intent("\\", UserCommand::ToggleSidebar),
             ],
         }
     }
@@ -158,7 +158,7 @@ impl Default for KeyMap {
 /// Raw keybinding overrides from the `[keymap]` section of
 /// `config.toml`. Keys are `MapAction::config_name` strings (e.g.
 /// `"pan_left"`); values replace the default bindings for that
-/// action (wrapped as `UserIntent::Map` internally). Applied via
+/// action (wrapped as `UserCommand::Map` internally). Applied via
 /// `KeyMap::with_overrides`. Adding a new bindable `MapAction` only
 /// requires extending `MapAction::all_listed` + `MapAction::config_name`
 /// — the data shape here is unchanged.
@@ -209,8 +209,8 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
 mod tests {
     use super::*;
 
-    fn map(action: MapAction) -> UserIntent {
-        UserIntent::Map(action)
+    fn map(action: MapAction) -> UserCommand {
+        UserCommand::Map(action)
     }
 
     #[test]
@@ -273,11 +273,11 @@ mod tests {
         );
         assert_eq!(
             km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
-            Some(&UserIntent::Quit)
+            Some(&UserCommand::Quit)
         );
         assert_eq!(
             km.lookup(KeyCode::Char('q'), KeyModifiers::CONTROL),
-            Some(&UserIntent::Quit)
+            Some(&UserCommand::Quit)
         );
     }
 
@@ -342,7 +342,10 @@ mod tests {
     #[test]
     fn resolve_quit() {
         let km = KeyMap::default();
-        assert_eq!(km.resolve(KeyCode::Char('q'), NONE), Some(UserIntent::Quit));
+        assert_eq!(
+            km.resolve(KeyCode::Char('q'), NONE),
+            Some(UserCommand::Quit)
+        );
     }
 
     #[test]

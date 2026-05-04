@@ -2,7 +2,7 @@
 //! to recentre / zoom / fly-to / read the current centre.
 //!
 //! All mutators are fire-and-forget: each call enqueues an
-//! [`Op::Intent(UserIntent::Map(...))`] onto the shared
+//! [`Op::Command(UserCommand::Map(...))`] onto the shared
 //! [`OpsBuffer`](crate::compositor::op::OpsBuffer) and the App drains
 //! it once per iteration. Read methods (`center`, no-arg `zoom`)
 //! consult shared `Arc<Mutex<...>>` cells the host refreshes on every
@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use mlua::UserData;
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::op::{Op, OpsBuffer};
 use crate::geo::LonLat;
 use crate::map::MapAction;
@@ -21,7 +21,7 @@ use crate::map::MapAction;
 pub(super) struct HostMap {
     /// Shared op buffer the lua subsystem drains every iteration.
     /// Fire-and-forget Lua intents (`jump` / `zoom` / `fly_to`)
-    /// enqueue an `Op::Intent(UserIntent::Map(...))`; the host treats
+    /// enqueue an `Op::Command(UserCommand::Map(...))`; the host treats
     /// them identically to a keymap-driven dispatch.
     ops: OpsBuffer,
     center: Arc<Mutex<LonLat>>,
@@ -37,13 +37,13 @@ impl HostMap {
 impl UserData for HostMap {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.map:jump(lon, lat)` — request the map recentre on
-        // the given coordinate. Enqueues `UserIntent::Map(Jump)` onto
+        // the given coordinate. Enqueues `UserCommand::Map(Jump)` onto
         // the shared op buffer so the host treats it identically to a
         // keymap-driven jump.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             this.ops
                 .borrow_mut()
-                .push(Op::Intent(UserIntent::Map(MapAction::Jump(LonLat {
+                .push(Op::Command(UserCommand::Map(MapAction::Jump(LonLat {
                     lon,
                     lat,
                 }))));
@@ -62,7 +62,7 @@ impl UserData for HostMap {
             Some(z) => {
                 this.ops
                     .borrow_mut()
-                    .push(Op::Intent(UserIntent::Map(MapAction::SetZoom(z))));
+                    .push(Op::Command(UserCommand::Map(MapAction::SetZoom(z))));
                 Ok(mlua::Value::Nil)
             }
             None => {
@@ -78,7 +78,7 @@ impl UserData for HostMap {
         methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
             this.ops
                 .borrow_mut()
-                .push(Op::Intent(UserIntent::Map(MapAction::FlyTo {
+                .push(Op::Command(UserCommand::Map(MapAction::FlyTo {
                     center: LonLat { lon, lat },
                     zoom,
                 })));

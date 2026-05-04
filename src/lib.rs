@@ -7,10 +7,16 @@
 // tests can share a module tree; external consumers only need the handful
 // of items used by main.rs, so everything else is `pub(crate)`.
 
-/// Application event loop and central message dispatcher. Also home
-/// of the [`UserIntent`](app::UserIntent) vocabulary — the single
-/// enum every emission site (palette, plugins, mouse, future RPC)
-/// speaks and that [`app::App::dispatch`] interprets.
+/// Crate-wide command vocabulary — the GoF Command pattern's
+/// **Command** role. The single enum every emission site (palette,
+/// plugins, mouse, future RPC) speaks and that [`app::App::dispatch`]
+/// interprets as the GoF Receiver. Foundational on purpose: every
+/// layer that *produces* a command reaches this type via
+/// `crate::UserCommand`, no upward dependency on `app/`.
+pub mod command;
+pub use command::UserCommand;
+
+/// Application event loop and central message dispatcher.
 pub mod app;
 
 /// Compositor — stack-based focus / modal system (helix-inspired).
@@ -55,10 +61,10 @@ pub mod theme;
 
 /// Input subsystem — raw-terminal-event ingest and translation
 /// (input thread, keymap table, mouse adapter). Sits as a peer of
-/// `map/` and `lua/`; [`app::App`] pulls translated [`UserIntent`]s
-/// out of it for each `AppEvent::Input`. `pub` so `main` can name
-/// the [`input::thread::InputHandle`] it spawns at the composition
-/// root.
+/// `map/` and `lua/`; [`app::App`] pulls translated
+/// [`UserCommand`]s out of it for each `AppEvent::Input`. `pub` so
+/// `main` can name the [`input::thread::InputHandle`] it spawns at
+/// the composition root.
 pub mod input;
 
 /// File-based logging to XDG state directory.

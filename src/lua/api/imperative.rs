@@ -31,7 +31,7 @@ use std::time::Instant;
 use mlua::{Lua, Table};
 
 use super::{CaptureSlot, EventSubscription, LuaHostShared};
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::op::{Op, OpsBuffer};
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
@@ -129,7 +129,7 @@ fn build_frame_table(lua: &Lua, slot: CaptureSlot, ops: OpsBuffer) -> mlua::Resu
         lua.create_function(move |_, _: ()| {
             ops_for_export
                 .borrow_mut()
-                .push(Op::Intent(UserIntent::ExportFrame));
+                .push(Op::Command(UserCommand::ExportFrame));
             Ok(())
         })?,
     )?;

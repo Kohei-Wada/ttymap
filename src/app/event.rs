@@ -4,7 +4,7 @@
 //! channel that every off-main-thread (or deferred main-thread)
 //! source pushes into. Four variants:
 //!
-//! - [`AppEvent::Intent`] — wraps a [`UserIntent`]: every
+//! - [`AppEvent::Command`] — wraps a [`UserCommand`]: every
 //!   fire-and-forget intent emitter (keymap / mouse when dispatch
 //!   can't run inline; Lua plugins use the shared [`crate::compositor::op::OpsBuffer`])
 //!   goes through this. Synchronous emitters (compositor.poll,
@@ -14,7 +14,7 @@
 //!   completed [`MapFrame`] for the App to display next paint cycle.
 //! - [`AppEvent::Input`] — a raw terminal event (keyboard / mouse /
 //!   resize / paste) read by the input thread. The main loop matches
-//!   on it and dispatches the appropriate downstream `UserIntent`s.
+//!   on it and dispatches the appropriate downstream `UserCommand`s.
 //! - [`AppEvent::Wake`] — periodic wake-up from the frame timer
 //!   thread. Replaces the old `recv_timeout` polling: the main loop
 //!   now blocks on `recv()` and the timer guarantees per-iteration
@@ -26,26 +26,26 @@
 //!   against a live `MapApi`. They're aligned in cadence (one per
 //!   draw) but live at different layers.
 //!
-//! The split (rather than adding `FrameReady` directly to [`UserIntent`])
-//! is intentional: `UserIntent` derives `PartialEq` for keymap binding
+//! The split (rather than adding `FrameReady` directly to [`UserCommand`])
+//! is intentional: `UserCommand` derives `PartialEq` for keymap binding
 //! lookups, and `MapFrame` is a per-frame grid buffer whose equality
-//! is meaningless and expensive. Wrapping keeps `UserIntent`'s vocabulary
+//! is meaningless and expensive. Wrapping keeps `UserCommand`'s vocabulary
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
 
 use crate::map::render::frame::MapFrame;
 
-use super::UserIntent;
+use crate::UserCommand;
 
 /// Unified event payload drained from the App-level `mpsc` channel.
 ///
 /// See module-level docs for the rationale behind the variant split.
 #[derive(Debug)]
 pub enum AppEvent {
-    /// A user-intent [`UserIntent`] emitted off-thread or deferred from
-    /// inside a Lua callback. Dispatched through
-    /// [`super::App::dispatch`] in arrival order.
-    Intent(UserIntent),
+    /// A [`UserCommand`] emitted off-thread or deferred from inside a
+    /// Lua callback. Dispatched through [`super::App::dispatch`] in
+    /// arrival order.
+    Command(UserCommand),
     /// A freshly rendered [`MapFrame`] from the render thread. Stored
     /// on the App as the next paint snapshot; multiple in flight =>
     /// last one wins, matching the prior dedicated-channel behaviour.
@@ -65,8 +65,8 @@ pub enum AppEvent {
     Wake,
 }
 
-impl From<UserIntent> for AppEvent {
-    fn from(msg: UserIntent) -> Self {
-        AppEvent::Intent(msg)
+impl From<UserCommand> for AppEvent {
+    fn from(msg: UserCommand) -> Self {
+        AppEvent::Command(msg)
     }
 }

@@ -37,7 +37,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
@@ -60,21 +60,21 @@ use crate::theme::UiTheme;
 /// ASCII LF) and the binding silently does nothing. `C-k` has no
 /// such legacy collision and works regardless. Tab / Shift-Tab
 /// always work as a fallback.
-fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
+fn intercept_focus_key(event: KeyEvent) -> Option<UserCommand> {
     if event.code == KeyCode::Tab && event.modifiers == KeyModifiers::NONE {
-        return Some(UserIntent::CycleFocus(true));
+        return Some(UserCommand::CycleFocus(true));
     }
     if event.code == KeyCode::BackTab
         || (event.code == KeyCode::Tab && event.modifiers.contains(KeyModifiers::SHIFT))
     {
-        return Some(UserIntent::CycleFocus(false));
+        return Some(UserCommand::CycleFocus(false));
     }
     let only_ctrl = event.modifiers == KeyModifiers::CONTROL;
     if only_ctrl && event.code == KeyCode::Char('j') {
-        return Some(UserIntent::CycleFocus(true));
+        return Some(UserCommand::CycleFocus(true));
     }
     if only_ctrl && event.code == KeyCode::Char('k') {
-        return Some(UserIntent::CycleFocus(false));
+        return Some(UserCommand::CycleFocus(false));
     }
     None
 }
@@ -297,7 +297,7 @@ impl Compositor {
     /// the lua-side state pointing at a stale handle.
     pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<Op> {
         if let Some(msg) = intercept_focus_key(event) {
-            return vec![Op::Intent(msg)];
+            return vec![Op::Command(msg)];
         }
         if self.stack.is_empty() {
             return Vec::new();
@@ -611,14 +611,14 @@ mod tests {
     /// Drive a key event into the compositor and apply the returned
     /// ops the same way App would: stack mutations are applied
     /// to `c` itself, intents are returned to the test for assertion.
-    fn drive(c: &mut Compositor, event: KeyEvent, ctx: &Context) -> Vec<UserIntent> {
+    fn drive(c: &mut Compositor, event: KeyEvent, ctx: &Context) -> Vec<UserCommand> {
         let ops = c.handle_event(event, ctx);
         let mut intents = Vec::new();
         for op in ops {
             match op {
                 Op::Push { id, component } => c.push_with_id(id, component),
                 Op::Close(id) => c.close_by_id(id),
-                Op::Intent(intent) => intents.push(intent),
+                Op::Command(intent) => intents.push(intent),
             }
         }
         intents
@@ -679,7 +679,7 @@ mod tests {
         struct SwallowsAll;
         impl Component for SwallowsAll {
             fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
-                win.emit(UserIntent::Map(crate::map::MapAction::None));
+                win.emit(UserCommand::Map(crate::map::MapAction::None));
             }
             fn render(&self, _: &mut window::RenderWindow) {}
         }
@@ -697,13 +697,13 @@ mod tests {
             KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
             &ctx,
         );
-        assert_eq!(intents, vec![UserIntent::CycleFocus(true)]);
+        assert_eq!(intents, vec![UserCommand::CycleFocus(true)]);
 
         let intents = drive(
             &mut c,
             KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
             &ctx,
         );
-        assert_eq!(intents, vec![UserIntent::CycleFocus(false)]);
+        assert_eq!(intents, vec![UserCommand::CycleFocus(false)]);
     }
 }

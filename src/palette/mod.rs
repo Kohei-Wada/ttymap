@@ -240,7 +240,7 @@ pub fn install(
 mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
-    use crate::app::UserIntent;
+    use crate::UserCommand;
     use crate::map::MapAction;
     use crate::theme::ThemeId;
 
@@ -301,7 +301,7 @@ mod tests {
             &self.items
         }
         fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
-            PaletteAction::Run(vec![UserIntent::Map(MapAction::None)])
+            PaletteAction::Run(vec![UserCommand::Map(MapAction::None)])
         }
     }
 
@@ -414,7 +414,7 @@ mod tests {
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
         let ops = dispatch(&mut p, KeyCode::Enter, NONE);
         assert!(ops.closed());
-        assert_eq!(ops.intents(), vec![UserIntent::Map(MapAction::None)]);
+        assert_eq!(ops.intents(), vec![UserCommand::Map(MapAction::None)]);
         assert!(!ops.pushed());
     }
 

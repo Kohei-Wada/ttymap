@@ -9,7 +9,7 @@
 //!
 //! [`PaletteProvider`]: super::provider::PaletteProvider
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::Component;
 
 use super::provider::PaletteProvider;
@@ -29,7 +29,7 @@ use super::provider::PaletteProvider;
 ///
 /// `Run` and `Push` are reachable from Lua only via the host
 /// `intent_tx` / `push_tx` channels — Lua cannot construct an
-/// `UserIntent` enum or a `Box<dyn Component>` directly. `SwitchProvider`
+/// `UserCommand` enum or a `Box<dyn Component>` directly. `SwitchProvider`
 /// has no equivalent side channel (provider swap on a *running*
 /// palette must be atomic) so it's the one structural verb exposed in
 /// the Lua return shape.
@@ -37,7 +37,7 @@ pub enum PaletteAction {
     /// Close the palette with no side effect.
     Close,
     /// Close the palette and dispatch these messages.
-    Run(Vec<UserIntent>),
+    Run(Vec<UserCommand>),
     /// Close the palette and push `component` onto the compositor.
     /// Always stacks new — no Rust-side dedup. A plugin that wants
     /// "close existing on re-select" implements that itself.

@@ -29,7 +29,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::input::keymap::KeyMap;
 use crate::map::MapAction;
 
@@ -76,11 +76,11 @@ impl BaseLayer {
     /// Advance the `gg` state machine and resolve via the keymap.
     /// Called unconditionally so any non-`g` keypress resets
     /// `pending_g`.
-    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserIntent> {
+    fn resolve_keymap(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<UserCommand> {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Some(UserIntent::Map(MapAction::ZoomToWorld));
+                return Some(UserCommand::Map(MapAction::ZoomToWorld));
             }
             self.pending_g = true;
             return None;
@@ -185,7 +185,10 @@ mod tests {
         assert!(!ops.pushed());
         // 2nd g: ZoomToWorld.
         let ops = dispatch(&mut bg, KeyCode::Char('g'));
-        assert_eq!(ops.intents(), vec![UserIntent::Map(MapAction::ZoomToWorld)]);
+        assert_eq!(
+            ops.intents(),
+            vec![UserCommand::Map(MapAction::ZoomToWorld)]
+        );
     }
 
     #[test]

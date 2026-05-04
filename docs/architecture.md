@@ -24,12 +24,15 @@ src/
 ├── input/               input subsystem — peer of map/, app/, lua/
 │   ├── thread.rs        producer thread blocking on crossterm::event::read
 │   ├── keymap.rs        KeyMap table + KeybindingOverrides (init.lua + Lua keymap.set)
-│   └── mouse.rs         MouseAdapter — MouseEvent → UserIntent (drag pan, scroll zoom-at)
+│   └── mouse.rs         MouseAdapter — MouseEvent → UserCommand (drag pan, scroll zoom-at)
 │
-├── app/                 controller: event loop, intent dispatch, UI shell
+├── command.rs           UserCommand enum — the GoF Command vocabulary
+│                         (Map(MapAction) / Quit / SetTheme / ToggleSidebar / …)
+│                         used by every emission site in the crate.
+│
+├── app/                 controller: event loop, command dispatch, UI shell
 │   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
-│   ├── intent.rs        UserIntent enum (Map(MapAction) / Quit / SetTheme / ToggleSidebar / …)
-│   ├── event.rs         AppEvent — unified queue payload (Intent / FrameReady / Input / Wake)
+│   ├── event.rs         AppEvent — unified queue payload (Command / FrameReady / Input / Wake)
 │   ├── frame_timer.rs   per-iteration wake source
 │   └── ui.rs            ratatui draw entry — map area + footer, routes through compositor
 │
@@ -38,7 +41,7 @@ src/
 │   ├── base.rs          BaseLayer — keymap + activation table + count prefixes (5j etc.)
 │   ├── sidebar.rs       left-rail layout (up to 3 Sidebar cards, equal vertical split)
 │   ├── window.rs        Window (event-side, queues ops) + RenderWindow (render-side, owns UiTheme)
-│   ├── op.rs            Op enum — single drain vocabulary (Push / Close / Intent)
+│   ├── op.rs            Op enum — single drain vocabulary (Push / Close / Command)
 │   └── map_api.rs       MapApi — world-space + screen-space draw primitives consumed by Lua tick
 │
 ├── palette/             `:`-triggered universal picker (itself a Component)
@@ -107,14 +110,17 @@ runtime/
 - **`map/`** — domain. Knows nothing about UI, plugins, or focus.
   `MapAction` carries every map-level mutation, including mouse-continuous
   variants (`PanCells`, `ZoomAt`).
-- **`app/`** — the **controller**. `UserIntent` (in
-  `app/intent.rs`) is the closed enum every input source (keymap,
-  palette, compositor components, mouse adapter, Lua callbacks, async
-  tasks) emits; `App::dispatch` in `app/mod.rs` is the sole
-  place that executes them. Map-level actions nest under
-  `UserIntent::Map(MapAction)`; other variants sit at the top level.
-  Command pattern with `App` as the Receiver — see
-  [design.md](design.md) for the UserIntent-vs-direct-call judgment
+- **`app/`** — the **controller**. `UserCommand` (in
+  `src/command.rs` at crate root) is the closed enum every input
+  source (keymap, palette, compositor components, mouse adapter, Lua
+  callbacks, async tasks) emits; `App::dispatch` in `app/mod.rs` is
+  the sole place that executes them. Map-level actions nest under
+  `UserCommand::Map(MapAction)`; other variants sit at the top
+  level. GoF Command pattern with `App` as the Receiver — the
+  `UserCommand` type lives at the crate root rather than under
+  `app/` so producers reach it via `crate::UserCommand` without an
+  upward dependency on the Receiver. See
+  [design.md](design.md) for the UserCommand-vs-direct-call judgment
   rules.
 - **`compositor/`** — focus and modal state. A stack of
   `Component`s; the top owns key focus. No `is_visible` / `activate`
@@ -124,7 +130,7 @@ runtime/
   equal-split in the left rail (max 3 visible);
   `Placement::Floating` draws over the map (palette).
 - **`input/mouse.rs`** — pure adapter.
-  `MouseEvent → Vec<UserIntent>` (`CursorMoved` on every event;
+  `MouseEvent → Vec<UserCommand>` (`CursorMoved` on every event;
   drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
 - **`app/ui.rs`** — non-modal shell. `draw()` paints the latest
   `MapFrame`, runs the `LuaEventBus::dispatch_tick` so every Lua
@@ -164,43 +170,43 @@ runtime/
 ```
 raw event
   ↓ keyboard / mouse / Lua callback / tile arrival / frame timer
-  ↓ produces 0..N UserIntent or AppEvent::FrameReady (pure translation)
+  ↓ produces 0..N UserCommand or AppEvent::FrameReady (pure translation)
   ↓
 App::dispatch(intent)
   ↓
-    UserIntent::Map(action)        → MapState::process_action(&action)
+    UserCommand::Map(action)        → MapState::process_action(&action)
                                      (Map(MapAction::Jump(loc)) recentres,
                                       Map(MapAction::Pan…) scrolls, etc.)
-    UserIntent::Quit               → break the event loop
-    UserIntent::SetTheme(id)       → App::switch_theme (rebuilds styler + UI theme)
-    UserIntent::CursorMoved(c,r)   → cursor overlay
-    UserIntent::CycleFocus(fwd)    → Compositor::cycle
-    UserIntent::Resize(cols,rows)  → App::handle_resize
-    UserIntent::ToggleSidebar      → show/hide the sidebar; recomputes
+    UserCommand::Quit               → break the event loop
+    UserCommand::SetTheme(id)       → App::switch_theme (rebuilds styler + UI theme)
+    UserCommand::CursorMoved(c,r)   → cursor overlay
+    UserCommand::CycleFocus(fwd)    → Compositor::cycle
+    UserCommand::Resize(cols,rows)  → App::handle_resize
+    UserCommand::ToggleSidebar      → show/hide the sidebar; recomputes
                                      the map canvas so the render thread
                                      allocates the right buffer size
-    UserIntent::ExportFrame        → write the current MapFrame as ANSI / HTML
+    UserCommand::ExportFrame        → write the current MapFrame as ANSI / HTML
 ```
 
-Keyboard and mouse take different paths to `UserIntent` — keys go
+Keyboard and mouse take different paths to `UserCommand` — keys go
 through the Compositor; mouse events go through a pure adapter:
 
 ```
 key event
   ↓ Compositor::handle_event(event, ctx):
-    [reserved]  Tab / Shift-Tab   → UserIntent::CycleFocus(…)
+    [reserved]  Tab / Shift-Tab   → UserCommand::CycleFocus(…)
     [focused]   focused component's handle_event(event, &mut win)
                   ↓ win.emit / win.open / win.close / win.ignore
     [fallback]  only if the focused component called win.ignore()
                 and focus isn't already on BaseLayer
                 → re-deliver to BaseLayer (keymap + activation table + count prefix)
-  ↓ Vec<UserIntent>
+  ↓ Vec<UserCommand>
 
 mouse event
-  ↓ MouseAdapter::translate(event) → Vec<UserIntent>:
-    every event   → UserIntent::CursorMoved(col, row)
-    drag (left)   → UserIntent::Map(MapAction::PanCells(dx, dy))
-    scroll        → UserIntent::Map(MapAction::ZoomAt { anchor_*, zoom_in })
+  ↓ MouseAdapter::translate(event) → Vec<UserCommand>:
+    every event   → UserCommand::CursorMoved(col, row)
+    drag (left)   → UserCommand::Map(MapAction::PanCells(dx, dy))
+    scroll        → UserCommand::Map(MapAction::ZoomAt { anchor_*, zoom_in })
 ```
 
 ## Render flow

@@ -5,9 +5,9 @@
 //! every invoker (keymap, palette, plugins, mouse adapter, render
 //! thread, input thread, frame timer) emits onto the unified
 //! [`AppEvent`] bus, and only `App::dispatch` executes the
-//! resulting `UserIntent`s. Component hooks express intent through
+//! resulting `UserCommand`s. Component hooks express intent through
 //! `Window::emit(msg)` which routes onto the same bus — no
-//! synchronous "return `Vec<UserIntent>`" path remains.
+//! synchronous "return `Vec<UserCommand>`" path remains.
 //!
 //! `App` doesn't own subsystems. Threads (render / input /
 //! frame timer), the bus, and the channel are constructed by `main`
@@ -26,13 +26,12 @@
 
 pub mod event;
 pub mod frame_timer;
-pub mod intent;
 mod overlay;
 mod sidebar;
 pub mod ui;
 
+use crate::UserCommand;
 pub use event::AppEvent;
-pub use intent::UserIntent;
 use overlay::OverlayThrottle;
 use sidebar::SidebarPolicy;
 
@@ -61,7 +60,7 @@ pub struct App {
     /// and `FrameTimer`.
     map: MapHandle,
     /// App-lifetime flag — `true` while the event loop should keep
-    /// running, flipped to `false` by [`UserIntent::Quit`]. Lives
+    /// running, flipped to `false` by [`UserCommand::Quit`]. Lives
     /// here (not on `MapState`) because liveness is an app concern,
     /// not a map-data concern.
     running: bool,
@@ -235,17 +234,17 @@ impl App {
                     self.compositor.push_with_id(id, component);
                 }
                 crate::compositor::op::Op::Close(id) => self.compositor.close_by_id(id),
-                crate::compositor::op::Op::Intent(intent) => {
+                crate::compositor::op::Op::Command(intent) => {
                     let snapshot = intent.clone();
                     self.dispatch(intent);
-                    self.notify_post_intent(&snapshot);
+                    self.notify_post_command(&snapshot);
                 }
             }
         }
     }
 
     /// Whether the event loop should keep running — flipped off by
-    /// [`UserIntent::Quit`]. Checked at the top of each `run`
+    /// [`UserCommand::Quit`]. Checked at the top of each `run`
     /// iteration.
     fn is_running(&self) -> bool {
         self.running
@@ -265,10 +264,10 @@ impl App {
     /// executor; the bus is observation only.
     fn handle_event(&mut self, event: AppEvent, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
-            AppEvent::Intent(msg) => {
+            AppEvent::Command(msg) => {
                 let snapshot = msg.clone();
                 self.dispatch(msg);
-                self.notify_post_intent(&snapshot);
+                self.notify_post_command(&snapshot);
             }
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
@@ -289,16 +288,16 @@ impl App {
     /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
     /// surface stays meaningful — bus events are "something
     /// observable happened to the app", not "every state mutation".
-    fn notify_post_intent(&self, msg: &UserIntent) {
+    fn notify_post_command(&self, msg: &UserCommand) {
         match msg {
-            UserIntent::Map(MapAction::Jump(ll)) => self.lua.notify_map_jumped(*ll),
-            UserIntent::Map(MapAction::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
-            UserIntent::Map(MapAction::FlyTo { center, zoom }) => {
+            UserCommand::Map(MapAction::Jump(ll)) => self.lua.notify_map_jumped(*ll),
+            UserCommand::Map(MapAction::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
+            UserCommand::Map(MapAction::FlyTo { center, zoom }) => {
                 self.lua.notify_map_flew_to(*center, *zoom);
             }
-            UserIntent::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
-            UserIntent::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
-            UserIntent::ExportFrame => self.lua.notify_frame_exported(),
+            UserCommand::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
+            UserCommand::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
+            UserCommand::ExportFrame => self.lua.notify_frame_exported(),
             // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
             // `CycleFocus`, the discrete `Pan*` keymap actions, and
             // `Quit` (the App is tearing down anyway) are deliberately
@@ -317,7 +316,7 @@ impl App {
                     && key_event.code == KeyCode::Char('c')
                 {
                     info!("Ctrl-C received, quitting");
-                    let _ = event_tx.send(AppEvent::Intent(UserIntent::Quit));
+                    let _ = event_tx.send(AppEvent::Command(UserCommand::Quit));
                 } else {
                     debug!("key event: {:?}", key_event.code);
                     let ctx = self.context();
@@ -327,11 +326,11 @@ impl App {
             }
             Event::Resize(cols, rows) => {
                 info!("resize: {}x{}", cols, rows);
-                let _ = event_tx.send(AppEvent::Intent(UserIntent::Resize(cols, rows)));
+                let _ = event_tx.send(AppEvent::Command(UserCommand::Resize(cols, rows)));
             }
             Event::Mouse(mouse) => {
                 for msg in self.mouse.translate(mouse) {
-                    let _ = event_tx.send(AppEvent::Intent(msg));
+                    let _ = event_tx.send(AppEvent::Command(msg));
                 }
             }
             _ => {}
@@ -405,30 +404,30 @@ impl App {
     /// loop — kicks off the very first render task so the terminal
     /// isn't blank waiting for input.
     fn dispatch_initial_redraw(&mut self) {
-        self.dispatch(UserIntent::Map(MapAction::Redraw));
+        self.dispatch(UserCommand::Map(MapAction::Redraw));
     }
 
-    fn dispatch(&mut self, msg: UserIntent) {
+    fn dispatch(&mut self, msg: UserCommand) {
         match msg {
-            UserIntent::Map(action) => {
+            UserCommand::Map(action) => {
                 if self.map.apply_action(&action) {
                     self.request_map_redraw();
                 }
             }
-            UserIntent::Quit => {
-                debug!("UserIntent::Quit — stopping event loop");
+            UserCommand::Quit => {
+                debug!("UserCommand::Quit — stopping event loop");
                 self.running = false;
             }
-            UserIntent::SetTheme(new_id) => self.switch_theme(new_id),
-            UserIntent::CursorMoved(col, row) => {
+            UserCommand::SetTheme(new_id) => self.switch_theme(new_id),
+            UserCommand::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
             }
-            UserIntent::CycleFocus(forward) => {
+            UserCommand::CycleFocus(forward) => {
                 self.compositor.cycle(forward);
             }
-            UserIntent::Resize(cols, rows) => self.handle_resize(cols, rows),
-            UserIntent::ExportFrame => self.export_current_frame(),
-            UserIntent::ToggleSidebar => self.toggle_sidebar(),
+            UserCommand::Resize(cols, rows) => self.handle_resize(cols, rows),
+            UserCommand::ExportFrame => self.export_current_frame(),
+            UserCommand::ToggleSidebar => self.toggle_sidebar(),
         }
     }
 

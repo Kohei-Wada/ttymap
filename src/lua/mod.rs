@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::op;
 use crate::compositor::{Activation, PaletteEntry};
 use crate::config::Config;
@@ -145,7 +145,7 @@ pub fn build_subsystem(
 /// plugin surfaces via `ttymap.help:keymap_entries()`. Live data —
 /// runtime keymap overrides surface here.
 fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
-    UserIntent::keymap_help_entries(keymap)
+    UserCommand::keymap_help_entries(keymap)
 }
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming

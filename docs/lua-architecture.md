@@ -131,9 +131,9 @@ Canonical event names (`names::*` in `registry.rs`):
 | `map_jumped`      | `MapAction::Jump` ran                                 | `(lon, lat)`         |
 | `map_zoom_set`    | `MapAction::SetZoom` ran                              | `zoom: number`       |
 | `map_flew_to`     | `MapAction::FlyTo` ran                                | `(lon, lat, zoom)`   |
-| `theme_changed`   | `UserIntent::SetTheme` ran                            | `theme: string`      |
-| `resized`         | `UserIntent::Resize` ran                              | `(cols, rows)`       |
-| `frame_exported`  | `UserIntent::ExportFrame` ran                         | none                 |
+| `theme_changed`   | `UserCommand::SetTheme` ran                            | `theme: string`      |
+| `resized`         | `UserCommand::Resize` ran                              | `(cols, rows)`       |
+| `frame_exported`  | `UserCommand::ExportFrame` ran                         | none                 |
 
 Subscribers under different names are independent. One broken
 subscriber doesn't stop the others — errors are logged and the
@@ -200,10 +200,10 @@ a handle) and `:close()` (idempotent flip).
 Lua side is fire-and-forget; App drains per tick. Senders held by the
 setup state:
 
-- `jump_tx` — `ttymap.map:jump` → `UserIntent::Map(MapAction::Jump)`
+- `jump_tx` — `ttymap.map:jump` → `UserCommand::Map(MapAction::Jump)`
 - `zoom_tx` — `ttymap.map:zoom(level)` setter → `MapAction::SetZoom`
 - `fly_to_tx` — `ttymap.map:fly_to` → `MapAction::FlyTo`
-- `export_tx` — `ttymap.api.frame.export` → `UserIntent::ExportFrame`
+- `export_tx` — `ttymap.api.frame.export` → `UserCommand::ExportFrame`
 - `push_tx` — `Box<dyn Component>` queued by `api.card.open` /
   `api.palette.open` → pushed onto the compositor stack
 

@@ -133,7 +133,7 @@ pub enum CallOutcome<R> {
 /// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
 /// - `ops` is the shared [`crate::compositor::op::OpsBuffer`] every plugin
 ///   clones a handle to; all Lua → App traffic (`Op::Push` /
-///   `Op::Close` / `Op::Intent`) lands on it.
+///   `Op::Close` / `Op::Command`) lands on it.
 pub fn fresh_load(
     source: &str,
     chunk_name: &str,

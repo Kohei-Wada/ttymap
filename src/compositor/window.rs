@@ -8,7 +8,7 @@
 //!     if ev.code == KeyCode::Esc {
 //!         win.close();
 //!     } else if enter_with_selection {
-//!         win.emit(UserIntent::Map(MapAction::Jump(loc)));
+//!         win.emit(UserCommand::Map(MapAction::Jump(loc)));
 //!         win.close();
 //!     } else if ev.code == KeyCode::Char('/') {
 //!         win.close();
@@ -20,7 +20,7 @@
 //! Stack-mutation methods (`close`, `open`, `ignore`) queue into
 //! [`WindowOps`]; the compositor drains the queue after the hook
 //! returns and applies them in a deterministic order (`close` →
-//! `opens`). `emit` is *not* queued — it routes the [`UserIntent`]
+//! `opens`). `emit` is *not* queued — it routes the [`UserCommand`]
 //! straight onto the App-level [`AppEvent`] channel, so every
 //! intent (whether produced by the keymap, a Lua palette callback,
 //! or a panel hook) flows through the same bus the render thread,
@@ -45,7 +45,7 @@ use ratatui::widgets::{
     TableState,
 };
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{CardId, Component, Context};
 use crate::theme::{StyleKind, UiTheme};
@@ -67,7 +67,7 @@ pub(crate) struct WindowOps {
     /// after the hook returns:
     /// - [`Op::Close`] → `Compositor::close_by_id`
     /// - [`Op::Push`] → `Compositor::push_with_id`
-    /// - [`Op::Intent`] → relayed to the App's `AppEvent` channel
+    /// - [`Op::Command`] → relayed to the App's `AppEvent` channel
     pub ops: Vec<Op>,
     /// `true` if the hook called [`Window::ignore`]. Meaningful only
     /// when no [`Op`] was queued — in that case the compositor
@@ -96,14 +96,14 @@ impl WindowOps {
         self.ops.iter().any(|op| matches!(op, Op::Push { .. }))
     }
 
-    /// Test helper: every [`UserIntent`] the hook queued via
+    /// Test helper: every [`UserCommand`] the hook queued via
     /// [`Window::emit`], in call order.
     #[cfg(test)]
-    pub(crate) fn intents(&self) -> Vec<UserIntent> {
+    pub(crate) fn intents(&self) -> Vec<UserCommand> {
         self.ops
             .iter()
             .filter_map(|op| match op {
-                Op::Intent(intent) => Some(intent.clone()),
+                Op::Command(intent) => Some(intent.clone()),
                 _ => None,
             })
             .collect()
@@ -160,14 +160,14 @@ impl<'a> Window<'a> {
         });
     }
 
-    /// Queue `msg` as an [`Op::Intent`]; the compositor relays it
+    /// Queue `msg` as an [`Op::Command`]; the compositor relays it
     /// onto the App's unified [`AppEvent`] bus when it drains this
     /// `WindowOps`. The App's main loop picks it up in the same
     /// iteration's `try_recv` pass after this hook returns, so
     /// `emit + close` still dispatches the msg (against the
     /// post-pop state).
-    pub fn emit(&mut self, msg: UserIntent) {
-        self.ops.ops.push(Op::Intent(msg));
+    pub fn emit(&mut self, msg: UserCommand) {
+        self.ops.ops.push(Op::Command(msg));
     }
 
     /// Signal "this event isn't mine". With no other op queued,

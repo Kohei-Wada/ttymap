@@ -15,22 +15,20 @@
 //!   `App::apply_lua_ops` drains it once per loop iteration.
 //!
 //! Both paths converge in `App::apply_ops`, which dispatches by
-//! variant. Replaces the older mix — per-component `CloseFlag`
-//! polling, per-plugin `push_rx` mpsc, `LuaSender` mpsc, and the
-//! compositor's own `WindowOps`-as-bool-trio — with a single typed
-//! buffer carrying [`Op::Push`] / [`Op::Close`] / [`Op::Intent`].
+//! variant. Single typed buffer carrying [`Op::Push`] / [`Op::Close`]
+//! / [`Op::Command`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::app::UserIntent;
+use crate::UserCommand;
 use crate::compositor::{CardId, Component};
 
 /// A same-thread request from a component (Rust or Lua-backed) to
 /// the host. Component hooks emit these via the
 /// [`Window`](super::window::Window) handle; Lua callbacks emit via
 /// the shared [`OpsBuffer`]. The host (`Compositor` for stack ops,
-/// `App::dispatch` for intents) applies them after the producer
+/// `App::dispatch` for commands) applies them after the producer
 /// returns.
 pub enum Op {
     /// Push a component onto the compositor stack with a
@@ -46,12 +44,12 @@ pub enum Op {
     /// no-op when `id` is not on the stack (handle closed twice, or
     /// the component already self-closed via `win.close()`).
     Close(CardId),
-    /// Dispatch a [`UserIntent`] through `App::dispatch`.
+    /// Dispatch a [`UserCommand`] through `App::dispatch`.
     /// Emitted by Lua-facing host methods (`ttymap.map:jump` /
     /// `:zoom` / `:fly_to`, `ttymap.api.frame.export`, …) — the
-    /// canonical intent vocabulary every other emitter (keymap,
+    /// canonical command vocabulary every other emitter (keymap,
     /// mouse, palette) already speaks.
-    Intent(UserIntent),
+    Command(UserCommand),
 }
 
 impl std::fmt::Debug for Op {
@@ -59,7 +57,7 @@ impl std::fmt::Debug for Op {
         match self {
             Self::Push { id, .. } => f.debug_struct("Push").field("id", id).finish(),
             Self::Close(id) => f.debug_tuple("Close").field(id).finish(),
-            Self::Intent(i) => f.debug_tuple("Intent").field(i).finish(),
+            Self::Command(c) => f.debug_tuple("Command").field(c).finish(),
         }
     }
 }
