@@ -9,9 +9,9 @@
 
 use crate::compositor::MapApi;
 use crate::compositor::op::{Op, OpsBuffer};
-use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
 use crate::lua::registry::{LuaEventBus, names};
+use ttymap_engine::geo::LonLat;
 
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`] and lifted out of the registrar by

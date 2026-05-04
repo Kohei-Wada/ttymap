@@ -14,9 +14,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::compositor::{Compositor, Context, MapApi};
 use crate::lua::LuaHandle;
-use crate::map::render::frame::MapFrame;
-use crate::map::render::overlay::UserPolyline;
 use crate::theme::UiTheme;
+use ttymap_engine::map::render::frame::MapFrame;
+use ttymap_engine::map::render::overlay::UserPolyline;
 
 /// Draw the full screen. Caller passes the latest map snapshot
 /// (or `None` if the render thread hasn't produced one yet) plus
@@ -93,7 +93,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
     let map_inner = map_block.inner(map_area);
     f.render_widget(map_block, map_area);
     if let Some(map_frame) = map_frame {
-        f.render_widget(map_frame, map_inner);
+        f.render_widget(super::frame_widget::MapFrameWidget(map_frame), map_inner);
 
         // World-space overlays + always-on chrome from components on
         // the compositor (wiki markers, info bar, scale, attribution).

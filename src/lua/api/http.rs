@@ -25,7 +25,7 @@ use std::time::SystemTime;
 
 use mlua::UserData;
 
-use crate::shared::http::HttpClient;
+use ttymap_engine::shared::http::HttpClient;
 
 pub struct HostHttp {
     pub http: HttpClient,
@@ -40,7 +40,7 @@ impl UserData for HostHttp {
             Ok(LuaJob::spawn(&this.http, url, Some(ttl_secs)))
         });
         methods.add_method("url_encode", |_, _this, s: String| {
-            Ok(crate::shared::http::url::urlencoded(&s))
+            Ok(ttymap_engine::shared::http::url::urlencoded(&s))
         });
     }
 }

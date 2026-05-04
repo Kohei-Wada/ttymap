@@ -28,11 +28,11 @@ use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{Compositor, Context};
 use crate::lua::LuaHandle;
-use crate::map::MapAction;
-use crate::map::MapHandle;
-use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
+use ttymap_engine::map::MapAction;
+use ttymap_engine::map::MapHandle;
+use ttymap_engine::map::render::frame::MapFrame;
 
 pub(super) struct Dispatcher {
     pub(super) map: MapHandle,

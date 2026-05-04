@@ -173,23 +173,23 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     let opt = lua.create_table()?;
 
     let map = lua.create_table()?;
-    map.set("lat", d.map.lat)?;
-    map.set("lon", d.map.lon)?;
-    if let Some(z) = d.map.zoom {
+    map.set("lat", d.engine.map.lat)?;
+    map.set("lon", d.engine.map.lon)?;
+    if let Some(z) = d.engine.map.zoom {
         map.set("zoom", z)?;
     }
-    map.set("max_zoom", d.map.max_zoom)?;
-    map.set("zoom_step", d.map.zoom_step)?;
+    map.set("max_zoom", d.engine.map.max_zoom)?;
+    map.set("zoom_step", d.engine.map.zoom_step)?;
     opt.set("map", map)?;
 
     let render = lua.create_table()?;
-    render.set("style", d.render.style.clone())?;
-    render.set("language", d.render.language.clone())?;
+    render.set("style", d.engine.render.style.clone())?;
+    render.set("language", d.engine.render.language.clone())?;
     opt.set("render", render)?;
 
     let cache = lua.create_table()?;
-    cache.set("tiles", d.cache.tiles)?;
-    cache.set("memory_tiles", d.cache.memory_tiles)?;
+    cache.set("tiles", d.engine.cache.tiles)?;
+    cache.set("memory_tiles", d.engine.cache.memory_tiles)?;
     opt.set("cache", cache)?;
 
     let geoip = lua.create_table()?;
@@ -269,35 +269,35 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
 
     if let Ok(t) = opt.get::<Table>("map") {
         if let Ok(v) = t.get::<f64>("lat") {
-            cfg.map.lat = v;
+            cfg.engine.map.lat = v;
         }
         if let Ok(v) = t.get::<f64>("lon") {
-            cfg.map.lon = v;
+            cfg.engine.map.lon = v;
         }
         if let Ok(v) = t.get::<Option<f64>>("zoom") {
-            cfg.map.zoom = v;
+            cfg.engine.map.zoom = v;
         }
         if let Ok(v) = t.get::<f64>("max_zoom") {
-            cfg.map.max_zoom = v;
+            cfg.engine.map.max_zoom = v;
         }
         if let Ok(v) = t.get::<f64>("zoom_step") {
-            cfg.map.zoom_step = v;
+            cfg.engine.map.zoom_step = v;
         }
     }
     if let Ok(t) = opt.get::<Table>("render") {
         if let Ok(v) = t.get::<String>("style") {
-            cfg.render.style = v;
+            cfg.engine.render.style = v;
         }
         if let Ok(v) = t.get::<String>("language") {
-            cfg.render.language = v;
+            cfg.engine.render.language = v;
         }
     }
     if let Ok(t) = opt.get::<Table>("cache") {
         if let Ok(v) = t.get::<bool>("tiles") {
-            cfg.cache.tiles = v;
+            cfg.engine.cache.tiles = v;
         }
         if let Ok(v) = t.get::<usize>("memory_tiles") {
-            cfg.cache.memory_tiles = v;
+            cfg.engine.cache.memory_tiles = v;
         }
     }
     if let Ok(t) = opt.get::<Table>("geoip") {
@@ -355,27 +355,27 @@ mod tests {
     fn empty_init_returns_defaults() {
         let (cfg, km) = run("");
         let d = Config::default();
-        assert_eq!(cfg.render.style, d.render.style);
-        assert_eq!(cfg.cache.memory_tiles, d.cache.memory_tiles);
+        assert_eq!(cfg.engine.render.style, d.engine.render.style);
+        assert_eq!(cfg.engine.cache.memory_tiles, d.engine.cache.memory_tiles);
         assert!(km.is_empty());
     }
 
     #[test]
     fn opt_render_style_overrides_default() {
         let (cfg, _) = run(r#"ttymap.opt.render.style = "bright""#);
-        assert_eq!(cfg.render.style, "bright");
+        assert_eq!(cfg.engine.render.style, "bright");
     }
 
     #[test]
     fn opt_cache_memory_tiles_overrides_default() {
         let (cfg, _) = run(r#"ttymap.opt.cache.memory_tiles = 1024"#);
-        assert_eq!(cfg.cache.memory_tiles, 1024);
+        assert_eq!(cfg.engine.cache.memory_tiles, 1024);
     }
 
     #[test]
     fn opt_map_zoom_optional_can_be_set() {
         let (cfg, _) = run(r#"ttymap.opt.map.zoom = 10"#);
-        assert_eq!(cfg.map.zoom, Some(10.0));
+        assert_eq!(cfg.engine.map.zoom, Some(10.0));
     }
 
     #[test]
@@ -425,7 +425,10 @@ mod tests {
         // the field stays at its default.
         let src = r#"ttymap.opt.cache.memory_tiles = "lots""#;
         let (cfg, _) = run(src);
-        assert_eq!(cfg.cache.memory_tiles, Config::default().cache.memory_tiles);
+        assert_eq!(
+            cfg.engine.cache.memory_tiles,
+            Config::default().engine.cache.memory_tiles
+        );
     }
 
     #[test]
@@ -436,7 +439,7 @@ mod tests {
             ttymap.opt.cache.memory_tiles = heavy and 2048 or 256
         "#;
         let (cfg, _) = run(src);
-        assert_eq!(cfg.cache.memory_tiles, 2048);
+        assert_eq!(cfg.engine.cache.memory_tiles, 2048);
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
         ];
         let (cfg, _km) = exec(&sources, &Config::default()).expect("exec");
         assert_eq!(
-            cfg.render.style, "bright",
+            cfg.engine.render.style, "bright",
             "a broken layer must not stop a later layer's mutations"
         );
     }

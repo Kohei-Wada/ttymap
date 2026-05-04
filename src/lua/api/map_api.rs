@@ -27,7 +27,7 @@ use mlua::{Lua, Scope, Table};
 
 use crate::compositor::MapApi;
 use crate::compositor::map_api::Anchor;
-use crate::geo::LonLat;
+use ttymap_engine::geo::LonLat;
 
 /// Build the Lua-facing `map` table for a single per-frame `on_tick`
 /// call. The closures borrow `cell` for `'scope`; once the host's
@@ -241,13 +241,13 @@ fn polyline(
 mod tests {
     use super::*;
     use crate::compositor::MapApi;
-    use crate::map::render::frame::MapFrame;
-    use crate::map::render::overlay::UserPolyline;
     use crate::theme::DARK;
     use crate::theme::UiTheme;
     use mlua::Lua;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ttymap_engine::map::render::frame::MapFrame;
+    use ttymap_engine::map::render::overlay::UserPolyline;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
         let area = Rect::new(0, 0, area_w, area_h);

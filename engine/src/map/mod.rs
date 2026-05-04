@@ -21,13 +21,11 @@ pub use action::MapAction;
 pub use state::{MapState, MapStateOptions, Viewport};
 
 use std::sync::Arc;
-use std::sync::mpsc;
 
-use crate::app::AppEvent;
 use crate::config::Config;
 use crate::geo::LonLat;
 use crate::map::render::pipeline::RenderPipeline;
-use crate::map::render::thread::{RenderClient, RenderHandle};
+use crate::map::render::thread::{FrameSink, RenderClient, RenderHandle};
 use crate::map::styler::Styler;
 use crate::theme::ThemeId;
 
@@ -116,10 +114,11 @@ impl MapHandle {
 /// `App` since it crosses both map rendering and UI chrome.
 pub fn build(
     config: &Config,
-    event_tx: mpsc::Sender<AppEvent>,
+    cols: u16,
+    rows: u16,
+    frame_sink: FrameSink,
     theme_id: ThemeId,
 ) -> (RenderHandle, MapHandle) {
-    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let (width, height) = render::canvas_size(cols, rows);
 
     log::info!(
@@ -142,7 +141,7 @@ pub fn build(
         width,
         height,
     );
-    let render_handle = RenderHandle::spawn(pipeline, wake_rx, event_tx);
+    let render_handle = RenderHandle::spawn(pipeline, wake_rx, frame_sink);
     let render_client = render_handle.client();
 
     let state = MapState::new(

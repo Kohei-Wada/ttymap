@@ -2993,21 +2993,35 @@ dependencies = [
  "crossbeam-channel",
  "crossterm",
  "directories",
+ "log",
+ "mlua",
+ "ratatui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sgp4",
+ "ttymap-engine",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ttymap-engine"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "directories",
  "earcut",
  "flate2",
  "indexmap",
  "log",
  "lru",
- "mlua",
  "prost",
  "prost-build",
  "protox",
- "ratatui",
  "reqwest",
  "rstar",
  "serde",
  "serde_json",
- "sgp4",
  "unicode-width 0.2.2",
 ]
 

@@ -52,17 +52,15 @@ pub mod palette;
 pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
+/// Wraps [`ttymap_engine::Config`] with binary-only knobs (geoip,
+/// runtime, plugin disable list).
 pub mod config;
 
-/// Map subsystem — viewport state, action dispatch, and the full map
-/// rendering pipeline (tile fetch, styler, render thread). `MapFrame`
-/// produced here is what the UI displays.
-pub mod map;
-
-/// Theme — colour palette data (`ColorPalette`, `DARK`, `BRIGHT`),
-/// `ThemeId`, plus the ratatui adapter (`UiTheme`) and semantic-tag
-/// resolver (`StyleKind`). All in one place because separating data
-/// from adapter created more boilerplate than it saved.
+/// Theme — binary-side ratatui adapter (`UiTheme`) and semantic-tag
+/// resolver (`StyleKind`). The colour data (`ColorPalette`,
+/// `ThemeId`, `DARK`/`BRIGHT`) lives in [`ttymap_engine::theme`] and
+/// is re-exported from this module for ergonomic `crate::theme::*`
+/// imports.
 #[doc(hidden)]
 pub mod theme;
 
@@ -86,7 +84,5 @@ pub mod lua;
 // `tests/` / `benches/` — which are compiled as external crates — can
 // reach them. `#[doc(hidden)]` signals "not stable API" to consumers.
 
-#[doc(hidden)]
-pub mod geo;
 #[doc(hidden)]
 pub mod shared;

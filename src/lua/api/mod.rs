@@ -103,8 +103,8 @@ use std::time::Instant;
 
 use mlua::{Lua, Table};
 
-use crate::geo::LonLat;
-use crate::shared::http::HttpClient;
+use ttymap_engine::geo::LonLat;
+use ttymap_engine::shared::http::HttpClient;
 
 /// Maximum number of pending notifications retained in the host's
 /// shared ring buffer. Sized to absorb a brief flurry (a search
@@ -423,7 +423,7 @@ pub fn install(
 mod tests {
     use super::*;
     use crate::UserCommand;
-    use crate::map::MapAction;
+    use ttymap_engine::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors

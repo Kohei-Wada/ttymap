@@ -1,11 +1,21 @@
-[package]
-name = "ttymap"
+[workspace]
+members = ["engine", "."]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "A terminal map viewer that renders Mapbox Vector Tiles as Unicode Braille characters."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Kohei-Wada/ttymap"
+
+[package]
+name = "ttymap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "A terminal map viewer that renders Mapbox Vector Tiles as Unicode Braille characters."
+license.workspace = true
+repository.workspace = true
 homepage = "https://github.com/Kohei-Wada/ttymap"
 readme = "README.md"
 keywords = ["map", "tui", "mapbox", "terminal", "braille"]
@@ -17,8 +27,6 @@ categories = ["command-line-utilities", "visualization"]
 include = [
     "src/**/*",
     "runtime/**/*",
-    "build.rs",
-    "proto/**/*",
     "Cargo.toml",
     "Makefile",
     "README.md",
@@ -26,22 +34,17 @@ include = [
 ]
 
 [dependencies]
+ttymap-engine = { path = "engine" }
 crossterm = "0.29"
 ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
-flate2 = "1"
-prost = "0.14"
-rstar = "0.12"
-earcut = "0.4"
 serde = "1"
 serde_json = "1"
 directories = "6"
 unicode-width = "0.2"
 log = { version = "0.4", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-indexmap = "2.14.0"
-lru = "0.16"
 crossbeam-channel = "0.5"
 mlua = { version = "0.11", features = ["lua54", "vendored"] }
 sgp4 = { version = "2.4.0", default-features = false, features = ["std"] }
@@ -53,10 +56,6 @@ criterion = "0.5"
 version = "1"
 default-features = false
 features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy", "run-cargo-fmt"]
-
-[build-dependencies]
-prost-build = "0.14"
-protox = "0.9"
 
 [[bench]]
 name = "decode_tile"

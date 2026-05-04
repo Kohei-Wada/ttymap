@@ -92,32 +92,32 @@ fn main() {
     let (mut config, keymap_overrides) = ttymap::lua::load_init_lua(Config::default());
 
     if let Some(v) = cli.lat {
-        config.map.lat = v;
+        config.engine.map.lat = v;
     }
     if let Some(v) = cli.lon {
-        config.map.lon = v;
+        config.engine.map.lon = v;
     }
     if let Some(v) = cli.zoom {
-        config.map.zoom = Some(v);
+        config.engine.map.zoom = Some(v);
     }
     if let Some(v) = cli.style {
         // Unknown values get normalised to "dark" by the styler's
         // fallback at construction time; just hand the raw string in.
-        config.render.style = v;
+        config.engine.render.style = v;
     }
 
     if cli.here || config.geoip.on_startup {
         match ttymap::shared::geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
             Some((lat, lon)) => {
                 log::info!("geoip: resolved to {}, {}", lat, lon);
-                config.map.lat = lat;
-                config.map.lon = lon;
+                config.engine.map.lat = lat;
+                config.engine.map.lon = lon;
             }
             None => {
                 log::warn!(
                     "geoip lookup failed, using default {}, {}",
-                    config.map.lat,
-                    config.map.lon
+                    config.engine.map.lat,
+                    config.engine.map.lon
                 );
             }
         }
@@ -125,8 +125,8 @@ fn main() {
 
     log::info!(
         "starting ttymap: lat={}, lon={}",
-        config.map.lat,
-        config.map.lon
+        config.engine.map.lat,
+        config.engine.map.lon
     );
 
     if let Err(e) = run_event_loop(config, keymap_overrides) {
@@ -143,12 +143,28 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
 
     // Active theme — owned by App, consumed by the map only at
     // construction (initial styler) and on theme switch.
-    let theme_id = ttymap::theme::ThemeId::from_name(&config.render.style);
+    let theme_id = ttymap::theme::ThemeId::from_name(&config.engine.render.style);
+
+    // Engine doesn't depend on crossterm; the binary owns the
+    // terminal-size probe and hands cols/rows to `engine::map::build`.
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+
+    // Frame sink — the engine doesn't know about `AppEvent`. We hand
+    // it a closure that wraps each completed `MapFrame` into the
+    // binary's bus protocol. Returning `false` tells the engine the
+    // bus is closed and the render thread should exit.
+    let frame_tx = event_tx.clone();
+    let frame_sink: ttymap_engine::map::render::thread::FrameSink = Box::new(move |frame| {
+        frame_tx
+            .send(ttymap::app::AppEvent::FrameReady(frame))
+            .is_ok()
+    });
 
     // Map subsystem: tile cache + render pipeline + render thread.
     // `_render_handle` is a peer to `_input` / `_frame_timer` — held
     // here for `Drop`-driven shutdown, not used otherwise.
-    let (_render_handle, map) = ttymap::map::build(&config, event_tx.clone(), theme_id);
+    let (_render_handle, map) =
+        ttymap_engine::map::build(&config.engine, cols, rows, frame_sink, theme_id);
 
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the

@@ -8,7 +8,7 @@
 //! rate-check) therefore still ticks predictably even with no input,
 //! render, or Lua intent activity.
 //!
-//! Lifecycle mirrors [`crate::map::render::thread::RenderHandle`] and
+//! Lifecycle mirrors [`ttymap_engine::map::render::thread::RenderHandle`] and
 //! [`super::input_thread::InputHandle`]: a shared `should_quit` flag
 //! is checked between each sleep + send; on `Drop` (or explicit
 //! [`Self::shutdown`]) the flag flips and the thread exits within

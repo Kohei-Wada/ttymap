@@ -33,7 +33,7 @@
 //! tight and the keymap path unchanged, while the unified queue still
 //! gets one drain instead of N polled sources.
 
-use crate::map::render::frame::MapFrame;
+use ttymap_engine::map::render::frame::MapFrame;
 
 use crate::UserCommand;
 

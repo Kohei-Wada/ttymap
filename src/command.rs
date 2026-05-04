@@ -41,17 +41,17 @@
 //! the dispatch table.
 
 use crate::input::KeyMap;
-use crate::map::MapAction;
 use crate::theme::ThemeId;
+use ttymap_engine::map::MapAction;
 
 /// What the app can do in response to an event. Emitted by palette
 /// providers, plugin handlers, and async plugin polling; interpreted
 /// by [`crate::app::App::dispatch`] inside the event loop.
 ///
 /// Map-level commands are nested under [`UserCommand::Map`] because
-/// [`MapState`](crate::map::MapState) owns its own command vocabulary
+/// [`MapState`](ttymap_engine::map::MapState) owns its own command vocabulary
 /// ([`MapAction`]) and consumes it through a single entry
-/// ([`MapState::process_action`](crate::map::MapState::process_action)).
+/// ([`MapState::process_action`](ttymap_engine::map::MapState::process_action)).
 /// Other variants sit at the top level: each is handled directly by
 /// an `App::dispatch` arm and there is no intermediate sub-system to
 /// delegate to.
@@ -79,7 +79,7 @@ pub enum UserCommand {
     /// thread's canvas dimensions. Arguments are the new terminal
     /// size in cells.
     Resize(u16, u16),
-    /// Write the currently displayed [`MapFrame`](crate::map::render::frame::MapFrame)
+    /// Write the currently displayed [`MapFrame`](ttymap_engine::map::render::frame::MapFrame)
     /// to an auto-named file under `$XDG_DATA_HOME/ttymap/exports/`.
     /// Emitted by the export plugin's palette entry. Filename encodes
     /// zoom + centre + timestamp so repeated exports don't collide.

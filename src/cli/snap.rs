@@ -17,13 +17,13 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::config;
-use crate::map::Viewport;
-use crate::map::render::frame::MapFrame;
-use crate::map::render::pipeline::RenderPipeline;
-use crate::map::styler::Styler;
-use crate::map::{MapState, MapStateOptions};
 use crate::shared::geoip;
 use crate::theme::ThemeId;
+use ttymap_engine::map::Viewport;
+use ttymap_engine::map::render::frame::MapFrame;
+use ttymap_engine::map::render::pipeline::RenderPipeline;
+use ttymap_engine::map::styler::Styler;
+use ttymap_engine::map::{MapState, MapStateOptions};
 
 /// Polling step between tile checks. Short enough to feel responsive,
 /// long enough to avoid busy-waiting the CPU while HTTP fetches run
@@ -88,8 +88,8 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     if args.here {
         match geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
             Some((lat, lon)) => {
-                config.map.lat = lat;
-                config.map.lon = lon;
+                config.engine.map.lat = lat;
+                config.engine.map.lon = lon;
             }
             None => {
                 return Err(io::Error::other(
@@ -99,20 +99,20 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
         }
     } else {
         if let Some(lat) = args.lat {
-            config.map.lat = lat;
+            config.engine.map.lat = lat;
         }
         if let Some(lon) = args.lon {
-            config.map.lon = lon;
+            config.engine.map.lon = lon;
         }
     }
     if let Some(z) = args.zoom {
-        config.map.zoom = Some(z);
+        config.engine.map.zoom = Some(z);
     }
     if let Some(s) = args.style {
-        config.render.style = s;
+        config.engine.render.style = s;
     }
     if let Some(lang) = args.language {
-        config.render.language = lang;
+        config.engine.render.language = lang;
     }
 
     // If --cols/--rows weren't given, default to the current
@@ -130,24 +130,24 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     // tile::build spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
-    let (tile_cache, _wake_rx) = crate::map::tile::build(&config);
-    let theme_id = ThemeId::from_name(&config.render.style);
+    let (tile_cache, _wake_rx) = ttymap_engine::map::tile::build(&config.engine);
+    let theme_id = ThemeId::from_name(&config.engine.render.style);
     let styler = Arc::new(Styler::new(theme_id));
     let mut pipeline = RenderPipeline::new(
         tile_cache,
         styler,
-        config.render.language.clone(),
+        config.engine.render.language.clone(),
         width,
         height,
     );
 
     let map = MapState::new(
         MapStateOptions {
-            initial_lon: config.map.lon,
-            initial_lat: config.map.lat,
-            initial_zoom: config.map.zoom,
-            zoom_step: config.map.zoom_step,
-            max_zoom: config.map.max_zoom,
+            initial_lon: config.engine.map.lon,
+            initial_lat: config.engine.map.lat,
+            initial_zoom: config.engine.map.zoom,
+            zoom_step: config.engine.map.zoom_step,
+            max_zoom: config.engine.map.max_zoom,
         },
         width,
         height,

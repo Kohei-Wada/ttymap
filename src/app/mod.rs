@@ -18,6 +18,7 @@
 pub mod dispatcher;
 pub mod event;
 pub mod frame_timer;
+mod frame_widget;
 mod overlay;
 mod sidebar;
 pub mod ui;
@@ -36,9 +37,9 @@ use crate::config::Config;
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaSubsystem;
-use crate::map::MapHandle;
-use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
+use ttymap_engine::map::MapHandle;
+use ttymap_engine::map::render::frame::MapFrame;
 
 pub struct App {
     /// GoF Receiver for `UserCommand`. Owns the state that mutates

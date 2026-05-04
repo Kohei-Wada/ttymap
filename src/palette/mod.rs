@@ -241,8 +241,8 @@ mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::UserCommand;
-    use crate::map::MapAction;
     use crate::theme::ThemeId;
+    use ttymap_engine::map::MapAction;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {

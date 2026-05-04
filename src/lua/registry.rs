@@ -170,13 +170,13 @@ impl LuaEventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::LonLat;
-    use crate::map::render::frame::MapFrame;
-    use crate::map::render::overlay::UserPolyline;
     use crate::theme::DARK;
     use crate::theme::UiTheme;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ttymap_engine::geo::LonLat;
+    use ttymap_engine::map::render::frame::MapFrame;
+    use ttymap_engine::map::render::overlay::UserPolyline;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
         let area = Rect::new(0, 0, area_w, area_h);

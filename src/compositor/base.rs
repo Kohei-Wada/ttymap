@@ -31,7 +31,7 @@ use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
 use crate::UserCommand;
 use crate::input::keymap::KeyMap;
-use crate::map::MapAction;
+use ttymap_engine::map::MapAction;
 
 pub struct BaseLayer {
     keymap: KeyMap,

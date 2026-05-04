@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use log::debug;
 
-use crate::shared::http::HttpClient;
+use ttymap_engine::shared::http::HttpClient;
 
 /// Look up approximate `(lat, lon)` for the outbound IP. Returns `None`
 /// on any network / parse error or rate-limit response; callers fall

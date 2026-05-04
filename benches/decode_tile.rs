@@ -6,7 +6,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use ttymap::map::tile::decode;
+use ttymap_engine::map::tile::decode;
 
 /// Sample tile fetched once from mapscii.me (z14 over Tokyo). About 5 KB
 /// gzipped, ~11 KB raw, ~1000 features across ~15 layers.

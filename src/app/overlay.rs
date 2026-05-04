@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::map::render::overlay::UserPolyline;
+use ttymap_engine::map::render::overlay::UserPolyline;
 
 pub(super) struct OverlayThrottle {
     sink: Vec<UserPolyline>,

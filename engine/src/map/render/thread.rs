@@ -9,18 +9,23 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::thread;
 
 use crossbeam_channel as cb;
 
-use crate::app::AppEvent;
 use log::{debug, error, info};
 
 use super::frame::MapFrame;
 use super::pipeline::RenderPipeline;
 use crate::map::Viewport;
 use crate::map::styler::Styler;
+
+/// Callback the render thread invokes for every completed frame.
+/// Returns `false` to signal "consumer is gone, stop the thread".
+/// The binary supplies a closure that wraps `MapFrame` into its own
+/// bus protocol (e.g. `AppEvent::FrameReady`); the engine itself
+/// stays oblivious to whatever bus the binary is using.
+pub type FrameSink = Box<dyn FnMut(MapFrame) -> bool + Send>;
 
 pub enum RenderTask {
     Draw {
@@ -98,15 +103,15 @@ impl RenderHandle {
     /// it on the next render cycle". It replaces the polling timeout
     /// that used to bound tile-arrival → frame latency to 50 ms.
     ///
-    /// `event_tx` is a clone of the App-level [`AppEvent`] sender;
-    /// the render thread wraps each completed [`MapFrame`] as
-    /// [`AppEvent::FrameReady`] and pushes it onto the unified queue.
-    /// The App's main-loop drain replaces the prior dedicated
-    /// frame channel.
+    /// `frame_sink` is a callback that receives every completed
+    /// [`MapFrame`]. The binary wraps it into its own bus protocol
+    /// (e.g. `AppEvent::FrameReady`); the engine itself stays
+    /// oblivious. Returning `false` from the closure signals the
+    /// consumer is gone and the thread should exit.
     pub fn spawn(
         pipeline: RenderPipeline,
         wake_rx: cb::Receiver<()>,
-        event_tx: mpsc::Sender<AppEvent>,
+        frame_sink: FrameSink,
     ) -> Self {
         let (task_tx, task_rx) = cb::unbounded();
         let should_quit = Arc::new(AtomicBool::new(false));
@@ -114,7 +119,7 @@ impl RenderHandle {
 
         let thread = thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_loop(task_rx, wake_rx, event_tx, should_quit_clone, pipeline);
+                run_loop(task_rx, wake_rx, frame_sink, should_quit_clone, pipeline);
             }));
             if let Err(e) = result {
                 let msg = if let Some(s) = e.downcast_ref::<String>() {
@@ -211,12 +216,12 @@ fn drain_tasks(
     Ok(latest_draw)
 }
 
-/// Wrap a completed `MapFrame` as [`AppEvent::FrameReady`] and push it
-/// onto the App's unified event queue. Returns `false` only when the
-/// receiver has been dropped (App teardown) — the run loop exits.
-fn send_frame(event_tx: &mpsc::Sender<AppEvent>, frame: Option<MapFrame>) -> bool {
+/// Hand a completed `MapFrame` to the [`FrameSink`] callback the
+/// binary supplied. Returns `false` only when the consumer has gone
+/// (closure returned `false`) — the run loop exits.
+fn send_frame(sink: &mut FrameSink, frame: Option<MapFrame>) -> bool {
     if let Some(frame) = frame
-        && event_tx.send(AppEvent::FrameReady(frame)).is_err()
+        && !sink(frame)
     {
         return false;
     }
@@ -226,7 +231,7 @@ fn send_frame(event_tx: &mpsc::Sender<AppEvent>, frame: Option<MapFrame>) -> boo
 fn run_loop(
     task_rx: cb::Receiver<RenderTask>,
     wake_rx: cb::Receiver<()>,
-    event_tx: mpsc::Sender<AppEvent>,
+    mut frame_sink: FrameSink,
     should_quit: Arc<AtomicBool>,
     mut pipeline: RenderPipeline,
 ) {
@@ -261,7 +266,7 @@ fn run_loop(
                 match latest_draw {
                     Some((viewport, overlays)) => {
                         debug!("render: drawing (zoom={:.1}, overlays={})", viewport.zoom, overlays.len());
-                        if !send_frame(&event_tx, pipeline.render(&viewport, &overlays)) {
+                        if !send_frame(&mut frame_sink, pipeline.render(&viewport, &overlays)) {
                             return;
                         }
                         last_viewport = Some(viewport);
@@ -278,7 +283,7 @@ fn run_loop(
                         // (e.g. theme change should refresh the
                         // visible frame).
                         if let Some(ref vp) = last_viewport
-                            && !send_frame(&event_tx, pipeline.render(vp, &[]))
+                            && !send_frame(&mut frame_sink, pipeline.render(vp, &[]))
                         {
                             return;
                         }
@@ -291,7 +296,7 @@ fn run_loop(
                 while wake_rx.try_recv().is_ok() {}
                 if let Some(ref viewport) = last_viewport
                     && pipeline.poll_tiles()
-                    && !send_frame(&event_tx, pipeline.render(viewport, &[]))
+                    && !send_frame(&mut frame_sink, pipeline.render(viewport, &[]))
                 {
                     return;
                 }

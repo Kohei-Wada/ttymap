@@ -632,7 +632,7 @@ mod tests {
         struct SwallowsAll;
         impl Component for SwallowsAll {
             fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
-                win.emit(UserCommand::Map(crate::map::MapAction::None));
+                win.emit(UserCommand::Map(ttymap_engine::map::MapAction::None));
             }
             fn render(&self, _: &mut window::RenderWindow) {}
         }
