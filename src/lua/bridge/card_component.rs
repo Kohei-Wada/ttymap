@@ -17,12 +17,16 @@
 //! A window opened via `card.open` does focused-UI work only; map
 //! paint and async drain run in the per-frame tick on the main thread.
 //!
-//! Lifetime: the matching [`CardHandle`] (returned to Lua by
-//! `card.open`) carries a clone of the same [`CloseFlag`]. Either
-//! side flipping the flag is honoured on the next [`Component::poll`]
-//! tick, where this component pops itself off the stack via
-//! [`Window::close`]. Idempotent — a flipped-then-flipped flag does
-//! nothing extra.
+//! Lifetime: the matching [`CardHandle`](super::card_handle::CardHandle)
+//! (returned to Lua by `card.open`) holds the same
+//! [`CardId`](crate::frontend::compositor::CardId) reserved at the
+//! call site. Lua-side `handle:close()` enqueues an
+//! [`Op::Close`](crate::lua::op::Op::Close) onto the shared
+//! [`OpsBuffer`](crate::lua::op::OpsBuffer); the App applies it per
+//! iteration via
+//! [`crate::frontend::compositor::Compositor::close_by_id`].
+//! Idempotent — repeated `close()` calls just enqueue duplicate
+//! `Op::Close` entries that are no-ops once the component is gone.
 //!
 //! Drain plumbing (`ttymap.map:jump`, `ttymap.api.frame.export`)
 //! lives in the **setup state** that ran the script's top-level
@@ -42,7 +46,6 @@ use mlua::{Lua, Table};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use super::card_handle::CloseFlag;
 use super::card_parse::{
     KeyAction, key_code_to_lua, parse_footer_hints, parse_item_value, parse_line_value,
 };
@@ -55,15 +58,14 @@ use crate::theme::StyleKind;
 
 /// A [`Component`] backed by a Lua spec table. Pushed onto the
 /// compositor stack by `ttymap.api.card.open(spec)`; popped when
-/// either side flips the shared [`CloseFlag`].
+/// the matching [`CardHandle`](super::card_handle::CardHandle)
+/// enqueues an [`Op::Close`](crate::lua::op::Op::Close) keyed by the
+/// reserved [`CardId`](crate::frontend::compositor::CardId), or when
+/// the spec's `handle_event` returns `{ close = true }`.
 pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
     /// log tag (= identification used in warnings).
     handle: LuaBridgeHandle,
-    /// Shared with the [`CardHandle`](super::card_handle::CardHandle)
-    /// returned to Lua. Either side flipping it triggers a `win.close()`
-    /// on the next poll tick.
-    flag: CloseFlag,
     /// User-facing display label, read from `spec.name` if present
     /// at construction. Falls back to the handle's log tag (the
     /// `chunk_name` passed in by `card.open`). Leaked once so
@@ -122,12 +124,7 @@ impl LuaCardComponent {
     /// frame.export and the host-shared `center` / `zoom` mutexes;
     /// this component does not drain them (App drains them
     /// centrally per loop iteration).
-    pub fn from_spec(
-        lua: Lua,
-        spec: Table,
-        log_tag: &'static str,
-        flag: CloseFlag,
-    ) -> mlua::Result<Self> {
+    pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
         // Display name: spec's `name` if set, else the log tag.
         // Leak once; bounded by the number of windows opened.
         let display: &'static str = spec
@@ -148,7 +145,6 @@ impl LuaCardComponent {
         let handle = LuaBridgeHandle::new(lua, spec, log_tag)?;
         Ok(Self {
             handle,
-            flag,
             display,
             has_render,
             has_items,
@@ -434,16 +430,6 @@ impl Component for LuaCardComponent {
         }
     }
 
-    fn poll(&mut self, win: &mut Window) {
-        // The only Lua-facing poll work this Component does is
-        // honour the shared close flag. NO callback into the spec —
-        // async work belongs on a `ttymap.api.frame.on_tick(fn)`
-        // subscription, not on the focused window.
-        if self.flag.take() {
-            win.close();
-        }
-    }
-
     fn name(&self) -> &'static str {
         self.display
     }
@@ -474,7 +460,7 @@ mod tests {
     fn make(source: &str, log_tag: &'static str) -> LuaCardComponent {
         let lua = mlua::Lua::new();
         let spec: Table = lua.load(source).eval().expect("eval spec");
-        LuaCardComponent::from_spec(lua, spec, log_tag, CloseFlag::default()).expect("from_spec")
+        LuaCardComponent::from_spec(lua, spec, log_tag).expect("from_spec")
     }
 
     #[test]
@@ -612,62 +598,7 @@ mod tests {
         );
     }
 
-    // ── close flag (the only poll-time work this Component does) ──
-
-    #[test]
-    fn poll_does_nothing_until_flag_is_flipped() {
-        use crate::frontend::AppEvent;
-        use crate::frontend::compositor::Context;
-        use crate::frontend::compositor::window::WindowOps;
-
-        let flag = CloseFlag::default();
-        let lua = mlua::Lua::new();
-        let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaCardComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
-
-        const CTX: Context = Context {
-            theme_id: crate::theme::ThemeId::Dark,
-            cursor: None,
-        };
-        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            c.poll(&mut win);
-        }
-        assert!(!ops.close, "no flag flip → no close queued");
-    }
-
-    #[test]
-    fn poll_honours_flag_and_closes_window() {
-        use crate::frontend::AppEvent;
-        use crate::frontend::compositor::Context;
-        use crate::frontend::compositor::window::WindowOps;
-
-        let flag = CloseFlag::default();
-        let lua = mlua::Lua::new();
-        let spec: Table = lua.load(r#"return { name = "win" }"#).eval().unwrap();
-        let mut c = LuaCardComponent::from_spec(lua, spec, "win", flag.clone()).unwrap();
-
-        const CTX: Context = Context {
-            theme_id: crate::theme::ThemeId::Dark,
-            cursor: None,
-        };
-        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
-        flag.request();
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            c.poll(&mut win);
-        }
-        assert!(ops.close, "flipped flag → win.close() queued");
-
-        // Idempotent — second poll without re-flipping is a no-op.
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            c.poll(&mut win);
-        }
-        assert!(!ops.close);
-    }
+    // Close coverage moved to `card_handle::tests::close_enqueues_op_close_idempotent`:
+    // the close path no longer goes through Component::poll, so the
+    // CloseFlag polling tests retire with the flag itself.
 }

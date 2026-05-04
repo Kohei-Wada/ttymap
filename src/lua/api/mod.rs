@@ -260,7 +260,10 @@ pub struct LuaHostHandles {
     /// `!Send` payloads at construction; only `Sender<T>: Send`
     /// requires `T: Send`, and we never move the sender across
     /// threads.
-    pub push_rx: mpsc::Receiver<Box<dyn crate::frontend::compositor::Component>>,
+    pub push_rx: mpsc::Receiver<(
+        crate::frontend::compositor::CardId,
+        Box<dyn crate::frontend::compositor::Component>,
+    )>,
 }
 
 // ── Self-registration capture ────────────────────────────────────────
@@ -345,6 +348,7 @@ pub fn install(
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
     sender: LuaSender,
+    ops: crate::lua::op::OpsBuffer,
 ) -> mlua::Result<LuaHostHandles> {
     // `sender` is a [`LuaSender`] handed in from the composition
     // root; it wraps the App's `Sender<AppEvent>` so the lua module
@@ -359,7 +363,10 @@ pub fn install(
     // callback + App drain all run on the same thread). `mpsc`
     // accepts `!Send` payloads at construction; only `Sender<T>: Send`
     // requires `T: Send`, and the Sender never moves across threads.
-    let (push_tx, push_rx) = mpsc::channel::<Box<dyn crate::frontend::compositor::Component>>();
+    let (push_tx, push_rx) = mpsc::channel::<(
+        crate::frontend::compositor::CardId,
+        Box<dyn crate::frontend::compositor::Component>,
+    )>();
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
     let zoom = Arc::new(Mutex::new(0.0_f64));
 
@@ -506,13 +513,20 @@ pub fn install(
 
     let card_api = lua.create_table()?;
     let push_tx_for_window = push_tx.clone();
+    let ops_for_window = ops.clone();
     card_api.set(
         "open",
         lua.create_function(
             move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
+                use crate::frontend::compositor::CardId;
                 use crate::lua::bridge::card_component::LuaCardComponent;
-                use crate::lua::bridge::card_handle::{CardHandle, CloseFlag};
-                let flag = CloseFlag::default();
+                use crate::lua::bridge::card_handle::CardHandle;
+                // Reserve the [`CardId`] at the call site so the
+                // handle returned to Lua can target this exact
+                // component for close, even though the actual push
+                // applies on a later iteration when the App drains
+                // `push_rx`.
+                let id = CardId::next();
                 // Build the component on the **same** Lua VM that ran
                 // `card.open` — i.e. the setup state. The spec's
                 // callbacks (`render`, `handle_event`, …) capture
@@ -520,7 +534,7 @@ pub fn install(
                 // must be a clone of it (cheap Arc bump, no copy of the
                 // VM). When `LuaCardComponent` later calls into those
                 // callbacks, the same upvalue scope is in scope.
-                let component = LuaCardComponent::from_spec(lua.clone(), spec, tag, flag.clone())?;
+                let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
                 // Same-thread send: the channel never crosses threads.
                 // `send` returns Err only when the receiver has been
                 // dropped, which happens at App teardown — log + carry
@@ -529,7 +543,10 @@ pub fn install(
                 // dropped the receiver mid-run; that should never happen
                 // in production, hence `error!` rather than `warn!`.
                 if push_tx_for_window
-                    .send(Box::new(component) as Box<dyn crate::frontend::compositor::Component>)
+                    .send((
+                        id,
+                        Box::new(component) as Box<dyn crate::frontend::compositor::Component>,
+                    ))
                     .is_err()
                 {
                     log::error!(
@@ -537,7 +554,7 @@ pub fn install(
                         tag
                     );
                 }
-                Ok(CardHandle::new(flag))
+                Ok(CardHandle::new(id, ops_for_window.clone()))
             },
         )?,
     )?;
@@ -547,23 +564,26 @@ pub fn install(
     //
     // Mirror of `ttymap.api.card.open`: build a palette provider on
     // the same Lua VM (the setup state), wrap it in a
-    // [`PaletteComponent`] plus a [`CloseFlagWrapper`] so the host can
-    // pop the palette via the shared `CloseFlag` the
-    // [`PaletteHandle`] also holds, and queue it onto `push_tx`. The
-    // App drains `push_tx` per frame and pushes each component onto
-    // the compositor stack.
+    // [`PaletteComponent`], and queue (id, component) onto `push_tx`.
+    // The App drains per frame and pushes via `compositor.push_with_id`,
+    // associating the component with the [`CardId`] reserved here. The
+    // returned [`PaletteHandle`] holds the same id and can request
+    // close via [`Op::Close`].
     let palette_api = lua.create_table()?;
     let push_tx_for_palette = push_tx.clone();
+    let ops_for_palette = ops.clone();
     palette_api.set(
         "open",
         lua.create_function(
             move |lua,
                   spec: Table|
                   -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
-                use crate::lua::bridge::card_handle::{CloseFlag, CloseFlagWrapper};
+                use crate::frontend::compositor::CardId;
                 use crate::lua::bridge::palette_handle::PaletteHandle;
                 use crate::lua::bridge::palette_provider::LuaPaletteProvider;
-                let flag = CloseFlag::default();
+                // Reserve the id up-front so the returned [`PaletteHandle`]
+                // can target this exact PaletteComponent for close.
+                let id = CardId::next();
                 // Build the provider on the **same** Lua VM that ran
                 // `palette.open` — the setup state. The spec's
                 // callbacks (`filter`, `items`, `execute`, …) capture
@@ -572,9 +592,11 @@ pub fn install(
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
                 let palette =
                     crate::frontend::palette::PaletteComponent::with_provider(Box::new(provider));
-                let wrapped = CloseFlagWrapper::new(palette, flag.clone());
                 if push_tx_for_palette
-                    .send(Box::new(wrapped) as Box<dyn crate::frontend::compositor::Component>)
+                    .send((
+                        id,
+                        Box::new(palette) as Box<dyn crate::frontend::compositor::Component>,
+                    ))
                     .is_err()
                 {
                     log::error!(
@@ -582,7 +604,7 @@ pub fn install(
                         tag
                     );
                 }
-                Ok(PaletteHandle::new(flag))
+                Ok(PaletteHandle::new(id, ops_for_palette.clone()))
             },
         )?,
     )?;
@@ -899,8 +921,15 @@ mod tests {
         let slot = new_capture_slot();
         let (event_tx, event_rx) = mpsc::channel();
         let sender = LuaSender::new(event_tx);
-        let handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, sender)
-            .expect("install ttymap table");
+        let handles = install(
+            &lua,
+            "lua-test",
+            LuaHostShared::empty(),
+            slot,
+            sender,
+            crate::lua::op::new_ops_buffer(),
+        )
+        .expect("install ttymap table");
         (lua, handles, event_rx)
     }
 
@@ -1029,6 +1058,7 @@ mod tests {
             LuaHostShared::empty(),
             slot.clone(),
             dummy_lua_sender(),
+            crate::lua::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -1067,6 +1097,7 @@ mod tests {
             LuaHostShared::empty(),
             slot.clone(),
             dummy_lua_sender(),
+            crate::lua::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -1101,6 +1132,7 @@ mod tests {
             LuaHostShared::empty(),
             slot,
             dummy_lua_sender(),
+            crate::lua::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();
@@ -1209,8 +1241,15 @@ mod tests {
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
         let slot = new_capture_slot();
-        let _handles = install(&lua, "lua-test", shared.clone(), slot, dummy_lua_sender())
-            .expect("install ttymap table");
+        let _handles = install(
+            &lua,
+            "lua-test",
+            shared.clone(),
+            slot,
+            dummy_lua_sender(),
+            crate::lua::op::new_ops_buffer(),
+        )
+        .expect("install ttymap table");
 
         lua.load(
             r#"
@@ -1258,8 +1297,15 @@ mod tests {
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
         let slot = new_capture_slot();
-        let _handles = install(&lua, "lua-test", shared.clone(), slot, dummy_lua_sender())
-            .expect("install ttymap table");
+        let _handles = install(
+            &lua,
+            "lua-test",
+            shared.clone(),
+            slot,
+            dummy_lua_sender(),
+            crate::lua::op::new_ops_buffer(),
+        )
+        .expect("install ttymap table");
         for i in 0..(NOTIFY_RING_CAP + 4) {
             lua.load(format!(r#"ttymap.notify("msg-{}")"#, i))
                 .exec()
@@ -1362,12 +1408,11 @@ mod tests {
             handles.push_rx.try_recv().is_err(),
             "push_rx should be drained after a single recv"
         );
-        // Close the handle from Lua. Without an App-side close drain
-        // the component on `push_rx` would never see the flip; the
-        // flag is shared with that component's `CloseFlag`, but
-        // since we already drained the receiver and dropped the
-        // component, this just confirms the userdata method survives
-        // the call (idempotent close is the CardHandle contract).
+        // Close the handle from Lua. The push_rx receiver was already
+        // drained above, so the component is gone; this just confirms
+        // the userdata method survives the call (idempotent close is
+        // the CardHandle contract — internally it pushes Op::Close to
+        // the shared OpsBuffer; the App applies it via close_by_id).
         lua.load("ttymap_test_handle:close()")
             .exec()
             .expect("close");
