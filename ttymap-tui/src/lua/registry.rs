@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use mlua::{IntoLuaMulti, Lua, RegistryKey};
 
 use crate::lua::MapApi;
-use crate::lua::api::map_table;
+use crate::lua::api::map;
 
 /// Canonical Lua-facing event names. Centralised so the host emit
 /// site and any internal subscriber agree on the spelling — Lua
@@ -124,7 +124,7 @@ impl LuaEventBus {
         let cell = std::cell::RefCell::new(map);
         for sub in subs {
             let result: mlua::Result<()> = sub.lua.scope(|scope| {
-                let map_table = map_table::make_map_table(&sub.lua, scope, &cell)?;
+                let map_table = map::make_map_table(&sub.lua, scope, &cell)?;
                 let f: mlua::Function = sub.lua.registry_value(&sub.callback)?;
                 f.call::<()>(map_table)
             });

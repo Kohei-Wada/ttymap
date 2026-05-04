@@ -1,33 +1,125 @@
-//! Lua-side bridge for [`MapApi`].
+//! `ttymap.map` — Lua bridges for the map surface.
 //!
-//! Plugin authors call `map:point(lon, lat, glyph, color)` from Lua.
-//! For `map:polyline`, `color` accepts either a theme-aware string
-//! keyword (`"accent"` | `"accent_alt"` | `"muted"` | `"road"`) or a
-//! direct xterm-256 integer index (0..=255). Palette accessor methods
-//! (`map:accent_color()`, `map:road_color()`, etc.) return xterm indices
-//! so plugins can feed them back into `map:polyline`.
+//! Two distinct objects, both surfaced as `map` in Lua:
 //!
-//! `MapApi` carries a non-`'static` lifetime (it borrows the
-//! ratatui buffer for one frame), so we can't use mlua's
-//! `Scope::create_userdata_ref_mut` (which requires `T: 'static`).
-//! Instead we build a per-frame Lua table whose methods are
-//! `scope.create_function`-wrapped closures over a `RefCell` of the
-//! `MapApi` ref. The table mimics a userdata to the script — same
-//! `map:method(...)` syntax — but avoids the lifetime restriction.
+//! - **[`HostMap`]** — persistent userdata installed as `ttymap.map`
+//!   in the global. Mutators (`jump`, `zoom(level)`, `fly_to`) are
+//!   fire-and-forget; each enqueues an
+//!   [`Op::Command(UserCommand::Map(...))`] onto the shared
+//!   [`OpsBuffer`](crate::compositor::op::OpsBuffer). Read methods
+//!   (`center`, no-arg `zoom`) consult shared `Arc<Mutex<...>>` cells
+//!   the host refreshes on every dispatch path that carries a
+//!   `Window` / `MapApi`.
+//! - **[`make_map_table`]** — per-frame Lua table built inside
+//!   `Lua::scope` and handed to `on_tick` callbacks as the `map`
+//!   parameter. Drawing primitives (`point`, `label`, `text_anchored`,
+//!   `polyline`) plus read-only frame state (`center`, `zoom`,
+//!   `area_width`, `cursor`) plus theme accessors. `MapApi` carries a
+//!   non-`'static` lifetime so we can't use
+//!   `Scope::create_userdata_ref_mut`; instead the per-frame table
+//!   wraps `scope.create_function` closures over a `RefCell` of the
+//!   `MapApi` ref.
 //!
-//! All three drawing primitives (`point`, `label`, `polyline`) now
-//! accept the same colour argument shape: either a keyword string
-//! (`"accent"` / `"accent_alt"` / `"muted"` / `"road"`) or a direct
-//! xterm-256 integer index (0..=255). `nil` / unknown values fall
-//! back to the theme's accent colour.
+//! Color args: `point` / `label` / `polyline` / `text_anchored`
+//! accept either a theme-aware keyword (`"accent"` | `"accent_alt"` |
+//! `"muted"` | `"road"`) or a direct xterm-256 integer index
+//! (0..=255). Palette accessor methods (`accent_color`, `road_color`,
+//! etc.) return xterm indices for round-tripping.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
-use mlua::{Lua, Scope, Table};
+use mlua::{Lua, Scope, Table, UserData};
 
+use crate::UserCommand;
+use crate::compositor::op::{Op, OpsBuffer};
 use crate::lua::MapApi;
 use crate::lua::map_api::Anchor;
 use ttymap_engine::geo::LonLat;
+use ttymap_engine::map::MapAction;
+
+// ── ttymap.map (persistent userdata) ────────────────────────────────
+
+pub(super) struct HostMap {
+    /// Shared op buffer the lua subsystem drains every iteration.
+    /// Fire-and-forget Lua intents (`jump` / `zoom` / `fly_to`)
+    /// enqueue an `Op::Command(UserCommand::Map(...))`; the host treats
+    /// them identically to a keymap-driven dispatch.
+    ops: OpsBuffer,
+    center: Arc<Mutex<LonLat>>,
+    zoom: Arc<Mutex<f64>>,
+}
+
+impl HostMap {
+    pub(super) fn new(ops: OpsBuffer, center: Arc<Mutex<LonLat>>, zoom: Arc<Mutex<f64>>) -> Self {
+        Self { ops, center, zoom }
+    }
+}
+
+impl UserData for HostMap {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        // `ttymap.map:jump(lon, lat)` — request the map recentre on
+        // the given coordinate. Enqueues `UserCommand::Map(Jump)` onto
+        // the shared op buffer so the host treats it identically to a
+        // keymap-driven jump.
+        methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
+            this.ops
+                .borrow_mut()
+                .push(Op::Command(UserCommand::Map(MapAction::Jump(LonLat {
+                    lon,
+                    lat,
+                }))));
+            Ok(())
+        });
+
+        // `ttymap.map:zoom([level])` — overloaded:
+        //   `:zoom(level)` queues a zoom request (clamped host-side
+        //   in `MapState::process_action`). Fire-and-forget.
+        //   `:zoom()` (no arg) returns the current zoom level read
+        //   from the shared `Arc<Mutex<f64>>` the host refreshes on
+        //   the same dispatch paths it refreshes `:center()` on.
+        // mlua dispatches by the supplied argument signature: nil →
+        // `None` (getter), number → `Some(level)` (setter).
+        methods.add_method("zoom", |_, this, level: Option<f64>| match level {
+            Some(z) => {
+                this.ops
+                    .borrow_mut()
+                    .push(Op::Command(UserCommand::Map(MapAction::SetZoom(z))));
+                Ok(mlua::Value::Nil)
+            }
+            None => {
+                let z = *this.zoom.lock().expect("zoom mutex poisoned");
+                Ok(mlua::Value::Number(z))
+            }
+        });
+
+        // `ttymap.map:fly_to(lon, lat, zoom)` — composite recenter +
+        // zoom in one dispatch. Emitting `jump` + `zoom` separately
+        // would render two frames; this routes through `MapFlyTo`
+        // so the user sees a single transition.
+        methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
+            this.ops
+                .borrow_mut()
+                .push(Op::Command(UserCommand::Map(MapAction::FlyTo {
+                    center: LonLat { lon, lat },
+                    zoom,
+                })));
+            Ok(())
+        });
+
+        // `ttymap.map:center()` -> lon, lat — current map centre, kept
+        // fresh by the host before each dispatch path that carries a
+        // `Window` / `MapApi`. Plugins use this to scope upstream
+        // queries (e.g. an OpenSky bounding box around the user's
+        // view).
+        methods.add_method("center", |_, this, _: ()| {
+            let ll = *this.center.lock().expect("center mutex poisoned");
+            Ok((ll.lon, ll.lat))
+        });
+    }
+}
+
+// ── per-frame draw table (on_tick callback `map` parameter) ─────────
 
 /// Build the Lua-facing `map` table for a single per-frame `on_tick`
 /// call. The closures borrow `cell` for `'scope`; once the host's

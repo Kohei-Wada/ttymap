@@ -13,7 +13,7 @@
 //! `UserCommand` lives at the crate root rather than inside `app/`
 //! even though `App::dispatch` is the only consumer. The producers
 //! span every layer (`compositor::base`, `compositor::window`,
-//! `input::keymap`, `input::mouse`, `lua::api::host_map`,
+//! `input::keymap`, `input::mouse`, `lua::api::map`,
 //! `lua::api::imperative`, `palette::provider::*`, …); putting the
 //! type next to its single Receiver would force every producer to
 //! `use crate::app::UserCommand`, which is an upward dependency at

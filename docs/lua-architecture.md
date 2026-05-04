@@ -44,12 +44,20 @@ ttymap-tui/src/lua/
   sender.rs        channel sender helpers (push to App via crossbeam)
   map_api.rs       host-side MapApi struct (per-frame draw surface,
                    ratatui buffer + projection + theme; no mlua)
-  api/             Rust→Lua API binding (the `ttymap` global)
-    mod.rs         install() + every namespace userdata
-    http.rs        ttymap.http:fetch — background GET returning a poll-able Job
-    json.rs        ttymap.json:parse / encode
-    map_table.rs   per-frame MapApi → Lua table (Lua::scope)
-    sgp4.rs        SGP4 propagation namespace
+  api/             Rust→Lua API binding (the `ttymap` global).
+                   File ↔ Lua-namespace 1:1 (file name = `ttymap.<X>`).
+    mod.rs         install() + cross-namespace shared types
+    http.rs        ttymap.http   :fetch / :url_encode
+    json.rs        ttymap.json   :parse
+    sgp4.rs        ttymap.sgp4   TLE parse / propagate
+    map.rs         ttymap.map    HostMap userdata (jump/zoom/fly_to/center)
+                                + make_map_table (per-frame on_tick `map` arg)
+    config.rs      ttymap.config :geoip_endpoint
+    help.rs        ttymap.help   :keymap_entries / :palette_entries
+    log.rs         ttymap.log    :info / :warn / :error
+    tile.rs        ttymap.tile   :attribution
+    register.rs    setup-time `ttymap.register_*` / `on_event` capture
+    imperative.rs  `ttymap.api.{card,palette,frame,notify}` runtime cluster
   bridge/          Lua→Rust trait adapters
     handle.rs           shared dispatch plumbing (LuaHandle)
     card_component.rs   LuaCardComponent: Component for a Lua spec
@@ -165,8 +173,8 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
 ### MapApi (per-frame drawing)
 
 Bridged via a per-frame Lua table built inside `Lua::scope`
-(`ttymap-tui/src/lua/api/map_table.rs`) over the host-side `MapApi`
-struct (`ttymap-tui/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
+(`make_map_table` in `ttymap-tui/src/lua/api/map.rs`) over the host-side
+`MapApi` struct (`ttymap-tui/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
 `polyline`, `center`, `zoom`, `area_width`, `cursor`. Each `on_tick`
 callback receives this table. **All drawing for non-window plugins
 happens here.**

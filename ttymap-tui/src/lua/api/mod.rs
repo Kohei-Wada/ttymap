@@ -8,11 +8,14 @@
 //! logging, scheduling, …) is one new namespace, no churn on existing
 //! ones.
 //!
-//! Submodules:
-//! - [`sgp4`] — `ttymap.sgp4` userdata (TLE parsing + SGP4 propagation)
-//! - [`map_table`] — per-frame `map` table built inside `Lua::scope`
-//!   (drawing primitives that borrow the live ratatui buffer; wraps
-//!   the host-side [`crate::lua::MapApi`])
+//! Submodules: one per Lua namespace (`ttymap.<X>`).
+//! - [`http`], [`json`], [`sgp4`] — top-level userdata namespaces
+//! - [`map`] — `ttymap.map` userdata (`HostMap`) **and** the per-frame
+//!   `map` table handed to `on_tick` callbacks (`make_map_table`,
+//!   wrapping the host-side [`crate::lua::MapApi`])
+//! - `config`, `help`, `log`, `tile` — host-state namespaces
+//! - `imperative` — `ttymap.api.{card,palette,frame,notify}` cluster
+//! - `register` — setup-time `ttymap.register_*` / `on_event` capture
 //!
 //! Surface today:
 //!
@@ -79,22 +82,21 @@
 
 pub mod http;
 pub mod json;
-pub mod map_table;
+pub mod map;
 pub mod sgp4;
 
-mod host_config;
-mod host_help;
-mod host_log;
-mod host_map;
-mod host_tile;
+mod config;
+mod help;
 mod imperative;
+mod log;
 mod register;
+mod tile;
 
-use host_config::HostConfig;
-use host_help::HostHelp;
-use host_log::HostLog;
-use host_map::HostMap;
-use host_tile::HostTile;
+use config::HostConfig;
+use help::HostHelp;
+use log::HostLog;
+use map::HostMap;
+use tile::HostTile;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

@@ -185,7 +185,7 @@ impl<'a> MapApi<'a> {
     /// does `pixel_buf |= bit; fg_buf = color`).
     ///
     /// Coords with fewer than 2 points are silently dropped — see the
-    /// Lua-bridge filter in `src/lua/api/map_table.rs::polyline`.
+    /// Lua-bridge filter in `src/lua/api/map.rs::polyline`.
     /// Off-canvas portions of the projected line are no-ops (Bresenham
     /// + `set_pixel` bounds check).
     pub fn push_polyline_overlay(&mut self, coords: Vec<LonLat>, color: u8) {
