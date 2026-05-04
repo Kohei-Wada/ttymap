@@ -109,7 +109,8 @@ fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Re
                 // upvalues there, so the per-provider Lua handle must
                 // be a clone of it (cheap Arc bump).
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
-                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
+                let palette =
+                    crate::front::palette::PaletteComponent::with_provider(Box::new(provider));
                 ops.borrow_mut().push(Op::Push {
                     id,
                     component: Box::new(palette) as Box<dyn crate::compositor::Component>,

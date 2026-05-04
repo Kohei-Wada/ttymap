@@ -1,8 +1,8 @@
 use clap::Parser;
 use ttymap::app::frame_timer::FrameTimer;
 use ttymap::app::{App, KeybindingOverrides};
-use ttymap::cli::Command as Subcommand;
 use ttymap::config::Config;
+use ttymap::front::cli::Command as Subcommand;
 use ttymap::input::thread::InputHandle;
 
 #[derive(Parser)]
@@ -164,7 +164,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // Palette is a built-in (not a plugin): drain every plugin's
     // palette_entries into a CommandSeed and append the `:` activation.
     // Must run after every plugin's register call.
-    ttymap::palette::install(
+    ttymap::front::palette::install(
         &keymap,
         &mut lua.activations,
         std::mem::take(&mut lua.palette_entries),

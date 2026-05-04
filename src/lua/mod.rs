@@ -55,7 +55,7 @@ pub struct LuaSubsystem {
     /// Consumed by the compositor's `BaseLayer`.
     pub activations: Vec<Activation>,
     /// Plugin-supplied palette entries — drained by
-    /// [`crate::palette::install`] in `main` before the
+    /// [`crate::front::palette::install`] in `main` before the
     /// rest of this struct reaches `App::new`.
     pub palette_entries: Vec<PaletteEntry>,
     /// `[<key> <name>]` footer hints harvested from

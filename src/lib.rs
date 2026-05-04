@@ -22,6 +22,11 @@ pub use command::UserCommand;
 /// at the directory level. Ratatui-free.
 pub mod core;
 
+/// UI / IO shell layer. Houses presentation-bound modules: palette
+/// picker, CLI subcommand entry. Sits above [`core`] and consumes
+/// it; never imported from `core/`.
+pub mod front;
+
 /// Application event loop and central message dispatcher.
 pub mod app;
 
@@ -33,19 +38,6 @@ pub mod app;
 /// (`LuaCardComponent`) implement. Top-level subsystem (peer of
 /// `app/`, `lua/`, `input/`).
 pub mod compositor;
-
-/// Palette — `:`-triggered universal picker. Itself a [`Component`]
-/// pushed onto the compositor stack; provider sub-modes (theme
-/// picker, search, plugin commands) swap in place via
-/// `PaletteAction::SwitchProvider`. Top-level peer rather than
-/// living under `app/` because the Lua bridge implements
-/// `PaletteProvider` directly.
-pub mod palette;
-
-/// CLI subcommand implementations. Each subcommand lives in its own
-/// submodule; `main.rs` just parses the top-level enum and calls
-/// [`cli::Command::run`].
-pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
