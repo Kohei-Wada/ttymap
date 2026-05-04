@@ -317,38 +317,25 @@ mod tests {
             .collect()
     }
 
-    use crate::frontend::AppEvent;
+    use crate::frontend::compositor::CardId;
     use crate::frontend::compositor::window::WindowOps;
 
-    /// Dispatch a key into the palette and return the queued stack
-    /// ops + the `UserIntent`s the hook emitted onto a disposable bus.
-    /// Tests that only care about ops can ignore the second tuple
-    /// element via `let (ops, _) = ...;`.
-    fn dispatch(
-        p: &mut PaletteComponent,
-        code: KeyCode,
-        mods: KeyModifiers,
-    ) -> (WindowOps, Vec<UserIntent>) {
-        let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
+    /// Dispatch a key into the palette and return the queued
+    /// [`WindowOps`]; tests inspect via the `closed()` / `pushed()` /
+    /// `intents()` helpers.
+    fn dispatch(p: &mut PaletteComponent, code: KeyCode, mods: KeyModifiers) -> WindowOps {
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
+            let mut win = Window::new(&mut ops, &CTX, CardId::next());
             p.handle_event(KeyEvent::new(code, mods), &mut win);
         }
-        let mut msgs = Vec::new();
-        while let Ok(ev) = rx.try_recv() {
-            match ev {
-                AppEvent::Intent(m) => msgs.push(m),
-                other => panic!("unexpected event from palette: {other:?}"),
-            }
-        }
-        (ops, msgs)
+        ops
     }
 
-    fn expect_consumed((ops, msgs): (WindowOps, Vec<UserIntent>)) {
-        assert!(!ops.close);
-        assert!(ops.opens.is_empty());
-        assert!(msgs.is_empty());
+    fn expect_consumed(ops: WindowOps) {
+        assert!(!ops.closed());
+        assert!(!ops.pushed());
+        assert!(ops.intents().is_empty());
     }
 
     #[test]
@@ -425,10 +412,10 @@ mod tests {
     fn enter_closes_with_selected_msgs() {
         let mut p = palette_with(&["A", "B", "C"]);
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
-        let (ops, msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
-        assert!(ops.close);
-        assert_eq!(msgs, vec![UserIntent::Map(MapAction::None)]);
-        assert!(ops.opens.is_empty());
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.closed());
+        assert_eq!(ops.intents(), vec![UserIntent::Map(MapAction::None)]);
+        assert!(!ops.pushed());
     }
 
     #[test]
@@ -436,17 +423,17 @@ mod tests {
         let mut p = palette_with(&["Zoom in"]);
         dispatch(&mut p, KeyCode::Char('x'), NONE);
         assert!(filtered_labels(&p).is_empty());
-        let (ops, msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
-        assert!(ops.close);
-        assert!(msgs.is_empty());
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.closed());
+        assert!(ops.intents().is_empty());
     }
 
     #[test]
     fn esc_closes() {
         let mut p = palette_with(&["A"]);
-        let (ops, msgs) = dispatch(&mut p, KeyCode::Esc, NONE);
-        assert!(ops.close);
-        assert!(msgs.is_empty());
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.closed());
+        assert!(ops.intents().is_empty());
     }
 
     /// Provider that counts how many times `cancel` is invoked. Used
@@ -485,8 +472,8 @@ mod tests {
             cancel_calls: cancels.clone(),
         };
         let mut p = PaletteComponent::with_provider(Box::new(prov));
-        let (ops, _msgs) = dispatch(&mut p, KeyCode::Esc, NONE);
-        assert!(ops.close);
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.closed());
         assert_eq!(cancels.get(), 1);
     }
 
@@ -498,8 +485,8 @@ mod tests {
             cancel_calls: cancels.clone(),
         };
         let mut p = PaletteComponent::with_provider(Box::new(prov));
-        let (ops, _msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
-        assert!(ops.close);
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.closed());
         assert_eq!(cancels.get(), 1);
     }
 
@@ -514,8 +501,8 @@ mod tests {
             cancel_calls: cancels.clone(),
         };
         let mut p = PaletteComponent::with_provider(Box::new(prov));
-        let (ops, _msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
-        assert!(ops.close);
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(ops.closed());
         assert_eq!(cancels.get(), 0);
     }
 
@@ -592,10 +579,9 @@ mod tests {
         dispatch(&mut p, KeyCode::Char('t'), NONE);
         dispatch(&mut p, KeyCode::Char('o'), NONE);
         // pending; poll should flush since interval is 0.
-        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
         let mut ops = WindowOps::default();
         {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
+            let mut win = Window::new(&mut ops, &CTX, CardId::next());
             p.poll(&mut win);
         }
         assert_eq!(*calls.borrow(), vec!["".to_string(), "to".to_string()]);
@@ -656,8 +642,8 @@ mod tests {
         let mut p = PaletteComponent::with_provider(Box::new(prov));
         dispatch(&mut p, KeyCode::Char('t'), NONE);
         dispatch(&mut p, KeyCode::Char('o'), NONE);
-        let (ops, _msgs) = dispatch(&mut p, KeyCode::Enter, NONE);
-        assert!(!ops.close, "OnEnter Enter+empty must keep palette open");
+        let ops = dispatch(&mut p, KeyCode::Enter, NONE);
+        assert!(!ops.closed(), "OnEnter Enter+empty must keep palette open");
         assert_eq!(*calls.borrow(), vec!["".to_string(), "to".to_string()]);
     }
 
@@ -670,8 +656,8 @@ mod tests {
         };
         let mut p = PaletteComponent::with_provider(Box::new(prov));
         dispatch(&mut p, KeyCode::Char('t'), NONE);
-        let (ops, _msgs) = dispatch(&mut p, KeyCode::Esc, NONE);
-        assert!(ops.close);
+        let ops = dispatch(&mut p, KeyCode::Esc, NONE);
+        assert!(ops.closed());
     }
 
     #[test]
