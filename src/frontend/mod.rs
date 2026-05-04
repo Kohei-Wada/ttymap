@@ -224,12 +224,31 @@ impl Frontend {
             // `tick` event fires against the live MapApi.
             self.render_into(terminal)?;
 
+            // Drain any [`Op`]s that Lua callbacks enqueued during this
+            // iteration (handler calls, on_tick callbacks, palette
+            // execute callbacks). Today only `Op::Close` is in use —
+            // the older `CloseFlag` polling has been replaced with this
+            // single buffered drain.
+            self.apply_lua_ops();
+
             // If plugin `on_tick` callbacks pushed polylines, throttle
             // the redraw request to the configured interval.
             self.tick_overlay_redraw();
         }
 
         Ok(())
+    }
+
+    /// Apply every [`Op`] queued by Lua callbacks since the last
+    /// drain. Called once per loop iteration, after `render_into` so
+    /// `on_tick` callbacks (which run inside `ui::draw`) have already
+    /// pushed.
+    fn apply_lua_ops(&mut self) {
+        for op in self.lua.drain_ops() {
+            match op {
+                crate::lua::op::Op::Close(id) => self.compositor.close_by_id(id),
+            }
+        }
     }
 
     /// Whether the event loop should keep running — flipped off by
@@ -344,8 +363,8 @@ impl Frontend {
         // self.compositor` for the push side.
         let lua = &self.lua;
         let compositor = &mut self.compositor;
-        lua.drain_pushes(|component| {
-            compositor.push(component);
+        lua.drain_pushes(|id, component| {
+            compositor.push_with_id(id, component);
         });
 
         let ctx = self.context();

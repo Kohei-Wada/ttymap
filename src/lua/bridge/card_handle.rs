@@ -2,174 +2,70 @@
 //! component onto the compositor stack, return a Lua-facing handle
 //! whose only method is `close()` (idempotent).
 //!
-//! The handle holds a shared atomic flag; `close()` flips it. The
-//! `LuaCardComponent` it pushed checks the flag on its next poll
-//! tick and pops itself off the stack via `win.close()`.
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+//! The handle holds a reserved [`CardId`] and a clone of the
+//! Lua subsystem's shared [`OpsBuffer`]. `close()` enqueues an
+//! [`Op::Close`] keyed by the id; the App drains the buffer per
+//! iteration and pops the matching component via
+//! [`crate::frontend::compositor::Compositor::close_by_id`].
+//!
+//! Replaces the older `Arc<AtomicBool>` flag + per-component
+//! `Component::poll` polling pattern: there's no per-frame
+//! "is this card asking to close?" scan; the close is a single
+//! push to the buffer, applied directly by id.
 
 use mlua::UserData;
 
-/// Shared close flag between the Lua-side handle and the Rust-side
-/// component. Cloned at construction; either side flipping it
-/// triggers the next poll-tick `win.close()`.
-#[derive(Clone, Default)]
-pub struct CloseFlag(Arc<AtomicBool>);
-
-impl CloseFlag {
-    // Relaxed is sufficient: the flag is the only shared state and
-    // there is no companion data whose write must be ordered with
-    // respect to the flip.
-    pub fn request(&self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
-    pub fn take(&self) -> bool {
-        self.0.swap(false, Ordering::Relaxed)
-    }
-}
+use crate::frontend::compositor::CardId;
+use crate::lua::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.card.open(...)`.
-/// Idempotent `:close()` — flipping a flipped flag is a no-op.
+/// Idempotent `:close()` — pushing two `Op::Close(id)` for the same
+/// id is harmless (the second `close_by_id` call is a no-op once the
+/// component is already off the stack).
 pub struct CardHandle {
-    flag: CloseFlag,
+    id: CardId,
+    ops: OpsBuffer,
 }
 
 impl CardHandle {
-    /// Build a handle that signals close via the shared `flag`.
-    pub fn new(flag: CloseFlag) -> Self {
-        Self { flag }
+    /// Build a handle that requests close via [`Op::Close`] keyed by
+    /// the supplied `id`.
+    pub fn new(id: CardId, ops: OpsBuffer) -> Self {
+        Self { id, ops }
     }
 }
 
 impl UserData for CardHandle {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("close", |_, this, _: ()| {
-            this.flag.request();
+            this.ops.borrow_mut().push(Op::Close(this.id));
             Ok(())
         });
-    }
-}
-
-/// Generic wrapper that drains a [`CloseFlag`] on each `poll` tick
-/// and forwards every other [`Component`] method to the inner impl.
-///
-/// Used by `ttymap.api.palette.open` (and any future A-series
-/// primitive that wraps a pre-existing `Component`) to add the
-/// shared-flag close protocol without duplicating it inside each
-/// adapter type. [`LuaCardComponent`] does the same thing inline
-/// in its own `poll` because it owns the flag directly; for adapters
-/// that already exist (`PaletteComponent` wrapping a
-/// [`LuaPaletteProvider`]) wrapping is the cheaper bridge.
-///
-/// [`Component`]: crate::frontend::compositor::Component
-/// [`LuaCardComponent`]: super::card_component::LuaCardComponent
-/// [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
-pub struct CloseFlagWrapper<C> {
-    inner: C,
-    flag: CloseFlag,
-}
-
-impl<C> CloseFlagWrapper<C> {
-    pub fn new(inner: C, flag: CloseFlag) -> Self {
-        Self { inner, flag }
-    }
-}
-
-impl<C: crate::frontend::compositor::Component> crate::frontend::compositor::Component
-    for CloseFlagWrapper<C>
-{
-    fn handle_event(
-        &mut self,
-        event: crossterm::event::KeyEvent,
-        win: &mut crate::frontend::compositor::window::Window,
-    ) {
-        self.inner.handle_event(event, win);
-    }
-
-    fn render(&self, win: &mut crate::frontend::compositor::window::RenderWindow) {
-        self.inner.render(win);
-    }
-
-    fn poll(&mut self, win: &mut crate::frontend::compositor::window::Window) {
-        self.inner.poll(win);
-        if self.flag.take() {
-            win.close();
-        }
-    }
-
-    fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        self.inner.footer_hints()
-    }
-
-    fn name(&self) -> &'static str {
-        self.inner.name()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lua::op::new_ops_buffer;
 
     #[test]
-    fn close_flips_flag_idempotent() {
-        let flag = CloseFlag::default();
+    fn close_enqueues_op_close_idempotent() {
+        let ops = new_ops_buffer();
+        let id = CardId::next();
         let lua = mlua::Lua::new();
-        let ud = lua.create_userdata(CardHandle::new(flag.clone())).unwrap();
+        let ud = lua
+            .create_userdata(CardHandle::new(id, ops.clone()))
+            .unwrap();
         lua.load("local h = ...; h:close(); h:close()")
             .call::<()>(ud)
             .unwrap();
-        assert!(flag.take());
-        assert!(!flag.take());
-    }
-
-    /// [`CloseFlagWrapper::poll`] must call `win.close()` exactly when
-    /// the shared flag has been flipped — and nothing extra at any
-    /// other time. Mirrors the equivalent test on
-    /// [`super::card_component::LuaCardComponent`].
-    #[test]
-    fn close_flag_wrapper_polls_close_when_flag_set() {
-        use crate::frontend::AppEvent;
-        use crate::frontend::compositor::Component;
-        use crate::frontend::compositor::Context;
-        use crate::frontend::compositor::window::{Window, WindowOps};
-
-        /// Inert inner component — no-op for every method so the
-        /// wrapper's behaviour is the only thing under test.
-        struct Inert;
-        impl Component for Inert {}
-
-        const CTX: Context = Context {
-            theme_id: crate::theme::ThemeId::Dark,
-            cursor: None,
-        };
-        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
-
-        let flag = CloseFlag::default();
-        let mut wrapped = CloseFlagWrapper::new(Inert, flag.clone());
-
-        // No flip → no close.
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            wrapped.poll(&mut win);
+        let drained: Vec<Op> = std::mem::take(&mut *ops.borrow_mut());
+        assert_eq!(drained.len(), 2, "two close() calls -> two ops queued");
+        for op in drained {
+            match op {
+                Op::Close(got) => assert_eq!(got, id),
+            }
         }
-        assert!(!ops.close);
-
-        // Flipped flag → close queued, then idempotent.
-        flag.request();
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            wrapped.poll(&mut win);
-        }
-        assert!(ops.close);
-
-        let mut ops = WindowOps::default();
-        {
-            let mut win = Window::new(&mut ops, &CTX, &tx);
-            wrapped.poll(&mut win);
-        }
-        assert!(!ops.close);
     }
 }

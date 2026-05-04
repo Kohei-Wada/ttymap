@@ -7,10 +7,11 @@
 //! "Frontend doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
-use crate::frontend::compositor::Component;
 use crate::frontend::compositor::MapApi;
+use crate::frontend::compositor::{CardId, Component};
 use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
+use crate::lua::op::{Op, OpsBuffer};
 use crate::lua::registry::{LuaEventBus, names};
 
 /// Runtime-held part of the Lua subsystem (built by
@@ -22,11 +23,25 @@ use crate::lua::registry::{LuaEventBus, names};
 pub struct LuaHandle {
     bus: LuaEventBus,
     host_handles: Vec<LuaHostHandles>,
+    /// Shared buffer that Lua callbacks push [`Op`]s into; Frontend
+    /// drains via [`Self::drain_ops`] once per loop iteration.
+    ops: OpsBuffer,
 }
 
 impl LuaHandle {
-    pub fn new(bus: LuaEventBus, host_handles: Vec<LuaHostHandles>) -> Self {
-        Self { bus, host_handles }
+    pub fn new(bus: LuaEventBus, host_handles: Vec<LuaHostHandles>, ops: OpsBuffer) -> Self {
+        Self {
+            bus,
+            host_handles,
+            ops,
+        }
+    }
+
+    /// Take every [`Op`] enqueued by Lua callbacks since the last
+    /// drain. Frontend calls this once per loop iteration and applies
+    /// each op to the compositor / dispatch path.
+    pub fn drain_ops(&self) -> Vec<Op> {
+        std::mem::take(&mut *self.ops.borrow_mut())
     }
 
     /// Fire the per-frame `"tick"` event. Called by `ui::draw` once
@@ -89,13 +104,15 @@ impl LuaHandle {
     }
 
     /// Drain every plugin's `push_rx` queue — components that Lua
-    /// queued via `ttymap.api.card.open` / `palette.open`. The
-    /// caller decides what to do with each pulled component (in
-    /// practice: push it onto the compositor stack).
-    pub fn drain_pushes<F: FnMut(Box<dyn Component>)>(&self, mut on_push: F) {
+    /// queued via `ttymap.api.card.open` / `palette.open`. Each
+    /// pull carries the [`CardId`] reserved at the call site (so the
+    /// matching [`crate::lua::bridge::card_handle::CardHandle`] can
+    /// later request a close via [`Op::Close`]); the caller pushes
+    /// onto the compositor stack via `push_with_id`.
+    pub fn drain_pushes<F: FnMut(CardId, Box<dyn Component>)>(&self, mut on_push: F) {
         for handles in &self.host_handles {
-            while let Ok(component) = handles.push_rx.try_recv() {
-                on_push(component);
+            while let Ok((id, component)) = handles.push_rx.try_recv() {
+                on_push(id, component);
             }
         }
     }

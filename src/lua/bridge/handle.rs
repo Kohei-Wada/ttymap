@@ -145,10 +145,11 @@ pub fn fresh_load(
     host_tag: &'static str,
     shared: Arc<host::LuaHostShared>,
     sender: LuaSender,
+    ops: crate::lua::op::OpsBuffer,
 ) -> mlua::Result<(Lua, host::CapturedRegistration, host::LuaHostHandles)> {
     let lua = new_lua();
     let slot = host::new_capture_slot();
-    let handles = host::install(&lua, host_tag, shared, slot.clone(), sender)?;
+    let handles = host::install(&lua, host_tag, shared, slot.clone(), sender, ops)?;
     lua.load(source).set_name(chunk_name).exec()?;
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()

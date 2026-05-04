@@ -17,6 +17,7 @@ pub mod api;
 pub mod bridge;
 pub mod handle;
 pub mod init_lua;
+pub mod op;
 pub mod registry;
 pub mod runtimepath;
 pub mod sender;
@@ -95,11 +96,13 @@ pub fn build_subsystem(
     // script itself (`enabled = false` in the spec). Higher-priority
     // layers shadow lower ones by stem.
     let runtime_path = runtime_path();
+    let ops = op::new_ops_buffer();
     register_builtin_plugins(
         runtime_path,
         &config.plugins.disable,
         shared.clone(),
         lua_sender,
+        ops.clone(),
         &mut r,
     );
 
@@ -129,6 +132,7 @@ pub fn build_subsystem(
     let handle = LuaHandle::new(
         std::mem::take(&mut r.event_bus),
         std::mem::take(&mut r.lua_host_handles),
+        ops,
     );
 
     LuaSubsystem {
@@ -278,6 +282,7 @@ pub fn register_builtin_plugins(
     disable: &[String],
     shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
+    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
     if runtime_path.is_empty() {
@@ -296,6 +301,7 @@ pub fn register_builtin_plugins(
             disable,
             shared.clone(),
             sender.clone(),
+            ops.clone(),
             r,
         );
     }
@@ -310,6 +316,7 @@ fn register_one(
     source: &'static str,
     shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
+    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
     // Run the script once to capture its activation surfaces and
@@ -325,7 +332,7 @@ fn register_one(
     // display name). Same value — the file stem is the plugin's
     // canonical identifier on every surface.
     let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, sender) {
+        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, sender, ops) {
             Ok(t) => t,
             Err(e) => {
                 log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
@@ -480,6 +487,7 @@ fn register_plugins_in(
     disable: &[String],
     shared: Arc<api::LuaHostShared>,
     sender: LuaSender,
+    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -539,7 +547,7 @@ fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(name, source, shared.clone(), sender.clone(), r);
+        register_one(name, source, shared.clone(), sender.clone(), ops.clone(), r);
     }
 }
 
@@ -601,7 +609,14 @@ mod tests {
         let shared = api::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        register_builtin_plugins(&rtp, &[], shared, dummy_lua_sender(), &mut r);
+        register_builtin_plugins(
+            &rtp,
+            &[],
+            shared,
+            dummy_lua_sender(),
+            op::new_ops_buffer(),
+            &mut r,
+        );
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -647,9 +662,15 @@ mod tests {
     /// registration time.
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, api::CapturedRegistration) {
         let shared = api::LuaHostShared::empty();
-        let (lua, captured, _handles) =
-            bridge::handle::fresh_load(source, name, "lua-test", shared, dummy_lua_sender())
-                .expect("load");
+        let (lua, captured, _handles) = bridge::handle::fresh_load(
+            source,
+            name,
+            "lua-test",
+            shared,
+            dummy_lua_sender(),
+            op::new_ops_buffer(),
+        )
+        .expect("load");
         (lua, captured)
     }
 
@@ -718,7 +739,15 @@ mod tests {
 
         let shared = api::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_plugins_in(&dir, None, &[], shared.clone(), dummy_lua_sender(), &mut r);
+        register_plugins_in(
+            &dir,
+            None,
+            &[],
+            shared.clone(),
+            dummy_lua_sender(),
+            op::new_ops_buffer(),
+            &mut r,
+        );
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -772,6 +801,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         let ls = labels(&r);
@@ -798,6 +828,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         let ls = labels(&r);
@@ -829,6 +860,7 @@ mod tests {
             &disable,
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         let ls = labels(&r);
@@ -858,6 +890,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         let ls = labels(&r);
@@ -889,6 +922,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         assert!(
@@ -914,6 +948,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         let ls = labels(&r);
@@ -1002,6 +1037,7 @@ mod tests {
             &[],
             api::LuaHostShared::empty(),
             dummy_lua_sender(),
+            op::new_ops_buffer(),
             &mut r,
         );
         assert!(r.palette_entries.is_empty());

@@ -246,8 +246,15 @@ mod tests {
         // surface, not the bus.
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = LuaSender::new(tx);
-        let _handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, sender)
-            .expect("install ttymap");
+        let _handles = install(
+            &lua,
+            "lua-test",
+            LuaHostShared::empty(),
+            slot,
+            sender,
+            crate::lua::op::new_ops_buffer(),
+        )
+        .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");
         LuaPaletteProvider::from_spec(lua, spec, "lua-test").expect("from_spec")
     }
