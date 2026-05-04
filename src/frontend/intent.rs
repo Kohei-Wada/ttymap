@@ -27,7 +27,7 @@
 //! dispatch table.
 
 use crate::input::KeyMap;
-use crate::map::Action;
+use crate::map::MapAction;
 use crate::theme::ThemeId;
 
 /// What the app can do in response to an event. Emitted by palette
@@ -36,7 +36,7 @@ use crate::theme::ThemeId;
 ///
 /// Map-level intents are nested under [`UserIntent::Map`] because
 /// [`MapState`](crate::map::MapState) owns its own command vocabulary
-/// ([`Action`]) and consumes it through a single entry
+/// ([`MapAction`]) and consumes it through a single entry
 /// ([`MapState::process_action`](crate::map::MapState::process_action)).
 /// Other variants sit at the top level: each is handled directly by
 /// an `Frontend::dispatch` arm and there is no intermediate sub-system to
@@ -44,9 +44,9 @@ use crate::theme::ThemeId;
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserIntent {
     /// Dispatch a map-state action (pan, zoom, reset, jump, ...).
-    Map(Action),
+    Map(MapAction),
     /// Stop the event loop and tear down the app. Lives at the top
-    /// level (not nested under [`Action`]) because Quit is an
+    /// level (not nested under [`MapAction`]) because Quit is an
     /// app-lifetime concern, not a map-data concern — `MapState`
     /// has no business knowing whether the program is alive.
     Quit,
@@ -80,12 +80,12 @@ impl UserIntent {
     /// Resolve a `[keymap]` config name (e.g. `"quit"`, `"pan_up"`)
     /// to the matching intent. Top-level intents like [`Self::Quit`]
     /// are matched directly; everything else falls through to
-    /// [`Action::from_config_name`] wrapped as [`Self::Map`].
+    /// [`MapAction::from_config_name`] wrapped as [`Self::Map`].
     pub fn from_config_name(name: &str) -> Option<UserIntent> {
         match name {
             "quit" => Some(UserIntent::Quit),
             "toggle_sidebar" => Some(UserIntent::ToggleSidebar),
-            _ => Action::from_config_name(name).map(UserIntent::Map),
+            _ => MapAction::from_config_name(name).map(UserIntent::Map),
         }
     }
 
@@ -93,7 +93,7 @@ impl UserIntent {
     /// surfaces. Each entry's `keymap.keys_for(intent)` is queried
     /// upstream to produce the final help text.
     pub fn listed_with_labels() -> Vec<(UserIntent, &'static str)> {
-        let mut out: Vec<(UserIntent, &'static str)> = Action::all_listed()
+        let mut out: Vec<(UserIntent, &'static str)> = MapAction::all_listed()
             .iter()
             .map(|a| (UserIntent::Map(a.clone()), a.label()))
             .collect();

@@ -31,7 +31,7 @@ use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
 use crate::frontend::UserIntent;
 use crate::input::keymap::KeyMap;
-use crate::map::Action;
+use crate::map::MapAction;
 
 pub struct BaseLayer {
     keymap: KeyMap,
@@ -80,7 +80,7 @@ impl BaseLayer {
         if code == KeyCode::Char('g') && modifiers == KeyModifiers::NONE {
             if self.pending_g {
                 self.pending_g = false;
-                return Some(UserIntent::Map(Action::ZoomToWorld));
+                return Some(UserIntent::Map(MapAction::ZoomToWorld));
             }
             self.pending_g = true;
             return None;
@@ -194,7 +194,7 @@ mod tests {
         assert!(ops.opens.is_empty());
         // 2nd g: ZoomToWorld.
         let (_ops, msgs) = dispatch(&mut bg, KeyCode::Char('g'));
-        assert_eq!(msgs, vec![UserIntent::Map(Action::ZoomToWorld)]);
+        assert_eq!(msgs, vec![UserIntent::Map(MapAction::ZoomToWorld)]);
     }
 
     #[test]

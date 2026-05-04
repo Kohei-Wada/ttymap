@@ -1,4 +1,4 @@
-use super::action::Action;
+use super::action::MapAction;
 use crate::geo::{self, LonLat};
 
 /// Snapshot of the visible map region handed to the render pipeline:
@@ -78,37 +78,37 @@ impl MapState {
     }
 
     /// Process a map action. Returns true if redraw needed.
-    pub fn process_action(&mut self, action: &Action) -> bool {
+    pub fn process_action(&mut self, action: &MapAction) -> bool {
         let step = 8.0 / 2.0_f64.powf(self.zoom);
         let zoom_step = self.zoom_step;
         let max_zoom = self.max_zoom;
 
         match action {
-            Action::None => false,
-            Action::PanLeft => self.pan(step, -1.0, 0.0),
-            Action::PanRight => self.pan(step, 1.0, 0.0),
-            Action::PanUp => self.pan(step, 0.0, 0.75),
-            Action::PanDown => self.pan(step, 0.0, -0.75),
-            Action::PanLeftFast => self.pan(step, -10.0, 0.0),
-            Action::PanRightFast => self.pan(step, 10.0, 0.0),
-            Action::PanUpHalf => self.pan(step, 0.0, 7.5),
-            Action::PanDownHalf => self.pan(step, 0.0, -7.5),
-            Action::ZoomIn => {
+            MapAction::None => false,
+            MapAction::PanLeft => self.pan(step, -1.0, 0.0),
+            MapAction::PanRight => self.pan(step, 1.0, 0.0),
+            MapAction::PanUp => self.pan(step, 0.0, 0.75),
+            MapAction::PanDown => self.pan(step, 0.0, -0.75),
+            MapAction::PanLeftFast => self.pan(step, -10.0, 0.0),
+            MapAction::PanRightFast => self.pan(step, 10.0, 0.0),
+            MapAction::PanUpHalf => self.pan(step, 0.0, 7.5),
+            MapAction::PanDownHalf => self.pan(step, 0.0, -7.5),
+            MapAction::ZoomIn => {
                 let old = self.zoom;
                 self.zoom = (self.zoom + zoom_step).min(max_zoom);
                 self.zoom != old
             }
-            Action::ZoomOut => {
+            MapAction::ZoomOut => {
                 let old = self.zoom;
                 self.zoom = (self.zoom - zoom_step).max(self.min_zoom);
                 self.zoom != old
             }
-            Action::ZoomToWorld => {
+            MapAction::ZoomToWorld => {
                 let old = self.zoom;
                 self.zoom = self.min_zoom;
                 self.zoom != old
             }
-            Action::ResetPosition => {
+            MapAction::ResetPosition => {
                 let old_center = self.center;
                 let old_zoom = self.zoom;
                 self.center = LonLat {
@@ -118,13 +118,13 @@ impl MapState {
                 self.zoom = self.initial_zoom.unwrap_or(self.min_zoom);
                 self.center != old_center || self.zoom != old_zoom
             }
-            Action::Redraw => true,
-            Action::PanCells(dx, dy) => {
+            MapAction::Redraw => true,
+            MapAction::PanCells(dx, dy) => {
                 let old = self.center;
                 self.pan_by_cells(*dx, *dy);
                 self.center != old
             }
-            Action::ZoomAt {
+            MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
                 zoom_in,
@@ -135,16 +135,16 @@ impl MapState {
                 self.zoom_towards(*anchor_dx, *anchor_dy, delta);
                 self.zoom != old_zoom || self.center != old_center
             }
-            Action::Jump(loc) => {
+            MapAction::Jump(loc) => {
                 self.jump_to(*loc);
                 true
             }
-            Action::SetZoom(z) => {
+            MapAction::SetZoom(z) => {
                 let old = self.zoom;
                 self.zoom = z.clamp(self.min_zoom, max_zoom);
                 self.zoom != old
             }
-            Action::FlyTo { center, zoom } => {
+            MapAction::FlyTo { center, zoom } => {
                 let old_center = self.center;
                 let old_zoom = self.zoom;
                 self.center = *center;
@@ -249,7 +249,7 @@ mod tests {
     fn test_pan() {
         let mut map = default_core();
         let before = map.center.lon;
-        map.process_action(&Action::PanRight);
+        map.process_action(&MapAction::PanRight);
         assert!(map.center.lon > before);
     }
 
@@ -257,10 +257,10 @@ mod tests {
     fn test_zoom_in_out() {
         let mut map = default_core();
         for _ in 0..5 {
-            map.process_action(&Action::ZoomIn);
+            map.process_action(&MapAction::ZoomIn);
         }
         let after_in = map.zoom;
-        map.process_action(&Action::ZoomOut);
+        map.process_action(&MapAction::ZoomOut);
         assert!(map.zoom < after_in);
     }
 
@@ -276,9 +276,9 @@ mod tests {
     #[test]
     fn test_reset_position() {
         let mut map = default_core();
-        map.process_action(&Action::PanRight);
+        map.process_action(&MapAction::PanRight);
         let moved = map.center.lon;
-        map.process_action(&Action::ResetPosition);
+        map.process_action(&MapAction::ResetPosition);
         assert_ne!(map.center.lon, moved);
         assert_eq!(map.center.lon, map.initial_lon);
     }
@@ -290,9 +290,9 @@ mod tests {
         // clamped so a plugin author can pass `1e9` without the host
         // entering an undefined zoom state.
         let mut map = default_core();
-        map.process_action(&Action::SetZoom(99.0));
+        map.process_action(&MapAction::SetZoom(99.0));
         assert!((map.zoom - map.max_zoom).abs() < f64::EPSILON);
-        map.process_action(&Action::SetZoom(-99.0));
+        map.process_action(&MapAction::SetZoom(-99.0));
         assert!((map.zoom - map.min_zoom).abs() < f64::EPSILON);
     }
 
@@ -307,7 +307,7 @@ mod tests {
             lon: 139.7595,
             lat: 35.6828,
         };
-        map.process_action(&Action::FlyTo {
+        map.process_action(&MapAction::FlyTo {
             center: target,
             zoom: 99.0,
         });

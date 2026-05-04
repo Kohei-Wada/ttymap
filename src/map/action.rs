@@ -1,15 +1,15 @@
-//! `Action` enum — map-level commands executed by `MapState`.
+//! `MapAction` enum — map-level commands executed by `MapState`.
 //!
 //! Produced by the keyboard handler via the keymap lookup; consumed
 //! only by `MapState::process_action`. Plugin activation lives outside
 //! this enum — widgets register their own activation keys at startup
-//! and are invoked directly by the keyboard handler, so `Action`
+//! and are invoked directly by the keyboard handler, so `MapAction`
 //! never carries UI-widget names.
 
 use crate::geo::LonLat;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Action {
+pub enum MapAction {
     None,
     PanUp,
     PanDown,
@@ -54,7 +54,7 @@ pub enum Action {
     },
 }
 
-impl Action {
+impl MapAction {
     /// Human-readable label used by the command palette and the help
     /// overlay. Mouse-only variants (`PanCells`, `ZoomAt`) and the
     /// no-op `None` return `""` since they are not exposed in UI
@@ -62,47 +62,47 @@ impl Action {
     /// exhaustive so adding a variant triggers a compile error here.
     pub fn label(&self) -> &'static str {
         match self {
-            Action::None => "",
-            Action::PanUp => "Pan up",
-            Action::PanDown => "Pan down",
-            Action::PanLeft => "Pan left",
-            Action::PanRight => "Pan right",
-            Action::PanLeftFast => "Pan left (fast)",
-            Action::PanRightFast => "Pan right (fast)",
-            Action::PanUpHalf => "Pan up (half)",
-            Action::PanDownHalf => "Pan down (half)",
-            Action::ZoomIn => "Zoom in",
-            Action::ZoomOut => "Zoom out",
-            Action::ZoomToWorld => "Zoom to world",
-            Action::ResetPosition => "Reset position",
-            Action::Redraw => "Redraw",
-            Action::PanCells(..)
-            | Action::ZoomAt { .. }
-            | Action::Jump(_)
-            | Action::SetZoom(_)
-            | Action::FlyTo { .. } => "",
+            MapAction::None => "",
+            MapAction::PanUp => "Pan up",
+            MapAction::PanDown => "Pan down",
+            MapAction::PanLeft => "Pan left",
+            MapAction::PanRight => "Pan right",
+            MapAction::PanLeftFast => "Pan left (fast)",
+            MapAction::PanRightFast => "Pan right (fast)",
+            MapAction::PanUpHalf => "Pan up (half)",
+            MapAction::PanDownHalf => "Pan down (half)",
+            MapAction::ZoomIn => "Zoom in",
+            MapAction::ZoomOut => "Zoom out",
+            MapAction::ZoomToWorld => "Zoom to world",
+            MapAction::ResetPosition => "Reset position",
+            MapAction::Redraw => "Redraw",
+            MapAction::PanCells(..)
+            | MapAction::ZoomAt { .. }
+            | MapAction::Jump(_)
+            | MapAction::SetZoom(_)
+            | MapAction::FlyTo { .. } => "",
         }
     }
 
-    /// Every `Action` variant surfaced in UI listings (command palette,
+    /// Every `MapAction` variant surfaced in UI listings (command palette,
     /// help overlay). Excludes mouse-only variants and the no-op
     /// `None`. Adding a new keymap-bindable variant means adding it
     /// here.
-    pub fn all_listed() -> &'static [Action] {
+    pub fn all_listed() -> &'static [MapAction] {
         &[
-            Action::PanLeft,
-            Action::PanRight,
-            Action::PanUp,
-            Action::PanDown,
-            Action::PanLeftFast,
-            Action::PanRightFast,
-            Action::PanUpHalf,
-            Action::PanDownHalf,
-            Action::ZoomIn,
-            Action::ZoomOut,
-            Action::ZoomToWorld,
-            Action::ResetPosition,
-            Action::Redraw,
+            MapAction::PanLeft,
+            MapAction::PanRight,
+            MapAction::PanUp,
+            MapAction::PanDown,
+            MapAction::PanLeftFast,
+            MapAction::PanRightFast,
+            MapAction::PanUpHalf,
+            MapAction::PanDownHalf,
+            MapAction::ZoomIn,
+            MapAction::ZoomOut,
+            MapAction::ZoomToWorld,
+            MapAction::ResetPosition,
+            MapAction::Redraw,
         ]
     }
 
@@ -112,32 +112,32 @@ impl Action {
     /// config. Exhaustive so adding a variant is a compile error.
     pub fn config_name(&self) -> &'static str {
         match self {
-            Action::None => "",
-            Action::PanUp => "pan_up",
-            Action::PanDown => "pan_down",
-            Action::PanLeft => "pan_left",
-            Action::PanRight => "pan_right",
-            Action::PanLeftFast => "pan_left_fast",
-            Action::PanRightFast => "pan_right_fast",
-            Action::PanUpHalf => "pan_up_half",
-            Action::PanDownHalf => "pan_down_half",
-            Action::ZoomIn => "zoom_in",
-            Action::ZoomOut => "zoom_out",
-            Action::ZoomToWorld => "zoom_to_world",
-            Action::ResetPosition => "reset_position",
-            Action::Redraw => "redraw",
-            Action::PanCells(..)
-            | Action::ZoomAt { .. }
-            | Action::Jump(_)
-            | Action::SetZoom(_)
-            | Action::FlyTo { .. } => "",
+            MapAction::None => "",
+            MapAction::PanUp => "pan_up",
+            MapAction::PanDown => "pan_down",
+            MapAction::PanLeft => "pan_left",
+            MapAction::PanRight => "pan_right",
+            MapAction::PanLeftFast => "pan_left_fast",
+            MapAction::PanRightFast => "pan_right_fast",
+            MapAction::PanUpHalf => "pan_up_half",
+            MapAction::PanDownHalf => "pan_down_half",
+            MapAction::ZoomIn => "zoom_in",
+            MapAction::ZoomOut => "zoom_out",
+            MapAction::ZoomToWorld => "zoom_to_world",
+            MapAction::ResetPosition => "reset_position",
+            MapAction::Redraw => "redraw",
+            MapAction::PanCells(..)
+            | MapAction::ZoomAt { .. }
+            | MapAction::Jump(_)
+            | MapAction::SetZoom(_)
+            | MapAction::FlyTo { .. } => "",
         }
     }
 
     /// Reverse of [`config_name`]: resolve a TOML key back to its
-    /// `Action`. Only listed (rebindable) variants match; unknown
+    /// `MapAction`. Only listed (rebindable) variants match; unknown
     /// names yield `None`.
-    pub fn from_config_name(name: &str) -> Option<Action> {
+    pub fn from_config_name(name: &str) -> Option<MapAction> {
         Self::all_listed()
             .iter()
             .find(|a| a.config_name() == name)

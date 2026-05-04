@@ -92,7 +92,7 @@ use mlua::{Lua, Table, UserData};
 use crate::frontend::UserIntent;
 use crate::geo::LonLat;
 use crate::lua::sender::LuaSender;
-use crate::map::Action;
+use crate::map::MapAction;
 use crate::shared::http::HttpClient;
 
 /// Maximum number of pending notifications retained in the host's
@@ -725,7 +725,7 @@ impl UserData for HostMap {
         // identically to a keymap-driven jump.
         methods.add_method("jump", |_, this, (lon, lat): (f64, f64)| {
             this.sender
-                .emit(UserIntent::Map(Action::Jump(LonLat { lon, lat })));
+                .emit(UserIntent::Map(MapAction::Jump(LonLat { lon, lat })));
             Ok(())
         });
 
@@ -739,7 +739,7 @@ impl UserData for HostMap {
         // `None` (getter), number → `Some(level)` (setter).
         methods.add_method("zoom", |_, this, level: Option<f64>| match level {
             Some(z) => {
-                this.sender.emit(UserIntent::Map(Action::SetZoom(z)));
+                this.sender.emit(UserIntent::Map(MapAction::SetZoom(z)));
                 Ok(mlua::Value::Nil)
             }
             None => {
@@ -753,7 +753,7 @@ impl UserData for HostMap {
         // would render two frames; this routes through `MapFlyTo`
         // so the user sees a single transition.
         methods.add_method("fly_to", |_, this, (lon, lat, zoom): (f64, f64, f64)| {
-            this.sender.emit(UserIntent::Map(Action::FlyTo {
+            this.sender.emit(UserIntent::Map(MapAction::FlyTo {
                 center: LonLat { lon, lat },
                 zoom,
             }));
@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn host_map_jump_pushes_appmsg_jump() {
         // `ttymap.map:jump(lon, lat)` lands on the shared `event_rx`
-        // as a fully-formed `UserIntent::Map(Action::Jump(LonLat))`; the
+        // as a fully-formed `UserIntent::Map(MapAction::Jump(LonLat))`; the
         // App's central drain forwards it to dispatch unchanged.
         let (lua, _handles, event_rx) = install_for_test();
 
@@ -943,7 +943,7 @@ mod tests {
 
         let ev = event_rx.try_recv().expect("jump must be queued");
         match ev {
-            AppEvent::Intent(UserIntent::Map(Action::Jump(ll))) => {
+            AppEvent::Intent(UserIntent::Map(MapAction::Jump(ll))) => {
                 assert!((ll.lon - 139.7595).abs() < 1e-9);
                 assert!((ll.lat - 35.6828).abs() < 1e-9);
             }
@@ -955,12 +955,12 @@ mod tests {
     fn host_map_zoom_setter_pushes_appmsg_set_zoom() {
         // `ttymap.map:zoom(level)` is fire-and-forget on the Lua side —
         // the level lands on `event_rx` as
-        // `UserIntent::Map(Action::SetZoom(level))`.
+        // `UserIntent::Map(MapAction::SetZoom(level))`.
         let (lua, _handles, event_rx) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
         let ev = event_rx.try_recv().expect("zoom must be queued");
         match ev {
-            AppEvent::Intent(UserIntent::Map(Action::SetZoom(z))) => {
+            AppEvent::Intent(UserIntent::Map(MapAction::SetZoom(z))) => {
                 assert!((z - 7.5).abs() < 1e-9)
             }
             other => panic!("expected AppEvent::Intent(Map(SetZoom)), got {other:?}"),
@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn host_map_fly_to_pushes_appmsg_fly_to() {
         // `ttymap.map:fly_to(lon, lat, zoom)` packs both into a single
-        // `UserIntent::Map(Action::FlyTo)` so the host can emit one
+        // `UserIntent::Map(MapAction::FlyTo)` so the host can emit one
         // dispatch per call (single redraw, no intermediate frame).
         let (lua, _handles, event_rx) = install_for_test();
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
@@ -995,7 +995,7 @@ mod tests {
             .expect("exec");
         let ev = event_rx.try_recv().expect("fly_to queued");
         match ev {
-            AppEvent::Intent(UserIntent::Map(Action::FlyTo { center, zoom })) => {
+            AppEvent::Intent(UserIntent::Map(MapAction::FlyTo { center, zoom })) => {
                 assert!((center.lon - 139.7595).abs() < 1e-9);
                 assert!((center.lat - 35.6828).abs() < 1e-9);
                 assert!((zoom - 12.0).abs() < 1e-9);

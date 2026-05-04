@@ -50,7 +50,7 @@ impl LuaPaletteProvider {
     /// call that produced the setup state. `ttymap.map:jump` inside
     /// this provider's `execute` callback hits the setup state's
     /// shared `intent_tx` — drained centrally by [`crate::frontend::App`]
-    /// per frame and dispatched as `UserIntent::Map(Action::Jump)`.
+    /// per frame and dispatched as `UserIntent::Map(MapAction::Jump)`.
     /// `execute` returns purely structural [`PaletteAction`] variants
     /// (`Close`, future `Push` / `SwitchProvider`); map intents leave
     /// through the host channel, not the action return value.

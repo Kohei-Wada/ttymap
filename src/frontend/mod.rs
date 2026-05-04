@@ -42,7 +42,7 @@ pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaHandle;
 use crate::lua::LuaSubsystem;
-use crate::map::Action;
+use crate::map::MapAction;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
@@ -279,9 +279,9 @@ impl Frontend {
     /// observable happened to the app", not "every state mutation".
     fn notify_post_intent(&self, msg: &UserIntent) {
         match msg {
-            UserIntent::Map(Action::Jump(ll)) => self.lua.notify_map_jumped(*ll),
-            UserIntent::Map(Action::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
-            UserIntent::Map(Action::FlyTo { center, zoom }) => {
+            UserIntent::Map(MapAction::Jump(ll)) => self.lua.notify_map_jumped(*ll),
+            UserIntent::Map(MapAction::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
+            UserIntent::Map(MapAction::FlyTo { center, zoom }) => {
                 self.lua.notify_map_flew_to(*center, *zoom);
             }
             UserIntent::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
@@ -416,7 +416,7 @@ impl Frontend {
     /// loop — kicks off the very first render task so the terminal
     /// isn't blank waiting for input.
     fn dispatch_initial_redraw(&mut self) {
-        self.dispatch(UserIntent::Map(Action::Redraw));
+        self.dispatch(UserIntent::Map(MapAction::Redraw));
     }
 
     fn dispatch(&mut self, msg: UserIntent) {

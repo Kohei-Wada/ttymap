@@ -8,7 +8,7 @@
 //!     if ev.code == KeyCode::Esc {
 //!         win.close();
 //!     } else if enter_with_selection {
-//!         win.emit(UserIntent::Map(Action::Jump(loc)));
+//!         win.emit(UserIntent::Map(MapAction::Jump(loc)));
 //!         win.close();
 //!     } else if ev.code == KeyCode::Char('/') {
 //!         win.close();

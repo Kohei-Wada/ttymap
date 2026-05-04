@@ -1,7 +1,7 @@
 //! Map subsystem — domain state and the full map-rendering pipeline.
 //!
 //! `state.rs` / `action.rs` own the map viewport (center, zoom, running
-//! flag) and the `Action` enum. The siblings are the implementation
+//! flag) and the `MapAction` enum. The siblings are the implementation
 //! machinery:
 //!
 //! - `tile/`    — MVT fetch + cache + decode
@@ -17,7 +17,7 @@ pub mod state;
 pub mod styler;
 pub mod tile;
 
-pub use action::Action;
+pub use action::MapAction;
 pub use state::{MapState, MapStateOptions, Viewport};
 
 use std::sync::Arc;
@@ -70,10 +70,10 @@ impl MapHandle {
 
     // ── Mutations ──────────────────────────────────────────────────────
 
-    /// Apply a map-level [`Action`] (pan / zoom / jump / reset / …).
+    /// Apply a map-level [`MapAction`] (pan / zoom / jump / reset / …).
     /// Returns `true` if the state changed in a way that warrants a
     /// redraw.
-    pub fn apply_action(&mut self, action: &Action) -> bool {
+    pub fn apply_action(&mut self, action: &MapAction) -> bool {
         self.state.process_action(action)
     }
 

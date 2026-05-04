@@ -749,7 +749,7 @@ mod tests {
         struct SwallowsAll;
         impl Component for SwallowsAll {
             fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
-                win.emit(UserIntent::Map(crate::map::Action::None));
+                win.emit(UserIntent::Map(crate::map::MapAction::None));
             }
             fn render(&self, _: &mut window::RenderWindow) {}
         }
