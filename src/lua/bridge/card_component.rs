@@ -53,7 +53,7 @@ use super::card_parse::{
 use super::handle::{CallOutcome, LuaBridgeHandle};
 use crate::compositor::Component;
 use crate::compositor::window::{RenderWindow, Window};
-use crate::theme::StyleKind;
+use crate::front::theme::StyleKind;
 
 // ── Component ──────────────────────────────────────────────────────
 

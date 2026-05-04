@@ -8,7 +8,7 @@
 use crossterm::event::KeyCode;
 use mlua::Table;
 
-use crate::theme::StyleKind;
+use crate::front::theme::StyleKind;
 
 /// Read `spec.footer_hints` as a sequence of `{key, label}` pairs and
 /// leak each pair so [`crate::compositor::Component::footer_hints`]

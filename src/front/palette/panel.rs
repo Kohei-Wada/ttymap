@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 
 use crate::compositor::window::RenderWindow;
-use crate::theme::StyleKind;
+use crate::front::theme::StyleKind;
 
 use super::PaletteComponent;
 

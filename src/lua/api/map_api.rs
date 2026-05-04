@@ -241,9 +241,10 @@ fn polyline(
 mod tests {
     use super::*;
     use crate::compositor::MapApi;
+    use crate::front::theme::UiTheme;
     use crate::map::render::frame::MapFrame;
     use crate::map::render::overlay::UserPolyline;
-    use crate::theme::{DARK, UiTheme};
+    use crate::theme::DARK;
     use mlua::Lua;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;

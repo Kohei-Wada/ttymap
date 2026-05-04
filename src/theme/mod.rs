@@ -1,26 +1,23 @@
-//! Theme — colour data + ratatui adapter.
+//! Theme — colour data (foundation, no ratatui).
 //!
 //! [`ThemeId`] is the single source of truth for "which theme is
 //! active": pick one from the config, derive everything else from it —
 //! the [`ColorPalette`] the styler and overlays read, the [`UiTheme`]
-//! the UI renders through, and the display name shown to the user.
+//! (in [`crate::front::theme`]) the UI renders through, and the
+//! display name shown to the user.
 //!
 //! Layout:
 //! - [`palette`] — palette data (`ColorPalette` struct, `DARK` /
 //!   `BRIGHT` consts). No ratatui dependency; the styler and the map
 //!   renderer consume it.
-//! - [`ui`] — ratatui adapter ([`UiTheme`]). Plugins never see this
-//!   directly; they ask for a [`StyleKind`] semantic tag via
-//!   `RenderWindow::style()` which resolves through `UiTheme`.
-//! - [`style`] — [`StyleKind`] semantic tags + resolver.
+//! - The ratatui adapter ([`UiTheme`](crate::front::theme::UiTheme))
+//!   and the semantic tag enum
+//!   ([`StyleKind`](crate::front::theme::StyleKind)) live under
+//!   `front/` because they directly import ratatui style types.
 
 pub mod palette;
-pub mod style;
-pub mod ui;
 
 pub use palette::{BRIGHT, ColorPalette, DARK};
-pub use style::StyleKind;
-pub use ui::UiTheme;
 
 /// Identifies which theme the app is running with. Derives the concrete
 /// [`ColorPalette`] and, separately, the set of styling rules consumed by

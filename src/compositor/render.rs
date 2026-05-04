@@ -16,7 +16,7 @@ use ratatui::layout::Rect;
 
 use super::window::RenderWindow;
 use super::{Compositor, Context, Placement, sidebar};
-use crate::theme::UiTheme;
+use crate::front::theme::UiTheme;
 
 /// Render the compositor's stack into the given areas.
 ///

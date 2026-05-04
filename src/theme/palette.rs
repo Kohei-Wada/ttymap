@@ -2,7 +2,7 @@
 //!
 //! Values are xterm-256 colour indices (`u8`). No ratatui dependency,
 //! so both the map renderer (via `styler::Styler`) and the UI layer
-//! (via [`crate::theme::UiTheme`]) read from here.
+//! (via [`crate::front::theme::UiTheme`]) read from here.
 
 /// All colours used by a single theme.
 #[derive(Clone, Copy)]

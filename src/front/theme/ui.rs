@@ -1,12 +1,12 @@
 //! Ratatui adapter — converts palette `u8` values to ratatui styles.
 //!
-//! Plugins never see this type. They get [`crate::theme::StyleKind`]
+//! Plugins never see this type. They get [`crate::front::theme::StyleKind`]
 //! via `RenderWindow::style()`, which resolves here.
 
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 
-use super::ColorPalette;
+use crate::theme::ColorPalette;
 
 /// Computed UI theme from a [`ColorPalette`]. The five `Color` fields
 /// are `Color::Indexed(u8)` — xterm-256 palette entries.

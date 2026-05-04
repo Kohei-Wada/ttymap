@@ -11,3 +11,4 @@
 
 pub mod cli;
 pub mod palette;
+pub mod theme;

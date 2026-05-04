@@ -12,7 +12,7 @@ use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use super::window;
 use super::{CardId, Component, Context, Placement};
-use crate::theme::UiTheme;
+use crate::front::theme::UiTheme;
 
 /// Maximum number of sidebar cards rendered simultaneously.
 /// Beyond this each section becomes too small to be useful even

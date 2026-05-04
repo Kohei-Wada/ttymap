@@ -48,7 +48,8 @@ use ratatui::widgets::{
 use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{CardId, Component, Context};
-use crate::theme::{StyleKind, UiTheme};
+use crate::front::theme::StyleKind;
+use crate::front::theme::UiTheme;
 
 /// Queue of [`Op`]s a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns —
