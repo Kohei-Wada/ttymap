@@ -23,8 +23,8 @@ pub use state::{MapState, MapStateOptions, Viewport};
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use crate::app::AppEvent;
 use crate::config::Config;
-use crate::frontend::AppEvent;
 use crate::geo::LonLat;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::{RenderClient, RenderHandle};
@@ -33,7 +33,7 @@ use crate::theme::ThemeId;
 
 /// Runtime handle to the map subsystem.
 ///
-/// Frontend stores one of these and interacts with the map only
+/// App stores one of these and interacts with the map only
 /// through the methods below — never names `MapState`, the render
 /// channel, the styler, or the underlying viewport machinery.
 ///
@@ -42,7 +42,7 @@ use crate::theme::ThemeId;
 /// composition root, peer to `InputHandle` / `FrameTimer`.
 ///
 /// The active `ThemeId` is **not** stored here either — the theme is
-/// an app-level concern owned by `Frontend`. The map only consumes
+/// an app-level concern owned by `App`. The map only consumes
 /// it transiently to build a `Styler` when [`Self::set_theme`] is
 /// called.
 pub struct MapHandle {
@@ -89,7 +89,7 @@ impl MapHandle {
 
     /// Switch the active theme on the render thread: build a fresh
     /// styler from `new_id` and ship it. The theme id itself is owned
-    /// by the caller (Frontend); the map only needs it transiently
+    /// by the caller (App); the map only needs it transiently
     /// to construct a [`Styler`].
     pub fn set_theme(&self, new_id: ThemeId) {
         let styler = Arc::new(Styler::new(new_id));
@@ -109,11 +109,11 @@ impl MapHandle {
 /// Build the map subsystem: tile cache + render pipeline + render
 /// thread + initial `MapState`. Returns `(RenderHandle, MapHandle)` —
 /// main holds the owning thread guard for `Drop`-driven shutdown,
-/// and hands the handle to `Frontend::new`.
+/// and hands the handle to `App::new`.
 ///
 /// `theme_id` is consumed transiently to build the initial styler;
 /// the map subsystem doesn't keep it. The active theme lives on
-/// `Frontend` since it crosses both map rendering and UI chrome.
+/// `App` since it crosses both map rendering and UI chrome.
 pub fn build(
     config: &Config,
     event_tx: mpsc::Sender<AppEvent>,

@@ -8,10 +8,10 @@
 // of items used by main.rs, so everything else is `pub(crate)`.
 
 /// Application event loop and central message dispatcher. Also home
-/// of the [`UserIntent`](frontend::UserIntent) vocabulary — the single
+/// of the [`UserIntent`](app::UserIntent) vocabulary — the single
 /// enum every emission site (palette, plugins, mouse, future RPC)
-/// speaks and that [`frontend::Frontend::dispatch`] interprets.
-pub mod frontend;
+/// speaks and that [`app::App::dispatch`] interprets.
+pub mod app;
 
 /// Compositor — stack-based focus / modal system (helix-inspired).
 /// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
@@ -19,7 +19,7 @@ pub mod frontend;
 /// orchestrates layout (Floating vs Sidebar), and surfaces the
 /// `Component` / `Window` framework that plugin-side wrappers
 /// (`LuaCardComponent`) implement. Top-level subsystem (peer of
-/// `frontend/`, `lua/`, `input/`).
+/// `app/`, `lua/`, `input/`).
 pub mod compositor;
 
 /// Palette — `:`-triggered universal picker. Itself a [`Component`]

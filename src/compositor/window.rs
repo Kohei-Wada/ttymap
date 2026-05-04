@@ -45,8 +45,8 @@ use ratatui::widgets::{
     TableState,
 };
 
+use crate::app::UserIntent;
 use crate::compositor::{CardId, Component, Context};
-use crate::frontend::UserIntent;
 use crate::lua::op::Op;
 use crate::theme::{StyleKind, UiTheme};
 

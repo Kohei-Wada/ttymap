@@ -1,4 +1,4 @@
-//! User-intent vocabulary consumed by [`Frontend::dispatch`](super::Frontend::dispatch).
+//! User-intent vocabulary consumed by [`App::dispatch`](super::App::dispatch).
 //!
 //! `UserIntent` is the **single enum** that anything inside the app can
 //! emit to request a state change — palette providers, plugins' key
@@ -8,8 +8,8 @@
 //!
 //! In GoF Command-pattern terms this is the **Command** role expressed
 //! as a closed algebraic type: each variant is an imperative intent
-//! (`Map`, `CycleFocus`, `SetTheme`) that the Receiver ([`super::Frontend`])
-//! executes in [`Frontend::dispatch`](super::Frontend::dispatch). Invokers
+//! (`Map`, `CycleFocus`, `SetTheme`) that the Receiver ([`super::App`])
+//! executes in [`App::dispatch`](super::App::dispatch). Invokers
 //! (keymap, palette, plugins) **return `Vec<UserIntent>`** and never
 //! execute anything themselves — the dispatcher is the sole
 //! side-effect boundary. Note the naming split: "command" is reserved
@@ -32,14 +32,14 @@ use crate::theme::ThemeId;
 
 /// What the app can do in response to an event. Emitted by palette
 /// providers, plugin handlers, and async plugin polling; interpreted
-/// by [`Frontend::dispatch`](super::Frontend::dispatch) inside the event loop.
+/// by [`App::dispatch`](super::App::dispatch) inside the event loop.
 ///
 /// Map-level intents are nested under [`UserIntent::Map`] because
 /// [`MapState`](crate::map::MapState) owns its own command vocabulary
 /// ([`MapAction`]) and consumes it through a single entry
 /// ([`MapState::process_action`](crate::map::MapState::process_action)).
 /// Other variants sit at the top level: each is handled directly by
-/// an `Frontend::dispatch` arm and there is no intermediate sub-system to
+/// an `App::dispatch` arm and there is no intermediate sub-system to
 /// delegate to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserIntent {

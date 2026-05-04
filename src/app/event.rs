@@ -8,7 +8,7 @@
 //!   fire-and-forget intent emitter (keymap / mouse when dispatch
 //!   can't run inline; Lua plugins use the shared [`crate::lua::op::OpsBuffer`])
 //!   goes through this. Synchronous emitters (compositor.poll,
-//!   palette.execute) still call [`super::Frontend::dispatch`]
+//!   palette.execute) still call [`super::App::dispatch`]
 //!   directly without the channel.
 //! - [`AppEvent::FrameReady`] — the render thread hands back a
 //!   completed [`MapFrame`] for the App to display next paint cycle.

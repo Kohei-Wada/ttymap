@@ -39,7 +39,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::frontend::UserIntent;
+use crate::app::UserIntent;
 use crate::lua::op::Op;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
@@ -327,7 +327,7 @@ impl Compositor {
 
     /// Poll every component. Intent emissions queued by the hook
     /// (`win.emit`) ride the same [`WindowOps`] as stack ops; the
-    /// concatenated [`Op`] vec is returned for Frontend to apply.
+    /// concatenated [`Op`] vec is returned for App to apply.
     pub fn poll(&mut self, ctx: &Context) -> Vec<Op> {
         // Walk in reverse so closing a component doesn't disturb
         // indices of later ones. Collect ops per index first; the
@@ -402,7 +402,7 @@ impl Compositor {
 
     /// Count of `Placement::Sidebar` components on the stack.
     ///
-    /// Used by the Frontend's auto-open logic — the sidebar opens
+    /// Used by the App's auto-open logic — the sidebar opens
     /// on a *count increase*, not on the existence of any sidebar
     /// component, so toggling the sidebar off via `\` doesn't
     /// fight per-frame auto-open while components stay alive.
@@ -519,7 +519,7 @@ pub struct Registrar {
     pub event_bus: crate::lua::LuaEventBus,
     /// Setup-state [`LuaHostHandles`](crate::lua::api::LuaHostHandles)
     /// for every plugin script: the App takes ownership of this `Vec`
-    /// in [`crate::frontend::App::new`] and drains each handle's receivers
+    /// in [`crate::app::App::new`] and drains each handle's receivers
     /// (`push_rx` / `intent_rx`) once per frame so callbacks running
     /// in the setup state can request map jumps, frame exports, or
     /// component pushes without sitting on a dead receiver.
@@ -702,7 +702,7 @@ mod tests {
 
     /// Build a disposable `(Sender, Receiver)` pair for tests that
     /// Drive a key event into the compositor and apply the returned
-    /// ops the same way Frontend would: stack mutations are applied
+    /// ops the same way App would: stack mutations are applied
     /// to `c` itself, intents are returned to the test for assertion.
     fn drive(c: &mut Compositor, event: KeyEvent, ctx: &Context) -> Vec<UserIntent> {
         let ops = c.handle_event(event, ctx);

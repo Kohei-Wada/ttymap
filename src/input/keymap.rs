@@ -4,7 +4,7 @@
 //!
 //! The keymap speaks the same `UserIntent` vocabulary as the palette
 //! and plugins — every key binding resolves to a `UserIntent` that
-//! rides through [`Frontend::dispatch`](crate::frontend::Frontend). Today all
+//! rides through [`App::dispatch`](crate::app::App). Today all
 //! defaults are `UserIntent::Map` wrappers, but nothing prevents binding
 //! a key to `UserIntent::SetTheme(...)` or `UserIntent::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::frontend::UserIntent;
+use crate::app::UserIntent;
 use crate::map::MapAction;
 
 /// A key binding: a key code + optional modifiers.

@@ -1,10 +1,10 @@
 //! Runtime handle to the Lua subsystem.
 //!
-//! Frontend stores one of these as a private field. It exposes
+//! App stores one of these as a private field. It exposes
 //! **semantic** methods (`notify_*`, `tick`, `sync_view`,
-//! `drain_ops`) so Frontend never names the [`LuaEventBus`], the
+//! `drain_ops`) so App never names the [`LuaEventBus`], the
 //! event-name constants, or the per-plugin host channels. The
-//! "Frontend doesn't know how Lua is wired internally" boundary —
+//! "App doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
 use crate::compositor::MapApi;
@@ -16,13 +16,13 @@ use crate::lua::registry::{LuaEventBus, names};
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`] and lifted out of the registrar by
 /// [`Self::take_from_registrar`]). Wraps the event bus and per-plugin
-/// host-state channels so callers (Frontend) interact through
+/// host-state channels so callers (App) interact through
 /// semantic methods rather than touching the bus or channels
 /// directly.
 pub struct LuaHandle {
     bus: LuaEventBus,
     host_handles: Vec<LuaHostHandles>,
-    /// Shared buffer that Lua callbacks push [`Op`]s into; Frontend
+    /// Shared buffer that Lua callbacks push [`Op`]s into; App
     /// drains via [`Self::drain_ops`] once per loop iteration.
     ops: OpsBuffer,
 }
@@ -37,7 +37,7 @@ impl LuaHandle {
     }
 
     /// Take every [`Op`] enqueued by Lua callbacks since the last
-    /// drain. Frontend calls this once per loop iteration and applies
+    /// drain. App calls this once per loop iteration and applies
     /// each op to the compositor / dispatch path.
     pub fn drain_ops(&self) -> Vec<Op> {
         std::mem::take(&mut *self.ops.borrow_mut())
@@ -90,7 +90,7 @@ impl LuaHandle {
 
     /// Refresh the per-plugin `center` / `zoom` mirror cells that
     /// `ttymap.map:center()` / `:zoom()` Lua accessors read from.
-    /// Called once per tick from Frontend's housekeeping pass.
+    /// Called once per tick from App's housekeeping pass.
     pub fn sync_view(&self, center: LonLat, zoom: f64) {
         for handles in &self.host_handles {
             if let Ok(mut cell) = handles.center.lock() {
