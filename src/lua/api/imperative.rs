@@ -32,7 +32,7 @@ use mlua::{Lua, Table};
 
 use super::{CaptureSlot, EventSubscription, LuaHostShared};
 use crate::UserCommand;
-use crate::compositor::op::{Op, OpsBuffer};
+use crate::core::compositor::op::{Op, OpsBuffer};
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
 /// [`super::install`] after activation surfaces are registered.
@@ -61,7 +61,7 @@ fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Resul
         "open",
         lua.create_function(
             move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
-                use crate::compositor::CardId;
+                use crate::core::compositor::CardId;
                 use crate::lua::bridge::card_component::LuaCardComponent;
                 use crate::lua::bridge::card_handle::CardHandle;
                 // Reserve the [`CardId`] at the call site so the
@@ -80,7 +80,7 @@ fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Resul
                 let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
                 ops.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(component) as Box<dyn crate::compositor::Component>,
+                    component: Box::new(component) as Box<dyn crate::core::compositor::Component>,
                 });
                 Ok(CardHandle::new(id, ops.clone()))
             },
@@ -97,7 +97,7 @@ fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Re
             move |lua,
                   spec: Table|
                   -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
-                use crate::compositor::CardId;
+                use crate::core::compositor::CardId;
                 use crate::lua::bridge::palette_handle::PaletteHandle;
                 use crate::lua::bridge::palette_provider::LuaPaletteProvider;
                 // Reserve the id up-front so the returned [`PaletteHandle`]
@@ -113,7 +113,7 @@ fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Re
                     crate::front::palette::PaletteComponent::with_provider(Box::new(provider));
                 ops.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(palette) as Box<dyn crate::compositor::Component>,
+                    component: Box::new(palette) as Box<dyn crate::core::compositor::Component>,
                 });
                 Ok(PaletteHandle::new(id, ops.clone()))
             },

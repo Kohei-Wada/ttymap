@@ -15,6 +15,7 @@
 //! Phase 4 of GitHub issue #212 (architectural cleanup: split
 //! front/core).
 
+pub mod compositor;
 mod dispatcher;
 pub mod map;
 mod overlay;

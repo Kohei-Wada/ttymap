@@ -247,9 +247,9 @@ impl LuaHostShared {
 ///
 /// Component pushes from `ttymap.api.card.open` /
 /// `ttymap.api.palette.open` no longer live here — they ride the
-/// shared [`OpsBuffer`](crate::compositor::op::OpsBuffer) as
-/// [`Op::Push`](crate::compositor::op::Op::Push) and the App drains them
-/// alongside [`Op::Close`](crate::compositor::op::Op::Close).
+/// shared [`OpsBuffer`](crate::core::compositor::op::OpsBuffer) as
+/// [`Op::Push`](crate::core::compositor::op::Op::Push) and the App drains them
+/// alongside [`Op::Close`](crate::core::compositor::op::Op::Close).
 pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
     /// Latest zoom level mirrored from the host so
@@ -341,7 +341,7 @@ pub fn install(
     tag: &'static str,
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
-    ops: crate::compositor::op::OpsBuffer,
+    ops: crate::core::compositor::op::OpsBuffer,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -429,10 +429,14 @@ mod tests {
     /// and hand back the host handles + the shared op buffer. Mirrors
     /// the production install path; the capture slot is dropped since
     /// these tests don't exercise registration.
-    fn install_for_test() -> (mlua::Lua, LuaHostHandles, crate::compositor::op::OpsBuffer) {
+    fn install_for_test() -> (
+        mlua::Lua,
+        LuaHostHandles,
+        crate::core::compositor::op::OpsBuffer,
+    ) {
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
-        let ops = crate::compositor::op::new_ops_buffer();
+        let ops = crate::core::compositor::op::new_ops_buffer();
         let handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, ops.clone())
             .expect("install ttymap table");
         (lua, handles, ops)
@@ -467,10 +471,10 @@ mod tests {
             .exec()
             .expect("exec");
 
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::Jump(ll))) => {
+            crate::core::compositor::op::Op::Command(UserCommand::Map(MapAction::Jump(ll))) => {
                 assert!((ll.lon - 139.7595).abs() < 1e-9);
                 assert!((ll.lat - 35.6828).abs() < 1e-9);
             }
@@ -485,10 +489,10 @@ mod tests {
         // `Op::Command(UserCommand::Map(MapAction::SetZoom(level)))`.
         let (lua, _handles, ops) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::SetZoom(z))) => {
+            crate::core::compositor::op::Op::Command(UserCommand::Map(MapAction::SetZoom(z))) => {
                 assert!((z - 7.5).abs() < 1e-9)
             }
             other => panic!("expected Op::Command(Map(SetZoom)), got {other:?}"),
@@ -522,10 +526,10 @@ mod tests {
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
             .exec()
             .expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::FlyTo {
+            crate::core::compositor::op::Op::Command(UserCommand::Map(MapAction::FlyTo {
                 center,
                 zoom,
             })) => {
@@ -541,12 +545,12 @@ mod tests {
     fn api_frame_export_pushes_appmsg_export_frame() {
         let (lua, _handles, ops) = install_for_test();
         lua.load("ttymap.api.frame.export()").exec().expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         assert!(
             matches!(
                 &drained[0],
-                crate::compositor::op::Op::Command(UserCommand::ExportFrame)
+                crate::core::compositor::op::Op::Command(UserCommand::ExportFrame)
             ),
             "got {:?}",
             drained[0]
@@ -566,7 +570,7 @@ mod tests {
             "lua-test",
             LuaHostShared::empty(),
             slot.clone(),
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -604,7 +608,7 @@ mod tests {
             "lua-test",
             LuaHostShared::empty(),
             slot.clone(),
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -638,7 +642,7 @@ mod tests {
             "lua-test",
             LuaHostShared::empty(),
             slot,
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();
@@ -752,7 +756,7 @@ mod tests {
             "lua-test",
             shared.clone(),
             slot,
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
 
@@ -807,7 +811,7 @@ mod tests {
             "lua-test",
             shared.clone(),
             slot,
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap table");
         for i in 0..(NOTIFY_RING_CAP + 4) {
@@ -904,10 +908,10 @@ mod tests {
         .expect("exec");
         // Exactly one Op::Push must be enqueued — `card.open` pushes
         // per call, no implicit dedup.
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one card.open -> one Op");
         let push_id = match &drained[0] {
-            crate::compositor::op::Op::Push { id, .. } => *id,
+            crate::core::compositor::op::Op::Push { id, .. } => *id,
             other => panic!("expected Op::Push, got {:?}", other),
         };
         // Close the handle from Lua — must enqueue Op::Close keyed by
@@ -915,10 +919,10 @@ mod tests {
         lua.load("ttymap_test_handle:close()")
             .exec()
             .expect("close");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one close() -> one Op");
         match &drained[0] {
-            crate::compositor::op::Op::Close(id) => assert_eq!(*id, push_id),
+            crate::core::compositor::op::Op::Close(id) => assert_eq!(*id, push_id),
             other => panic!("expected Op::Close, got {:?}", other),
         }
     }
@@ -945,10 +949,10 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one palette.open -> one Op");
         let push_id = match &drained[0] {
-            crate::compositor::op::Op::Push { id, .. } => *id,
+            crate::core::compositor::op::Op::Push { id, .. } => *id,
             other => panic!("expected Op::Push, got {:?}", other),
         };
         // `:close()` is idempotent: each call enqueues an Op::Close —
@@ -957,11 +961,11 @@ mod tests {
         lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<crate::core::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 2, "two close() -> two Op::Close");
         for op in drained {
             match op {
-                crate::compositor::op::Op::Close(id) => assert_eq!(id, push_id),
+                crate::core::compositor::op::Op::Close(id) => assert_eq!(id, push_id),
                 other => panic!("expected Op::Close, got {:?}", other),
             }
         }

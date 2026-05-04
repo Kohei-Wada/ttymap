@@ -30,15 +30,6 @@ pub mod front;
 /// Application event loop and central message dispatcher.
 pub mod app;
 
-/// Compositor — stack-based focus / modal system (helix-inspired).
-/// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
-/// events to the focused component (with fall-through to BaseLayer),
-/// orchestrates layout (Floating vs Sidebar), and surfaces the
-/// `Component` / `Window` framework that plugin-side wrappers
-/// (`LuaCardComponent`) implement. Top-level subsystem (peer of
-/// `app/`, `lua/`, `input/`).
-pub mod compositor;
-
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 pub mod config;
 

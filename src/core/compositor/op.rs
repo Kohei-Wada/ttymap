@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::UserCommand;
-use crate::compositor::{CardId, Component};
+use crate::core::compositor::{CardId, Component};
 
 /// A same-thread request from a component (Rust or Lua-backed) to
 /// the host. Component hooks emit these via the

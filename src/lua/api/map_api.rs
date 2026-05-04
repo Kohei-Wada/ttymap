@@ -25,8 +25,8 @@ use std::cell::RefCell;
 
 use mlua::{Lua, Scope, Table};
 
-use crate::compositor::MapApi;
-use crate::compositor::map_api::Anchor;
+use crate::core::compositor::MapApi;
+use crate::core::compositor::map_api::Anchor;
 use crate::geo::LonLat;
 
 /// Build the Lua-facing `map` table for a single per-frame `on_tick`
@@ -240,7 +240,7 @@ fn polyline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compositor::MapApi;
+    use crate::core::compositor::MapApi;
     use crate::core::map::render::frame::MapFrame;
     use crate::core::map::render::overlay::UserPolyline;
     use crate::front::theme::UiTheme;

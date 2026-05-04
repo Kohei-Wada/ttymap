@@ -9,7 +9,7 @@
 //! a key to `UserCommand::SetTheme(...)` or `UserCommand::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
 //! are *not* `UserCommand`s — those go through the compositor's
-//! [`Window::open`](crate::compositor::window::Window) / `toggle`
+//! [`Window::open`](crate::core::compositor::window::Window) / `toggle`
 //! queue, applied atomically after the `BaseLayer` hook returns.)
 
 use std::collections::HashMap;

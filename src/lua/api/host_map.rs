@@ -3,7 +3,7 @@
 //!
 //! All mutators are fire-and-forget: each call enqueues an
 //! [`Op::Command(UserCommand::Map(...))`] onto the shared
-//! [`OpsBuffer`](crate::compositor::op::OpsBuffer) and the App drains
+//! [`OpsBuffer`](crate::core::compositor::op::OpsBuffer) and the App drains
 //! it once per iteration. Read methods (`center`, no-arg `zoom`)
 //! consult shared `Arc<Mutex<...>>` cells the host refreshes on every
 //! dispatch path that carries a `Window` / `MapApi`, so callers see
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use mlua::UserData;
 
 use crate::UserCommand;
-use crate::compositor::op::{Op, OpsBuffer};
+use crate::core::compositor::op::{Op, OpsBuffer};
 use crate::core::map::MapAction;
 use crate::geo::LonLat;
 

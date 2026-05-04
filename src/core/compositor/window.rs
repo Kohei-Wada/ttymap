@@ -46,8 +46,8 @@ use ratatui::widgets::{
 };
 
 use crate::UserCommand;
-use crate::compositor::op::Op;
-use crate::compositor::{CardId, Component, Context};
+use crate::core::compositor::op::Op;
+use crate::core::compositor::{CardId, Component, Context};
 use crate::front::theme::StyleKind;
 use crate::front::theme::UiTheme;
 

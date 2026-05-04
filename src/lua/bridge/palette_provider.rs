@@ -14,7 +14,7 @@ use std::time::Duration;
 use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaBridgeHandle};
-use crate::compositor::Context;
+use crate::core::compositor::Context;
 use crate::front::palette::PaletteAction;
 use crate::front::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
 
@@ -246,7 +246,7 @@ mod tests {
             "lua-test",
             LuaHostShared::empty(),
             slot,
-            crate::compositor::op::new_ops_buffer(),
+            crate::core::compositor::op::new_ops_buffer(),
         )
         .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");

@@ -6,7 +6,7 @@
 //!
 //! - [`AppEvent::Command`] — wraps a [`UserCommand`]: every
 //!   fire-and-forget intent emitter (keymap / mouse when dispatch
-//!   can't run inline; Lua plugins use the shared [`crate::compositor::op::OpsBuffer`])
+//!   can't run inline; Lua plugins use the shared [`crate::core::compositor::op::OpsBuffer`])
 //!   goes through this. Synchronous emitters (compositor.poll,
 //!   palette.execute) still call [`super::App::dispatch`]
 //!   directly without the channel.

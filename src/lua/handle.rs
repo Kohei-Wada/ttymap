@@ -7,8 +7,8 @@
 //! "App doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
-use crate::compositor::MapApi;
-use crate::compositor::op::{Op, OpsBuffer};
+use crate::core::compositor::MapApi;
+use crate::core::compositor::op::{Op, OpsBuffer};
 use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
 use crate::lua::registry::{LuaEventBus, names};

@@ -13,7 +13,7 @@ pub use theme::ThemeProvider;
 
 use std::time::Duration;
 
-use crate::compositor::Context;
+use crate::core::compositor::Context;
 use crate::front::palette::action::PaletteAction;
 
 /// One row in the palette list.

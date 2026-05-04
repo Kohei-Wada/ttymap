@@ -37,7 +37,7 @@ pub use map_api::MapApi;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::UserCommand;
-use crate::compositor::op::Op;
+use crate::core::compositor::op::Op;
 use crate::theme::ThemeId;
 
 // ── Framework-reserved keys ────────────────────────────────────────
@@ -112,7 +112,7 @@ pub struct Context {
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Project to a `LonLat` via
-    /// [`MapApi::cursor_ll`](crate::compositor::MapApi::cursor_ll)
+    /// [`MapApi::cursor_ll`](crate::core::compositor::MapApi::cursor_ll)
     /// at paint time.
     #[allow(dead_code)] // plugin-author API; the in-tree reader (info plugin) lands later
     pub cursor: Option<(u16, u16)>,

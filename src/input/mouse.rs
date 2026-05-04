@@ -22,7 +22,7 @@
 //! puts its `mouse_down_range: Range` on `Editor` for that reason.
 //!
 //! Key and mouse paths are intentionally not symmetric: keyboard
-//! routes through the [`compositor`](crate::compositor) for focus
+//! routes through the [`compositor`](crate::core::compositor) for focus
 //! delivery before producing a `UserCommand`, while mouse is a pure
 //! translator with no focus involvement. Both emit the same `UserCommand`
 //! vocabulary on the output side: every event emits a leading

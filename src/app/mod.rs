@@ -28,8 +28,8 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
 use crate::UserCommand;
-use crate::compositor::{BaseLayer, Compositor};
 use crate::config::Config;
+use crate::core::compositor::{BaseLayer, Compositor};
 use crate::core::map::MapHandle;
 use crate::core::map::render::frame::MapFrame;
 pub use crate::input::KeybindingOverrides;

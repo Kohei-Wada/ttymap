@@ -26,8 +26,8 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context};
+use crate::core::compositor::window::{RenderWindow, Window};
+use crate::core::compositor::{Activation, Component, Context};
 use crate::input::keymap::KeyMap;
 use crate::theme::ThemeId;
 
@@ -220,7 +220,7 @@ impl Component for PaletteComponent {
 pub fn install(
     keymap: &KeyMap,
     activations: &mut Vec<Activation>,
-    palette_entries: Vec<crate::compositor::PaletteEntry>,
+    palette_entries: Vec<crate::core::compositor::PaletteEntry>,
 ) {
     let seed = Rc::new(CommandSeed::build(keymap, palette_entries));
     let seed_for_spawn = seed;
@@ -317,8 +317,8 @@ mod tests {
             .collect()
     }
 
-    use crate::compositor::CardId;
-    use crate::compositor::window::WindowOps;
+    use crate::core::compositor::CardId;
+    use crate::core::compositor::window::WindowOps;
 
     /// Dispatch a key into the palette and return the queued
     /// [`WindowOps`]; tests inspect via the `closed()` / `pushed()` /

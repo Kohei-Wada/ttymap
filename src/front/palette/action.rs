@@ -10,7 +10,7 @@
 //! [`PaletteProvider`]: super::provider::PaletteProvider
 
 use crate::UserCommand;
-use crate::compositor::Component;
+use crate::core::compositor::Component;
 
 use super::provider::PaletteProvider;
 

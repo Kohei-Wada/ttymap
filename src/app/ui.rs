@@ -12,7 +12,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::compositor::{Compositor, Context, MapApi};
+use crate::core::compositor::{Compositor, Context, MapApi};
 use crate::core::map::render::frame::MapFrame;
 use crate::core::map::render::overlay::UserPolyline;
 use crate::front::theme::UiTheme;
@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
 
     // Modal panels on top of the map (bottom-up) + sidebar sections
     // laid out vertically in the side panel when it's open.
-    crate::compositor::render::paint(compositor, f, map_inner, sidebar_inner, theme, ctx);
+    crate::core::compositor::render::paint(compositor, f, map_inner, sidebar_inner, theme, ctx);
 
     // Empty-sidebar placeholder so toggling on with no sections shows
     // SOMETHING — otherwise the user would just see an empty box and

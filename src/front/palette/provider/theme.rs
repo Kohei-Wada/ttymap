@@ -4,7 +4,7 @@
 //! "Theme" entry.
 
 use crate::UserCommand;
-use crate::compositor::Context;
+use crate::core::compositor::Context;
 use crate::theme::ThemeId;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
