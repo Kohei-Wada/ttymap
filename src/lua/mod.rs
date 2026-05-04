@@ -17,6 +17,7 @@ pub mod api;
 pub mod bridge;
 pub mod handle;
 pub mod init_lua;
+pub mod registrar;
 pub mod registry;
 pub mod runtimepath;
 
@@ -24,6 +25,7 @@ pub use api::LuaHostShared;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use handle::LuaHandle;
 pub use init_lua::load_init_lua;
+pub use registrar::Registrar;
 pub use registry::LuaEventBus;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 
@@ -34,7 +36,7 @@ use mlua::{Lua, Table};
 
 use crate::app::UserIntent;
 use crate::compositor::op;
-use crate::compositor::{Activation, PaletteEntry, Registrar};
+use crate::compositor::{Activation, PaletteEntry};
 use crate::config::Config;
 use crate::input::KeyMap;
 

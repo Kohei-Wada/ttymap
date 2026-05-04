@@ -36,8 +36,8 @@ use crate::map::MapAction;
 pub struct BaseLayer {
     keymap: KeyMap,
     /// Activation table: key event → component factory. Populated at
-    /// startup from the [`Registrar`](super::Registrar) that each
-    /// plugin's `register` function contributes to.
+    /// startup from the [`crate::lua::Registrar`] that each plugin's
+    /// `register_keybind` call contributes to.
     activations: Vec<Activation>,
     /// Plugin-supplied footer hints harvested from palette entries
     /// with a non-empty `hint` (key) at startup. Rendered in the

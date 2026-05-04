@@ -4,8 +4,8 @@
 //! - map actions (harvested from [`MapAction::all_listed`] with keymap
 //!   hints)
 //! - plugin palette entries harvested from the
-//!   [`Registrar`](crate::compositor::Registrar) by the palette
-//!   module's own `register` function
+//!   [`Registrar`](crate::lua::Registrar) and drained into this
+//!   provider at composition time
 //!
 //! A dynamic "Theme" entry is appended per-open with the current
 //! `ThemeId` so the "(current)" hint stays accurate after runtime

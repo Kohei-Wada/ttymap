@@ -6,8 +6,8 @@
 //! pop — no `active` flag, no `seed` field on a long-lived struct.
 //!
 //! The list of non-palette palette entries is harvested from the
-//! [`Registrar`](crate::compositor::Registrar) at composition time
-//! (see [`install`]) and baked into a [`CommandSeed`] that the
+//! [`Registrar`](crate::lua::Registrar) at composition time (see
+//! [`install`]) and baked into a [`CommandSeed`] that the
 //! activation closure clones (as an `Rc`) for each push.
 //!
 //! Provider sub-modes (Theme picker) are reached by the provider's

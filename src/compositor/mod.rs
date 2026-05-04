@@ -16,12 +16,13 @@
 //! lifetime is plugin-side policy (a captured `CardHandle` that's
 //! nil while closed), not a framework hook.
 //!
-//! Plugin discovery feeds in through [`Registrar`], which the Lua
-//! subsystem populates at startup with one `Activation` per
-//! `register_keybind`, one `PaletteEntry` per
-//! `register_palette_command`, and one `Subscriber` per
-//! `on_event` (`LuaEventBus`). `App` takes a finished `Registrar`
-//! and never names a concrete plugin type.
+//! Plugin activation primitives ([`Activation`], [`PaletteEntry`])
+//! live here; the Lua subsystem's [`crate::lua::Registrar`]
+//! collection bucket bundles them with its own
+//! [`crate::lua::LuaEventBus`] / [`crate::lua::api::LuaHostHandles`]
+//! at plugin-load time. `App` takes the finished bundle and never
+//! names a concrete plugin type. Compositor itself is unaware of
+//! Lua — it speaks only `Activation` / `PaletteEntry` / `Component`.
 
 pub mod base;
 pub mod map_api;
@@ -464,7 +465,7 @@ impl Default for Compositor {
     }
 }
 
-// ── Plugin self-registration (App is plugin-agnostic) ──────────────
+// ── Plugin activation primitives ───────────────────────────────────
 
 /// Factory closure producing a fresh [`Component`] when the user
 /// activates the corresponding surface. Receives a [`Context`]
@@ -475,24 +476,23 @@ impl Default for Compositor {
 /// Returns `None` when the factory wants to skip the push entirely
 /// — used by Lua plugins whose activation callback returned a falsy
 /// value, signalling "I read my state and decided not to open this
-/// time". For built-in factories that always produce a component,
-/// see [`box_component_factory`] which wraps them in `Some`.
+/// time".
 pub type SpawnComponent = Box<dyn Fn(&Context) -> Option<Box<dyn Component>>>;
 
 /// One activation entry — "when this key is pressed while nothing
 /// modal is above the bottom layer, invoke `spawn` and push the
-/// result".
+/// result". Collected by [`crate::lua::Registrar`] at plugin-load
+/// time and consumed by [`BaseLayer`] at startup.
 pub struct Activation {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
     pub spawn: SpawnComponent,
 }
 
-/// Palette entry description owned by the registrar. Selection
-/// always pushes a fresh component on the stack — there's no
-/// toggle/spawn distinction now that the compositor doesn't dedup.
-/// A plugin that wants "close on re-select" closes itself in its
-/// own `handle_event`.
+/// Palette entry description. Selection always pushes a fresh
+/// component on the stack — there's no toggle/spawn distinction now
+/// that the compositor doesn't dedup. A plugin that wants "close on
+/// re-select" closes itself in its own `handle_event`.
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
@@ -500,93 +500,6 @@ pub struct PaletteEntry {
     /// footer slug paired with `hint` (`[<hint> <name>]`).
     pub name: &'static str,
     pub spawn: SpawnComponent,
-}
-
-/// Collector passed to each plugin's `register` function. Plugins
-/// add an activation, a palette entry, and / or an overlay; the
-/// compositor stays agnostic of any specific plugin.
-#[derive(Default)]
-pub struct Registrar {
-    pub activations: Vec<Activation>,
-    pub palette_entries: Vec<PaletteEntry>,
-    /// Plugin-declared per-frame callbacks. Captured by the Lua
-    /// dispatcher when a script calls `ttymap.api.frame.on_tick(fn)`
-    /// (zero or more times per script), and ticked once per frame
-    /// from `App::run` against the live `MapApi`. The unified
-    /// per-frame work mechanism for the nvim-style plugin API.
-    pub event_bus: crate::lua::LuaEventBus,
-    /// Setup-state [`LuaHostHandles`](crate::lua::api::LuaHostHandles)
-    /// for every plugin script: the App takes ownership of this `Vec`
-    /// in [`crate::app::App::new`] and drains each handle's receivers
-    /// (`push_rx` / `intent_rx`) once per frame so callbacks running
-    /// in the setup state can request map jumps, frame exports, or
-    /// component pushes without sitting on a dead receiver.
-    pub lua_host_handles: Vec<crate::lua::api::LuaHostHandles>,
-}
-
-impl Registrar {
-    pub fn add_activation(&mut self, a: Activation) {
-        self.activations.push(a);
-    }
-    pub fn add_palette_entry(&mut self, e: PaletteEntry) {
-        self.palette_entries.push(e);
-    }
-
-    // ── Convenience builders ───────────────────────────────────────────────
-    //
-    // The methods below accept an `impl Component`-returning closure
-    // and box twice internally so each plugin's `register` can drop
-    // the `Box::new(move |...| -> Box<dyn Component> { Box::new(...) })`
-    // syntactic noise. The struct-literal forms above stay for any
-    // plugin that needs full control (e.g. building entries
-    // dynamically).
-
-    /// Bind a key to spawn a fresh component on press.
-    pub fn bind<F, C>(&mut self, code: KeyCode, modifiers: KeyModifiers, factory: F)
-    where
-        F: Fn(&Context) -> C + 'static,
-        C: Component + 'static,
-    {
-        self.add_activation(Activation {
-            code,
-            modifiers,
-            spawn: box_component_factory(factory),
-        });
-    }
-
-    /// Add a palette entry that pushes a fresh component on
-    /// selection. Plugins that want toggle behavior implement self-
-    /// close in their own `handle_event`.
-    pub fn add_palette<F, C>(
-        &mut self,
-        label: impl Into<String>,
-        hint: impl Into<String>,
-        name: &'static str,
-        factory: F,
-    ) where
-        F: Fn(&Context) -> C + 'static,
-        C: Component + 'static,
-    {
-        self.add_palette_entry(PaletteEntry {
-            label: label.into(),
-            hint: hint.into(),
-            name,
-            spawn: box_component_factory(factory),
-        });
-    }
-}
-
-/// Wrap an `impl Component`-returning closure in the double-Box that
-/// the registrar's collections store. Lifts the `Box::new(move |ctx|
-/// Box::new(factory(ctx)) as Box<dyn Component>)` boilerplate out of
-/// every `add_*` method so the next builder doesn't have to remember
-/// the exact dance.
-fn box_component_factory<F, C>(factory: F) -> SpawnComponent
-where
-    F: Fn(&Context) -> C + 'static,
-    C: Component + 'static,
-{
-    Box::new(move |ctx| Some(Box::new(factory(ctx)) as Box<dyn Component>))
 }
 
 #[cfg(test)]
