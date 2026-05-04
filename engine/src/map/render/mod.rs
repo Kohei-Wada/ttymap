@@ -4,7 +4,6 @@ pub mod braille;
 pub mod canvas;
 pub mod earcut_worker;
 pub mod frame;
-// frame_widget moved to src/app/frame_widget.rs (binary side: ratatui Widget adapter)
 mod geom;
 pub mod label;
 pub mod overlay;
