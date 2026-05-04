@@ -80,6 +80,30 @@ fn intercept_focus_key(event: KeyEvent) -> Option<UserIntent> {
     None
 }
 
+// ── Stable component identity ──────────────────────────────────────
+
+/// Stable identity for a component on the [`Compositor`] stack.
+///
+/// Allocated by [`CardId::next`] from a process-global atomic counter
+/// so external actors (Lua handles, future async sources) can reserve
+/// an id at the call site that opens a card and use it later to
+/// request a close — even though the actual push may have applied on
+/// a later iteration. Uniqueness across the program lifetime; we
+/// never recycle ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CardId(u64);
+
+impl CardId {
+    /// Allocate a fresh `CardId`. Single atomic increment; the
+    /// counter is process-global so any caller (compositor's own
+    /// `push`, Lua bridge's `api.card.open`) gets a unique id without
+    /// coordination.
+    pub fn next() -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 // ── Component + event routing ──────────────────────────────────────
 
 /// Read-only snapshot of app-level context a component may need
@@ -198,7 +222,7 @@ use window::{Window, WindowOps};
 /// [`BaseLayer`] even while modals are rendered above it, which is
 /// how the old `Focus::Background` state maps into this design.
 pub struct Compositor {
-    stack: Vec<Box<dyn Component>>,
+    stack: Vec<(CardId, Box<dyn Component>)>,
     /// Index of the component that receives key events first.
     /// Invariant: `focused_idx < stack.len()` whenever the stack is
     /// non-empty. After every push, this becomes the new top; after
@@ -214,9 +238,34 @@ impl Compositor {
         }
     }
 
-    pub fn push(&mut self, c: Box<dyn Component>) {
-        self.stack.push(c);
+    /// Push a component, allocating a fresh [`CardId`] internally.
+    /// Used for in-process pushes whose caller doesn't need to
+    /// reference the id later (e.g. [`BaseLayer`] at startup,
+    /// palette at startup, or `Window::open` from inside a key
+    /// handler).
+    pub fn push(&mut self, c: Box<dyn Component>) -> CardId {
+        let id = CardId::next();
+        self.push_with_id(id, c);
+        id
+    }
+
+    /// Push a component with a caller-supplied id. Used by external
+    /// sources (Lua `api.card.open`) that need to reserve the id at
+    /// the call site so they can return a handle whose close path
+    /// targets this specific component.
+    pub fn push_with_id(&mut self, id: CardId, c: Box<dyn Component>) {
+        self.stack.push((id, c));
         self.focused_idx = self.stack.len() - 1;
+    }
+
+    /// Pop the component matching `id` off the stack. Silent no-op
+    /// when `id` isn't present (handle closed twice, or component
+    /// already self-closed via `win.close()`).
+    pub fn close_by_id(&mut self, id: CardId) {
+        if let Some(idx) = self.stack.iter().position(|(i, _)| *i == id) {
+            self.stack.remove(idx);
+            self.clamp_focus_after_shrink();
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -259,7 +308,7 @@ impl Compositor {
         let mut ops = WindowOps::default();
         {
             let mut win = Window::new(&mut ops, ctx, event_tx);
-            self.stack[focused].handle_event(event, &mut win);
+            self.stack[focused].1.handle_event(event, &mut win);
         }
         // Fall-through: only when the hook queued nothing *and*
         // explicitly called `ignore()`, and the focus isn't already
@@ -268,7 +317,7 @@ impl Compositor {
             let mut ops = WindowOps::default();
             {
                 let mut win = Window::new(&mut ops, ctx, event_tx);
-                self.stack[0].handle_event(event, &mut win);
+                self.stack[0].1.handle_event(event, &mut win);
             }
             self.apply_ops(0, ops);
             return;
@@ -289,8 +338,7 @@ impl Compositor {
             self.clamp_focus_after_shrink();
         }
         for c in ops.opens {
-            self.stack.push(c);
-            self.focused_idx = self.stack.len() - 1;
+            self.push(c);
         }
     }
 
@@ -306,7 +354,7 @@ impl Compositor {
             let mut ops = WindowOps::default();
             {
                 let mut win = Window::new(&mut ops, ctx, event_tx);
-                self.stack[i].poll(&mut win);
+                self.stack[i].1.poll(&mut win);
             }
             self.apply_ops(i, ops);
         }
@@ -340,12 +388,12 @@ impl Compositor {
         // lookup — find the topmost floating component and paint
         // it. Always focused when present (the palette consumes
         // input the moment it opens).
-        if let Some((idx, c)) = self
+        if let Some((idx, (_, c))) = self
             .stack
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, c)| c.placement() == Placement::Floating)
+            .find(|(_, (_, c))| c.placement() == Placement::Floating)
         {
             let focused = idx == self.focused_idx;
             let mut win = window::RenderWindow::new(f, map_area, theme, ctx).focused(focused);
@@ -378,7 +426,7 @@ impl Compositor {
     pub fn sidebar_component_count(&self) -> usize {
         self.stack
             .iter()
-            .filter(|c| c.placement() == Placement::Sidebar)
+            .filter(|(_, c)| c.placement() == Placement::Sidebar)
             .count()
     }
 
@@ -386,7 +434,7 @@ impl Compositor {
     pub fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.stack
             .get(self.focused_idx)
-            .map(|c| c.footer_hints())
+            .map(|(_, c)| c.footer_hints())
             .unwrap_or_default()
     }
 
@@ -397,7 +445,7 @@ impl Compositor {
     pub fn focused_name(&self) -> &'static str {
         self.stack
             .get(self.focused_idx)
-            .map(|c| c.name())
+            .map(|(_, c)| c.name())
             .unwrap_or("")
     }
 
