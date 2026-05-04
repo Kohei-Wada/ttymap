@@ -23,16 +23,18 @@ The build step compiles `proto/vector_tile.proto` using protox (no system protoc
 ## Design philosophy
 
 See [docs/design.md](docs/design.md) for load-bearing design decisions:
-- **When to emit a `UserIntent` vs a direct method call** — user intent goes through `App::dispatch`; internal data flow (frame arrival, widget polling) does not.
-- **Controller split: by feature, not by domain** — if `App::dispatch` + cross-cutting helpers grow large.
+- **When to emit a `UserIntent` vs a direct method call** — user intent goes through `Frontend::dispatch`; internal data flow (frame arrival, widget polling) does not.
+- **Controller split: by feature, not by domain** — if `Frontend::dispatch` + cross-cutting helpers grow large.
 - **Cleanup via `Drop`, not manual** — `RenderHandle`'s thread shutdown is handled by its Drop impl.
 - **Frames are completed products** — main thread displays, does not compute.
+
+For the full system architecture (src tree, layering, message + render flow, focus model, concurrency) see [docs/architecture.md](docs/architecture.md). The summary below is enough to navigate the code; details belong in that doc.
 
 ## Architecture
 
 The app uses a **three-thread model**:
 
-1. **Main thread** (`src/app/`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `App::dispatch` (the single Receiver), which speaks the `UserIntent` vocabulary defined in `src/frontend/intent.rs`.
+1. **Main thread** (`src/frontend/`): Runs the event loop — drains completed frames from the render thread, polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes driven by user intent flow through `Frontend::dispatch` (the single Receiver), which speaks the `UserIntent` vocabulary defined in `src/frontend/intent.rs`.
 
 2. **Render thread** (`src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw(Viewport)` / `Resize` / `SetStyler` / `Shutdown`) via crossbeam-channel, and sends completed `MapFrame`s back. The loop is **purely event-driven**: a `crossbeam::select!` parks on the task channel and on a wake channel pinged by the decoder thread on each tile arrival — no timeout-based polling.
 
@@ -45,7 +47,7 @@ The app uses a **three-thread model**:
 Key modules:
 - **`src/map/render/renderer.rs`**: Orchestrates tile fetching, spatial queries, and drawing. Determines visible tiles from center/zoom, queries each tile layer's R-tree for on-screen features, draws non-symbol features first then symbols sorted by `sort` key.
 - **`src/map/tile/decode/`**: Decodes protobuf MVT tiles into `DecodedTile` with per-layer R-trees (`rstar`) for spatial indexing. `mod.rs` owns the public types and the top-level `decode()` entry; `geometry.rs` is the zigzag + command-stream decoder; `tags.rs` decodes per-feature tag pairs; `decompress.rs` sniffs and unwraps gzip.
-- **`src/map/render/canvas.rs` / `braille.rs`**: 2×4 pixel Braille rendering. Each terminal cell maps to 8 sub-pixels. Supports polyline (with line width via Bresenham), polygon fill (via `earcutr` triangulation), and text overlay. Colors use the xterm-256 palette.
+- **`src/map/render/canvas.rs` / `braille.rs`**: 2×4 pixel Braille rendering. Each terminal cell maps to 8 sub-pixels. Supports polyline (with line width via Bresenham), polygon fill (via `earcut` triangulation), and text overlay. Colors use the xterm-256 palette.
 - **`src/map/render/frame.rs`**: `MapFrame` — the completed grid of `MapCell { ch, fg, bg }` plus the view (center/zoom) it was rendered at, so overlays can project coordinates against the same frame regardless of staleness.
 - **`src/map/styler/`**: Defines map styles as Rust data structures. `schema/mapscii.rs` is the single rule source (filter expressions, style_type, min/max zoom); themes vary only by `ColorPalette` swap. Applied during tile decode to produce styled `Feature` objects. Future schemas (Protomaps etc.) land as `schema/<name>.rs`.
 - **`src/theme/`**: Colour data (`palette.rs` — `ColorPalette` + `DARK` / `BRIGHT` consts, xterm-256 indices) plus the ratatui adapter (`ui.rs` — `UiTheme`). `ThemeId` lives in `theme/mod.rs` and is the single source of truth for "which theme". Styler consumes `ColorPalette`; UI code consumes `UiTheme`.
@@ -61,7 +63,7 @@ Key modules:
 - **`src/input/`**: Input subsystem (peer of `map/` and `lua/`). `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input`; `keymap.rs` holds the `KeyMap` table + `KeybindingOverrides` (read from `[keymap]` config and Lua `keymap.set`); `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserIntent`. Keyboard supports count prefixes for pan (e.g., `5j`); `:` opens the command palette, `/` opens the palette pre-loaded with the search provider.
 - **`src/geo.rs`**: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`src/map/render/label.rs`**: Collision-free label placement buffer.
-- **`src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here — Rust-side `src/plugin/` is gone. nvim-style: any `.lua` under `<runtime>/plugin/` is a plugin, identified by file stem. Plugins join host loops by calling `ttymap.api.frame.on_tick(fn)` / `register_palette_command` / `register_keybind`. Layout: `src/lua/api/` builds the `ttymap` global (Rust→Lua API binding); `src/lua/bridge/` adapts Lua specs to Rust traits (`Component`, `PaletteProvider`); top-level `mod.rs` / `registry.rs` / `runtimepath.rs` / `init_lua.rs` own discovery, the per-frame tick dispatcher, and the separate config-DSL state. See **[docs/lua-architecture.md](docs/lua-architecture.md)** for the full surface — every namespace, activation surfaces, drain pattern, runtime path resolution, config chain, bundled plugins. Migration guide: [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md).
+- **`src/lua/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here — Rust-side `src/plugin/` is gone. nvim-style: any `.lua` under `<runtime>/plugin/` is a plugin, identified by file stem. Plugins join host loops by calling `ttymap.api.frame.on_tick(fn)` / `register_palette_command` / `register_keybind`. Layout: `src/lua/api/` builds the `ttymap` global (Rust→Lua API binding — `mod.rs`, `http.rs`, `json.rs`, `map_api.rs`, `sgp4.rs`); `src/lua/bridge/` adapts Lua specs to Rust traits (`Component`, `PaletteProvider`); top-level `mod.rs` / `registry.rs` / `runtimepath.rs` / `init_lua.rs` / `handle.rs` / `sender.rs` own discovery, the per-frame tick dispatcher, runtime layer resolution, the config-DSL state, and channel plumbing. See **[docs/lua-architecture.md](docs/lua-architecture.md)** for the full surface — every namespace, activation surfaces, drain pattern, runtime path resolution, config chain, bundled plugins. Migration guide: [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md).
 
 ## Rust Edition
 

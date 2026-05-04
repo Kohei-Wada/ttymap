@@ -36,15 +36,20 @@ src/lua/
   registry.rs      LuaTickRegistry — the per-frame tick dispatcher
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
   init_lua.rs      separate config-DSL Lua state (opt + keymap)
-  ttymap/          Rust→Lua API binding (the `ttymap` global)
+  handle.rs        shared host handle plumbing
+  sender.rs        channel sender helpers (push to App via crossbeam)
+  api/             Rust→Lua API binding (the `ttymap` global)
     mod.rs         install() + every namespace userdata
+    http.rs        ttymap.http:fetch — background GET returning a poll-able Job
+    json.rs        ttymap.json:parse / encode
     map_api.rs     per-frame MapApi → Lua table (Lua::scope)
     sgp4.rs        SGP4 propagation namespace
   bridge/          Lua→Rust trait adapters
     handle.rs           shared dispatch plumbing (LuaHandle)
-    card_component.rs LuaCardComponent: Component for a Lua spec
+    card_component.rs   LuaCardComponent: Component for a Lua spec
     palette_provider.rs LuaPaletteProvider: PaletteProvider for a spec
-    card_handle.rs    CardHandle + CloseFlag + CloseFlagWrapper
+    card_handle.rs      CardHandle + CloseFlag + CloseFlagWrapper
+    card_parse.rs       Lua-table → CardSpec parsing helpers
     palette_handle.rs   PaletteHandle (mirror of CardHandle)
 ```
 
