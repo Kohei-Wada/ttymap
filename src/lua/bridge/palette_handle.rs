@@ -6,13 +6,13 @@
 //! the handle holds a reserved [`CardId`] and a clone of the Lua
 //! subsystem's shared [`OpsBuffer`]; `close()` enqueues an
 //! [`Op::Close`] that the App applies via
-//! [`crate::frontend::compositor::Compositor::close_by_id`]. Kept as
+//! [`crate::compositor::Compositor::close_by_id`]. Kept as
 //! its own type so callers know which kind of primitive they have —
 //! the Rust-side wiring is shared, but the Lua-side identity is not.
 
 use mlua::UserData;
 
-use crate::frontend::compositor::CardId;
+use crate::compositor::CardId;
 use crate::lua::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.palette.open(...)`.

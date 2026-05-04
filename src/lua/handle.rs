@@ -7,7 +7,7 @@
 //! "Frontend doesn't know how Lua is wired internally" boundary —
 //! all bus dispatch and host-state plumbing lives behind this type.
 
-use crate::frontend::compositor::MapApi;
+use crate::compositor::MapApi;
 use crate::geo::LonLat;
 use crate::lua::api::LuaHostHandles;
 use crate::lua::op::{Op, OpsBuffer};

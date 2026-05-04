@@ -9,7 +9,7 @@
 //! a key to `UserIntent::SetTheme(...)` or `UserIntent::CycleFocus(...)` in
 //! the future. (Surface activations like opening the palette or a plugin
 //! are *not* `UserIntent`s — those go through the compositor's
-//! [`Window::open`](crate::frontend::compositor::window::Window) / `toggle`
+//! [`Window::open`](crate::compositor::window::Window) / `toggle`
 //! queue, applied atomically after the `BaseLayer` hook returns.)
 
 use std::collections::HashMap;

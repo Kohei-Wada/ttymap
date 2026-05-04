@@ -33,9 +33,9 @@ use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
+use crate::compositor::{Activation, PaletteEntry, Registrar};
 use crate::config::Config;
 use crate::frontend::UserIntent;
-use crate::frontend::compositor::{Activation, PaletteEntry, Registrar};
 use crate::input::KeyMap;
 
 /// Result of [`build_subsystem`].
@@ -53,7 +53,7 @@ pub struct LuaSubsystem {
     /// Consumed by the compositor's `BaseLayer`.
     pub activations: Vec<Activation>,
     /// Plugin-supplied palette entries — drained by
-    /// [`crate::frontend::palette::install`] in `main` before the
+    /// [`crate::palette::install`] in `main` before the
     /// rest of this struct reaches `Frontend::new`.
     pub palette_entries: Vec<PaletteEntry>,
     /// `[<key> <name>]` footer hints harvested from
@@ -383,16 +383,15 @@ fn register_one(
     // host API — flows through the channels in `LuaHostHandles` that
     // the App drains every frame. The factory itself never builds
     // or returns a Component; pushing is fully Lua-driven now.
-    use crate::frontend::compositor::{Activation, PaletteEntry};
+    use crate::compositor::{Activation, PaletteEntry};
     use crossterm::event::{KeyCode, KeyModifiers};
-    let build_factory = |gate_key: mlua::RegistryKey,
-                         lua_clone: mlua::Lua|
-     -> crate::frontend::compositor::SpawnComponent {
-        Box::new(move |_ctx| {
-            run_lua_callback(&lua_clone, &gate_key, name);
-            None
-        })
-    };
+    let build_factory =
+        |gate_key: mlua::RegistryKey, lua_clone: mlua::Lua| -> crate::compositor::SpawnComponent {
+            Box::new(move |_ctx| {
+                run_lua_callback(&lua_clone, &gate_key, name);
+                None
+            })
+        };
 
     for cmd in captured.palette_commands {
         let factory = build_factory(cmd.invoke, lua.clone());

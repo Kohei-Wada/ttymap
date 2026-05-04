@@ -19,12 +19,12 @@
 //!
 //! Lifetime: the matching [`CardHandle`](super::card_handle::CardHandle)
 //! (returned to Lua by `card.open`) holds the same
-//! [`CardId`](crate::frontend::compositor::CardId) reserved at the
+//! [`CardId`](crate::compositor::CardId) reserved at the
 //! call site. Lua-side `handle:close()` enqueues an
 //! [`Op::Close`](crate::lua::op::Op::Close) onto the shared
 //! [`OpsBuffer`](crate::lua::op::OpsBuffer); the App applies it per
 //! iteration via
-//! [`crate::frontend::compositor::Compositor::close_by_id`].
+//! [`crate::compositor::Compositor::close_by_id`].
 //! Idempotent — repeated `close()` calls just enqueue duplicate
 //! `Op::Close` entries that are no-ops once the component is gone.
 //!
@@ -50,8 +50,8 @@ use super::card_parse::{
     KeyAction, key_code_to_lua, parse_footer_hints, parse_item_value, parse_line_value,
 };
 use super::handle::{CallOutcome, LuaBridgeHandle};
-use crate::frontend::compositor::Component;
-use crate::frontend::compositor::window::{RenderWindow, Window};
+use crate::compositor::Component;
+use crate::compositor::window::{RenderWindow, Window};
 use crate::theme::StyleKind;
 
 // ── Component ──────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ use crate::theme::StyleKind;
 /// compositor stack by `ttymap.api.card.open(spec)`; popped when
 /// the matching [`CardHandle`](super::card_handle::CardHandle)
 /// enqueues an [`Op::Close`](crate::lua::op::Op::Close) keyed by the
-/// reserved [`CardId`](crate::frontend::compositor::CardId), or when
+/// reserved [`CardId`](crate::compositor::CardId), or when
 /// the spec's `handle_event` returns `{ close = true }`.
 pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
@@ -438,8 +438,8 @@ impl Component for LuaCardComponent {
         self.footer_hints.clone()
     }
 
-    fn placement(&self) -> crate::frontend::compositor::Placement {
-        crate::frontend::compositor::Placement::Sidebar
+    fn placement(&self) -> crate::compositor::Placement {
+        crate::compositor::Placement::Sidebar
     }
 }
 

@@ -4,7 +4,7 @@
 //! - map actions (harvested from [`MapAction::all_listed`] with keymap
 //!   hints)
 //! - plugin palette entries harvested from the
-//!   [`Registrar`](crate::frontend::compositor::Registrar) by the palette
+//!   [`Registrar`](crate::compositor::Registrar) by the palette
 //!   module's own `register` function
 //!
 //! A dynamic "Theme" entry is appended per-open with the current
@@ -13,8 +13,8 @@
 
 use std::rc::Rc;
 
+use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
 use crate::frontend::UserIntent;
-use crate::frontend::compositor::{Context, PaletteEntry as RegistrarEntry};
 use crate::input::keymap::KeyMap;
 use crate::map::MapAction;
 use crate::theme::ThemeId;

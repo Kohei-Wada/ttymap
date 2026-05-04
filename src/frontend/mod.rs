@@ -21,11 +21,9 @@
 //! plugin type — it carries only `Box<dyn Component>`s populated by
 //! the Lua dispatcher at composition time.
 
-pub(crate) mod compositor;
 pub mod event;
 pub mod frame_timer;
 pub mod intent;
-pub mod palette;
 pub mod ui;
 
 pub use event::AppEvent;
@@ -36,8 +34,8 @@ use std::io;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
+use crate::compositor::{BaseLayer, Compositor, Context};
 use crate::config::Config;
-use crate::frontend::compositor::{BaseLayer, Compositor, Context};
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::LuaHandle;
@@ -101,7 +99,7 @@ pub struct Frontend {
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Surfaced to components via
-    /// [`Context`](crate::frontend::compositor::Context) so plugins can build
+    /// [`Context`](crate::compositor::Context) so plugins can build
     /// cursor-aware overlays.
     cursor: Option<(u16, u16)>,
     /// Timestamp of the last overlay-driven `request_map_redraw`. Used

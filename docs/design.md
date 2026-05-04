@@ -38,7 +38,7 @@ every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
 CLI subcommand under `src/commands/` and the palette entries under
-`src/frontend/palette/`. The internal intent type is `UserIntent` so those three
+`src/palette/`. The internal intent type is `UserIntent` so those three
 layers stay unambiguous.
 
 ### When to emit a `UserIntent`

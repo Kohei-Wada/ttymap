@@ -284,7 +284,7 @@ impl<'a> MapApi<'a> {
     }
 
     /// Project an absolute terminal cursor position (as surfaced via
-    /// [`Context::cursor`](crate::frontend::compositor::Context::cursor)) into
+    /// [`Context::cursor`](crate::compositor::Context::cursor)) into
     /// world coordinates. Returns `None` when the cursor is outside
     /// the visible map area.
     #[allow(dead_code)] // plugin-author API; in-tree consumer (info plugin) lands later

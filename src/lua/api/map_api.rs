@@ -25,8 +25,8 @@ use std::cell::RefCell;
 
 use mlua::{Lua, Scope, Table};
 
-use crate::frontend::compositor::MapApi;
-use crate::frontend::compositor::map_api::Anchor;
+use crate::compositor::MapApi;
+use crate::compositor::map_api::Anchor;
 use crate::geo::LonLat;
 
 /// Build the Lua-facing `map` table for a single `paint_on_map`
@@ -240,7 +240,7 @@ fn polyline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::compositor::MapApi;
+    use crate::compositor::MapApi;
     use crate::map::render::frame::MapFrame;
     use crate::map::render::overlay::UserPolyline;
     use crate::theme::{DARK, UiTheme};

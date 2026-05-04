@@ -486,7 +486,7 @@ pub fn install(
         "open",
         lua.create_function(
             move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
-                use crate::frontend::compositor::CardId;
+                use crate::compositor::CardId;
                 use crate::lua::bridge::card_component::LuaCardComponent;
                 use crate::lua::bridge::card_handle::CardHandle;
                 use crate::lua::op::Op;
@@ -506,8 +506,7 @@ pub fn install(
                 let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
                 ops_for_window.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(component)
-                        as Box<dyn crate::frontend::compositor::Component>,
+                    component: Box::new(component) as Box<dyn crate::compositor::Component>,
                 });
                 Ok(CardHandle::new(id, ops_for_window.clone()))
             },
@@ -533,7 +532,7 @@ pub fn install(
             move |lua,
                   spec: Table|
                   -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
-                use crate::frontend::compositor::CardId;
+                use crate::compositor::CardId;
                 use crate::lua::bridge::palette_handle::PaletteHandle;
                 use crate::lua::bridge::palette_provider::LuaPaletteProvider;
                 use crate::lua::op::Op;
@@ -546,11 +545,10 @@ pub fn install(
                 // upvalues there, so the per-provider Lua handle must
                 // be a clone of it (cheap Arc bump).
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
-                let palette =
-                    crate::frontend::palette::PaletteComponent::with_provider(Box::new(provider));
+                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
                 ops_for_palette.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(palette) as Box<dyn crate::frontend::compositor::Component>,
+                    component: Box::new(palette) as Box<dyn crate::compositor::Component>,
                 });
                 Ok(PaletteHandle::new(id, ops_for_palette.clone()))
             },

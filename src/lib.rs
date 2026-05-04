@@ -8,10 +8,27 @@
 // of items used by main.rs, so everything else is `pub(crate)`.
 
 /// Application event loop and central message dispatcher. Also home
-/// of the [`UserIntent`](app::UserIntent) vocabulary — the single enum every
-/// emission site (palette, plugins, mouse, future RPC) speaks and that
-/// [`Frontend::dispatch`](app::Frontend) interprets.
+/// of the [`UserIntent`](frontend::UserIntent) vocabulary — the single
+/// enum every emission site (palette, plugins, mouse, future RPC)
+/// speaks and that [`frontend::Frontend::dispatch`] interprets.
 pub mod frontend;
+
+/// Compositor — stack-based focus / modal system (helix-inspired).
+/// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
+/// events to the focused component (with fall-through to BaseLayer),
+/// orchestrates layout (Floating vs Sidebar), and surfaces the
+/// `Component` / `Window` framework that plugin-side wrappers
+/// (`LuaCardComponent`) implement. Top-level subsystem (peer of
+/// `frontend/`, `lua/`, `input/`).
+pub mod compositor;
+
+/// Palette — `:`-triggered universal picker. Itself a [`Component`]
+/// pushed onto the compositor stack; provider sub-modes (theme
+/// picker, search, plugin commands) swap in place via
+/// `PaletteAction::SwitchProvider`. Top-level peer rather than
+/// frontend-internal because the Lua bridge implements
+/// `PaletteProvider` directly.
+pub mod palette;
 
 /// CLI subcommand implementations. Each subcommand lives in its own
 /// submodule; `main.rs` just parses the top-level enum and calls

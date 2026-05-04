@@ -6,7 +6,7 @@
 //! Lua subsystem's shared [`OpsBuffer`]. `close()` enqueues an
 //! [`Op::Close`] keyed by the id; the App drains the buffer per
 //! iteration and pops the matching component via
-//! [`crate::frontend::compositor::Compositor::close_by_id`].
+//! [`crate::compositor::Compositor::close_by_id`].
 //!
 //! Replaces the older `Arc<AtomicBool>` flag + per-component
 //! `Component::poll` polling pattern: there's no per-frame
@@ -15,7 +15,7 @@
 
 use mlua::UserData;
 
-use crate::frontend::compositor::CardId;
+use crate::compositor::CardId;
 use crate::lua::op::{Op, OpsBuffer};
 
 /// Lua-facing handle returned by `ttymap.api.card.open(...)`.
