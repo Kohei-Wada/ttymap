@@ -15,8 +15,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::compositor::{CardId, Component};
 use crate::frontend::UserIntent;
-use crate::frontend::compositor::{CardId, Component};
 
 /// A same-thread request from the Lua subsystem to the App.
 ///

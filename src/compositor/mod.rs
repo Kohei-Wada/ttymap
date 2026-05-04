@@ -116,7 +116,7 @@ pub struct Context {
     /// Latest mouse cursor position in absolute terminal cells.
     /// `None` until the first mouse event arrives (or always, on
     /// terminals without mouse support). Project to a `LonLat` via
-    /// [`MapApi::cursor_ll`](crate::frontend::compositor::MapApi::cursor_ll)
+    /// [`MapApi::cursor_ll`](crate::compositor::MapApi::cursor_ll)
     /// at paint time.
     #[allow(dead_code)] // plugin-author API; the in-tree reader (info plugin) lands later
     pub cursor: Option<(u16, u16)>,
@@ -271,6 +271,10 @@ impl Compositor {
 
     pub fn len(&self) -> usize {
         self.stack.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stack.is_empty()
     }
 
     fn clamp_focus_after_shrink(&mut self) {

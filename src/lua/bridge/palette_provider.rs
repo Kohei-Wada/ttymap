@@ -14,9 +14,9 @@ use std::time::Duration;
 use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaBridgeHandle};
-use crate::frontend::compositor::Context;
-use crate::frontend::palette::PaletteAction;
-use crate::frontend::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
+use crate::compositor::Context;
+use crate::palette::PaletteAction;
+use crate::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {

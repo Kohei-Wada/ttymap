@@ -6,7 +6,7 @@
 //! pop — no `active` flag, no `seed` field on a long-lived struct.
 //!
 //! The list of non-palette palette entries is harvested from the
-//! [`Registrar`](crate::frontend::compositor::Registrar) at composition time
+//! [`Registrar`](crate::compositor::Registrar) at composition time
 //! (see [`install`]) and baked into a [`CommandSeed`] that the
 //! activation closure clones (as an `Rc`) for each push.
 //!
@@ -26,8 +26,8 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::frontend::compositor::window::{RenderWindow, Window};
-use crate::frontend::compositor::{Activation, Component, Context};
+use crate::compositor::window::{RenderWindow, Window};
+use crate::compositor::{Activation, Component, Context};
 use crate::input::keymap::KeyMap;
 use crate::theme::ThemeId;
 
@@ -220,7 +220,7 @@ impl Component for PaletteComponent {
 pub fn install(
     keymap: &KeyMap,
     activations: &mut Vec<Activation>,
-    palette_entries: Vec<crate::frontend::compositor::PaletteEntry>,
+    palette_entries: Vec<crate::compositor::PaletteEntry>,
 ) {
     let seed = Rc::new(CommandSeed::build(keymap, palette_entries));
     let seed_for_spawn = seed;
@@ -317,8 +317,8 @@ mod tests {
             .collect()
     }
 
-    use crate::frontend::compositor::CardId;
-    use crate::frontend::compositor::window::WindowOps;
+    use crate::compositor::CardId;
+    use crate::compositor::window::WindowOps;
 
     /// Dispatch a key into the palette and return the queued
     /// [`WindowOps`]; tests inspect via the `closed()` / `pushed()` /

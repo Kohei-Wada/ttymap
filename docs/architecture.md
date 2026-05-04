@@ -113,7 +113,7 @@ runtime/
   Command pattern with `Frontend` as the Receiver — see
   [design.md](design.md) for the UserIntent-vs-direct-call judgment
   rules.
-- **`frontend/compositor/`** — focus and modal state. A stack of
+- **`compositor/`** — focus and modal state. A stack of
   `Component`s; the top owns key focus. No `is_visible` / `activate`
   / `deactivate` contract — presence on the stack *is* the lifecycle.
   `Tab` / `Shift-Tab` cycle focus (framework-reserved, intercepted
@@ -127,7 +127,7 @@ runtime/
   `MapFrame`, runs the `LuaTickRegistry::tick` so every Lua plugin's
   `on_tick` callback gets one frame to paint world-space markers via
   `MapApi`, then forwards modal rendering to the Compositor.
-- **`frontend/palette/`** — `:`-triggered universal picker. Itself a
+- **`palette/`** — `:`-triggered universal picker. Itself a
   `Component`; provider sub-modes (theme picker, search, plugin
   commands) swap in place via `PaletteAction::SwitchProvider`. Sync
   providers filter on each keystroke; async providers debounce and
@@ -140,7 +140,7 @@ runtime/
   or `ttymap.register_keybind(key, fn)` (top-level keybind). Panels
   and palettes are opened *imperatively* from inside callbacks via
   `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`.
-  Drawing primitives (`MapApi`) live under `frontend/compositor/`;
+  Drawing primitives (`MapApi`) live under `compositor/`;
   the Lua bridge wraps them via `Lua::scope` so the Lua-side handle
   never outlives a single tick. See
   [lua-architecture.md](lua-architecture.md) for the full surface.

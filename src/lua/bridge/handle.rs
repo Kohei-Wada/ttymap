@@ -31,7 +31,7 @@ pub struct LuaBridgeHandle {
     /// …`). For bundled plugins this is the file stem; for user
     /// plugins it's the leaked stem from the registration walker.
     /// Same value the component returns from
-    /// [`crate::frontend::compositor::Component::dedup_tag`], so logs and
+    /// [`crate::compositor::Component::dedup_tag`], so logs and
     /// stack identity agree.
     log_tag: &'static str,
     lua: Lua,
