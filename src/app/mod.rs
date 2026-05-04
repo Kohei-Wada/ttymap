@@ -1,101 +1,63 @@
-//! App layer — receives [`AppEvent`]s, mutates state, and
-//! draws.
+//! App layer — the loop driver above [`Dispatcher`].
 //!
-//! [`App`] is the sole **Receiver** in the GoF Command pattern:
-//! every invoker (keymap, palette, plugins, mouse adapter, render
-//! thread, input thread, frame timer) emits onto the unified
-//! [`AppEvent`] bus, and only `App::dispatch` executes the
-//! resulting `UserCommand`s. Component hooks express intent through
-//! `Window::emit(msg)` which routes onto the same bus — no
-//! synchronous "return `Vec<UserCommand>`" path remains.
+//! `App` drains [`AppEvent`]s off the unified `mpsc` bus, forwards
+//! them to [`Dispatcher`] (the GoF Receiver — see
+//! [`dispatcher`](mod@dispatcher)), and asks ratatui to paint each
+//! iteration. State that mutates in response to commands lives on
+//! `Dispatcher`; only the rendered `MapFrame` and the input
+//! [`MouseAdapter`] live here, plus the bus poll-timeout.
 //!
-//! `App` doesn't own subsystems. Threads (render / input /
-//! frame timer), the bus, and the channel are constructed by `main`
-//! at the composition root and handed in. The App just runs
-//! the per-iteration handler the loop calls into.
+//! `App` doesn't own subsystems. Threads (render / input / frame
+//! timer), the bus, and the channel are constructed by `main` at the
+//! composition root and handed in. The App just runs the
+//! per-iteration handler the loop calls into.
 //!
-//! Focus/modal state lives on [`Compositor`] — a stack of
-//! [`Component`]s that replaced the old `FocusManager` + `Plugin`
-//! trilogy. World-space map overlays are *not* a `Component`
-//! concern: every Lua plugin's per-frame map paint runs through
-//! [`crate::lua::LuaEventBus::dispatch_tick`] (called from
-//! [`crate::app::ui::draw`]) which hands the plugin a `MapApi` it
-//! draws into directly. The compositor never names a concrete
-//! plugin type — it carries only `Box<dyn Component>`s populated by
-//! the Lua dispatcher at composition time.
+//! Focus/modal state lives on [`Compositor`] — owned by `Dispatcher`,
+//! borrowed by `App::render_into` for paint.
 
+mod dispatcher;
 pub mod event;
 pub mod frame_timer;
 mod overlay;
 mod sidebar;
 pub mod ui;
 
-use crate::UserCommand;
+use dispatcher::Dispatcher;
 pub use event::AppEvent;
-use overlay::OverlayThrottle;
-use sidebar::SidebarPolicy;
 
 use std::io;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
 
-use crate::compositor::{BaseLayer, Compositor, Context};
+use crate::UserCommand;
+use crate::compositor::{BaseLayer, Compositor};
 use crate::config::Config;
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
-use crate::lua::LuaHandle;
 use crate::lua::LuaSubsystem;
-use crate::map::MapAction;
 use crate::map::MapHandle;
 use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
-use crate::theme::UiTheme;
 
 pub struct App {
-    /// Map subsystem handle: dispatch state + render-task sender +
-    /// theme id + attribution. Built by [`crate::map::build`] in
-    /// `main` and handed in. The owning `RenderHandle` lives in
-    /// `main`'s scope as a peer subsystem alongside `InputHandle`
-    /// and `FrameTimer`.
-    map: MapHandle,
-    /// App-lifetime flag — `true` while the event loop should keep
-    /// running, flipped to `false` by [`UserCommand::Quit`]. Lives
-    /// here (not on `MapState`) because liveness is an app concern,
-    /// not a map-data concern.
-    running: bool,
-    /// Left-sidebar visibility / width / auto-open invariant. See
-    /// [`SidebarPolicy`].
-    sidebar: SidebarPolicy,
-    /// Active theme id. Crosses both UI chrome (drives `ui_theme`)
-    /// and map rendering (drives the styler the render thread uses);
-    /// owned here because the choice is an app concern, not a
-    /// map-data concern. The map subsystem only consumes it
-    /// transiently when [`MapHandle::set_theme`] is called.
-    theme_id: ThemeId,
-    /// Runtime handle to the Lua subsystem. Encapsulates the event
-    /// bus and per-plugin host channels so App never names them
-    /// directly — every Lua-side interaction goes through semantic
-    /// methods (`notify_*`, `tick`, `sync_view`, `drain_ops`).
-    lua: LuaHandle,
+    /// GoF Receiver for `UserCommand`. Owns the state that mutates
+    /// in response to commands; `App` is the loop driver above it.
+    /// See [`Dispatcher`].
+    dispatcher: Dispatcher,
     /// Latest rendered map snapshot drained from the render thread.
-    /// `None` until the first frame arrives. Owned here directly —
-    /// no UiState wrapper now that built-in chrome lives in plugins.
+    /// `None` until the first frame arrives. Lives on App (not
+    /// Dispatcher) because it is the *rendered product* that App
+    /// displays — Dispatcher reads it as `Option<&MapFrame>` only on
+    /// the `ExportFrame` arm.
     map_frame: Option<MapFrame>,
+    /// Mouse-event translator. App owns this because `handle_input`
+    /// is the only consumer.
     mouse: MouseAdapter,
-    compositor: Compositor,
-    ui_theme: UiTheme,
-    /// Per-frame overlay sink + the rate-limit on overlay-driven
-    /// redraws. See [`OverlayThrottle`].
-    overlay: OverlayThrottle,
-    /// Latest mouse cursor position in absolute terminal cells.
-    /// `None` until the first mouse event arrives (or always, on
-    /// terminals without mouse support). Surfaced to components via
-    /// [`Context`] so plugins can build
-    /// cursor-aware overlays.
-    cursor: Option<(u16, u16)>,
     /// Main event-loop wake interval. Derived from
-    /// `ttymap.opt.runtime.poll_timeout_ms` at startup.
+    /// `ttymap.opt.runtime.poll_timeout_ms` at startup. `pub` getter
+    /// because `main` reads it to align the input thread / frame
+    /// timer cadences.
     poll_timeout: std::time::Duration,
 }
 
@@ -105,9 +67,9 @@ impl App {
     /// Composition root (`main`) builds every subsystem upstream and
     /// hands them in: the map subsystem as [`MapHandle`], the Lua
     /// plugin subsystem as [`LuaSubsystem`] (already with the palette
-    /// installed). App just consumes them — its only own work
-    /// is wiring the compositor base layer, deriving the UI theme,
-    /// and storing the per-iteration state.
+    /// installed). App just consumes them — its only own work is
+    /// wiring the compositor base layer and forwarding the relevant
+    /// pieces to [`Dispatcher::new`].
     pub fn new(
         config: Config,
         keymap: KeyMap,
@@ -120,12 +82,10 @@ impl App {
             activations,
             plugin_hints,
             // `palette_entries` was already drained by
-            // `palette::install` from main; nothing left for
-            // App to consume.
+            // `palette::install` from main; nothing left for App to
+            // consume.
             palette_entries: _,
         } = lua;
-
-        let ui_theme = UiTheme::from_palette(theme_id.palette());
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
@@ -134,19 +94,16 @@ impl App {
         compositor.push(Box::new(BaseLayer::new(keymap, activations, plugin_hints)));
 
         App {
-            map,
-            running: true,
-            sidebar: SidebarPolicy::new(config.runtime.sidebar_width),
-            theme_id,
-            lua,
+            dispatcher: Dispatcher::new(
+                theme_id,
+                map,
+                lua,
+                compositor,
+                config.runtime.sidebar_width,
+                std::time::Duration::from_millis(config.runtime.overlay_redraw_ms),
+            ),
             map_frame: None,
             mouse: MouseAdapter::default(),
-            compositor,
-            ui_theme,
-            cursor: None,
-            overlay: OverlayThrottle::new(std::time::Duration::from_millis(
-                config.runtime.overlay_redraw_ms,
-            )),
             poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
         }
     }
@@ -158,8 +115,8 @@ impl App {
         self.poll_timeout
     }
 
-    /// Drive the per-iteration event loop until the map state
-    /// requests shutdown.
+    /// Drive the per-iteration event loop until `Dispatcher` flips
+    /// `running` off.
     ///
     /// The app owns the iteration shape (housekeeping → drain
     /// queue → poll components → render → throttle overlay redraw)
@@ -173,9 +130,9 @@ impl App {
         event_rx: &std::sync::mpsc::Receiver<AppEvent>,
         event_tx: &std::sync::mpsc::Sender<AppEvent>,
     ) -> io::Result<()> {
-        self.dispatch_initial_redraw();
+        self.dispatcher.dispatch_initial_redraw();
 
-        while self.is_running() {
+        while self.dispatcher.is_running() {
             // Park on the unified bus until any source produces an
             // event; drain any further buffered events non-blockingly
             // so a burst doesn't push the paint behind.
@@ -191,18 +148,16 @@ impl App {
             // the bus directly. Same-iteration `try_recv` ran above
             // already; an emission here will be picked up next
             // iteration.
-            self.poll_compositor();
+            self.dispatcher.poll_compositor(self.map_frame.as_ref());
 
             // Drain Lua-enqueued ops *before* render so that ops
             // emitted by handler / palette / keybind callbacks during
-            // event handling apply this frame (matches the prior
-            // behaviour of `lua.drain_pushes` running in
-            // `poll_compositor`). on_tick-emitted ops fire during
-            // `render_into` below — those land in the buffer and
-            // drain at the start of the *next* iteration's
+            // event handling apply this frame. on_tick-emitted ops
+            // fire during `render_into` below — those land in the
+            // buffer and drain at the start of the *next* iteration's
             // `poll_compositor`, with the same one-frame visibility
             // lag as the prior CloseFlag-via-poll design.
-            self.apply_lua_ops();
+            self.dispatcher.apply_lua_ops(self.map_frame.as_ref());
 
             // Render a frame. Inside `ui::draw`, the per-frame Lua
             // `tick` event fires against the live MapApi.
@@ -210,68 +165,24 @@ impl App {
 
             // If plugin `on_tick` callbacks pushed polylines, throttle
             // the redraw request to the configured interval.
-            self.tick_overlay_redraw();
+            if self.dispatcher.overlay_should_redraw() {
+                self.dispatcher.request_map_redraw();
+            }
         }
 
         Ok(())
-    }
-
-    /// Apply every queued [`Op`] from any source: Lua callbacks
-    /// (drained via [`crate::lua::handle::LuaHandle::drain_ops`]),
-    /// component handlers (returned from [`Compositor::handle_event`]),
-    /// component polls (returned from [`Compositor::poll`]). All three
-    /// converge on the same vocabulary; this method is the single
-    /// applier.
-    fn apply_lua_ops(&mut self) {
-        let ops = self.lua.drain_ops();
-        self.apply_ops(ops);
-    }
-
-    fn apply_ops(&mut self, ops: Vec<crate::compositor::op::Op>) {
-        for op in ops {
-            match op {
-                crate::compositor::op::Op::Push { id, component } => {
-                    self.compositor.push_with_id(id, component);
-                }
-                crate::compositor::op::Op::Close(id) => self.compositor.close_by_id(id),
-                crate::compositor::op::Op::Command(intent) => {
-                    let snapshot = intent.clone();
-                    self.dispatch(intent);
-                    self.notify_post_command(&snapshot);
-                }
-            }
-        }
-    }
-
-    /// Whether the event loop should keep running — flipped off by
-    /// [`UserCommand::Quit`]. Checked at the top of each `run`
-    /// iteration.
-    fn is_running(&self) -> bool {
-        self.running
     }
 
     /// Apply one event drained off the unified queue. Each variant
     /// has a small fixed handler and the work is bounded — long Lua
     /// callbacks notwithstanding, the loop never sits inside this
     /// for more than the time a single dispatch needs.
-    ///
-    /// Two-stage shape per variant: **execute** (state mutation —
-    /// `dispatch`, `map_frame = ...`, etc.) followed by **notify**
-    /// (broadcast a post-effect notification on the Lua event bus).
-    /// Subscribers (Lua plugins via `ttymap.on_event`) only see the
-    /// notification path; they read the resulting state through the
-    /// usual `ttymap.map:*` accessors. Intent flow stays single-
-    /// executor; the bus is observation only.
     fn handle_event(&mut self, event: AppEvent, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
-            AppEvent::Command(msg) => {
-                let snapshot = msg.clone();
-                self.dispatch(msg);
-                self.notify_post_command(&snapshot);
-            }
+            AppEvent::Command(msg) => self.dispatcher.dispatch(msg, self.map_frame.as_ref()),
             AppEvent::FrameReady(frame) => {
                 self.map_frame = Some(frame);
-                self.lua.notify_frame_ready();
+                self.dispatcher.notify_frame_ready();
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
             // `Wake` exists purely to unblock `event_rx.recv()`. The
@@ -280,29 +191,6 @@ impl App {
             // extra handler logic belongs here. Distinct from the
             // Lua-side `"tick"` event which fires from inside draw.
             AppEvent::Wake => {}
-        }
-    }
-
-    /// Broadcast post-effect notifications for the variants that
-    /// plugins want to observe. Skips noisy / internal intents
-    /// (`PanCells`, `CursorMoved`, `CycleFocus`, etc.) so the bus
-    /// surface stays meaningful — bus events are "something
-    /// observable happened to the app", not "every state mutation".
-    fn notify_post_command(&self, msg: &UserCommand) {
-        match msg {
-            UserCommand::Map(MapAction::Jump(ll)) => self.lua.notify_map_jumped(*ll),
-            UserCommand::Map(MapAction::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
-            UserCommand::Map(MapAction::FlyTo { center, zoom }) => {
-                self.lua.notify_map_flew_to(*center, *zoom);
-            }
-            UserCommand::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
-            UserCommand::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
-            UserCommand::ExportFrame => self.lua.notify_frame_exported(),
-            // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
-            // `CycleFocus`, the discrete `Pan*` keymap actions, and
-            // `Quit` (the App is tearing down anyway) are deliberately
-            // not broadcast. Adding them later is one match arm.
-            _ => {}
         }
     }
 
@@ -319,9 +207,8 @@ impl App {
                     let _ = event_tx.send(AppEvent::Command(UserCommand::Quit));
                 } else {
                     debug!("key event: {:?}", key_event.code);
-                    let ctx = self.context();
-                    let ops = self.compositor.handle_event(key_event, &ctx);
-                    self.apply_ops(ops);
+                    self.dispatcher
+                        .handle_key_event(key_event, self.map_frame.as_ref());
                 }
             }
             Event::Resize(cols, rows) => {
@@ -337,41 +224,19 @@ impl App {
         }
     }
 
-    fn context(&self) -> Context {
-        Context {
-            theme_id: self.theme_id,
-            cursor: self.cursor,
-        }
-    }
-
-    /// Drive a single `compositor.poll` pass. Each component's hook
-    /// returns ops via [`WindowOps`]; we apply them through the
-    /// shared [`Self::apply_ops`] router.
-    fn poll_compositor(&mut self) {
-        let ctx = self.context();
-        let ops = self.compositor.poll(&ctx);
-        self.apply_ops(ops);
-
-        let count = self.compositor.sidebar_component_count();
-        if self.sidebar.observe_count(count) {
-            let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-            self.handle_resize(cols, rows);
-        }
-    }
-
     /// Single per-iteration draw. The `tick` bus event fires from
     /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
     fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
-        let ctx = self.context();
-        // Field-disjoint borrows so the closure can hold `&self.X`
-        // alongside `&mut self.overlay`.
+        let ctx = self.dispatcher.context();
+        // Field-disjoint borrows so the closure can hold immutable
+        // refs alongside the mutable `overlay_sink`.
         let map_frame = self.map_frame.as_ref();
-        let compositor = &self.compositor;
-        let lua = &self.lua;
-        let ui_theme = &self.ui_theme;
-        let sidebar_open = self.sidebar.open;
-        let sidebar_width = self.sidebar.width;
-        let overlay_sink = self.overlay.sink_mut();
+        let compositor = &self.dispatcher.compositor;
+        let lua = &self.dispatcher.lua;
+        let ui_theme = &self.dispatcher.ui_theme;
+        let sidebar_open = self.dispatcher.sidebar.open;
+        let sidebar_width = self.dispatcher.sidebar.width;
+        let overlay_sink = self.dispatcher.overlay.sink_mut();
         terminal.draw(|f| {
             crate::app::ui::draw(
                 f,
@@ -388,106 +253,5 @@ impl App {
             )
         })?;
         Ok(())
-    }
-
-    /// After draw: if Lua plugins pushed polylines into the overlay
-    /// sink during `on_tick` and the throttle interval has elapsed,
-    /// queue a fresh `RenderTask::Draw` so the next frame carries
-    /// them.
-    fn tick_overlay_redraw(&mut self) {
-        if self.overlay.should_redraw() {
-            self.request_map_redraw();
-        }
-    }
-
-    /// Initial dispatch fired by `run` right after entering the
-    /// loop — kicks off the very first render task so the terminal
-    /// isn't blank waiting for input.
-    fn dispatch_initial_redraw(&mut self) {
-        self.dispatch(UserCommand::Map(MapAction::Redraw));
-    }
-
-    fn dispatch(&mut self, msg: UserCommand) {
-        match msg {
-            UserCommand::Map(action) => {
-                if self.map.apply_action(&action) {
-                    self.request_map_redraw();
-                }
-            }
-            UserCommand::Quit => {
-                debug!("UserCommand::Quit — stopping event loop");
-                self.running = false;
-            }
-            UserCommand::SetTheme(new_id) => self.switch_theme(new_id),
-            UserCommand::CursorMoved(col, row) => {
-                self.cursor = Some((col, row));
-            }
-            UserCommand::CycleFocus(forward) => {
-                self.compositor.cycle(forward);
-            }
-            UserCommand::Resize(cols, rows) => self.handle_resize(cols, rows),
-            UserCommand::ExportFrame => self.export_current_frame(),
-            UserCommand::ToggleSidebar => self.toggle_sidebar(),
-        }
-    }
-
-    fn toggle_sidebar(&mut self) {
-        self.sidebar.toggle();
-        // The visible map area shrinks/expands — re-run the resize
-        // path so the render thread allocates the right canvas size.
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        self.handle_resize(cols, rows);
-    }
-
-    fn export_current_frame(&self) {
-        let Some(frame) = self.map_frame.as_ref() else {
-            log::warn!("export: no frame to write yet");
-            return;
-        };
-        let Some(dirs) = directories::ProjectDirs::from("", "", "ttymap") else {
-            log::warn!("export: no ProjectDirs available");
-            return;
-        };
-        let dir = dirs.data_dir().join("exports");
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            log::warn!("export: mkdir {} failed: {e}", dir.display());
-            return;
-        }
-        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let name = format!(
-            "ttymap-z{}-{:.4}-{:.4}-{}.ans",
-            frame.zoom.floor() as i32,
-            frame.center.lat,
-            frame.center.lon,
-            stamp
-        );
-        let path = dir.join(&name);
-        match std::fs::write(&path, frame.to_ansi()) {
-            Ok(()) => log::info!("export: wrote {}", path.display()),
-            Err(e) => log::warn!("export: write {} failed: {e}", path.display()),
-        }
-    }
-
-    fn switch_theme(&mut self, new_id: ThemeId) {
-        self.theme_id = new_id;
-        self.ui_theme = UiTheme::from_palette(new_id.palette());
-        self.map.set_theme(new_id);
-        self.request_map_redraw();
-    }
-
-    fn handle_resize(&mut self, cols: u16, rows: u16) {
-        let map_cols = self.sidebar.effective_map_cols(cols);
-        self.map.handle_resize(map_cols, rows);
-        self.request_map_redraw();
-    }
-
-    fn request_map_redraw(&mut self) {
-        // Refresh the Lua-side view mirror in the same beat as
-        // queueing the next render task — Lua plugins read
-        // `ttymap.map:center()` / `:zoom()` from these mirrors and
-        // expect them to reflect the view about to be drawn.
-        self.lua.sync_view(self.map.center(), self.map.zoom());
-        let overlays = self.overlay.drain();
-        self.map.request_redraw(overlays);
     }
 }
