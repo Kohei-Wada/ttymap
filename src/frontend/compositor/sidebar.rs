@@ -11,7 +11,7 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use super::window;
-use super::{Component, Context, Placement};
+use super::{CardId, Component, Context, Placement};
 use crate::theme::UiTheme;
 
 /// Maximum number of sidebar cards rendered simultaneously.
@@ -29,7 +29,7 @@ pub(super) fn render(
     side_area: Rect,
     theme: &UiTheme,
     ctx: &Context,
-    stack: &[Box<dyn Component>],
+    stack: &[(CardId, Box<dyn Component>)],
     focused_idx: usize,
 ) {
     // Walk the stack once to collect sidebar refs alongside the
@@ -37,7 +37,7 @@ pub(super) fn render(
     // not the global stack).
     let mut sidebar_components: Vec<&dyn Component> = Vec::new();
     let mut focused_in_sidebar: Option<usize> = None;
-    for (i, c) in stack.iter().enumerate() {
+    for (i, (_, c)) in stack.iter().enumerate() {
         if c.placement() == Placement::Sidebar {
             if i == focused_idx {
                 focused_in_sidebar = Some(sidebar_components.len());

@@ -344,7 +344,9 @@ impl Frontend {
         // self.compositor` for the push side.
         let lua = &self.lua;
         let compositor = &mut self.compositor;
-        lua.drain_pushes(|component| compositor.push(component));
+        lua.drain_pushes(|component| {
+            compositor.push(component);
+        });
 
         let ctx = self.context();
         self.compositor.poll(&ctx, event_tx);
