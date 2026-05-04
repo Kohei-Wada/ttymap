@@ -42,11 +42,13 @@ ttymap-tui/src/lua/
   init_lua.rs      separate config-DSL Lua state (opt + keymap)
   handle.rs        shared host handle plumbing
   sender.rs        channel sender helpers (push to App via crossbeam)
+  map_api.rs       host-side MapApi struct (per-frame draw surface,
+                   ratatui buffer + projection + theme; no mlua)
   api/             Rust→Lua API binding (the `ttymap` global)
     mod.rs         install() + every namespace userdata
     http.rs        ttymap.http:fetch — background GET returning a poll-able Job
     json.rs        ttymap.json:parse / encode
-    map_api.rs     per-frame MapApi → Lua table (Lua::scope)
+    map_table.rs   per-frame MapApi → Lua table (Lua::scope)
     sgp4.rs        SGP4 propagation namespace
   bridge/          Lua→Rust trait adapters
     handle.rs           shared dispatch plumbing (LuaHandle)
@@ -163,7 +165,8 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
 ### MapApi (per-frame drawing)
 
 Bridged via a per-frame Lua table built inside `Lua::scope`
-(`ttymap/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
+(`ttymap-tui/src/lua/api/map_table.rs`) over the host-side `MapApi`
+struct (`ttymap-tui/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
 `polyline`, `center`, `zoom`, `area_width`, `cursor`. Each `on_tick`
 callback receives this table. **All drawing for non-window plugins
 happens here.**

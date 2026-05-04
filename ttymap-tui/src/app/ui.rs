@@ -12,8 +12,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::compositor::{Compositor, Context, MapApi};
-use crate::lua::LuaHandle;
+use crate::compositor::{Compositor, Context};
+use crate::lua::{LuaHandle, MapApi};
 use crate::theme::UiTheme;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::overlay::UserPolyline;

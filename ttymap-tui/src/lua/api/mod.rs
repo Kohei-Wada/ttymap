@@ -10,8 +10,9 @@
 //!
 //! Submodules:
 //! - [`sgp4`] — `ttymap.sgp4` userdata (TLE parsing + SGP4 propagation)
-//! - [`map_api`] — per-frame `map` table built inside `Lua::scope`
-//!   (drawing primitives that borrow the live ratatui buffer)
+//! - [`map_table`] — per-frame `map` table built inside `Lua::scope`
+//!   (drawing primitives that borrow the live ratatui buffer; wraps
+//!   the host-side [`crate::lua::MapApi`])
 //!
 //! Surface today:
 //!
@@ -78,7 +79,7 @@
 
 pub mod http;
 pub mod json;
-pub mod map_api;
+pub mod map_table;
 pub mod sgp4;
 
 mod host_config;
