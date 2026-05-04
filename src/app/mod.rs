@@ -1,17 +1,17 @@
-//! Frontend layer — receives [`AppEvent`]s, mutates state, and
+//! App layer — receives [`AppEvent`]s, mutates state, and
 //! draws.
 //!
-//! [`Frontend`] is the sole **Receiver** in the GoF Command pattern:
+//! [`App`] is the sole **Receiver** in the GoF Command pattern:
 //! every invoker (keymap, palette, plugins, mouse adapter, render
 //! thread, input thread, frame timer) emits onto the unified
-//! [`AppEvent`] bus, and only `Frontend::dispatch` executes the
+//! [`AppEvent`] bus, and only `App::dispatch` executes the
 //! resulting `UserIntent`s. Component hooks express intent through
 //! `Window::emit(msg)` which routes onto the same bus — no
 //! synchronous "return `Vec<UserIntent>`" path remains.
 //!
-//! `Frontend` doesn't own subsystems. Threads (render / input /
+//! `App` doesn't own subsystems. Threads (render / input /
 //! frame timer), the bus, and the channel are constructed by `main`
-//! at the composition root and handed in. The Frontend just runs
+//! at the composition root and handed in. The App just runs
 //! the per-iteration handler the loop calls into.
 //!
 //! Focus/modal state lives on [`Compositor`] — a stack of
@@ -46,7 +46,7 @@ use crate::map::render::frame::MapFrame;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
 
-pub struct Frontend {
+pub struct App {
     /// Map subsystem handle: dispatch state + render-task sender +
     /// theme id + attribution. Built by [`crate::map::build`] in
     /// `main` and handed in. The owning `RenderHandle` lives in
@@ -79,7 +79,7 @@ pub struct Frontend {
     /// transiently when [`MapHandle::set_theme`] is called.
     theme_id: ThemeId,
     /// Runtime handle to the Lua subsystem. Encapsulates the event
-    /// bus and per-plugin host channels so Frontend never names them
+    /// bus and per-plugin host channels so App never names them
     /// directly — every Lua-side interaction goes through semantic
     /// methods (`notify_*`, `tick`, `sync_view`, `drain_ops`).
     lua: LuaHandle,
@@ -120,13 +120,13 @@ pub struct Frontend {
     overlay_redraw_interval: std::time::Duration,
 }
 
-impl Frontend {
-    /// Build the Frontend.
+impl App {
+    /// Build the App.
     ///
     /// Composition root (`main`) builds every subsystem upstream and
     /// hands them in: the map subsystem as [`MapHandle`], the Lua
     /// plugin subsystem as [`LuaSubsystem`] (already with the palette
-    /// installed). Frontend just consumes them — its only own work
+    /// installed). App just consumes them — its only own work
     /// is wiring the compositor base layer, deriving the UI theme,
     /// and storing the per-iteration state.
     pub fn new(
@@ -142,7 +142,7 @@ impl Frontend {
             plugin_hints,
             // `palette_entries` was already drained by
             // `palette::install` from main; nothing left for
-            // Frontend to consume.
+            // App to consume.
             palette_entries: _,
         } = lua;
 
@@ -154,7 +154,7 @@ impl Frontend {
         let mut compositor = Compositor::new();
         compositor.push(Box::new(BaseLayer::new(keymap, activations, plugin_hints)));
 
-        Frontend {
+        App {
             map,
             running: true,
             sidebar_open: false,
@@ -409,9 +409,9 @@ impl Frontend {
         let sidebar_width = self.sidebar_width;
         let overlay_sink = &mut self.overlay_sink;
         terminal.draw(|f| {
-            crate::frontend::ui::draw(
+            crate::app::ui::draw(
                 f,
-                crate::frontend::ui::DrawInputs {
+                crate::app::ui::DrawInputs {
                     map_frame,
                     compositor,
                     lua,

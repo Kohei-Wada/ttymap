@@ -33,28 +33,28 @@ use std::sync::Arc;
 
 use mlua::{Lua, Table};
 
+use crate::app::UserIntent;
 use crate::compositor::{Activation, PaletteEntry, Registrar};
 use crate::config::Config;
-use crate::frontend::UserIntent;
 use crate::input::KeyMap;
 
 /// Result of [`build_subsystem`].
 ///
 /// The runtime-held [`LuaHandle`] is **already constructed** by
-/// `build_subsystem` itself — the Frontend just stores it, no longer
+/// `build_subsystem` itself — the App just stores it, no longer
 /// reaches into a registrar to assemble it. The remaining fields are
 /// the parts that flow into the frontend's compositor (activations,
 /// plugin_hints) and the palette installer (palette_entries).
 pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface
-    /// Frontend uses to observe state changes and tick plugins.
+    /// App uses to observe state changes and tick plugins.
     pub handle: LuaHandle,
     /// Per-plugin keymap activations (`<key>` ⇒ spawn component).
     /// Consumed by the compositor's `BaseLayer`.
     pub activations: Vec<Activation>,
     /// Plugin-supplied palette entries — drained by
     /// [`crate::palette::install`] in `main` before the
-    /// rest of this struct reaches `Frontend::new`.
+    /// rest of this struct reaches `App::new`.
     pub palette_entries: Vec<PaletteEntry>,
     /// `[<key> <name>]` footer hints harvested from
     /// `palette_entries` *before* the palette installer drains them.

@@ -49,7 +49,7 @@ impl LuaPaletteProvider {
     /// installed on `lua` by the prior [`crate::lua::api::install`]
     /// call that produced the setup state. `ttymap.map:jump` inside
     /// this provider's `execute` callback hits the setup state's
-    /// shared `intent_tx` — drained centrally by [`crate::frontend::App`]
+    /// shared `intent_tx` — drained centrally by [`crate::app::App`]
     /// per frame and dispatched as `UserIntent::Map(MapAction::Jump)`.
     /// `execute` returns purely structural [`PaletteAction`] variants
     /// (`Close`, future `Push` / `SwitchProvider`); map intents leave

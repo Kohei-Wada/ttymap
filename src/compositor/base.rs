@@ -29,7 +29,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
 use super::{Activation, Component};
-use crate::frontend::UserIntent;
+use crate::app::UserIntent;
 use crate::input::keymap::KeyMap;
 use crate::map::MapAction;
 

@@ -1,8 +1,8 @@
 use clap::Parser;
+use ttymap::app::frame_timer::FrameTimer;
+use ttymap::app::{App, KeybindingOverrides};
 use ttymap::commands::Command as Subcommand;
 use ttymap::config::Config;
-use ttymap::frontend::frame_timer::FrameTimer;
-use ttymap::frontend::{Frontend, KeybindingOverrides};
 use ttymap::input::thread::InputHandle;
 
 #[derive(Parser)]
@@ -87,7 +87,7 @@ fn main() {
     }
 
     // Run init.lua first, then override with CLI args. `keymap_overrides`
-    // travels to Frontend::new alongside Config because the keymap is
+    // travels to App::new alongside Config because the keymap is
     // scripted at the same place but lives in its own data shape.
     let (mut config, keymap_overrides) = ttymap::lua::load_init_lua(Config::default());
 
@@ -136,12 +136,12 @@ fn main() {
 
 /// Composition root: builds the event channel, every subsystem
 /// (map / Lua), spawns the off-thread input / frame-timer peers,
-/// then hands control to `Frontend::run`. Every thread handle joins
+/// then hands control to `App::run`. Every thread handle joins
 /// in its `Drop` impl, so teardown is just RAII at end of scope.
 fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
-    // Active theme — owned by Frontend, consumed by the map only at
+    // Active theme — owned by App, consumed by the map only at
     // construction (initial styler) and on theme switch.
     let theme_id = ttymap::theme::ThemeId::from_name(&config.render.style);
 
@@ -157,7 +157,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
 
     // Lua subsystem: load every plugin, register activations / palette
     // entries / event-bus subscriptions, return the populated bundle.
-    // All Lua → Frontend traffic rides the shared `OpsBuffer` built
+    // All Lua → App traffic rides the shared `OpsBuffer` built
     // inside `build_subsystem`; no separate intent sender needed.
     let mut lua = ttymap::lua::build_subsystem(&config, map.attribution.clone(), &keymap);
 
@@ -170,7 +170,7 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
         std::mem::take(&mut lua.palette_entries),
     );
 
-    let mut frontend = Frontend::new(config, keymap, theme_id, map, lua);
+    let mut app = App::new(config, keymap, theme_id, map, lua);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
@@ -189,11 +189,11 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     )
     .is_ok();
 
-    let _input = InputHandle::spawn(event_tx.clone(), frontend.poll_timeout());
-    let _frame_timer = FrameTimer::spawn(event_tx.clone(), frontend.poll_timeout());
+    let _input = InputHandle::spawn(event_tx.clone(), app.poll_timeout());
+    let _frame_timer = FrameTimer::spawn(event_tx.clone(), app.poll_timeout());
 
     log::info!("event loop started");
-    frontend.run(&mut terminal, &event_rx, &event_tx)?;
+    app.run(&mut terminal, &event_rx, &event_tx)?;
     log::info!("event loop ended");
 
     if kitty_pushed {

@@ -27,7 +27,7 @@ src/
 │   └── mouse.rs         MouseAdapter — MouseEvent → UserIntent (drag pan, scroll zoom-at)
 │
 ├── frontend/            controller: event loop, intent dispatch, UI shell, compositor
-│   ├── mod.rs           Frontend::new / run / dispatch — single side-effect boundary
+│   ├── mod.rs           App::new / run / dispatch — single side-effect boundary
 │   ├── intent.rs        UserIntent enum (Map(MapAction) / Jump / SetTheme / CycleFocus / …)
 │   ├── event.rs         AppEvent — unified queue payload (Intent / FrameReady / Input / Wake)
 │   ├── frame_timer.rs   per-iteration wake source
@@ -104,13 +104,13 @@ runtime/
 - **`map/`** — domain. Knows nothing about UI, plugins, or focus.
   `MapAction` carries every map-level mutation, including mouse-continuous
   variants (`PanCells`, `ZoomAt`).
-- **`frontend/`** — the **controller**. `UserIntent` (in
-  `frontend/intent.rs`) is the closed enum every input source (keymap,
+- **`app/`** — the **controller**. `UserIntent` (in
+  `app/intent.rs`) is the closed enum every input source (keymap,
   palette, compositor components, mouse adapter, Lua callbacks, async
-  tasks) emits; `Frontend::dispatch` in `frontend/mod.rs` is the sole
+  tasks) emits; `App::dispatch` in `app/mod.rs` is the sole
   place that executes them. Map-level actions nest under
   `UserIntent::Map(MapAction)`; other variants sit at the top level.
-  Command pattern with `Frontend` as the Receiver — see
+  Command pattern with `App` as the Receiver — see
   [design.md](design.md) for the UserIntent-vs-direct-call judgment
   rules.
 - **`compositor/`** — focus and modal state. A stack of
@@ -123,7 +123,7 @@ runtime/
 - **`input/mouse.rs`** — pure adapter.
   `MouseEvent → Vec<UserIntent>` (`CursorMoved` on every event;
   drag → `Map(PanCells)`; scroll → `Map(ZoomAt)`). No state mutation.
-- **`frontend/ui.rs`** — non-modal shell. `draw()` paints the latest
+- **`app/ui.rs`** — non-modal shell. `draw()` paints the latest
   `MapFrame`, runs the `LuaTickRegistry::tick` so every Lua plugin's
   `on_tick` callback gets one frame to paint world-space markers via
   `MapApi`, then forwards modal rendering to the Compositor.
@@ -157,14 +157,14 @@ raw event
   ↓ keyboard / mouse / Lua callback / tile arrival / frame timer
   ↓ produces 0..N UserIntent or AppEvent::FrameReady (pure translation)
   ↓
-Frontend::dispatch(intent)
+App::dispatch(intent)
   ↓
     UserIntent::Map(action)      → MapState::process_action(&action)
     UserIntent::Jump(loc)        → MapState::jump_to(loc)
-    UserIntent::SetTheme(id)     → Frontend::switch_theme (rebuilds styler + UI theme)
+    UserIntent::SetTheme(id)     → App::switch_theme (rebuilds styler + UI theme)
     UserIntent::CursorMoved(c,r) → cursor overlay
     UserIntent::CycleFocus(fwd)  → Compositor::cycle
-    UserIntent::Resize(cols,rows)→ Frontend::handle_resize
+    UserIntent::Resize(cols,rows)→ App::handle_resize
 ```
 
 Keyboard and mouse take different paths to `UserIntent` — keys go

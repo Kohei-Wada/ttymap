@@ -13,8 +13,8 @@
 
 use std::rc::Rc;
 
+use crate::app::UserIntent;
 use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
-use crate::frontend::UserIntent;
 use crate::input::keymap::KeyMap;
 use crate::map::MapAction;
 use crate::theme::ThemeId;

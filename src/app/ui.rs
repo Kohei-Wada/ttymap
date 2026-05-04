@@ -24,7 +24,7 @@ use crate::theme::UiTheme;
 /// `Component::paint_on_map`) and on-top panels
 /// (via `Component::render`) go through the same draw pass as the
 /// map.
-/// Per-frame inputs collected by [`Frontend::render_into`]. Bundled
+/// Per-frame inputs collected by [`App::render_into`]. Bundled
 /// to keep [`draw`] under clippy's argument-count threshold and to
 /// give related fields a single place to grow.
 pub struct DrawInputs<'a> {

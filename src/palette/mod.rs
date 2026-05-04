@@ -240,7 +240,7 @@ pub fn install(
 mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
-    use crate::frontend::UserIntent;
+    use crate::app::UserIntent;
     use crate::map::MapAction;
     use crate::theme::ThemeId;
 

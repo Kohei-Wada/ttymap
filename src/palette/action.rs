@@ -9,8 +9,8 @@
 //!
 //! [`PaletteProvider`]: super::provider::PaletteProvider
 
+use crate::app::UserIntent;
 use crate::compositor::Component;
-use crate::frontend::UserIntent;
 
 use super::provider::PaletteProvider;
 
