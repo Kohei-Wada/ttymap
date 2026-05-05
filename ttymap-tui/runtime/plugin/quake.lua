@@ -134,18 +134,26 @@ ttymap.api.frame.on_tick(function(map)
         local body = state.job:try_take()
         if body then
             local payload = ttymap.json:parse(body)
+            if not payload then
+                ttymap.notify("quake: USGS response unparseable",
+                              { level = "warn" })
+            end
             state.quakes = parse_features(payload)
             if state.selected > #state.quakes then
                 state.selected = math.max(1, #state.quakes)
             end
             -- Auto-recentre on the first non-empty result so
             -- the user lands somewhere meaningful right after
-            -- toggling on.
+            -- toggling on. The same flag gates the one-time info
+            -- popup so subsequent refreshes stay quiet.
             if not state.initial_jump_done and #state.quakes > 0 then
                 local top = highest_magnitude(state.quakes)
                 if top then
                     state.initial_jump_done = true
                     ttymap.map:jump(top.lon, top.lat)
+                    ttymap.notify(string.format(
+                        "quake: %d recent", #state.quakes
+                    ))
                 end
             end
             state.job = nil

@@ -14,6 +14,7 @@ local state = {
     selected       = 1,   -- 1-based index
     job            = nil, -- pending fetch
     last_fetch_sec = 0,   -- wall-clock second of last fetch start
+    initial_done   = false, -- whether the first fetch after open landed
 }
 local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
 
@@ -46,9 +47,22 @@ ttymap.api.frame.on_tick(function(map)
         local body = state.job:try_take()
         if body then
             local payload = ttymap.json:parse(body)
+            if not payload then
+                ttymap.notify("aircraft: OpenSky response unparseable",
+                              { level = "warn" })
+            end
             state.aircraft = opensky.parse(payload)
             if state.selected > #state.aircraft then
                 state.selected = math.max(1, #state.aircraft)
+            end
+            -- One info popup on the first successful fetch after
+            -- opening the panel; subsequent refreshes stay quiet so
+            -- the corner doesn't get spammed every interval.
+            if not state.initial_done then
+                state.initial_done = true
+                ttymap.notify(string.format(
+                    "aircraft: %d in view", #state.aircraft
+                ))
             end
             state.job = nil
         end
@@ -71,6 +85,10 @@ local function close()
     if w then
         w:close()
         w = nil
+        -- Reset the first-fetch flag so the next open re-shows the
+        -- "N in view" popup. Without this, reopening would silently
+        -- reuse stale state.
+        state.initial_done = false
     end
 end
 

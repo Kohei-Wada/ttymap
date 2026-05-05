@@ -122,7 +122,12 @@ local function step_state_machine()
     if not body then return end
 
     if state.phase == "geosearching" then
-        local pages = parse_geosearch(ttymap.json:parse(body))
+        local payload = ttymap.json:parse(body)
+        if not payload then
+            ttymap.notify("wiki: geosearch response unparseable",
+                          { level = "warn" })
+        end
+        local pages = parse_geosearch(payload)
         state.job = nil
         if #pages == 0 then
             state.phase = "idle"
@@ -135,7 +140,12 @@ local function step_state_machine()
         state.phase = "extracting"
         state.job = ttymap.http:fetch(extracts_url(titles))
     elseif state.phase == "extracting" then
-        local extracts = parse_extracts(ttymap.json:parse(body))
+        local payload = ttymap.json:parse(body)
+        if not payload then
+            ttymap.notify("wiki: extracts response unparseable",
+                          { level = "warn" })
+        end
+        local extracts = parse_extracts(payload)
         local merged = {}
         for _, p in ipairs(state.pending_pages or {}) do
             table.insert(merged, {
@@ -150,6 +160,11 @@ local function step_state_machine()
         state.job = nil
         state.phase = "idle"
         merge_articles(merged)
+        if #merged > 0 then
+            ttymap.notify(string.format("wiki: %d articles nearby", #merged))
+        else
+            ttymap.notify("wiki: no articles nearby")
+        end
     end
 end
 
