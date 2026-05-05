@@ -25,3 +25,18 @@ directories = "6"
 [build-dependencies]
 prost-build = "0.14"
 protox = "0.9"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "decode_tile"
+harness = false
+
+[[bench]]
+name = "render_frame"
+harness = false
+
+[[bench]]
+name = "tile_disk_hit"
+harness = false

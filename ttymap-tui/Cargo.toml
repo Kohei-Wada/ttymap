@@ -45,22 +45,7 @@ crossbeam-channel = "0.5"
 mlua = { version = "0.11", features = ["lua54", "vendored"] }
 sgp4 = { version = "2.4.0", default-features = false, features = ["std"] }
 
-[dev-dependencies]
-criterion = "0.5"
-
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
 features = ["precommit-hook", "run-cargo-test", "run-cargo-clippy", "run-cargo-fmt"]
-
-[[bench]]
-name = "decode_tile"
-harness = false
-
-[[bench]]
-name = "render_frame"
-harness = false
-
-[[bench]]
-name = "tile_disk_hit"
-harness = false

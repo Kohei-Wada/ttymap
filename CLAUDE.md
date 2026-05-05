@@ -74,6 +74,7 @@ ttymap-engine/                (ttymap-engine — ratatui-free)
     theme/                    palette data (ColorPalette + DARK/BRIGHT + ThemeId)
   proto/vector_tile.proto
   build.rs                    compiles MVT proto via protox
+  benches/                    decode_tile / render_frame / tile_disk_hit
 
 ttymap-tui/                   (ttymap-tui — ratatui + crossterm shell)
   src/
@@ -92,7 +93,6 @@ ttymap-tui/                   (ttymap-tui — ratatui + crossterm shell)
     lua/                      plugin runtime — bridges binary (Component,
                               palette) and engine (MapApi, http)
     shared/geoip.rs           IP → lon/lat resolution (binary-only)
-  benches/                    decode_tile / render_frame / tile_disk_hit
   runtime/                    bundled Lua plugins + init.lua scaffolding
 ```
 
