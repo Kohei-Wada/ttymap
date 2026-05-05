@@ -4,10 +4,6 @@ ttymap's plugin system is Lua-only. All in-tree plugins live in
 `runtime/plugin/`; the Rust side is the binding layer. `mlua` with
 Lua 5.4 vendored.
 
-This doc is the architectural reference. For the user-facing "how do
-I write a plugin" walkthrough, see
-[lua-plugin-migration.md](lua-plugin-migration.md).
-
 ## Plugin model
 
 nvim-style. **A `.lua` file in a `<runtime>/plugin/` directory is a
@@ -40,12 +36,15 @@ ttymap-tui/src/lua/
   vm.rs            new_lua + package.searchers / package.path setup
   loader.rs        register_builtin_plugins, register_one,
                    register_plugins_in — disk walk + per-plugin wiring
-  registry.rs      LuaEventBus — pub/sub for tick / frame_ready / map_jumped / …
+  tick.rs          dispatch_tick(bus, map) — per-frame fan-out of
+                   the "tick" bucket on the host EventBus
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
-  init_lua.rs      separate config-DSL Lua state (opt + keymap)
-  handle.rs        shared host handle plumbing (LuaHandle)
+  init_lua.rs      runs the init.lua chain in the shared Lua state
+                   (opt + keymap pre-pass)
+  handle.rs        LuaHandle — shared host plumbing (drain_ops, tick,
+                   notify_*) the App calls into
   registrar.rs     Registrar — collects activations / palette entries
-  sender.rs        channel sender helpers (push to App via crossbeam)
+                   / event subscribers harvested from each plugin
   map_api.rs       host-side MapApi struct (per-frame draw surface,
                    ratatui buffer + projection + theme; no mlua)
   host.rs          host-side Lua-runtime state (LuaHostShared,
@@ -56,8 +55,10 @@ ttymap-tui/src/lua/
                    CapturedRegistration, CaptureSlot)
   api/             Rust→Lua API binding (the `ttymap` global).
                    File ↔ Lua-namespace 1:1 (file name = `ttymap.<X>`).
-    mod.rs         install() — assembles the namespace userdatas
-    http.rs        ttymap.http   :fetch / :url_encode
+    mod.rs         install() — assembles the namespace userdatas;
+                   also installs top-level `ttymap.notify` /
+                   `ttymap.on_event` on the global
+    http.rs        ttymap.http   :fetch / :fetch_cached / :url_encode
     json.rs        ttymap.json   :parse
     sgp4.rs        ttymap.sgp4   TLE parse / propagate
     map.rs         ttymap.map    HostMap userdata (jump/zoom/fly_to/center)
@@ -67,15 +68,21 @@ ttymap-tui/src/lua/
     log.rs         ttymap.log    :info / :warn / :error
     tile.rs        ttymap.tile   :attribution
     register.rs    setup-time `ttymap.register_*` / `on_event` capture
-    imperative.rs  `ttymap.api.{card,palette,frame,notify}` runtime cluster
+    imperative.rs  `ttymap.api.{card,palette,frame}` runtime cluster
   bridge/          Lua→Rust trait adapters
-    handle.rs           shared dispatch plumbing (LuaHandle)
+    handle.rs           shared dispatch plumbing
     card_component.rs   LuaCardComponent: Component for a Lua spec
     palette_provider.rs LuaPaletteProvider: PaletteProvider for a spec
     card_handle.rs      CardHandle + CloseFlag + CloseFlagWrapper
     card_parse.rs       Lua-table → CardSpec parsing helpers
     palette_handle.rs   PaletteHandle (mirror of CardHandle)
 ```
+
+The host-side pub/sub registry that Lua subscribers attach to is
+**`crate::event::EventBus`** (`ttymap-tui/src/event/bus.rs`) — it's a
+plain main-thread bus shared with non-Lua subscribers, not a Lua-only
+type. `lua::tick::dispatch_tick` drains the `"tick"` bucket once per
+frame; `EventBus::publish(Event::*)` drives every other event.
 
 ## Key Rust types
 
@@ -93,14 +100,15 @@ ttymap-tui/src/lua/
   component (used for palette providers, which have no `poll`).
 - **`LuaHandle`** (`bridge/handle.rs`) — shared dispatch plumbing for
   both window and palette callback paths.
-- **`LuaEventBus`** (`registry.rs`) — pub/sub registry keyed by
-  event name. Every `ttymap.on_event(name, fn)` (and its
-  `on_tick` sugar) call lands as a `Subscriber` under that name.
-  `dispatch_tick(map)` runs the `"tick"` bucket against a live
-  `MapApi`; `dispatch(name, args)` runs any other bucket. Errors
-  from one callback are logged + swallowed so a single broken
-  plugin can't freeze the host.
-- **`LuaHostShared`** (`ttymap/mod.rs`) — runtime-data carrier
+- **`EventBus`** (`crate::event::EventBus`, `ttymap-tui/src/event/bus.rs`)
+  — pub/sub registry keyed by event name. Every
+  `ttymap.on_event(name, fn)` (and its `on_tick` sugar) call lands as
+  a subscriber under that name. `lua::tick::dispatch_tick(bus, map)`
+  runs the `"tick"` bucket against a live `MapApi` once per frame;
+  `EventBus::publish(Event::*)` runs any other bucket. Errors from one
+  callback are logged + swallowed so a single broken plugin can't
+  freeze the host. The bus is shared with non-Lua subscribers.
+- **`LuaHostShared`** (`lua/host.rs`) — runtime-data carrier
   (attribution, geoip endpoint, keymap entries, palette entries),
   Arc-cloned into each namespace userdata.
 
@@ -111,7 +119,7 @@ userdatas:
 
 | Namespace        | Methods                                                                                        |
 |------------------|------------------------------------------------------------------------------------------------|
-| `ttymap.http`    | `:fetch(url)`, `:fetch_cached(url, ttl)`, `:url_encode(s)`                                     |
+| `ttymap.http`    | `:fetch(url)`, `:fetch_cached(url, ttl_secs)`, `:url_encode(s)`                                |
 | `ttymap.map`     | `:jump(lon, lat)`, `:zoom(level)`, `:zoom()` getter, `:fly_to(lon, lat, zoom)`, `:center()`    |
 | `ttymap.json`    | `:parse(s)` → table or nil                                                                     |
 | `ttymap.sgp4`    | `:parse_tle`, `:parse_tles`, `:propagate`, `:propagate_batch`                                  |
@@ -136,13 +144,13 @@ Top-level functions the script's setup body calls:
 
 ### Event bus
 
-`ttymap.on_event(name, fn)` registers a callback against the
-`LuaEventBus` (`ttymap-tui/src/lua/registry.rs`). Every emit site inside the
-host calls `LuaEventBus::dispatch_tick` (for the per-frame `"tick"`
-bucket, which threads a live `MapApi` through `Lua::scope`) or
-`LuaEventBus::dispatch(name, args)` (for plain-Lua-value payloads).
-
-Canonical event names (`names::*` in `registry.rs`):
+`ttymap.on_event(name, fn)` registers a callback against the host
+`EventBus` (`crate::event::EventBus` — `ttymap-tui/src/event/bus.rs`).
+The per-frame `"tick"` bucket runs through `lua::tick::dispatch_tick`
+(which threads a live `MapApi` through `Lua::scope`); every other
+bucket runs through `EventBus::publish(Event::*)` with a typed
+`Event` payload. The string an emit binds to is `Event::name()`
+(`ttymap-tui/src/event/payload.rs`).
 
 | Name              | Fired                                                 | Payload              |
 |-------------------|-------------------------------------------------------|----------------------|
@@ -153,7 +161,7 @@ Canonical event names (`names::*` in `registry.rs`):
 | `map_flew_to`     | `MapAction::FlyTo` ran                                | `(lon, lat, zoom)`   |
 | `theme_changed`   | `UserCommand::SetTheme` ran                            | `theme: string`      |
 | `resized`         | `UserCommand::Resize` ran                              | `(cols, rows)`       |
-| `frame_exported`  | `UserCommand::ExportFrame` ran                         | none                 |
+| `notify`          | `ttymap.notify(...)` or any host notify call           | `{ msg, level }`     |
 
 Subscribers under different names are independent. One broken
 subscriber doesn't stop the others — errors are logged and the
@@ -173,12 +181,18 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
   Enter+empty (default closes); `submit_mode` controls when `filter`
   fires — `"on_each_key"` (default), `{ kind = "debounced", ms = N }`,
   or `"on_enter"` (filter only on Enter+empty).
-- **`ttymap.api.frame.export()`** — fire-and-forget snapshot to disk.
+- **`ttymap.api.frame.to_ansi() -> string|nil`** — return the latest
+  `MapFrame` rendered as an ANSI string, or `nil` if no frame has
+  arrived yet. Producers (today: bundled `export.lua`) decide where +
+  how to persist it.
 - **`ttymap.api.frame.on_tick(fn)`** — subscribe a per-frame callback
   receiving a `MapApi` table. Stacks across calls.
-- **`ttymap.notify(msg [, opts])`** — post a transient status message;
-  the bundled `notify` plugin renders recent entries top-right.
-  `ttymap.api.notify.recent(ttl_ms)` is the read side.
+
+`ttymap.notify(msg [, opts])` is a top-level function on the
+`ttymap` global (not under `ttymap.api`) — it enqueues a `notify`
+event on the host bus. The bundled `notify` plugin subscribes via
+`ttymap.on_event("notify", ...)` and renders recent entries
+top-right.
 
 ### MapApi (per-frame drawing)
 
@@ -240,7 +254,12 @@ local function destination()
 end
 ttymap.register_palette_command({
     label = "Export frame as ANSI",
-    invoke = function() ttymap.api.frame.export(destination()) end,
+    invoke = function()
+        local ansi = ttymap.api.frame.to_ansi()
+        if not ansi then return end
+        local path = destination() .. "/ttymap.ans"
+        local f = io.open(path, "w"); f:write(ansi); f:close()
+    end,
 })
 
 -- ~/.config/ttymap/init.lua  (user override)
@@ -254,25 +273,27 @@ implementation).
 
 ## Drain pattern (host ↔ plugin)
 
-Lua side is fire-and-forget; App drains per tick. Senders held by the
-shared host handles:
+Lua side is fire-and-forget; App drains per tick. Plugin-emitted
+intent flows through a single typed buffer — the `OpsBuffer` shared
+with each api/ namespace — carrying `Op::Push`, `Op::Close`,
+`Op::Command(UserCommand)`, and `Op::Publish(Event)` variants
+(`compositor/op.rs`). Examples:
 
-- `jump_tx` — `ttymap.map:jump` → `UserCommand::Map(MapAction::Jump)`
-- `zoom_tx` — `ttymap.map:zoom(level)` setter → `MapAction::SetZoom`
-- `fly_to_tx` — `ttymap.map:fly_to` → `MapAction::FlyTo`
-- `export_tx` — `ttymap.api.frame.export` → `UserCommand::ExportFrame`
-- `push_tx` — `Box<dyn Component>` queued by `api.card.open` /
-  `api.palette.open` → pushed onto the compositor stack
+- `ttymap.map:jump(lon, lat)` → `Op::Command(UserCommand::Map(MapAction::Jump))`
+- `ttymap.map:zoom(level)` setter → `Op::Command(UserCommand::Map(MapAction::SetZoom))`
+- `ttymap.map:fly_to(...)` → `Op::Command(UserCommand::Map(MapAction::FlyTo))`
+- `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`
+  → `Op::Push { id, component }`
+- `ttymap.notify(msg, opts)` → `Op::Publish(Event::Notify { ... })`
 
-Receivers live on `LuaHostHandles` (returned once from `install`,
-since there's only one shared install per subsystem); App reads the
-single set of shared cells in `drain_lua_host_handles` once per loop
-iteration.
+`LuaHandle::drain_ops` (`lua/handle.rs`) hands the App the queued
+`Op`s once per loop iteration; the App applies them through the
+compositor and dispatcher.
 
-The same drain-on-each-iteration pattern carries `map:polyline`
-overlays: `App.overlay_sink: Vec<UserPolyline>` is borrowed by the
-per-frame `MapApi`, plugins push during `on_tick`, App drains the
-sink immediately after `ui::draw` into the next
+`map:polyline` overlays use a separate sink: `App.overlay.sink:
+Vec<UserPolyline>` (`app/overlay.rs`) is borrowed by the per-frame
+`MapApi`, plugins push during `on_tick`, App drains the sink
+immediately after `ui::draw` into the next
 `RenderTask::Draw { viewport, overlays }`. Render thread paints
 overlays in a third pass after symbols (subpixel granularity preserved
 via OR-merge into existing braille cells).
@@ -352,14 +373,16 @@ Errors at any layer are logged + recovered; the chain keeps walking.
 
 ## Bundled plugins (`runtime/plugin/`)
 
-14 total, each a reference implementation of one of the migration-guide
-categories (always-on chrome, toggleable overlay, toggleable side
-panel, palette one-shot, palette provider):
+14 total. Each plugin is a reference implementation of one shape —
+always-on chrome (`attribution`, `scalebar`, `help`), toggleable
+overlay (`center`, `here`, `ping_simulation`), toggleable side panel
+(`info`, `notify`, `aircraft`, `satellite`, `wiki`), palette
+one-shot (`export`, `quake`), or palette provider (`search`):
 
 ```
-aircraft/        attribution.lua  center.lua    export.lua
-help.lua         here.lua         info.lua      notify.lua
-ping_simulation  quake.lua        satellite/    scalebar.lua
+aircraft/        attribution.lua  center.lua         export.lua
+help.lua         here.lua         info.lua           notify.lua
+ping_simulation.lua  quake.lua    satellite/         scalebar.lua
 search/          wiki/
 ```
 
@@ -395,10 +418,3 @@ plugin updates the footer for free. **No plugin name is hardcoded in
 Per-window footer hints live inline in the
 `ttymap.api.card.open(spec)` spec via
 `footer_hints = { {key, label}, ... }`.
-
-## Migration
-
-For before/after examples covering all five plugin shapes
-(always-on chrome, toggleable overlay, toggleable side panel, palette
-one-shot, palette provider), see
-[lua-plugin-migration.md](lua-plugin-migration.md).

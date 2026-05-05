@@ -4,6 +4,10 @@ Terminal-based map viewer. Renders [Mapbox Vector Tiles](https://github.com/mapb
 
 Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 
+> ⚠️ **Work in progress.** ttymap is under active development —
+> APIs (CLI flags, Lua surface, config schema) may change without
+> notice and bugs are expected.
+
 ![ttymap default view with help panel and satellite tracker](assets/ttymap-default.png)
 
 <details>
@@ -22,7 +26,7 @@ Tokyo zoomed in with the wiki panel open:
 ## Features
 
 - **Braille rendering** — 2×4 sub-pixels per cell, ANSI 256-color
-- **Vim-style navigation** — `hjkl` pan (with count prefixes like `5j`), `a`/`z` zoom, `gg` world view, mouse drag + scroll
+- **Vim-style navigation** — `hjkl` pan, `b`/`w` fast pan, `C-u`/`C-d` half-screen pan, `a`/`z` zoom, `gg` world view, `0` reset, mouse drag + scroll
 - **Command palette** — `:` for actions, `/` for Nominatim location search
 - **Live overlays** — aircraft (OpenSky), satellites (TLE + SGP4), earthquakes (USGS), Wikipedia geosearch
 - **Headless snapshot** — `ttymap snap …` writes the current view as ANSI text for dashboards / cron / pipes
@@ -82,7 +86,6 @@ needed.
 - **[docs/architecture.md](docs/architecture.md)** — system layout, threads, message + render flow, focus model, concurrency
 - **[docs/configuration.md](docs/configuration.md)** — `init.lua` reference, runtime path resolution, file locations
 - **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, plugin shapes, dispatcher semantics
-- **[docs/lua-plugin-migration.md](docs/lua-plugin-migration.md)** — end-to-end before/after examples for each plugin shape
 - **[docs/design.md](docs/design.md)** — load-bearing design decisions (UserIntent vs direct call, controller split, Drop-based cleanup)
 
 ## Roadmap
@@ -107,9 +110,9 @@ PMTiles), error handling policy
 
 ## Contributing
 
-- **Add a feature to core** — open an issue first to sanity-check it isn't plugin material.
-- **Write a plugin** — see [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md). Drop a `*.lua` into `~/.config/ttymap/plugin/` to test without rebuilding. Simplest fetch+render: `runtime/plugin/quake.lua`. Full panel + selection + modal: `runtime/plugin/wiki/`. Debounced palette picker: `runtime/plugin/search/`.
-- **Fix a bug** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt.
+PRs and issues are very welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the dev workflow and a heads-up about breaking changes during
+this WIP phase.
 
 ## Platform support
 

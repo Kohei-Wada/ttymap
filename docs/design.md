@@ -64,7 +64,6 @@ Current examples:
 | `CursorMoved`                       | mouse router (every event)            | Overlay readout through the same boundary |
 | `CycleFocus`                        | Tab / Shift-Tab                       | UI transition                             |
 | `ToggleSidebar`                     | keymap, palette                       | Cross-cutting: visibility + map canvas    |
-| `ExportFrame`                       | export plugin's palette entry         | Cross-cutting: render snapshot to disk    |
 
 Surface activations (palette open, plugin activate) deliberately do
 *not* go through `UserCommand` — they're expressed as a `Component` push
@@ -245,7 +244,7 @@ stay CPU-heavy without blocking input, and lets the main thread drop
 older frames when multiple are queued (latest wins).
 
 The one legitimate exception is **per-frame Lua plugin work**:
-`ui::draw` runs `LuaEventBus::dispatch_tick` so every plugin's
+`ui::draw` runs `lua::tick::dispatch_tick` so every plugin's
 `on_tick` callback gets one frame to paint world-space primitives
 via `MapApi`, and to push polylines into the overlay sink (drained
 into the next `RenderTask::Draw`'s `overlays` field). This is
