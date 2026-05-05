@@ -1,5 +1,7 @@
 # ttymap
 
+[![CI](https://github.com/Kohei-Wada/ttymap/actions/workflows/ci.yml/badge.svg)](https://github.com/Kohei-Wada/ttymap/actions/workflows/ci.yml)
+
 Terminal-based map viewer. Renders [Mapbox Vector Tiles](https://github.com/mapbox/vector-tile-spec) as Unicode Braille characters with ANSI 256-color in your terminal.
 
 Inspired by [mapscii](https://github.com/rastapasta/mapscii).
