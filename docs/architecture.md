@@ -44,7 +44,6 @@ App::dispatch(intent)
     UserCommand::ToggleSidebar      → show/hide the sidebar; recomputes
                                      the map canvas so the render thread
                                      allocates the right buffer size
-    UserCommand::ExportFrame        → write the current MapFrame as ANSI / HTML
 ```
 
 Keyboard and mouse take different paths to `UserCommand` — keys go
@@ -58,7 +57,7 @@ key event
                   ↓ win.emit / win.open / win.close / win.ignore
     [fallback]  only if the focused component called win.ignore()
                 and focus isn't already on BaseLayer
-                → re-deliver to BaseLayer (keymap + activation table + count prefix)
+                → re-deliver to BaseLayer (keymap + activation table + `gg` sequence)
   ↓ Vec<UserCommand>
 
 mouse event
@@ -79,7 +78,7 @@ center/zoom (`MapFrame` carries the view it was rendered at).
 main thread (ratatui draw):
   ui::draw(f, &compositor, &theme, &ctx):
     1. latest MapFrame is painted into the map area
-    2. LuaEventBus::dispatch_tick — every Lua plugin's on_tick callback
+    2. lua::tick::dispatch_tick — every Lua plugin's on_tick callback
        runs once with a scoped MapApi handle, drawing world-space
        primitives (aircraft / satellite / quake / wiki markers, scale
        bar, attribution, …) and queueing UserPolyline overlays

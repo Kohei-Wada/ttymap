@@ -29,17 +29,18 @@ ttymap.opt.cache.memory_tiles = heavy and 2048 or 512
 ```
 
 Every option is optional; omitted values stay at their built-in
-defaults (see `runtime/init.lua` for the full schema with
+defaults (see `ttymap-tui/runtime/init.lua` for the full schema with
 defaults). Errors in `init.lua` (syntax, type mismatch, runtime
 exception) are logged and recovered — the app keeps booting with
 defaults.
 
 ## Options reference
 
-The complete option tree lives in `runtime/init.lua` — that file
-*is* the bundled defaults, and your `~/.config/ttymap/init.lua`
-runs after it in the same Lua state (last-wins on `ttymap.opt.*`).
-Browse it for the canonical list with inline comments.
+The complete option tree lives in `ttymap-tui/runtime/init.lua` —
+that file *is* the bundled defaults, and your
+`~/.config/ttymap/init.lua` runs after it in the same Lua state
+(last-wins on `ttymap.opt.*`). Browse it for the canonical list
+with inline comments.
 
 Top-level namespaces:
 
@@ -49,7 +50,7 @@ Top-level namespaces:
 | `ttymap.opt.render` | style preset, label language |
 | `ttymap.opt.cache` | LRU size, on-disk persist toggle |
 | `ttymap.opt.geoip` | endpoint, timeout, on-startup behaviour |
-| `ttymap.opt.runtime` | poll/redraw cadence |
+| `ttymap.opt.runtime` | poll/redraw cadence, sidebar width |
 | `ttymap.opt.disable` | list of plugin stems to skip |
 | `ttymap.keymap.set(action, keys)` | rebind a built-in action |
 | `ttymap.keymap.del(action)` | drop a built-in binding |
