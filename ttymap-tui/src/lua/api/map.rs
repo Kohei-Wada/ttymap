@@ -22,10 +22,9 @@
 //!
 //! Color args: `point` / `label` / `polyline` / `text_anchored`
 //! accept either a theme-aware keyword (`"accent"` | `"accent_alt"` |
-//! `"muted"` | `"road"` | `"info"` | `"warn"` | `"error"`) or a
-//! direct xterm-256 integer index (0..=255). Palette accessor
-//! methods (`accent_color`, `road_color`, etc.) return xterm
-//! indices for round-tripping.
+//! `"muted"` | `"road"`) or a direct xterm-256 integer index
+//! (0..=255). Palette accessor methods (`accent_color`, `road_color`,
+//! etc.) return xterm indices for round-tripping.
 
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
@@ -232,12 +231,6 @@ fn resolve_keyword(p: &MapApi<'_>, keyword: &mlua::String) -> u8 {
         Ok("road") => p.road_color_xterm(),
         Ok("accent_alt") => xterm_index(p.accent_alt_color()),
         Ok("muted") => xterm_index(p.muted_color()),
-        // Severity keywords for chrome (notify popups). Theme-aware
-        // — DARK uses bright yellow / orange / red, BRIGHT uses
-        // darker variants that read on white.
-        Ok("info") => xterm_index(p.notify_info_color()),
-        Ok("warn") => xterm_index(p.notify_warn_color()),
-        Ok("error") => xterm_index(p.notify_error_color()),
         _ => xterm_index(p.accent_color()),
     }
 }

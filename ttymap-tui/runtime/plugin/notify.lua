@@ -7,6 +7,14 @@
 -- popup per message for `TTL_S` after arrival. Newest at the top;
 -- a blank row between popups separates them visually.
 --
+-- All popups render in `accent` regardless of `level` — severity
+-- gets conveyed by the message text (plugin authors free to prefix
+-- "warn:" / "error:" / icons themselves). Theme-coloured severity
+-- mapping was tried and dropped: `accent_alt` is cyan in DARK and
+-- red in BRIGHT, which inverts the warn/error semantic across
+-- themes. `level` stays in the event payload so future subscribers
+-- (audit log, sound, etc) can still filter by it.
+--
 -- The ring lives entirely here — Rust side has no notify state at
 -- all, just the generic event bus.
 
@@ -18,16 +26,6 @@ local TTL_S = 4
 local RING_CAP = 32
 local MAX_TEXT_WIDTH = 60  -- truncate long messages so the popup
                            -- doesn't dominate the map area
-
--- Theme-aware severity keywords resolved by the host (info / warn /
--- error map to per-theme xterm indices that read on both dark and
--- bright backgrounds). Mirrors how chrome plugins like `info.lua`
--- pass `"accent"` and let the host pick the right colour.
-local function color_for(level)
-    if level == "error" then return "error" end
-    if level == "warn" then return "warn" end
-    return "info"
-end
 
 -- Wall-clock seconds. `os.time()` ticks even while the host idles,
 -- which is what we need for "expire after N seconds even if the
@@ -85,12 +83,11 @@ ttymap.api.frame.on_tick(function(map)
     local n = #entries
     for i = n, 1, -1 do
         local e = entries[i]
-        local color = color_for(e.level)
         local inner = " " .. e.message .. " "
         local border = string.rep("─", dwidth(inner))
-        map:text_anchored("top-left", row,     "╭" .. border .. "╮", color)
-        map:text_anchored("top-left", row + 1, "│" .. inner .. "│",  color)
-        map:text_anchored("top-left", row + 2, "╰" .. border .. "╯", color)
+        map:text_anchored("top-left", row,     "╭" .. border .. "╮", "accent")
+        map:text_anchored("top-left", row + 1, "│" .. inner .. "│",  "accent")
+        map:text_anchored("top-left", row + 2, "╰" .. border .. "╯", "accent")
         row = row + 3
         if i > 1 then row = row + 1 end  -- gap before next popup
     end
