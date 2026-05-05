@@ -90,7 +90,7 @@ local function open()
             { key = "q / Esc",      label = "close" },
         },
         render = build_lines,
-        handle_event = function(key)
+        handle_key = function(key)
             if sidebar.is_close_key(key) then
                 close()
                 return nil

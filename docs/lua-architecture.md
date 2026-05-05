@@ -165,7 +165,7 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
 
 - **`ttymap.api.card.open(spec) -> CardHandle`** — push a focused
   side-panel `LuaCardComponent` onto the compositor stack. Spec
-  carries `layout`, `render`, `handle_event`, `footer_hints`, `name`.
+  carries `layout`, `render`, `handle_key`, `footer_hints`, `name`.
 - **`ttymap.api.palette.open(spec) -> PaletteHandle`** — push a
   palette-mode component. Spec carries `prompt`, `submit_mode`,
   `filter`, `items`, `execute`, `cancel`, `is_loading`. (No `poll` —

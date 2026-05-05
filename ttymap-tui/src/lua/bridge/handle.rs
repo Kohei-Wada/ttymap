@@ -75,7 +75,7 @@ impl LuaBridgeHandle {
     /// want different recovery for "plugin opted out of this hook"
     /// vs "plugin tried but threw" — e.g.
     /// [`LuaCardComponent`](super::card_component::LuaCardComponent)'s
-    /// `handle_event` maps the former to `KeyAction::Ignore`
+    /// `handle_key` maps the former to `KeyAction::Ignore`
     /// (forward to base) and the latter to `KeyAction::Consume`
     /// (don't leak buggy keys).
     pub fn try_call<A, R>(&self, method: &str, args: A) -> CallOutcome<R>

@@ -4,7 +4,7 @@
 //! Spec table fields (all optional):
 //! - `name = "..."` — display label shown in the focused-footer chip
 //! - `render = function() return lines end` — panel body
-//! - `handle_event = function(key) return action end` — focused keys
+//! - `handle_key = function(key) return action end` — focused keys
 //! - `footer_hints = { {key, label}, ... }` — focused footer hints
 //!
 //! All `LuaCardComponent`s render in the left sidebar — there's no
@@ -62,7 +62,7 @@ use crate::theme::StyleKind;
 /// the matching [`CardHandle`](super::card_handle::CardHandle)
 /// enqueues an [`Op::Close`](crate::compositor::op::Op::Close) keyed by the
 /// reserved [`CardId`](crate::compositor::CardId), or when
-/// the spec's `handle_event` returns `{ close = true }`.
+/// the spec's `handle_key` returns `{ close = true }`.
 pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
     /// log tag (= identification used in warnings).
@@ -98,8 +98,8 @@ pub struct LuaCardComponent {
     scroll_offset: std::cell::Cell<u16>,
     /// Last rendered inner height of this section's panel (i.e.
     /// `area - frame border`). Cached so PageUp / PageDown / C-d /
-    /// C-u in `handle_event` can use the *current* slot height as
-    /// the page step size — `handle_event` itself has no Rect.
+    /// C-u in `handle_key` can use the *current* slot height as
+    /// the page step size — `handle_key` itself has no Rect.
     /// Defaults to a sane fallback (10) when no frame has rendered
     /// yet.
     last_inner_height: std::cell::Cell<u16>,
@@ -198,11 +198,11 @@ impl LuaCardComponent {
         }
     }
 
-    /// Run the Lua side of `handle_event` and return the host action
+    /// Run the Lua side of `handle_key` and return the host action
     /// the script asked for.
     ///
     /// Three outcomes:
-    /// - **No `handle_event` field** → `KeyAction::Ignore`. Mirrors
+    /// - **No `handle_key` field** → `KeyAction::Ignore`. Mirrors
     ///   the Component trait's default impl: the spec opts out of
     ///   keymap consumption and the event flows to the base layer.
     /// - **Lua returned `nil`** → `KeyAction::Consume`. The handler
@@ -213,7 +213,7 @@ impl LuaCardComponent {
     ///   else (including a malformed table or a runtime error) logs
     ///   a warning and falls back to `Consume` so a buggy plugin
     ///   can't accidentally leak its keys to the rest of the app.
-    fn dispatch_event(&self, event: KeyEvent) -> KeyAction {
+    fn dispatch_key(&self, event: KeyEvent) -> KeyAction {
         let key = match self.build_key_table(event) {
             Ok(k) => k,
             Err(e) => {
@@ -225,7 +225,7 @@ impl LuaCardComponent {
                 return KeyAction::Consume;
             }
         };
-        match self.handle.try_call::<_, mlua::Value>("handle_event", key) {
+        match self.handle.try_call::<_, mlua::Value>("handle_key", key) {
             CallOutcome::Ok(ret) => KeyAction::from_lua_return(ret),
             CallOutcome::Missing => KeyAction::Ignore,
             CallOutcome::Errored => KeyAction::Consume,
@@ -347,8 +347,8 @@ impl LuaCardComponent {
 }
 
 impl Component for LuaCardComponent {
-    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
-        let action = self.dispatch_event(event);
+    fn handle_key(&mut self, event: KeyEvent, win: &mut Window) {
+        let action = self.dispatch_key(event);
 
         // When the Lua spec didn't consume the event, the bridge
         // applies built-in scroll keys so overflow content is
@@ -406,7 +406,7 @@ impl Component for LuaCardComponent {
         // or width logic needed.
         let area = win.area();
         let inner = win.panel(area, self.display);
-        // Snapshot the slot's content height so handle_event can use
+        // Snapshot the slot's content height so handle_key can use
         // it as the page step for PageUp / PageDown / C-d / C-u
         // without computing layout itself.
         self.last_inner_height.set(inner.height);
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn missing_handler_dispatches_to_ignore() {
         let c = make(r#"return { name = "noop" }"#, "noop");
-        assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Ignore);
+        assert_eq!(c.dispatch_key(key(KeyCode::Esc)), KeyAction::Ignore);
     }
 
     #[test]
@@ -528,14 +528,11 @@ mod tests {
         let c = make(
             r#"return {
                 name = "modal",
-                handle_event = function(_) return nil end,
+                handle_key = function(_) return nil end,
             }"#,
             "modal",
         );
-        assert_eq!(
-            c.dispatch_event(key(KeyCode::Char('a'))),
-            KeyAction::Consume
-        );
+        assert_eq!(c.dispatch_key(key(KeyCode::Char('a'))), KeyAction::Consume);
     }
 
     #[test]
@@ -543,18 +540,15 @@ mod tests {
         let c = make(
             r#"return {
                 name = "esc",
-                handle_event = function(k)
+                handle_key = function(k)
                     if k.code == "Esc" then return { close = true } end
                     return nil
                 end,
             }"#,
             "esc",
         );
-        assert_eq!(c.dispatch_event(key(KeyCode::Esc)), KeyAction::Close);
-        assert_eq!(
-            c.dispatch_event(key(KeyCode::Char('x'))),
-            KeyAction::Consume
-        );
+        assert_eq!(c.dispatch_key(key(KeyCode::Esc)), KeyAction::Close);
+        assert_eq!(c.dispatch_key(key(KeyCode::Char('x'))), KeyAction::Consume);
     }
 
     #[test]
@@ -562,11 +556,11 @@ mod tests {
         let c = make(
             r#"return {
                 name = "passthrough",
-                handle_event = function(_) return { ignore = true } end,
+                handle_key = function(_) return { ignore = true } end,
             }"#,
             "passthrough",
         );
-        assert_eq!(c.dispatch_event(key(KeyCode::Char('q'))), KeyAction::Ignore);
+        assert_eq!(c.dispatch_key(key(KeyCode::Char('q'))), KeyAction::Ignore);
     }
 
     #[test]
@@ -574,14 +568,11 @@ mod tests {
         let c = make(
             r#"return {
                 name = "broken",
-                handle_event = function(_) error("kaboom") end,
+                handle_key = function(_) error("kaboom") end,
             }"#,
             "broken",
         );
-        assert_eq!(
-            c.dispatch_event(key(KeyCode::Char('a'))),
-            KeyAction::Consume
-        );
+        assert_eq!(c.dispatch_key(key(KeyCode::Char('a'))), KeyAction::Consume);
     }
 
     #[test]
@@ -589,14 +580,11 @@ mod tests {
         let c = make(
             r#"return {
                 name = "weird",
-                handle_event = function(_) return "yolo" end,
+                handle_key = function(_) return "yolo" end,
             }"#,
             "weird",
         );
-        assert_eq!(
-            c.dispatch_event(key(KeyCode::Char('z'))),
-            KeyAction::Consume
-        );
+        assert_eq!(c.dispatch_key(key(KeyCode::Char('z'))), KeyAction::Consume);
     }
 
     // Close coverage moved to `card_handle::tests::close_enqueues_op_close_idempotent`:

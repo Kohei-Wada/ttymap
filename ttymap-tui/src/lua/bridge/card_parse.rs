@@ -138,7 +138,7 @@ pub(super) fn style_from_str(name: Option<&str>) -> StyleKind {
     }
 }
 
-/// What the Lua `handle_event` handler asked the host to do.
+/// What the Lua `handle_key` handler asked the host to do.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum KeyAction {
     /// Pass the event to the base layer (Component default).

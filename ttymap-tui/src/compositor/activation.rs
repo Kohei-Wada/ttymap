@@ -36,7 +36,7 @@ pub struct Activation {
 /// Palette entry description. Selection always pushes a fresh
 /// component on the stack — there's no toggle/spawn distinction now
 /// that the compositor doesn't dedup. A plugin that wants "close on
-/// re-select" closes itself in its own `handle_event`.
+/// re-select" closes itself in its own `handle_key`.
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,

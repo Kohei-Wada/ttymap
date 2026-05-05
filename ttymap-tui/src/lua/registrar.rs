@@ -75,7 +75,7 @@ impl Registrar {
 
     /// Add a palette entry that pushes a fresh component on
     /// selection. Plugins that want toggle behavior implement self-
-    /// close in their own `handle_event`.
+    /// close in their own `handle_key`.
     pub fn add_palette<F, C>(
         &mut self,
         label: impl Into<String>,
