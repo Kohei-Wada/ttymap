@@ -111,6 +111,34 @@ PMTiles), error handling policy
 - **Write a plugin** — see [docs/lua-plugin-migration.md](docs/lua-plugin-migration.md). Drop a `*.lua` into `~/.config/ttymap/plugin/` to test without rebuilding. Simplest fetch+render: `runtime/plugin/quake.lua`. Full panel + selection + modal: `runtime/plugin/wiki/`. Debounced palette picker: `runtime/plugin/search/`.
 - **Fix a bug** — PRs welcome. The pre-commit hook runs tests, clippy, and rustfmt.
 
+## Platform support
+
+CI runs on Linux, macOS, and Windows for every push (see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Linux is the
+primary daily-driver target; macOS and Windows are smoke-tested but
+get less interactive testing.
+
+### Troubleshooting
+
+- **Windows: install via `cargo` directly** — `make install` assumes a
+  POSIX shell. Until the Makefile grows a Windows path, build with
+  `cargo build --release` and copy `target/release/ttymap.exe` plus
+  the `ttymap-tui/runtime/` directory to wherever you want them. Set
+  `TTYMAP_RUNTIME=path\to\runtime` if you don't place it under the
+  platform-default data dir (`%APPDATA%\ttymap\runtime`).
+- **Windows: use Windows Terminal, not legacy ConHost** — Braille
+  glyphs and xterm-256 colours need a font with full Braille coverage
+  (Cascadia Mono works) and a terminal that respects 256-colour ANSI.
+  Legacy ConHost (the default `cmd.exe` window pre-Windows 11) renders
+  Braille as boxes and clamps to 16 colours.
+- **macOS: tile cache & exported frames live under
+  `~/Library/Caches/ttymap` and `~/Library/Application Support/ttymap`**
+  — different from Linux's XDG paths. The `directories` crate handles
+  this transparently; only relevant if you script around the cache.
+- **Mouse drag/scroll on Windows** — works in Windows Terminal; some
+  third-party emulators don't forward mouse events. Toggle off via
+  config if your terminal traps them.
+
 ## License
 
 Dual-licensed under either of
