@@ -100,6 +100,7 @@ end
 local function open()
     if w then return end
     w = ttymap.api.card.open({
+        name = "aircraft",
         footer_hints = {
             { key = "C-n/C-p", label = "select" },
             { key = "Enter",   label = "jump" },

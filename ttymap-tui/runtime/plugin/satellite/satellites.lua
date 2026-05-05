@@ -322,6 +322,7 @@ function M.make(specs)
         end
 
         w = ttymap.api.card.open({
+            name = "satellite",
             footer_hints = hints,
             items    = build_items,
             selected = selected_index,

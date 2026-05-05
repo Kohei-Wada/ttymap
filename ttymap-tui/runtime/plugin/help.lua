@@ -85,6 +85,7 @@ end
 local function open()
     if w then return end
     w = ttymap.api.card.open({
+        name = "help",
         footer_hints = {
             { key = "↑↓ PgUp PgDn", label = "scroll" },
             { key = "q / Esc",      label = "close" },
