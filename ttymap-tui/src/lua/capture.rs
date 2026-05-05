@@ -42,8 +42,8 @@ pub struct KeybindSpec {
 /// One subscription declared via `ttymap.on_event(name, fn)` (or its
 /// `ttymap.api.frame.on_tick(fn)` sugar, which lowers to event name
 /// `"tick"`). The host walks these at register time and pushes one
-/// [`Subscriber`](crate::lua::registry::Subscriber) into the
-/// [`LuaEventBus`](crate::lua::LuaEventBus) bucket for `event_name`.
+/// [`Subscriber::Lua`](crate::event::Subscriber) into the
+/// [`EventBus`](crate::event::EventBus) bucket for `event_name`.
 pub struct EventSubscription {
     pub event_name: &'static str,
     pub callback: RegistryKey,

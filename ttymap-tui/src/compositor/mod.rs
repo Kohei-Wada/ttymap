@@ -10,7 +10,7 @@
 //!
 //! World-space map overlays (wiki markers etc.) are *not* a
 //! `Component` concern. Every Lua plugin's per-frame map paint runs
-//! through [`crate::lua::LuaEventBus::dispatch_tick`] (called from
+//! through [`crate::lua::tick::dispatch_tick`] (called from
 //! [`crate::app::ui::draw`]) which hands the plugin a [`MapApi`] it
 //! draws into directly — tying map-side rendering to plugin
 //! lifetime is plugin-side policy (a captured `CardHandle` that's
@@ -19,7 +19,7 @@
 //! Plugin activation primitives ([`Activation`], [`PaletteEntry`])
 //! live here; the Lua subsystem's [`crate::lua::Registrar`]
 //! collection bucket bundles them with its own
-//! [`crate::lua::LuaEventBus`] / [`crate::lua::api::LuaHostHandles`]
+//! [`crate::event::EventBus`] / [`crate::lua::api::LuaHostHandles`]
 //! at plugin-load time. `App` takes the finished bundle and never
 //! names a concrete plugin type. Compositor itself is unaware of
 //! Lua — it speaks only `Activation` / `PaletteEntry` / `Component`.
@@ -432,6 +432,7 @@ mod tests {
                 Op::Push { id, component } => c.push_with_id(id, component),
                 Op::Close(id) => c.close_by_id(id),
                 Op::Command(intent) => intents.push(intent),
+                Op::Publish(_) => {}
             }
         }
         intents

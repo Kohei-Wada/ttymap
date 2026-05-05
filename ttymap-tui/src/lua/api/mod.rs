@@ -14,7 +14,7 @@
 //!   `map` table handed to `on_tick` callbacks (`make_map_table`,
 //!   wrapping the host-side [`crate::lua::MapApi`])
 //! - `config`, `help`, `log`, `tile` — host-state namespaces
-//! - `imperative` — `ttymap.api.{card,palette,frame,notify}` cluster
+//! - `imperative` — `ttymap.api.{card,palette,frame}` cluster
 //! - `register` — setup-time `ttymap.register_*` / `on_event` capture
 //!
 //! Surface today:
@@ -59,12 +59,14 @@
 //!                                            calls per script are stacked
 //! ttymap.notify(msg [, opts])               post a transient status message;
 //!                                            opts.level is `info` (default) /
-//!                                            `warn` / `error`. The bundled
-//!                                            `notify` plugin renders recent
+//!                                            `warn` / `error`. Lowers to
+//!                                            `Op::Publish(Event::Notify)`;
+//!                                            the bundled `notify.lua`
+//!                                            subscriber renders recent
 //!                                            entries in a corner.
-//! ttymap.api.notify.recent(ttl_ms) -> list  active notifications (age < ttl)
-//!                                            consumed by the bundled `notify`
-//!                                            plugin's per-frame renderer
+//! ttymap.on_event("notify", fn)              subscribe to bus events;
+//!                                            `notify` payload is
+//!                                            `{ message, level }` table.
 //! ```
 //!
 //! `ttymap.map:jump(...)` is fire-and-forget from the Lua side; the
@@ -99,12 +101,13 @@ use map::HostMap;
 use tile::HostTile;
 
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use mlua::{Lua, Table};
 
+use crate::compositor::op::Op;
+use crate::event::{Event, Level};
 use crate::lua::capture::CaptureSlot;
-use crate::lua::host::{LuaHostHandles, LuaHostShared, NotifyEntry};
+use crate::lua::host::{LuaHostHandles, LuaHostShared};
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::shared::http::HttpClient;
 
@@ -167,31 +170,32 @@ pub fn install(
     // plugin's `name` / `label` fields.
     register::install(lua, &ttymap, slot.clone())?;
 
-    // Imperative primitives (`ttymap.api.{card,palette,frame,notify}`)
-    // — runtime-time `open` / `export` / `on_tick` / `recent` calls a
-    // plugin makes from inside its callbacks.
-    imperative::install(lua, &ttymap, tag, slot, ops, shared.clone())?;
+    // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
+    // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
+    // makes from inside its callbacks.
+    imperative::install(lua, &ttymap, tag, slot, ops.clone(), shared.clone())?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
     // Top-level write surface for transient status messages. Kept as
     // a plain function (not method-style) so callers write
     // `ttymap.notify("ok")` instead of `ttymap.notify:post("ok")` —
-    // the call site is the common one; the read side under
-    // `ttymap.api.notify.recent` is consumed by exactly one plugin
-    // (the bundled renderer).
-    let shared_for_notify = shared.clone();
+    // the call site is the common one. The notification rides the
+    // shared `OpsBuffer` as `Op::Publish(Event::Notify {...})`; the
+    // App-side dispatcher hands it to `EventBus::publish`, which
+    // fans out to whoever subscribed (today: bundled `notify.lua`).
+    let ops_for_notify = ops;
     ttymap.set(
         "notify",
         lua.create_function(move |_, (msg, opts): (String, Option<Table>)| {
             let level = opts
                 .and_then(|t| t.get::<String>("level").ok())
-                .unwrap_or_else(|| "info".to_string());
-            shared_for_notify.push_notification(NotifyEntry {
+                .map(|s| Level::parse(&s))
+                .unwrap_or(Level::Info);
+            ops_for_notify.borrow_mut().push(Op::Publish(Event::Notify {
                 message: msg,
                 level,
-                posted_at: Instant::now(),
-            });
+            }));
             Ok(())
         })?,
     )?;
@@ -208,7 +212,6 @@ mod tests {
     use super::*;
     use crate::UserCommand;
     use crate::lua::capture::new_capture_slot;
-    use crate::lua::host::NOTIFY_RING_CAP;
     use ttymap_engine::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
@@ -324,19 +327,56 @@ mod tests {
     }
 
     #[test]
-    fn api_frame_export_pushes_appmsg_export_frame() {
-        let (lua, _handles, ops) = install_for_test();
-        lua.load("ttymap.api.frame.export()").exec().expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
-        assert_eq!(drained.len(), 1);
-        assert!(
-            matches!(
-                &drained[0],
-                crate::compositor::op::Op::Command(UserCommand::ExportFrame)
-            ),
-            "got {:?}",
-            drained[0]
-        );
+    fn api_frame_to_ansi_returns_nil_until_a_frame_arrives() {
+        // No frame has been mirrored into the shared cell yet, so
+        // the read side returns nil. Plugins gate their export on
+        // this and surface "no frame yet" via `ttymap.notify`.
+        let (lua, _handles, _ops) = install_for_test();
+        let v: mlua::Value = lua
+            .load(r#"return ttymap.api.frame.to_ansi()"#)
+            .eval()
+            .expect("eval");
+        assert!(matches!(v, mlua::Value::Nil), "got {:?}", v);
+    }
+
+    #[test]
+    fn api_frame_to_ansi_returns_string_after_frame_set() {
+        // After a [`MapFrame`] is written into the shared cell —
+        // which `App::handle_event` does on every `FrameReady` —
+        // `to_ansi()` returns the rendered string.
+        use ttymap_engine::geo::LonLat;
+        use ttymap_engine::map::render::frame::MapFrame;
+
+        let lua = mlua::Lua::new();
+        let shared = LuaHostShared::empty();
+        let slot = new_capture_slot();
+        let _handles = install(
+            &lua,
+            "lua-test",
+            shared.clone(),
+            slot,
+            crate::compositor::op::new_ops_buffer(),
+        )
+        .expect("install ttymap table");
+
+        // Empty frame still renders to something deterministic
+        // (an empty string per `MapFrame::to_ansi` semantics).
+        {
+            let mut slot = shared.current_frame.lock().unwrap();
+            *slot = Some(MapFrame {
+                cells: Vec::new(),
+                cols: 0,
+                rows: 0,
+                center: LonLat { lon: 0.0, lat: 0.0 },
+                zoom: 1.0,
+            });
+        }
+
+        let s: String = lua
+            .load(r#"return ttymap.api.frame.to_ansi()"#)
+            .eval()
+            .expect("eval");
+        assert_eq!(s, "");
     }
 
     #[test]
@@ -523,24 +563,12 @@ mod tests {
     }
 
     #[test]
-    fn notify_writes_into_shared_ring_and_recent_filters_by_ttl() {
-        // `ttymap.notify(msg, opts)` writes a [`NotifyEntry`] into the
-        // shared ring; `ttymap.api.notify.recent(ttl_ms)` returns the
-        // currently-active subset so the bundled plugin can render.
-        // Default level is "info"; explicit `level = "warn" / "error"`
-        // round-trips. A long ttl shows everything; a zero ttl hides
-        // everything (nothing has age < 0ms).
-        let lua = mlua::Lua::new();
-        let shared = LuaHostShared::empty();
-        let slot = new_capture_slot();
-        let _handles = install(
-            &lua,
-            "lua-test",
-            shared.clone(),
-            slot,
-            crate::compositor::op::new_ops_buffer(),
-        )
-        .expect("install ttymap table");
+    fn notify_lua_api_enqueues_publish_op_with_typed_level() {
+        // `ttymap.notify(msg, opts)` enqueues `Op::Publish(Event::Notify
+        // {...})` onto the shared `OpsBuffer`. `App::apply_ops` later
+        // hands it to `EventBus::publish`. Default level is `info`;
+        // explicit `level = "warn" / "error"` parses through.
+        let (lua, _handles, ops) = install_for_test();
 
         lua.load(
             r#"
@@ -550,68 +578,20 @@ mod tests {
             "#,
         )
         .exec()
-        .expect("notify writes");
+        .expect("notify lua exec");
 
-        // Direct buffer inspection — independent of the recent()
-        // surface so the test still pinpoints whichever side is wrong.
-        {
-            let buf = shared.notifications.lock().expect("lock");
-            assert_eq!(buf.len(), 3, "three notify calls -> three entries");
-            assert_eq!(buf[0].level, "info");
-            assert_eq!(buf[1].level, "warn");
-            assert_eq!(buf[2].level, "error");
-            assert_eq!(buf[2].message, "boom");
-        }
-
-        // recent() with a generous ttl returns oldest-first; with
-        // zero ttl returns nothing (every entry has age >= 0).
-        let visible: i64 = lua
-            .load(r#"return #ttymap.api.notify.recent(60000)"#)
-            .eval()
-            .expect("recent(60000)");
-        assert_eq!(visible, 3);
-        let none: i64 = lua
-            .load(r#"return #ttymap.api.notify.recent(0)"#)
-            .eval()
-            .expect("recent(0)");
-        assert_eq!(none, 0);
-    }
-
-    #[test]
-    fn notify_ring_evicts_oldest_on_overflow() {
-        // Past `NOTIFY_RING_CAP` writes the oldest entry must be
-        // dropped so a flurry never strands the most recent signal
-        // behind stale ones. Asserts the eviction happens by checking
-        // that the head shifts forward, not that the cap is honoured
-        // (cap is an internal invariant; what plugins observe is
-        // "newest always wins").
-        let lua = mlua::Lua::new();
-        let shared = LuaHostShared::empty();
-        let slot = new_capture_slot();
-        let _handles = install(
-            &lua,
-            "lua-test",
-            shared.clone(),
-            slot,
-            crate::compositor::op::new_ops_buffer(),
-        )
-        .expect("install ttymap table");
-        for i in 0..(NOTIFY_RING_CAP + 4) {
-            lua.load(format!(r#"ttymap.notify("msg-{}")"#, i))
-                .exec()
-                .expect("exec");
-        }
-        let buf = shared.notifications.lock().expect("lock");
-        assert_eq!(
-            buf.len(),
-            NOTIFY_RING_CAP,
-            "buffer must cap at {NOTIFY_RING_CAP}"
-        );
-        assert_eq!(
-            buf.front().expect("non-empty").message,
-            format!("msg-{}", 4),
-            "first 4 entries should have been evicted"
-        );
+        let drained: Vec<Op> = std::mem::take(&mut *ops.borrow_mut());
+        let notifies: Vec<(String, Level)> = drained
+            .into_iter()
+            .filter_map(|op| match op {
+                Op::Publish(Event::Notify { message, level }) => Some((message, level)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notifies.len(), 3, "three notify calls -> three publishes");
+        assert_eq!(notifies[0], ("ok".to_string(), Level::Info));
+        assert_eq!(notifies[1], ("watch out".to_string(), Level::Warn));
+        assert_eq!(notifies[2], ("boom".to_string(), Level::Error));
     }
 
     #[test]

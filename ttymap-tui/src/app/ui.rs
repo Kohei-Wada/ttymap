@@ -21,7 +21,7 @@ use ttymap_engine::map::render::overlay::UserPolyline;
 /// Draw the full screen. Caller passes the latest map snapshot
 /// (or `None` if the render thread hasn't produced one yet) plus
 /// the compositor; world-space overlays (wiki markers etc., painted
-/// by Lua plugins through `LuaEventBus::dispatch_tick`) and on-top
+/// by Lua plugins through `lua::tick::dispatch_tick`) and on-top
 /// panels (via `Component::render`) go through the same draw pass
 /// as the map.
 /// Per-frame inputs collected by [`App::render_into`]. Bundled

@@ -72,6 +72,14 @@ pub mod input;
 /// File-based logging to XDG state directory.
 pub mod logging;
 
+/// Pub/sub event subsystem — Lua-agnostic primitive at the
+/// integration point between Rust core and Lua plugin runtime.
+/// Producers (Rust dispatcher, Lua bridge) call
+/// [`event::EventBus::publish`]; subscribers (Rust closures, Lua
+/// callbacks) react. Cross-thread publishes ride the App-level mpsc
+/// via [`app::AppEvent::Bus`](app::AppEvent::Bus).
+pub mod event;
+
 /// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored). The
 /// bridge lives here: api/ exposes the `ttymap` global to scripts,
 /// bridge/ adapts Lua specs to Rust traits (`Component`,

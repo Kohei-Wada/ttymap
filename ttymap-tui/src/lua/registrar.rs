@@ -22,7 +22,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::compositor::{Activation, Component, Context, PaletteEntry, SpawnComponent};
-use crate::lua::LuaEventBus;
+use crate::event::EventBus;
 use crate::lua::host::LuaHostHandles;
 
 #[derive(Default)]
@@ -34,7 +34,7 @@ pub struct Registrar {
     /// (zero or more times per script), and ticked once per frame
     /// from `App::run` against the live `MapApi`. The unified
     /// per-frame work mechanism for the nvim-style plugin API.
-    pub event_bus: LuaEventBus,
+    pub event_bus: EventBus,
     /// Setup-state [`LuaHostHandles`] for every plugin script: the
     /// App takes ownership of this `Vec` in
     /// [`crate::app::App::new`] and refreshes each handle's shared

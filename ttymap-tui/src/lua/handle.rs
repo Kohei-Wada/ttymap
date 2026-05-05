@@ -2,16 +2,20 @@
 //!
 //! App stores one of these as a private field. It exposes
 //! **semantic** methods (`notify_*`, `tick`, `sync_view`,
-//! `drain_ops`) so App never names the [`LuaEventBus`], the
-//! event-name constants, or the per-plugin host channels. The
-//! "App doesn't know how Lua is wired internally" boundary —
-//! all bus dispatch and host-state plumbing lives behind this type.
+//! `drain_ops`) so App never names the [`EventBus`], the event
+//! variants, or the per-plugin host channels. The "App doesn't know
+//! how Lua is wired internally" boundary — all bus dispatch and
+//! host-state plumbing lives behind this type.
+
+use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
+use crate::event::{Event, EventBus, Level};
 use crate::lua::MapApi;
-use crate::lua::host::LuaHostHandles;
-use crate::lua::registry::{LuaEventBus, names};
+use crate::lua::host::{LuaHostHandles, LuaHostShared};
+use crate::lua::tick;
 use ttymap_engine::geo::LonLat;
+use ttymap_engine::map::render::frame::MapFrame;
 
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`] and lifted out of the registrar by
@@ -20,20 +24,41 @@ use ttymap_engine::geo::LonLat;
 /// semantic methods rather than touching the bus or channels
 /// directly.
 pub struct LuaHandle {
-    bus: LuaEventBus,
+    bus: EventBus,
     host_handles: Vec<LuaHostHandles>,
     /// Shared buffer that Lua callbacks push [`Op`]s into; App
     /// drains via [`Self::drain_ops`] once per loop iteration.
     ops: OpsBuffer,
+    /// Read-mostly snapshot the Lua bridge exposes via `ttymap.*`
+    /// userdatas. The handle keeps a clone so App can write into
+    /// shared cells (e.g. `current_frame`) through semantic methods
+    /// like [`Self::set_current_frame`] without naming
+    /// `LuaHostShared` directly.
+    shared: Arc<LuaHostShared>,
 }
 
 impl LuaHandle {
-    pub fn new(bus: LuaEventBus, host_handles: Vec<LuaHostHandles>, ops: OpsBuffer) -> Self {
+    pub fn new(
+        bus: EventBus,
+        host_handles: Vec<LuaHostHandles>,
+        ops: OpsBuffer,
+        shared: Arc<LuaHostShared>,
+    ) -> Self {
         Self {
             bus,
             host_handles,
             ops,
+            shared,
         }
+    }
+
+    /// Borrow the underlying [`EventBus`] for direct publishes (e.g.
+    /// the App-mpsc drain branch that handles
+    /// [`crate::app::AppEvent::Bus`] hands the event straight to
+    /// `bus.publish`). Most callers should prefer the `notify_*`
+    /// semantic methods below.
+    pub fn bus(&self) -> &EventBus {
+        &self.bus
     }
 
     /// Take every [`Op`] enqueued by Lua callbacks since the last
@@ -46,46 +71,63 @@ impl LuaHandle {
     /// Fire the per-frame `"tick"` event. Called by `ui::draw` once
     /// per frame against the live [`MapApi`].
     pub fn tick(&self, map: &mut MapApi<'_>) {
-        self.bus.dispatch_tick(map);
+        tick::dispatch_tick(&self.bus, map);
     }
 
-    /// Notify Lua observers that a fresh frame was drained from the
+    /// Notify observers that a fresh frame was drained from the
     /// render thread.
     pub fn notify_frame_ready(&self) {
-        self.bus.dispatch(names::FRAME_READY, ());
+        self.bus.publish(Event::FrameReady);
     }
 
-    /// Notify Lua observers that the map centred on a new location.
+    /// Mirror the latest [`MapFrame`] into the shared cell that
+    /// `ttymap.api.frame.to_ansi()` reads from. Called by App on
+    /// every `AppEvent::FrameReady` before [`Self::notify_frame_ready`]
+    /// so subscribers that immediately query `to_ansi()` see the
+    /// fresh frame.
+    pub fn set_current_frame(&self, frame: MapFrame) {
+        if let Ok(mut slot) = self.shared.current_frame.lock() {
+            *slot = Some(frame);
+        }
+    }
+
+    /// Notify observers that the map centred on a new location.
     pub fn notify_map_jumped(&self, ll: LonLat) {
-        self.bus.dispatch(names::MAP_JUMPED, (ll.lon, ll.lat));
+        self.bus.publish(Event::MapJumped(ll));
     }
 
-    /// Notify Lua observers that the zoom level was set explicitly
+    /// Notify observers that the zoom level was set explicitly
     /// (via `:zoom` or `MapAction::SetZoom`).
     pub fn notify_map_zoom_set(&self, zoom: f64) {
-        self.bus.dispatch(names::MAP_ZOOM_SET, zoom);
+        self.bus.publish(Event::MapZoomSet(zoom));
     }
 
-    /// Notify Lua observers that the map flew to a (centre, zoom)
-    /// pair in one combined dispatch.
+    /// Notify observers that the map flew to a (centre, zoom) pair
+    /// in one combined dispatch.
     pub fn notify_map_flew_to(&self, center: LonLat, zoom: f64) {
-        self.bus
-            .dispatch(names::MAP_FLEW_TO, (center.lon, center.lat, zoom));
+        self.bus.publish(Event::MapFlewTo(center, zoom));
     }
 
-    /// Notify Lua observers that the active theme switched.
+    /// Notify observers that the active theme switched.
     pub fn notify_theme_changed(&self, theme_name: &str) {
-        self.bus.dispatch(names::THEME_CHANGED, theme_name);
+        self.bus
+            .publish(Event::ThemeChanged(theme_name.to_string()));
     }
 
-    /// Notify Lua observers that the terminal resized.
+    /// Notify observers that the terminal resized.
     pub fn notify_resized(&self, cols: u16, rows: u16) {
-        self.bus.dispatch(names::RESIZED, (cols, rows));
+        self.bus.publish(Event::Resized(cols, rows));
     }
 
-    /// Notify Lua observers that an export wrote a frame to disk.
-    pub fn notify_frame_exported(&self) {
-        self.bus.dispatch(names::FRAME_EXPORTED, ());
+    /// Push a transient toast onto the bus. The bundled `notify.lua`
+    /// renderer subscribes and paints recent ones top-left for ~3s.
+    /// Callable from any main-thread Rust path; cross-thread
+    /// producers route through `AppEvent::Bus` instead.
+    pub fn notify(&self, message: impl Into<String>, level: Level) {
+        self.bus.publish(Event::Notify {
+            message: message.into(),
+            level,
+        });
     }
 
     /// Refresh the per-plugin `center` / `zoom` mirror cells that

@@ -22,8 +22,8 @@ pub mod init_lua;
 pub mod loader;
 pub mod map_api;
 pub mod registrar;
-pub mod registry;
 pub mod runtimepath;
+pub mod tick;
 pub mod vm;
 
 pub use bridge::palette_provider::LuaPaletteProvider;
@@ -32,7 +32,6 @@ pub use host::LuaHostShared;
 pub use init_lua::load_init_lua;
 pub use map_api::MapApi;
 pub use registrar::Registrar;
-pub use registry::LuaEventBus;
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use vm::new_lua;
 
@@ -122,19 +121,17 @@ pub fn build_subsystem(
         })
         .collect();
 
-    // `shared` is kept alive via Arc clones inside every Lua plugin's
-    // setup state and any `LuaPaletteProvider` it creates — dropping
-    // the local handle here is fine.
-    drop(shared);
-
     // Lift the runtime parts (bus + per-plugin host channels) out of
     // the registrar and wrap them into the [`LuaHandle`] right here,
     // so callers never see the bus or the channels and never have to
-    // assemble a handle themselves.
+    // assemble a handle themselves. `shared` lives on as the handle's
+    // own clone — App writes into shared cells (e.g. `current_frame`)
+    // through `LuaHandle` semantic methods.
     let handle = LuaHandle::new(
         std::mem::take(&mut r.event_bus),
         std::mem::take(&mut r.lua_host_handles),
         ops,
+        shared,
     );
 
     LuaSubsystem {

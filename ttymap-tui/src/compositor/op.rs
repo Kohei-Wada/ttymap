@@ -23,6 +23,7 @@ use std::rc::Rc;
 
 use crate::UserCommand;
 use crate::compositor::{CardId, Component};
+use crate::event::Event;
 
 /// A same-thread request from a component (Rust or Lua-backed) to
 /// the host. Component hooks emit these via the
@@ -50,6 +51,15 @@ pub enum Op {
     /// canonical command vocabulary every other emitter (keymap,
     /// mouse, palette) already speaks.
     Command(UserCommand),
+    /// Publish an [`Event`] onto the bus for fan-out to subscribers.
+    /// Emitted by Lua-facing producers like `ttymap.notify(msg)` —
+    /// the bus is owned by [`crate::lua::LuaHandle`], so reaching it
+    /// from inside a Lua callback would require sharing an `Rc<EventBus>`
+    /// across the bridge. Riding the existing buffer keeps Lua's
+    /// dependency on the host minimal: it just enqueues a typed
+    /// effect, and `App::apply_ops` calls `bus.publish` on the
+    /// main-thread side.
+    Publish(Event),
 }
 
 impl std::fmt::Debug for Op {
@@ -58,6 +68,7 @@ impl std::fmt::Debug for Op {
             Self::Push { id, .. } => f.debug_struct("Push").field("id", id).finish(),
             Self::Close(id) => f.debug_tuple("Close").field(id).finish(),
             Self::Command(c) => f.debug_tuple("Command").field(c).finish(),
+            Self::Publish(e) => f.debug_tuple("Publish").field(&e.name()).finish(),
         }
     }
 }

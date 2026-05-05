@@ -73,8 +73,8 @@ fn install_register_keybind(lua: &Lua, ttymap: &Table, slot: CaptureSlot) -> mlu
 /// `ttymap.on_event(name, fn)` — generic pub/sub subscription.
 /// Lower into a [`EventSubscription`] keyed by the leaked event
 /// name; the host walks them at register time and pushes one
-/// [`Subscriber`](crate::lua::registry::Subscriber) into the
-/// matching [`LuaEventBus`](crate::lua::LuaEventBus) bucket.
+/// [`Subscriber::Lua`](crate::event::Subscriber) into the matching
+/// [`EventBus`](crate::event::EventBus) bucket.
 ///
 /// The leak is bounded by `(unique event names) × plugins`,
 /// happens at register time only, and produces `&'static str`

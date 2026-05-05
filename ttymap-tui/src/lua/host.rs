@@ -6,26 +6,17 @@
 //! pure 1:1 with Lua namespaces.
 //!
 //! - [`LuaHostShared`] — read-mostly snapshot (attribution, geoip
-//!   endpoint, keymap rows, palette entries, notification ring).
-//!   Built once in [`crate::app::App::new`] and Arc-cloned into
-//!   each namespace userdata.
+//!   endpoint, keymap rows, palette entries). Built once in
+//!   [`crate::app::App::new`] and Arc-cloned into each namespace
+//!   userdata.
 //! - [`LuaHostHandles`] — per-plugin handle pair returned by
 //!   [`crate::lua::api::install`]; the host refreshes `center` /
 //!   `zoom` from any dispatch path that carries a `Window`.
 
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use ttymap_engine::geo::LonLat;
-
-/// Maximum number of pending notifications retained in the host's
-/// shared ring buffer. Sized to absorb a brief flurry (a search
-/// returning, a fetch erroring, a file exporting) without needing
-/// per-call resizing — at typical 3-second display TTL the buffer
-/// rarely hits cap, and on overflow we drop the oldest so newer
-/// signals are never starved.
-pub(crate) const NOTIFY_RING_CAP: usize = 16;
+use ttymap_engine::map::render::frame::MapFrame;
 
 /// Shared, mostly-immutable runtime data that every Lua plugin can
 /// query via the `ttymap` global. Built once in [`crate::app::App::new`]
@@ -57,25 +48,14 @@ pub struct LuaHostShared {
     /// register time) so it sees every plugin regardless of load
     /// order.
     pub palette_entries: Mutex<Vec<PluginEntry>>,
-    /// Transient status messages posted via `ttymap.notify(msg, opts)`.
-    /// The bundled `notify` plugin reads this each tick via
-    /// `ttymap.api.notify.recent(ttl_ms)` and renders entries that are
-    /// still within their TTL. A small ring (cap [`NOTIFY_RING_CAP`])
-    /// — overflow drops the oldest. Plain `Vec` because the volume is
-    /// tiny and the renderer iterates oldest-first by design.
-    pub notifications: Mutex<VecDeque<NotifyEntry>>,
-}
-
-/// One transient status message awaiting display. Held in
-/// [`LuaHostShared::notifications`]; the bundled `notify` plugin
-/// surfaces these via `ttymap.api.notify.recent(ttl_ms)`. `level` is a
-/// raw string ("info" / "warn" / "error") so renderers can map to
-/// theme colours without the host pre-committing to a palette.
-#[derive(Clone)]
-pub struct NotifyEntry {
-    pub message: String,
-    pub level: String,
-    pub posted_at: Instant,
+    /// Latest [`MapFrame`] drained from the render thread, mirrored
+    /// here for Lua's read side (`ttymap.api.frame.to_ansi()`).
+    /// `None` until the first frame arrives. App refreshes this on
+    /// every `AppEvent::FrameReady` via [`crate::lua::LuaHandle::set_current_frame`];
+    /// it never crosses threads (single main-thread accessor) but
+    /// uses `Mutex` for shape-uniformity with the other shared
+    /// fields and to keep `LuaHostShared` Sync.
+    pub current_frame: Mutex<Option<MapFrame>>,
 }
 
 /// One plugin's help-relevant metadata. Surfaced to Lua via
@@ -101,20 +81,7 @@ impl LuaHostShared {
             geoip_endpoint,
             keymap_entries,
             palette_entries: Mutex::new(Vec::new()),
-            notifications: Mutex::new(VecDeque::with_capacity(NOTIFY_RING_CAP)),
-        }
-    }
-
-    /// Append one notification to the shared ring buffer. Oldest
-    /// entry evicted on overflow so a flurry never starves the most
-    /// recent signal. Poisoned mutex is silently skipped — losing a
-    /// transient message is preferable to crashing the host.
-    pub fn push_notification(&self, entry: NotifyEntry) {
-        if let Ok(mut buf) = self.notifications.lock() {
-            if buf.len() >= NOTIFY_RING_CAP {
-                buf.pop_front();
-            }
-            buf.push_back(entry);
+            current_frame: Mutex::new(None),
         }
     }
 

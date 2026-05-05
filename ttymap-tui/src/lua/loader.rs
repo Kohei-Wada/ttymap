@@ -33,7 +33,6 @@ use crate::compositor::{Activation, PaletteEntry, SpawnComponent};
 use crate::lua::bridge;
 use crate::lua::host;
 use crate::lua::registrar::Registrar;
-use crate::lua::registry::Subscriber;
 
 /// Register every bundled Lua plugin with the registrar by walking
 /// `<layer>/plugin/*.lua` for each layer in `runtime_path`, in
@@ -106,18 +105,13 @@ pub(super) fn register_one(
 
     // Every `ttymap.on_event(name, fn)` (and its sugar
     // `ttymap.api.frame.on_tick(fn)` which lowers to event "tick")
-    // capture lands as a separate Subscriber. The setup-state Lua is
-    // cloned (cheap Arc bump) into each entry so the callback stays
-    // invokable for the program's lifetime. Order = registration order.
+    // capture lands on the bus as a Lua subscriber. The setup-state
+    // Lua is cloned (cheap Arc bump) into each entry so the callback
+    // stays invokable for the program's lifetime. Order =
+    // registration order.
     for sub in captured.event_subscriptions {
-        r.event_bus.subscribe(
-            sub.event_name,
-            Subscriber {
-                name,
-                lua: lua.clone(),
-                callback: sub.callback,
-            },
-        );
+        r.event_bus
+            .subscribe_lua(sub.event_name, name, lua.clone(), sub.callback);
     }
 
     // Hand the setup state's `LuaHostHandles` over to the

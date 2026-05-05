@@ -79,11 +79,6 @@ pub enum UserCommand {
     /// thread's canvas dimensions. Arguments are the new terminal
     /// size in cells.
     Resize(u16, u16),
-    /// Write the currently displayed [`MapFrame`](ttymap_engine::map::render::frame::MapFrame)
-    /// to an auto-named file under `$XDG_DATA_HOME/ttymap/exports/`.
-    /// Emitted by the export plugin's palette entry. Filename encodes
-    /// zoom + centre + timestamp so repeated exports don't collide.
-    ExportFrame,
     /// Show / hide the left sidebar. Toggling re-computes the map
     /// canvas dimensions so the render pipeline allocates the right
     /// buffer size for the visible map area.

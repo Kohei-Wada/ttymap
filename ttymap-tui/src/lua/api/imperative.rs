@@ -13,24 +13,21 @@
 //!   onto the stack. Returning `{ switch = sub_spec }` from the
 //!   provider's `execute` swaps the provider in place (sub-mode
 //!   transition, no stacking).
-//! - `ttymap.api.frame.export()` — request the current frame be
-//!   snapshotted to disk.
+//! - `ttymap.api.frame.to_ansi() -> string|nil` — return the latest
+//!   `MapFrame` rendered as an ANSI string. Producers (today
+//!   `export.lua`) decide where / how to persist it.
 //! - `ttymap.api.frame.on_tick(fn)` — subscribe a per-frame callback
 //!   (sugar for `ttymap.on_event("tick", fn)`).
-//! - `ttymap.api.notify.recent(ttl_ms)` — read side of the
-//!   notification ring.
 //!
 //! The activation surfaces (`register_palette_command` /
 //! `register_keybind` / `on_event`) live in [`super::register`] —
 //! they sit at `ttymap.X`, not under `ttymap.api`, because they're
 //! *script-load-time* declarations, not runtime imperative calls.
 
-use std::sync::Arc;
-use std::time::Instant;
-
 use mlua::{Lua, Table};
 
-use crate::UserCommand;
+use std::sync::Arc;
+
 use crate::compositor::op::{Op, OpsBuffer};
 use crate::lua::capture::{CaptureSlot, EventSubscription};
 use crate::lua::host::LuaHostShared;
@@ -49,8 +46,7 @@ pub(super) fn install(
 
     api.set("card", build_card_table(lua, tag, ops.clone())?)?;
     api.set("palette", build_palette_table(lua, tag, ops.clone())?)?;
-    api.set("frame", build_frame_table(lua, slot, ops)?)?;
-    api.set("notify", build_notify_read_table(lua, shared)?)?;
+    api.set("frame", build_frame_table(lua, slot, ops, shared)?)?;
 
     ttymap.set("api", api)?;
     Ok(())
@@ -122,18 +118,29 @@ fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Re
     Ok(palette_api)
 }
 
-fn build_frame_table(lua: &Lua, slot: CaptureSlot, ops: OpsBuffer) -> mlua::Result<Table> {
+fn build_frame_table(
+    lua: &Lua,
+    slot: CaptureSlot,
+    _ops: OpsBuffer,
+    shared: Arc<LuaHostShared>,
+) -> mlua::Result<Table> {
     let frame_api = lua.create_table()?;
-    let ops_for_export = ops;
+
+    // `to_ansi()` returns the latest [`MapFrame`] rendered as an
+    // ANSI string, or `nil` if no frame has arrived yet. Callers
+    // (today: bundled `export.lua`) decide where + how to persist
+    // it — the host hands over the bytes and gets out of the way.
+    let shared_for_ansi = shared;
     frame_api.set(
-        "export",
-        lua.create_function(move |_, _: ()| {
-            ops_for_export
-                .borrow_mut()
-                .push(Op::Command(UserCommand::ExportFrame));
-            Ok(())
+        "to_ansi",
+        lua.create_function(move |_, _: ()| -> mlua::Result<Option<String>> {
+            let Ok(slot) = shared_for_ansi.current_frame.lock() else {
+                return Ok(None);
+            };
+            Ok(slot.as_ref().map(|f| f.to_ansi()))
         })?,
     )?;
+
     // `on_tick` is a thin sugar for `on_event("tick", fn)` — kept
     // because the existing plugin set + docs use it everywhere and
     // it reads more naturally for the per-frame use case. New
@@ -152,38 +159,4 @@ fn build_frame_table(lua: &Lua, slot: CaptureSlot, ops: OpsBuffer) -> mlua::Resu
         })?,
     )?;
     Ok(frame_api)
-}
-
-/// Read-side of the notification ring. The bundled `notify` plugin
-/// walks `recent(ttl_ms)` per frame and renders entries whose age
-/// is below the TTL. Returning age (rather than a wall-clock
-/// timestamp) lets renderers decide on fade / sort policy without
-/// owning a clock.
-fn build_notify_read_table(lua: &Lua, shared: Arc<LuaHostShared>) -> mlua::Result<Table> {
-    let notify_api = lua.create_table()?;
-    notify_api.set(
-        "recent",
-        lua.create_function(move |lua, ttl_ms: u64| {
-            let table = lua.create_table()?;
-            let now = Instant::now();
-            let buf = match shared.notifications.lock() {
-                Ok(g) => g,
-                Err(_) => return Ok(table),
-            };
-            let mut idx = 1;
-            for e in buf.iter() {
-                let age_ms = now.saturating_duration_since(e.posted_at).as_millis() as u64;
-                if age_ms < ttl_ms {
-                    let row = lua.create_table()?;
-                    row.set("message", e.message.as_str())?;
-                    row.set("level", e.level.as_str())?;
-                    row.set("age_ms", age_ms)?;
-                    table.set(idx, row)?;
-                    idx += 1;
-                }
-            }
-            Ok(table)
-        })?,
-    )?;
-    Ok(notify_api)
 }

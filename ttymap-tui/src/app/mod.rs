@@ -149,7 +149,7 @@ impl App {
             // the bus directly. Same-iteration `try_recv` ran above
             // already; an emission here will be picked up next
             // iteration.
-            self.dispatcher.poll_compositor(self.map_frame.as_ref());
+            self.dispatcher.poll_compositor();
 
             // Drain Lua-enqueued ops *before* render so that ops
             // emitted by handler / palette / keybind callbacks during
@@ -158,7 +158,7 @@ impl App {
             // buffer and drain at the start of the *next* iteration's
             // `poll_compositor`, with the same one-frame visibility
             // lag as the prior CloseFlag-via-poll design.
-            self.dispatcher.apply_lua_ops(self.map_frame.as_ref());
+            self.dispatcher.apply_lua_ops();
 
             // Render a frame. Inside `ui::draw`, the per-frame Lua
             // `tick` event fires against the live MapApi.
@@ -180,8 +180,14 @@ impl App {
     /// for more than the time a single dispatch needs.
     fn handle_event(&mut self, event: AppEvent, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
-            AppEvent::Command(msg) => self.dispatcher.dispatch(msg, self.map_frame.as_ref()),
+            AppEvent::Command(msg) => self.dispatcher.dispatch(msg),
             AppEvent::FrameReady(frame) => {
+                // Mirror the frame into the shared cell Lua reads via
+                // `ttymap.api.frame.to_ansi()` *before* notifying
+                // subscribers — a `frame_ready` listener that
+                // immediately calls `to_ansi()` should see this frame,
+                // not the previous one.
+                self.dispatcher.set_current_frame_for_lua(frame.clone());
                 self.map_frame = Some(frame);
                 self.dispatcher.notify_frame_ready();
             }
@@ -192,6 +198,13 @@ impl App {
             // extra handler logic belongs here. Distinct from the
             // Lua-side `"tick"` event which fires from inside draw.
             AppEvent::Wake => {}
+            // Cross-thread bus publish. The main loop hands the event
+            // straight to the bus, which fans out to every registered
+            // subscriber. Main-thread producers go via
+            // `Dispatcher`/`LuaHandle` instead — this branch exists
+            // only so off-thread code can reach Lua subscribers
+            // without owning an mlua state.
+            AppEvent::Bus(bus_event) => self.dispatcher.publish_bus_event(bus_event),
         }
     }
 
@@ -208,8 +221,7 @@ impl App {
                     let _ = event_tx.send(AppEvent::Command(UserCommand::Quit));
                 } else {
                     debug!("key event: {:?}", key_event.code);
-                    self.dispatcher
-                        .handle_key_event(key_event, self.map_frame.as_ref());
+                    self.dispatcher.handle_key_event(key_event);
                 }
             }
             Event::Resize(cols, rows) => {

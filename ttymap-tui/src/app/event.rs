@@ -36,6 +36,7 @@
 use ttymap_engine::map::render::frame::MapFrame;
 
 use crate::UserCommand;
+use crate::event::Event as BusEvent;
 
 /// Unified event payload drained from the App-level `mpsc` channel.
 ///
@@ -63,6 +64,15 @@ pub enum AppEvent {
     /// arriving. Distinct from the Lua-side `"tick"` event, which
     /// fires from inside the draw closure against a `MapApi`.
     Wake,
+    /// Cross-thread bus publish: any non-main thread that wants to
+    /// fan a [`BusEvent`] out to subscribers wraps it here and pushes
+    /// onto the App `mpsc`. The main loop drains and calls
+    /// [`crate::event::EventBus::publish`] (which in turn fires every
+    /// Rust closure / Lua callback registered for `event.name()`).
+    /// Main-thread producers should call `bus.publish` directly
+    /// instead of going through this variant — the queue round-trip
+    /// would just add a one-iteration latency for no benefit.
+    Bus(BusEvent),
 }
 
 impl From<UserCommand> for AppEvent {
