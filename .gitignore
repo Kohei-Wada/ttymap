@@ -2,3 +2,8 @@
 termap.log
 .claude/
 docs/superpowers/
+
+# VHS recording outputs — regenerate from vhs/*.tape
+assets/*.mp4
+assets/*.gif
+!assets/ttymap-*.png
