@@ -165,24 +165,6 @@ impl<'a> MapApi<'a> {
         }
     }
 
-    /// Severity colour for `info`-level transient messages
-    /// (the bundled `notify.lua` uses the `"info"` keyword which
-    /// resolves here). Picked per theme so the same plugin code
-    /// reads on both dark and bright backgrounds.
-    pub fn notify_info_color(&self) -> Color {
-        self.theme.notify_info
-    }
-
-    /// Severity colour for `warn`-level transient messages.
-    pub fn notify_warn_color(&self) -> Color {
-        self.theme.notify_warn
-    }
-
-    /// Severity colour for `error`-level transient messages.
-    pub fn notify_error_color(&self) -> Color {
-        self.theme.notify_error
-    }
-
     // ── Drawing primitives ──────────────────────────────────────────
 
     /// Plot a single-cell glyph at the given world coordinate. No-op
