@@ -48,8 +48,13 @@ ttymap.api.frame.on_tick(function(map)
         if body then
             local payload = ttymap.json:parse(body)
             if not payload then
+                -- Short-circuit so we don't follow up the warn with
+                -- a misleading "0 in view" info popup; the existing
+                -- panel state stays untouched until a healthy fetch.
                 ttymap.notify("aircraft: OpenSky response unparseable",
                               { level = "warn" })
+                state.job = nil
+                return
             end
             state.aircraft = opensky.parse(payload)
             if state.selected > #state.aircraft then

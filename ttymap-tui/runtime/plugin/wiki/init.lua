@@ -126,6 +126,9 @@ local function step_state_machine()
         if not payload then
             ttymap.notify("wiki: geosearch response unparseable",
                           { level = "warn" })
+            state.job = nil
+            state.phase = "idle"
+            return
         end
         local pages = parse_geosearch(payload)
         state.job = nil
@@ -144,6 +147,10 @@ local function step_state_machine()
         if not payload then
             ttymap.notify("wiki: extracts response unparseable",
                           { level = "warn" })
+            state.pending_pages = nil
+            state.job = nil
+            state.phase = "idle"
+            return
         end
         local extracts = parse_extracts(payload)
         local merged = {}

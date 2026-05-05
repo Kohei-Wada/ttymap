@@ -137,6 +137,8 @@ ttymap.api.frame.on_tick(function(map)
             if not payload then
                 ttymap.notify("quake: USGS response unparseable",
                               { level = "warn" })
+                state.job = nil
+                return
             end
             state.quakes = parse_features(payload)
             if state.selected > #state.quakes then
