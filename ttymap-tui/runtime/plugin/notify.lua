@@ -19,18 +19,14 @@ local RING_CAP = 32
 local MAX_TEXT_WIDTH = 60  -- truncate long messages so the popup
                            -- doesn't dominate the map area
 
--- xterm-256 indices that survive both DARK and BRIGHT themes
--- without disappearing into the map. Yellow / orange / red are the
--- universal "needs your eyes" palette and pop against any tile
--- colour the renderer has handed out.
-local COLOR_BY_LEVEL = {
-    info = 226,   -- bright yellow
-    warn = 208,   -- orange
-    error = 196,  -- bright red
-}
-
+-- Theme-aware severity keywords resolved by the host (info / warn /
+-- error map to per-theme xterm indices that read on both dark and
+-- bright backgrounds). Mirrors how chrome plugins like `info.lua`
+-- pass `"accent"` and let the host pick the right colour.
 local function color_for(level)
-    return COLOR_BY_LEVEL[level] or COLOR_BY_LEVEL.info
+    if level == "error" then return "error" end
+    if level == "warn" then return "warn" end
+    return "info"
 end
 
 -- Wall-clock seconds. `os.time()` ticks even while the host idles,
