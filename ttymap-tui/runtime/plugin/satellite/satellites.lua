@@ -256,6 +256,22 @@ function M.make(specs)
                     else
                         sat.tles = ttymap.sgp4:parse_tle(body)
                     end
+                    if not sat.tles then
+                        ttymap.notify(string.format(
+                            "satellite: TLE parse failed for %s",
+                            sat.display or "satellite"
+                        ), { level = "warn" })
+                    elseif sat.kind == "group" then
+                        ttymap.notify(string.format(
+                            "satellite: loaded %d TLEs (%s)",
+                            #sat.tles, sat.display or sat.group or "?"
+                        ))
+                    else
+                        ttymap.notify(string.format(
+                            "satellite: loaded %s",
+                            sat.display or "satellite"
+                        ))
+                    end
                     sat.fetch_job = nil
                 end
             end

@@ -19,6 +19,12 @@ ttymap.api.frame.on_tick(function()
             and type(p.latitude) == "number"
             and type(p.longitude) == "number" then
             ttymap.map:jump(p.longitude, p.latitude)
+            ttymap.notify(string.format(
+                "Jumped to %.4f, %.4f", p.latitude, p.longitude
+            ))
+        else
+            ttymap.notify("here: geoip response missing lat/lon",
+                          { level = "warn" })
         end
         state.job = nil
     end

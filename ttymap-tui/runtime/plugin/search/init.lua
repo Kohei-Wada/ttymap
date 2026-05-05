@@ -30,7 +30,24 @@ ttymap.api.frame.on_tick(function()
     if state.job then
         local body = state.job:try_take()
         if body then
-            state.candidates = nominatim.parse(ttymap.json:parse(body))
+            local payload = ttymap.json:parse(body)
+            if not payload then
+                -- Short-circuit so we don't follow up with a
+                -- misleading `No results for "X"` info popup —
+                -- there may well be results, we just couldn't read
+                -- the response.
+                ttymap.notify("search: Nominatim response unparseable",
+                              { level = "warn" })
+                state.pending = false
+                state.job = nil
+                return
+            end
+            state.candidates = nominatim.parse(payload)
+            if #state.candidates == 0 and state.last_query ~= "" then
+                ttymap.notify(string.format(
+                    "No results for \"%s\"", state.last_query
+                ))
+            end
             state.pending = false
             state.job = nil
         end
