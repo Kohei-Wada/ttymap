@@ -8,10 +8,14 @@ Inspired by [mapscii](https://github.com/rastapasta/mapscii).
 > APIs (CLI flags, Lua surface, config schema) may change without
 > notice and bugs are expected.
 
-![ttymap default view with help panel and satellite tracker](assets/ttymap-default.png)
+https://github.com/user-attachments/assets/63c6415f-9d3e-4d0c-957c-92ca5f326e43
 
 <details>
-<summary>More screenshots</summary>
+<summary>Screenshots</summary>
+
+Default view with help panel and satellite tracker:
+
+![ttymap default view with help panel and satellite tracker](assets/ttymap-default.png)
 
 Bright theme:
 
