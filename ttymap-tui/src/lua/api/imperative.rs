@@ -37,22 +37,21 @@ use crate::lua::host::LuaHostShared;
 pub(super) fn install(
     lua: &Lua,
     ttymap: &Table,
-    tag: &'static str,
     slot: CaptureSlot,
     ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
 ) -> mlua::Result<()> {
     let api = lua.create_table()?;
 
-    api.set("card", build_card_table(lua, tag, ops.clone())?)?;
-    api.set("palette", build_palette_table(lua, tag, ops.clone())?)?;
+    api.set("card", build_card_table(lua, ops.clone())?)?;
+    api.set("palette", build_palette_table(lua, ops.clone())?)?;
     api.set("frame", build_frame_table(lua, slot, ops, shared)?)?;
 
     ttymap.set("api", api)?;
     Ok(())
 }
 
-fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Result<Table> {
+fn build_card_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
     let card_api = lua.create_table()?;
     card_api.set(
         "open",
@@ -68,13 +67,13 @@ fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Resul
                 // iteration.
                 let id = CardId::next();
                 // Build the component on the **same** Lua VM that ran
-                // `card.open` — i.e. the setup state. The spec's
+                // `card.open` — i.e. the shared Lua state. The spec's
                 // callbacks (`render`, `handle_key`, …) capture
                 // upvalues in this state, so the per-window Lua handle
                 // must be a clone of it (cheap Arc bump, no copy of the
                 // VM). When `LuaCardComponent` later calls into those
                 // callbacks, the same upvalue scope is in scope.
-                let component = LuaCardComponent::from_spec(lua.clone(), spec, tag)?;
+                let component = LuaCardComponent::from_spec(lua.clone(), spec, "lua")?;
                 ops.borrow_mut().push(Op::Push {
                     id,
                     component: Box::new(component) as Box<dyn crate::compositor::Component>,
@@ -86,7 +85,7 @@ fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Resul
     Ok(card_api)
 }
 
-fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Result<Table> {
+fn build_palette_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
     let palette_api = lua.create_table()?;
     palette_api.set(
         "open",
@@ -101,11 +100,11 @@ fn build_palette_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Re
                 // can target this exact PaletteComponent for close.
                 let id = CardId::next();
                 // Build the provider on the **same** Lua VM that ran
-                // `palette.open` — the setup state. The spec's
+                // `palette.open` — the shared Lua state. The spec's
                 // callbacks (`filter`, `items`, `execute`, …) capture
                 // upvalues there, so the per-provider Lua handle must
                 // be a clone of it (cheap Arc bump).
-                let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, tag)?;
+                let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, "lua")?;
                 let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
                 ops.borrow_mut().push(Op::Push {
                     id,

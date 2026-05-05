@@ -1,10 +1,11 @@
 //! Lua VM setup — fresh [`Lua`] state with runtime-path-aware
 //! `package.searchers` and `package.path` extensions.
 //!
-//! [`new_lua`] is the single entry point for building a state; both
-//! the bundled-plugin loader (`lua/loader.rs`) and `lua/bridge/handle.rs`
-//! `fresh_load` route through it. Keeping the setup tweaks here lets
-//! `lua/mod.rs` stay focused on subsystem orchestration.
+//! [`new_lua`] is the single entry point for building a state.
+//! `init_lua::load_init_lua` calls it once per ttymap process; the
+//! returned Lua then flows through `init.lua` and every plugin via
+//! `build_subsystem`. Keeping the setup tweaks here lets `lua/mod.rs`
+//! stay focused on subsystem orchestration.
 
 use std::path::Path;
 

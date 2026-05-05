@@ -103,11 +103,12 @@ impl LuaHostShared {
     }
 }
 
-/// Channels + shared state owned by **the setup state** (the Lua VM
-/// that runs the script's top-level `register_*` calls and continues
-/// to run palette / keybind callbacks for the program lifetime).
-/// [`crate::lua::api::install`] returns this once per state; the App
-/// routes the shared cells to the right consumers.
+/// Channels + shared state owned by the **shared Lua VM** (the
+/// single Lua state that runs `init.lua`, every plugin's top-level
+/// `register_*` calls, and every plugin callback for the program
+/// lifetime). [`crate::lua::api::install`] returns this **once** for
+/// the whole subsystem; every plugin reads the same `center` /
+/// `zoom` cells.
 ///
 /// - **UserCommand sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /

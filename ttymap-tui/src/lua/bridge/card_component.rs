@@ -30,14 +30,13 @@
 //! `Op::Close` entries that are no-ops once the component is gone.
 //!
 //! Drain plumbing (`ttymap.map:jump`, `ttymap.api.frame.export`)
-//! lives in the **setup state** that ran the script's top-level
-//! `register_*` calls — *not* on this per-window component. Those
-//! receivers are returned by
-//! [`crate::lua::api::install`] inside [`LuaHostHandles`] and
-//! drained centrally by `App` per frame. This is by design:
-//! `card.open` runs in the setup state's Lua VM, so its callbacks'
-//! `ttymap.map:jump(...)` calls hit the setup-state senders, not
-//! per-window receivers.
+//! lives in the **shared Lua state** — *not* on this per-window
+//! component. The shared cells are returned by
+//! [`crate::lua::api::install`] inside [`LuaHostHandles`] (one set
+//! for the whole subsystem) and drained centrally by `App` per
+//! frame. `card.open` runs in the shared Lua VM, so its callbacks'
+//! `ttymap.map:jump(...)` calls hit the same shared senders every
+//! other plugin uses.
 //!
 //! Per audit §13: errors are logged and recovered, never propagated.
 //! A buggy plugin must not take the host down.
@@ -121,8 +120,9 @@ impl LuaCardComponent {
     /// (`lua[<log_tag>]: render() failed: …`) and as the fallback
     /// for [`Component::name`] when `spec.name` is missing.
     ///
-    /// The setup state owns the Sender / Receiver pairs for jump /
-    /// frame.export and the host-shared `center` / `zoom` mutexes;
+    /// The shared Lua state owns the senders for jump / zoom /
+    /// fly_to / frame.export (lowered to `Op::Command` on the shared
+    /// `OpsBuffer`) and the host-shared `center` / `zoom` mutexes;
     /// this component does not drain them (App drains them
     /// centrally per loop iteration).
     pub fn from_spec(lua: Lua, spec: Table, log_tag: &'static str) -> mlua::Result<Self> {
@@ -385,8 +385,8 @@ impl Component for LuaCardComponent {
         }
 
         // Host-side jump / frame.export the callback queued hits the
-        // setup state's senders, not per-window receivers. App drains
-        // those centrally each frame.
+        // shared `OpsBuffer`, not per-window receivers. App drains
+        // it centrally each frame.
         match action {
             KeyAction::Close => win.close(),
             KeyAction::Ignore => win.ignore(),

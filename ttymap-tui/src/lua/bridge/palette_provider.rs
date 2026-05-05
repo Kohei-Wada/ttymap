@@ -39,7 +39,7 @@ pub struct LuaPaletteProvider {
 
 impl LuaPaletteProvider {
     /// Build a palette provider from a `spec` table that was already
-    /// constructed in an existing Lua VM (the *setup state* — the VM
+    /// constructed in an existing Lua VM (the *shared Lua state* — the VM
     /// that ran the script's top-level `register_*` calls and continues
     /// to run palette / keybind callbacks). Used by
     /// `ttymap.api.palette.open(spec)` where the script builds the spec
@@ -47,8 +47,8 @@ impl LuaPaletteProvider {
     ///
     /// Host services (`ttymap.map`, `ttymap.api`, …) are already
     /// installed on `lua` by the prior [`crate::lua::api::install`]
-    /// call that produced the setup state. `ttymap.map:jump` inside
-    /// this provider's `execute` callback hits the setup state's
+    /// call that produced the shared Lua state. `ttymap.map:jump` inside
+    /// this provider's `execute` callback hits the shared Lua state's
     /// shared `intent_tx` — drained centrally by [`crate::app::App`]
     /// per frame and dispatched as `UserCommand::Map(MapAction::Jump)`.
     /// `execute` returns purely structural [`PaletteAction`] variants
@@ -189,7 +189,7 @@ impl LuaPaletteProvider {
     ///   stacking. Invalid spec → warn + `Close`.
     ///
     /// Map intents (`ttymap.map:jump` inside `execute`) take a
-    /// different path: they push onto the setup state's shared
+    /// different path: they push onto the shared Lua state's shared
     /// `intent_tx`, which the App drains centrally and dispatches.
     /// `Run([UserCommand::*])` therefore has no return-value form — Lua
     /// emits map intents through the host channel, not the action.
@@ -236,7 +236,7 @@ mod tests {
         }
     }
 
-    /// Build a setup-state Lua VM (`ttymap` global installed) and run
+    /// Build a shared Lua VM with the `ttymap` global installed and run
     /// `script` against it, expecting `script` to return the spec
     /// table for `from_spec`. Mirrors how `ttymap.api.palette.open`
     /// receives a spec from a Lua callback at runtime.
@@ -245,7 +245,6 @@ mod tests {
         let slot = new_capture_slot();
         let _handles = install(
             &lua,
-            "lua-test",
             LuaHostShared::empty(),
             slot,
             crate::compositor::op::new_ops_buffer(),

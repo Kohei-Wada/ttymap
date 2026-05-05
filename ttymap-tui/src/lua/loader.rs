@@ -1,8 +1,8 @@
 //! Bundled plugin discovery — walk every `<layer>/plugin/` directory
-//! on the runtime path, parse the script's `register_*` /
-//! `on_event` declarations via [`crate::lua::bridge::handle::fresh_load`],
-//! and feed the resulting activations / palette entries / event-bus
-//! subscriptions into the [`Registrar`].
+//! on the runtime path, run each script in the shared Lua VM via
+//! [`crate::lua::bridge::handle::load_chunk`], and feed the resulting
+//! activations / palette entries / event-bus subscriptions into the
+//! [`Registrar`].
 //!
 //! nvim-style two-tier layout per runtime layer:
 //!
@@ -28,9 +28,9 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyModifiers};
 use mlua::Lua;
 
-use crate::compositor::op;
 use crate::compositor::{Activation, PaletteEntry, SpawnComponent};
 use crate::lua::bridge;
+use crate::lua::capture::CaptureSlot;
 use crate::lua::host;
 use crate::lua::registrar::Registrar;
 
@@ -44,10 +44,11 @@ use crate::lua::registrar::Registrar;
 /// A plugin whose stem matches any entry is skipped at registration
 /// time.
 pub fn register_builtin_plugins(
+    lua: &Lua,
+    slot: &CaptureSlot,
     runtime_path: &[PathBuf],
     disable: &[String],
     shared: Arc<host::LuaHostShared>,
-    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
     if runtime_path.is_empty() {
@@ -61,11 +62,12 @@ pub fn register_builtin_plugins(
             continue;
         }
         register_plugins_in(
+            lua,
+            slot,
             &plugin_dir,
             Some(&mut seen),
             disable,
             shared.clone(),
-            ops.clone(),
             r,
         );
     }
@@ -75,37 +77,36 @@ pub fn register_builtin_plugins(
 /// subscriptions. The single dispatcher used by both bundled and
 /// user plugins — Rust never knows a specific plugin's name; the
 /// caller passes the file stem as `name`.
+///
+/// All plugins share `lua` (one Lua VM for the whole subsystem,
+/// nvim-style). `slot` is the shared capture slot — drained per
+/// plugin so each script's `register_*` calls land in their own
+/// bucket attributed to `name`.
 pub(super) fn register_one(
+    lua: &Lua,
+    slot: &CaptureSlot,
     name: &'static str,
     source: &'static str,
     shared: Arc<host::LuaHostShared>,
-    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
-    // Run the script once to capture its activation surfaces and
-    // tick subscriptions. The `lua` returned here is the **setup
-    // state**: it holds the module-level Lua locals from setup, plus
-    // the RegistryKey'd palette / keybind / tick callbacks. We keep
-    // clones of it in every closure that fires later so module-level
-    // vars (e.g. an `enabled` flag) survive across the program's
-    // lifetime — that's the hook for plugin-side toggle state.
-    let shared_for_plugin = shared.clone();
-    // `name` is passed twice: as `chunk_name` (Lua stack-trace label)
-    // and as `host_tag` (HTTP UA suffix, log target, fallback window
-    // display name). Same value — the file stem is the plugin's
-    // canonical identifier on every surface.
-    let (lua, captured, handles) =
-        match bridge::handle::fresh_load(source, name, name, shared_for_plugin, ops) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
-                return;
-            }
-        };
+    // Run the script in the shared VM to capture its activation
+    // surfaces and tick subscriptions. We keep clones of `lua` in
+    // every closure that fires later so module-level locals
+    // (e.g. an `enabled` flag) survive across the program's
+    // lifetime — that's the hook for plugin-side toggle state. All
+    // such clones share the underlying `Arc<LuaInner>`.
+    let captured = match bridge::handle::load_chunk(lua, source, name, slot) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("lua[{}]: failed to load, plugin skipped: {}", name, e);
+            return;
+        }
+    };
 
     // Every `ttymap.on_event(name, fn)` (and its sugar
     // `ttymap.api.frame.on_tick(fn)` which lowers to event "tick")
-    // capture lands on the bus as a Lua subscriber. The setup-state
+    // capture lands on the bus as a Lua subscriber. The shared
     // Lua is cloned (cheap Arc bump) into each entry so the callback
     // stays invokable for the program's lifetime. Order =
     // registration order.
@@ -113,14 +114,6 @@ pub(super) fn register_one(
         r.event_bus
             .subscribe_lua(sub.event_name, name, lua.clone(), sub.callback);
     }
-
-    // Hand the setup state's `LuaHostHandles` over to the
-    // registrar so the App can drain its receivers per frame.
-    // Setup-state callbacks (palette command invoke, register_keybind
-    // callback, plugin-level `loop`, and any `ttymap.api.card.open`
-    // / `palette.open` spec callbacks) flip these senders. Without
-    // this push the receivers would just sit (latent bug pre-A7).
-    r.lua_host_handles.push(handles);
 
     // Surface plugin metadata to help. Only entries with a key
     // bind are listed today (matching the prior harvest filter); a
@@ -141,8 +134,8 @@ pub(super) fn register_one(
 
     // Explicit-callback paths: each register_palette_command and
     // register_keybind from the script gets its own factory. The
-    // factory just runs the captured Lua callback in the persistent
-    // setup state. Whatever the callback does — toggle a flag, push
+    // factory just runs the captured Lua callback in the shared
+    // Lua state. Whatever the callback does — toggle a flag, push
     // a window via `ttymap.api.card.open(spec)`, push a palette
     // via `ttymap.api.palette.open(spec)`, or call a fire-and-forget
     // host API — flows through the channels in `LuaHostHandles` that
@@ -236,11 +229,12 @@ fn push_plugin_entry(shared: &Arc<host::LuaHostShared>, name: &str, key: &str, l
 /// first and wins via `seen` dedup; the directory form is logged
 /// and skipped.
 pub(super) fn register_plugins_in(
+    lua: &Lua,
+    slot: &CaptureSlot,
     dir: &Path,
     mut seen: Option<&mut HashSet<String>>,
     disable: &[String],
     shared: Arc<host::LuaHostShared>,
-    ops: op::OpsBuffer,
     r: &mut Registrar,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -300,6 +294,6 @@ pub(super) fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(name, source, shared.clone(), ops.clone(), r);
+        register_one(lua, slot, name, source, shared.clone(), r);
     }
 }
