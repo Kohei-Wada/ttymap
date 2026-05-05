@@ -59,8 +59,14 @@ fn main() {
     // logger is registered and the `log::*!` macros are no-ops.
     // When set, logs land in ~/.local/state/ttymap/ttymap.log
     // (truncated on each launch, so debug sessions don't accumulate).
-    if let Some(level) = cli.log.as_deref() {
-        ttymap_tui::logging::init(level).ok();
+    // Init failure (state-dir missing, file open denied, logger
+    // already installed by something earlier in the process) is
+    // surfaced on stderr — the alternative was silent failure where
+    // `--log` had no observable effect and no error to grep for.
+    if let Some(level) = cli.log.as_deref()
+        && let Err(e) = ttymap_tui::logging::init(level)
+    {
+        eprintln!("ttymap: --log requested but logging init failed: {e}");
     }
 
     // Resolve runtime path before any Lua state spins up. Both the
