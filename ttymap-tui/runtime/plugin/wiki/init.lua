@@ -243,7 +243,7 @@ local function open()
         render   = build_lines,
         items    = build_items,
         selected = function() return state.selected end,
-        handle_event = function(key)
+        handle_key = function(key)
             local code = key.code
             local ch = key.char
             local ctrl = key.ctrl

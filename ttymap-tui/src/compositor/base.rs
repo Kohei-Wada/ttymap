@@ -17,7 +17,7 @@
 //! BaseLayer doesn't need to know about it.
 //!
 //! Because it's always at the very bottom of the stack, its
-//! `handle_event` only runs when the focused (possibly higher)
+//! `handle_key` only runs when the focused (possibly higher)
 //! component called `win.ignore()` — exactly the old
 //! "pass through to background" cases.
 //!
@@ -91,7 +91,7 @@ impl BaseLayer {
 }
 
 impl Component for BaseLayer {
-    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+    fn handle_key(&mut self, event: KeyEvent, win: &mut Window) {
         let KeyEvent {
             code, modifiers, ..
         } = event;
@@ -170,7 +170,7 @@ mod tests {
         let mut ops = WindowOps::default();
         {
             let mut win = Window::new(&mut ops, &CTX, CardId::next());
-            bg.handle_event(KeyEvent::new(code, NONE), &mut win);
+            bg.handle_key(KeyEvent::new(code, NONE), &mut win);
         }
         ops
     }

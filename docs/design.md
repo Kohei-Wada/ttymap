@@ -69,7 +69,7 @@ Current examples:
 Surface activations (palette open, plugin activate) deliberately do
 *not* go through `UserCommand` — they're expressed as a `Component` push
 onto the compositor stack, queued through `Window::open` from inside
-a `Component`'s `handle_event` (or directly from
+a `Component`'s `handle_key` (or directly from
 `api.card.open` / `api.palette.open` on the Lua side) and applied
 atomically after the hook returns. Routing focus through `UserCommand`
 would force the dispatch table to know which surfaces exist; keeping
@@ -187,7 +187,7 @@ its `close()`.
 
 ### Why a `&mut Window` queue instead of returning a result enum
 
-Hooks (`handle_event`, `poll`) receive a `&mut Window`. Plugins
+Hooks (`handle_key`, `poll`) receive a `&mut Window`. Plugins
 record intent through it — `win.close()`, `win.open(c)`,
 `win.emit(msg)`, `win.ignore()` — and the compositor drains the
 queue after the hook returns, applying ops atomically. The drain

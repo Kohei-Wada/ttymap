@@ -52,9 +52,9 @@ through the Compositor; mouse events go through a pure adapter:
 
 ```
 key event
-  ↓ Compositor::handle_event(event, ctx):
+  ↓ Compositor::handle_key(event, ctx):
     [reserved]  Tab / Shift-Tab   → UserCommand::CycleFocus(…)
-    [focused]   focused component's handle_event(event, &mut win)
+    [focused]   focused component's handle_key(event, &mut win)
                   ↓ win.emit / win.open / win.close / win.ignore
     [fallback]  only if the focused component called win.ignore()
                 and focus isn't already on BaseLayer
@@ -103,7 +103,7 @@ cycling — only which component receives keys first.
 **No framework-side dedup.** nvim-style: pressing an activation key
 twice produces two instances of the plugin on the stack. Plugins
 that want toggle behaviour close themselves in their own
-`handle_event` (typically: capture the `CardHandle` returned by
+`handle_key` (typically: capture the `CardHandle` returned by
 `api.card.open`, and on the activation key call `:close()` and nil
 out the handle). This keeps the Rust core ignorant of plugin
 identity — the concrete-type / `dedup_tag` schemes the compositor

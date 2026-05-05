@@ -149,7 +149,7 @@ impl Dispatcher {
     /// events.
     pub(super) fn handle_key_event(&mut self, key: KeyEvent, frame: Option<&MapFrame>) {
         let ctx = self.context();
-        let ops = self.compositor.handle_event(key, &ctx);
+        let ops = self.compositor.handle_key(key, &ctx);
         self.apply_ops(ops, frame);
     }
 

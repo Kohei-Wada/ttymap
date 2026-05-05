@@ -105,7 +105,7 @@ function M.make(specs)
         })
     end
 
-    -- Map char → index for handle_event dispatch + window-local
+    -- Map char → index for handle_key dispatch + window-local
     -- footer hint list (visible only while the panel is focused).
     local key_to_idx = {}
     local hints = {}
@@ -309,7 +309,7 @@ function M.make(specs)
             footer_hints = hints,
             items    = build_items,
             selected = selected_index,
-            handle_event = function(key)
+            handle_key = function(key)
                 local code = key.code
                 local ch = key.char
                 local ctrl = key.ctrl

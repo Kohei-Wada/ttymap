@@ -7,7 +7,7 @@
 //! returns.
 //!
 //! Two producers ride this enum:
-//! - **Component hooks** (`handle_event` / `poll`) enqueue via the
+//! - **Component hooks** (`handle_key` / `poll`) enqueue via the
 //!   [`Window`](super::window::Window) handle into a stack-local
 //!   `WindowOps`; the compositor drains it the moment the hook returns.
 //! - **Lua callbacks** (handle `:close()`, `api.card.open`,

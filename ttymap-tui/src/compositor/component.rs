@@ -50,10 +50,10 @@ pub enum Placement {
 /// nvim-style: the compositor never deduplicates pushes. Pressing an
 /// activation key twice produces two instances of the plugin on the
 /// stack. Plugins that want toggle behavior implement self-close in
-/// their own `handle_event` (return `win.close()` when the activation
+/// their own `handle_key` (return `win.close()` when the activation
 /// key fires while focused).
 ///
-/// The event-producing hooks ([`handle_event`](Self::handle_event)
+/// The event-producing hooks ([`handle_key`](Self::handle_key)
 /// and [`poll`](Self::poll)) receive a
 /// [`&mut Window`](super::window::Window) and express intent through it
 /// (`win.close()`, `win.open(c)`, `win.emit(msg)`, `win.ignore()`).
@@ -69,7 +69,7 @@ pub trait Component {
     /// Default impl is `win.ignore()` — the non-modal "I don't bind
     /// any keys, pass through to the base layer" behaviour. Plugins
     /// that consume keys override this.
-    fn handle_event(&mut self, _event: KeyEvent, win: &mut Window) {
+    fn handle_key(&mut self, _event: KeyEvent, win: &mut Window) {
         win.ignore();
     }
 

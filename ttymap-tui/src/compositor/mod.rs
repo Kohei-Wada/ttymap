@@ -189,7 +189,7 @@ impl Compositor {
     /// like a `w` window handle, an `enabled` feed flag, …).
     /// Closing from the outside via `stack.remove` would leave
     /// the lua-side state pointing at a stale handle.
-    pub fn handle_event(&mut self, event: KeyEvent, ctx: &Context) -> Vec<Op> {
+    pub fn handle_key(&mut self, event: KeyEvent, ctx: &Context) -> Vec<Op> {
         if let Some(msg) = intercept_focus_key(event) {
             return vec![Op::Command(msg)];
         }
@@ -201,7 +201,7 @@ impl Compositor {
         let mut ops = WindowOps::default();
         {
             let mut win = Window::new(&mut ops, ctx, focused_id);
-            self.stack[focused].1.handle_event(event, &mut win);
+            self.stack[focused].1.handle_key(event, &mut win);
         }
         // Fall-through: only when the hook queued nothing *and*
         // explicitly called `ignore()`, and the focus isn't already
@@ -211,7 +211,7 @@ impl Compositor {
             let mut ops = WindowOps::default();
             {
                 let mut win = Window::new(&mut ops, ctx, base_id);
-                self.stack[0].1.handle_event(event, &mut win);
+                self.stack[0].1.handle_key(event, &mut win);
             }
             return ops.ops;
         }
@@ -324,7 +324,7 @@ mod tests {
     struct TagComponent(&'static str);
 
     impl Component for TagComponent {
-        fn handle_event(&mut self, _: KeyEvent, _: &mut Window) {}
+        fn handle_key(&mut self, _: KeyEvent, _: &mut Window) {}
         fn render(&self, _: &mut window::RenderWindow) {}
         fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
             vec![(self.0, "")]
@@ -409,7 +409,7 @@ mod tests {
     }
 
     impl Component for Spawner {
-        fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+        fn handle_key(&mut self, event: KeyEvent, win: &mut Window) {
             if event.code == self.spawn_key {
                 win.open(Box::new(TagComponent(self.spawn_label)));
             }
@@ -425,7 +425,7 @@ mod tests {
     /// ops the same way App would: stack mutations are applied
     /// to `c` itself, intents are returned to the test for assertion.
     fn drive(c: &mut Compositor, event: KeyEvent, ctx: &Context) -> Vec<UserCommand> {
-        let ops = c.handle_event(event, ctx);
+        let ops = c.handle_key(event, ctx);
         let mut intents = Vec::new();
         for op in ops {
             match op {
@@ -469,7 +469,7 @@ mod tests {
 
         // Press `i` again — pushes a second wiki on top. Plugins
         // that want toggle behavior implement self-close in their
-        // own handle_event.
+        // own handle_key.
         drive(
             &mut c,
             KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
@@ -491,7 +491,7 @@ mod tests {
         /// plugin" that would swallow Tab if Tab reached it.
         struct SwallowsAll;
         impl Component for SwallowsAll {
-            fn handle_event(&mut self, _: KeyEvent, win: &mut Window) {
+            fn handle_key(&mut self, _: KeyEvent, win: &mut Window) {
                 win.emit(UserCommand::Map(ttymap_engine::map::MapAction::None));
             }
             fn render(&self, _: &mut window::RenderWindow) {}

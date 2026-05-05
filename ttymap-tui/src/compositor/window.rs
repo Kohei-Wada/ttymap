@@ -1,10 +1,10 @@
 //! [`Window`] — capability-constrained handle passed to components.
 //!
-//! Components receive a `&mut Window` on every hook (`handle_event`
+//! Components receive a `&mut Window` on every hook (`handle_key`
 //! and `poll`). They express intent by calling methods on it:
 //!
 //! ```ignore
-//! fn handle_event(&mut self, ev: KeyEvent, win: &mut Window) {
+//! fn handle_key(&mut self, ev: KeyEvent, win: &mut Window) {
 //!     if ev.code == KeyCode::Esc {
 //!         win.close();
 //!     } else if enter_with_selection {
@@ -152,7 +152,7 @@ impl<'a> Window<'a> {
     /// Push `c` on top of the stack after the hook returns. Always
     /// pushes a fresh entry — no identity dedup. A plugin that
     /// wants "open or focus existing" semantics implements that
-    /// inside its own `handle_event` (return `close` when already
+    /// inside its own `handle_key` (return `close` when already
     /// open, push otherwise).
     pub fn open(&mut self, c: Box<dyn Component>) {
         self.ops.ops.push(Op::Push {

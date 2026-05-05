@@ -82,7 +82,7 @@ local function open()
     if w then return end
     w = ttymap.api.card.open({
         render = build_lines,
-        handle_event = function(key) if key.code == "Esc" then close() end end,
+        handle_key = function(key) if key.code == "Esc" then close() end end,
     })
 end
 ttymap.register_keybind("a", function() if w then close() else open() end end)

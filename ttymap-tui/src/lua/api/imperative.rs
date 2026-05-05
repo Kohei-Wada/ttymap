@@ -73,7 +73,7 @@ fn build_card_table(lua: &Lua, tag: &'static str, ops: OpsBuffer) -> mlua::Resul
                 let id = CardId::next();
                 // Build the component on the **same** Lua VM that ran
                 // `card.open` — i.e. the setup state. The spec's
-                // callbacks (`render`, `handle_event`, …) capture
+                // callbacks (`render`, `handle_key`, …) capture
                 // upvalues in this state, so the per-window Lua handle
                 // must be a clone of it (cheap Arc bump, no copy of the
                 // VM). When `LuaCardComponent` later calls into those

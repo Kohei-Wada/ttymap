@@ -189,7 +189,7 @@ local function open_panel()
         render   = build_lines,
         items    = build_items,
         selected = function() return state.selected end,
-        handle_event = function(key)
+        handle_key = function(key)
             local n = #state.quakes
             if sidebar.up_pressed(key) then
                 state.selected = sidebar.cycle(state.selected, n, -1)

@@ -121,7 +121,7 @@ impl PaletteComponent {
 }
 
 impl Component for PaletteComponent {
-    fn handle_event(&mut self, event: KeyEvent, win: &mut Window) {
+    fn handle_key(&mut self, event: KeyEvent, win: &mut Window) {
         let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
         let up = matches!(event.code, KeyCode::Up) || (ctrl && event.code == KeyCode::Char('p'));
         let down =
@@ -327,7 +327,7 @@ mod tests {
         let mut ops = WindowOps::default();
         {
             let mut win = Window::new(&mut ops, &CTX, CardId::next());
-            p.handle_event(KeyEvent::new(code, mods), &mut win);
+            p.handle_key(KeyEvent::new(code, mods), &mut win);
         }
         ops
     }
