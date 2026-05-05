@@ -74,9 +74,10 @@ pub struct CapturedRegistration {
 /// `lua.load(source).exec()`.
 pub type CaptureSlot = Rc<RefCell<CapturedRegistration>>;
 
-/// Build an empty capture slot. The caller (typically `fresh_load`)
-/// passes one to [`crate::lua::api::install`] and reads it back after
-/// running the script.
+/// Build an empty capture slot. The caller passes one to
+/// [`crate::lua::api::install`] (once for the whole subsystem) and
+/// drains it via [`crate::lua::bridge::handle::load_chunk`] after
+/// each plugin's `exec` so registrations are attributed per-plugin.
 pub fn new_capture_slot() -> CaptureSlot {
     Rc::new(RefCell::new(CapturedRegistration::default()))
 }

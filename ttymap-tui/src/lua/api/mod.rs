@@ -45,7 +45,7 @@
 //! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
 //! ttymap.log    :info(msg) / :warn(msg) / :error(msg)
 //!                                            forward to host log at
-//!                                            target `lua[<plugin>]`
+//!                                            target `lua`
 //! ttymap.api.card.open(spec) -> Handle    push a focused window
 //!                                            (LuaCardComponent) onto
 //!                                            the stack; handle:close()
@@ -76,11 +76,14 @@
 //! carries a `Window` / `MapApi`, so callers see the latest centre
 //! without threading anything through their signatures.
 //!
-//! Note: the same `ttymap` name is used by `init.lua` as a config DSL
-//! (`ttymap.opt`, `ttymap.keymap`) — that's a different Lua state
-//! (see `init_lua.rs`), so the namespaces don't collide at runtime.
-//! The split is by *scope*, not by name: `opt` / `keymap` live in
-//! init; `http` / `map` / etc. live in plugin runtime.
+//! `ttymap` is a Neovim-style **single-VM global**: `init.lua`
+//! installs `ttymap.opt` / `ttymap.keymap` first; this module then
+//! adds `ttymap.http` / `map` / `api` / `register_*` / `notify` /
+//! `on_event` to the same table before plugins load. Every plugin
+//! sees one unified `ttymap` namespace, and `init.lua` can
+//! `require "ttymap.<plugin_name>"` and mutate a config table the
+//! plugin will read later (Lua's module cache makes the require
+//! return the same table on the plugin side).
 
 pub mod http;
 pub mod json;
@@ -113,10 +116,14 @@ use ttymap_engine::shared::http::HttpClient;
 
 // ── Install entry point ─────────────────────────────────────────────
 
-/// Build the `ttymap` table and install it as a Lua global. Returns
-/// the channels the calling component drains after each callback. One
-/// install per Lua state — same surface for components and palette
-/// providers, so the bridge stays uniform.
+/// Extend the `ttymap` global with the plugin runtime API
+/// (`http` / `map` / `api` / `register_*` / `notify` / `on_event` …)
+/// and return the host handles plugins read view state through.
+///
+/// The `ttymap` global must already exist — `init.lua`'s pre-pass
+/// (see [`crate::lua::init_lua`]) creates it with `opt` / `keymap`
+/// before this runs. We add fields to the same table rather than
+/// replace it, so `ttymap.opt.*` mutations from `init.lua` survive.
 ///
 /// `slot` receives any `register_palette_command` / `register_keybind`
 /// declarations and any `ttymap.api.frame.on_tick` subscriptions the
@@ -125,7 +132,6 @@ use ttymap_engine::shared::http::HttpClient;
 /// `<runtime>/plugin/`, identity = file stem.
 pub fn install(
     lua: &Lua,
-    tag: &'static str,
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
     ops: crate::compositor::op::OpsBuffer,
@@ -138,11 +144,21 @@ pub fn install(
     let center = Arc::new(Mutex::new(LonLat { lon: 0.0, lat: 0.0 }));
     let zoom = Arc::new(Mutex::new(0.0_f64));
 
-    let ttymap = lua.create_table()?;
+    let ttymap: Table = match lua.globals().get::<mlua::Value>("ttymap")? {
+        mlua::Value::Table(t) => t,
+        _ => {
+            // No init pre-pass ran (test paths or future callers). Create
+            // an empty `ttymap` so the rest of install can proceed.
+            let t = lua.create_table()?;
+            lua.globals().set("ttymap", t.clone())?;
+            t
+        }
+    };
+
     ttymap.set(
         "http",
         lua.create_userdata(http::HostHttp {
-            http: HttpClient::new(tag),
+            http: HttpClient::new("lua"),
         })?,
     )?;
     ttymap.set(
@@ -157,10 +173,7 @@ pub fn install(
         lua.create_userdata(HostConfig::new(shared.clone()))?,
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp::new(shared.clone()))?)?;
-    ttymap.set(
-        "log",
-        lua.create_userdata(HostLog::new(format!("lua[{}]", tag)))?,
-    )?;
+    ttymap.set("log", lua.create_userdata(HostLog::new("lua".to_string()))?)?;
 
     // Activation surfaces (`register_palette_command` /
     // `register_keybind` / `on_event`) — capturers that push into
@@ -173,7 +186,7 @@ pub fn install(
     // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
     // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
     // makes from inside its callbacks.
-    imperative::install(lua, &ttymap, tag, slot, ops.clone(), shared.clone())?;
+    imperative::install(lua, &ttymap, slot, ops.clone(), shared.clone())?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
@@ -200,8 +213,6 @@ pub fn install(
         })?,
     )?;
 
-    lua.globals().set("ttymap", ttymap)?;
-
     Ok(LuaHostHandles { center, zoom })
 }
 
@@ -222,8 +233,8 @@ mod tests {
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
         let ops = crate::compositor::op::new_ops_buffer();
-        let handles = install(&lua, "lua-test", LuaHostShared::empty(), slot, ops.clone())
-            .expect("install ttymap table");
+        let handles =
+            install(&lua, LuaHostShared::empty(), slot, ops.clone()).expect("install ttymap table");
         (lua, handles, ops)
     }
 
@@ -352,7 +363,6 @@ mod tests {
         let slot = new_capture_slot();
         let _handles = install(
             &lua,
-            "lua-test",
             shared.clone(),
             slot,
             crate::compositor::op::new_ops_buffer(),
@@ -389,7 +399,6 @@ mod tests {
         let slot = new_capture_slot();
         let _handles = install(
             &lua,
-            "lua-test",
             LuaHostShared::empty(),
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
@@ -427,7 +436,6 @@ mod tests {
         let slot = new_capture_slot();
         let _handles = install(
             &lua,
-            "lua-test",
             LuaHostShared::empty(),
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
@@ -461,7 +469,6 @@ mod tests {
         let slot = new_capture_slot();
         let _handles = install(
             &lua,
-            "lua-test",
             LuaHostShared::empty(),
             slot,
             crate::compositor::op::new_ops_buffer(),

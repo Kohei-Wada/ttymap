@@ -118,7 +118,7 @@ userdatas:
 | `ttymap.tile`    | `:attribution()`                                                                               |
 | `ttymap.config`  | `:geoip_endpoint()`                                                                            |
 | `ttymap.help`    | `:keymap_entries()`, `:palette_entries()`                                                      |
-| `ttymap.log`     | `:info(msg)`, `:warn(msg)`, `:error(msg)` — forward to host log at target `lua[<plugin>]`      |
+| `ttymap.log`     | `:info(msg)`, `:warn(msg)`, `:error(msg)` — forward to host log at target `lua`                |
 
 ### Activation surfaces
 
@@ -129,10 +129,10 @@ Top-level functions the script's setup body calls:
 - `ttymap.api.frame.on_tick(fn)` — sugar for
   `ttymap.on_event("tick", fn)`.
 - `ttymap.register_palette_command({ label, invoke, hint })` — adds a
-  palette row whose `invoke` callback runs in the setup state when
-  selected.
+  palette row whose `invoke` callback runs in the shared Lua state
+  when selected.
 - `ttymap.register_keybind(key, callback)` — single-char top-level
-  keybind. Callback runs in the setup state.
+  keybind. Callback runs in the shared Lua state.
 
 ### Event bus
 
@@ -189,19 +189,25 @@ Bridged via a per-frame Lua table built inside `Lua::scope`
 callback receives this table. **All drawing for non-window plugins
 happens here.**
 
-## Setup state and callback execution
+## Single shared Lua state
 
-Each plugin file runs in its own persistent **setup state** — the
-Lua VM that ran the script's top-level `register_*` calls. That same
-VM is also where:
+ttymap runs **one** Lua VM for the whole subsystem (Neovim-style).
+`init.lua` runs in it first; then every bundled and user plugin
+loads in the same state; then every callback for the program's
+lifetime fires in the same state:
 
-- every `on_tick` callback runs,
-- every palette `invoke` / keybind `callback` runs,
-- any window / palette `spec` is built.
+- every `on_tick` callback runs there,
+- every palette `invoke` / keybind `callback` runs there,
+- any window / palette `spec` is built there,
+- `init.lua`'s `require "ttymap.<name>"` and a plugin's
+  `require "ttymap.<name>"` resolve to **the same cached table**, so
+  init.lua can mutate a config holder before the plugin loads and
+  the plugin reads the mutated value when it loads.
 
-Because they share one Lua state, **plugin-local upvalues** (a
-`state` table, a `w` window-handle reference) are visible across all
-of them. That's how the toggle pattern works:
+Because every plugin shares one Lua state, **plugin-local upvalues**
+(a `state` table, a `w` window-handle reference) are visible across
+the plugin's own `register_*` callbacks. The toggle pattern works
+exactly because the closures share the same module-level locals:
 
 ```lua
 local w = nil
@@ -216,10 +222,40 @@ Component visibility / multi-instance / one-shot self-closing are all
 **plugin-side policy decisions**. Rust just gives you `open` (returns
 a handle) and `:close()` (idempotent flip).
 
+### Per-plugin config from `init.lua`
+
+The single-VM design enables the Neovim-style override pattern: a
+plugin exports a config holder under `<runtime>/lua/ttymap/<name>.lua`,
+the plugin reads it via `require`, and `init.lua` mutates it via
+`require`:
+
+```lua
+-- runtime/lua/ttymap/export.lua  (config holder)
+return { dir = nil }   -- nil → built-in default
+
+-- runtime/plugin/export.lua  (plugin reads it)
+local cfg = require "ttymap.export"
+local function destination()
+    return cfg.dir or os.getenv("PWD") or "."
+end
+ttymap.register_palette_command({
+    label = "Export frame as ANSI",
+    invoke = function() ttymap.api.frame.export(destination()) end,
+})
+
+-- ~/.config/ttymap/init.lua  (user override)
+require("ttymap.export").dir = "/tmp/maps"
+```
+
+The user touches one line in `init.lua` instead of forking the whole
+plugin (the old whole-file shadow pattern is still available but is
+now reserved for the rare case of a totally different plugin
+implementation).
+
 ## Drain pattern (host ↔ plugin)
 
 Lua side is fire-and-forget; App drains per tick. Senders held by the
-setup state:
+shared host handles:
 
 - `jump_tx` — `ttymap.map:jump` → `UserCommand::Map(MapAction::Jump)`
 - `zoom_tx` — `ttymap.map:zoom(level)` setter → `MapAction::SetZoom`
@@ -228,9 +264,10 @@ setup state:
 - `push_tx` — `Box<dyn Component>` queued by `api.card.open` /
   `api.palette.open` → pushed onto the compositor stack
 
-Receivers live on `LuaHostHandles` (returned from `install`); App
-walks every plugin's handles in `drain_lua_host_handles` once per
-loop iteration.
+Receivers live on `LuaHostHandles` (returned once from `install`,
+since there's only one shared install per subsystem); App reads the
+single set of shared cells in `drain_lua_host_handles` once per loop
+iteration.
 
 The same drain-on-each-iteration pattern carries `map:polyline`
 overlays: `App.overlay_sink: Vec<UserPolyline>` is borrowed by the
@@ -244,11 +281,11 @@ via OR-merge into existing braille cells).
 
 `ttymap.map:center()` and `ttymap.map:zoom()` (no-arg getter) read
 shared `Arc<Mutex<...>>` cells. The host refreshes them once per
-loop iteration in `App::drain_lua_host_handles`, before draining each
-plugin's setup-state channels. That means the values are correct in
-**every** callback path — palette `invoke`, `register_keybind`
-callbacks, `on_tick` — not just inside an active window's dispatch.
-Cells are shared with `HostMap` userdata via the same Arc.
+loop iteration in `App::drain_lua_host_handles`, before draining the
+shared op buffer. That means the values are correct in **every**
+callback path — palette `invoke`, `register_keybind` callbacks,
+`on_tick` — not just inside an active window's dispatch. Cells are
+shared with `HostMap` userdata via the same Arc.
 
 ## Runtime path resolution
 
@@ -288,16 +325,19 @@ Runs `cargo install --path .`, then copies `runtime/plugin/`,
 
 ## Config (`init.lua` chain)
 
-Two `init.lua` files run in the same Lua state — last-wins on
-`ttymap.opt.*` and `ttymap.keymap`:
+Two `init.lua` files run **first** in the shared Lua state, before
+any plugin loads — last-wins on `ttymap.opt.*` and `ttymap.keymap`:
 
 1. `<bundled-tier>/init.lua` (first hit among env / manifest / xdg_data)
 2. `~/.config/ttymap/init.lua`
 
-Note: this is a **separate Lua state** from the plugin runtime state
-(`init_lua.rs`). The same `ttymap` global name is reused for `opt` /
-`keymap` (config DSL) — no collision because the scopes don't share a
-VM.
+`init.lua` runs in the same Lua VM that every plugin loads in. The
+init pre-pass installs `ttymap.opt` and `ttymap.keymap` on the
+`ttymap` global; the plugin runtime install (`api::install`) extends
+the same global with `http`, `map`, `api`, `register_*`, `notify`,
+`on_event`. So `init.lua` can both tune `ttymap.opt.*` (host-owned
+settings) AND `require "ttymap.<plugin>"` to mutate plugin-specific
+config holders that the plugin will read when it loads next.
 
 `load_init_lua` exposes:
 

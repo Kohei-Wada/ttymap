@@ -67,14 +67,23 @@ pub struct LuaSubsystem {
 }
 
 /// Build the Lua plugin subsystem: load every `*.lua` under the
-/// runtime path's `plugin/` layers, register their activations /
-/// palette entries / event-bus subscriptions / per-plugin handles,
-/// and assemble the runtime [`LuaHandle`].
+/// runtime path's `plugin/` layers in the **shared** Lua VM
+/// (`lua` argument — the same VM `init.lua` already ran in via
+/// [`load_init_lua`]), register their activations / palette entries
+/// / event-bus subscriptions, and assemble the runtime [`LuaHandle`].
+///
+/// nvim-style: a single Lua state hosts init.lua, every bundled
+/// plugin, and every user plugin. `init.lua`'s `require "ttymap.<X>"`
+/// returns the same module a plugin gets later, so per-plugin config
+/// holders (`runtime/lua/ttymap/<plugin>.lua`) work the natural way:
+/// init.lua mutates the lib's table, the plugin reads the mutated
+/// values when it loads.
 ///
 /// **Does not install the palette** — that step runs from the
 /// composition root after this returns, draining `palette_entries`
 /// into a default `:`-palette provider.
 pub fn build_subsystem(
+    lua: mlua::Lua,
     config: &Config,
     attribution: Option<String>,
     keymap: &KeyMap,
@@ -93,17 +102,37 @@ pub fn build_subsystem(
         keymap_entries(keymap),
     ));
 
+    // Extend the existing `ttymap` global (created by init.lua's
+    // pre-pass with `opt` + `keymap`) with the plugin runtime API:
+    // `http`, `map`, `api`, `register_*`, `notify`, `on_event`. One
+    // install for the whole subsystem; every plugin sees the same
+    // `ttymap` table.
+    let ops = op::new_ops_buffer();
+    let slot = capture::new_capture_slot();
+    let host_handles = match api::install(&lua, shared.clone(), slot.clone(), ops.clone()) {
+        Ok(h) => h,
+        Err(e) => {
+            log::warn!("lua: api::install failed: {} — plugins disabled", e);
+            // Build an empty handle so the App still boots.
+            return LuaSubsystem {
+                handle: LuaHandle::new(std::mem::take(&mut r.event_bus), Vec::new(), ops, shared),
+                activations: Vec::new(),
+                palette_entries: Vec::new(),
+                plugin_hints: Vec::new(),
+            };
+        }
+    };
+
     // Bundled plugins (every `*.lua` under each runtime layer's
     // `plugin/`) always register — disabling one is an edit to the
     // script itself (`enabled = false` in the spec). Higher-priority
     // layers shadow lower ones by stem.
-    let runtime_path = runtime_path();
-    let ops = op::new_ops_buffer();
     loader::register_builtin_plugins(
-        runtime_path,
+        &lua,
+        &slot,
+        runtime_path(),
         &config.plugins.disable,
         shared.clone(),
-        ops.clone(),
         &mut r,
     );
 
@@ -121,15 +150,15 @@ pub fn build_subsystem(
         })
         .collect();
 
-    // Lift the runtime parts (bus + per-plugin host channels) out of
-    // the registrar and wrap them into the [`LuaHandle`] right here,
-    // so callers never see the bus or the channels and never have to
-    // assemble a handle themselves. `shared` lives on as the handle's
-    // own clone — App writes into shared cells (e.g. `current_frame`)
-    // through `LuaHandle` semantic methods.
+    // Lift the runtime parts (bus + the single shared host handles)
+    // out of the registrar and wrap them into the [`LuaHandle`]
+    // right here, so callers never see the bus or the channels and
+    // never have to assemble a handle themselves. `shared` lives on
+    // as the handle's own clone — App writes into shared cells
+    // (e.g. `current_frame`) through `LuaHandle` semantic methods.
     let handle = LuaHandle::new(
         std::mem::take(&mut r.event_bus),
-        std::mem::take(&mut r.lua_host_handles),
+        vec![host_handles],
         ops,
         shared,
     );
@@ -199,7 +228,8 @@ mod tests {
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        loader::register_builtin_plugins(&rtp, &[], shared, op::new_ops_buffer(), &mut r);
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        loader::register_builtin_plugins(&lua, &slot, &rtp, &[], shared, &mut r);
 
         let palette: std::collections::HashSet<String> = r
             .palette_entries
@@ -244,11 +274,28 @@ mod tests {
     /// subscriptions. Mirrors what `register_one` does at
     /// registration time.
     fn parse_spec(source: &str, name: &str) -> (mlua::Lua, capture::CapturedRegistration) {
-        let shared = host::LuaHostShared::empty();
-        let (lua, captured, _handles) =
-            bridge::handle::fresh_load(source, name, "lua-test", shared, op::new_ops_buffer())
-                .expect("load");
+        let lua = new_lua();
+        let slot = capture::new_capture_slot();
+        api::install(
+            &lua,
+            host::LuaHostShared::empty(),
+            slot.clone(),
+            op::new_ops_buffer(),
+        )
+        .expect("install ttymap");
+        let captured = bridge::handle::load_chunk(&lua, source, name, &slot).expect("load chunk");
         (lua, captured)
+    }
+
+    /// Helper for `register_plugins_in`-driven tests. Builds a fresh
+    /// Lua state with the runtime API installed and returns the
+    /// `(lua, slot)` pair the dir-discovery tests pass into the
+    /// loader.
+    fn fresh_loader_state(shared: Arc<host::LuaHostShared>) -> (mlua::Lua, capture::CaptureSlot) {
+        let lua = new_lua();
+        let slot = capture::new_capture_slot();
+        api::install(&lua, shared, slot.clone(), op::new_ops_buffer()).expect("install ttymap");
+        (lua, slot)
     }
 
     #[test]
@@ -316,14 +363,8 @@ mod tests {
 
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            shared.clone(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared.clone(), &mut r);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -371,14 +412,9 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
@@ -397,14 +433,9 @@ mod tests {
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
@@ -428,14 +459,9 @@ mod tests {
 
         let mut r = Registrar::default();
         let disable = vec!["beta".to_string()];
-        register_plugins_in(
-            &dir,
-            None,
-            &disable,
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &disable, shared, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
@@ -457,14 +483,9 @@ mod tests {
         .expect("write init.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -488,14 +509,9 @@ mod tests {
         .expect("write fmt.lua");
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         assert!(
             !labels(&r).iter().any(|l| l.contains("libonly")),
             "lib-only subdir must not register as a plugin"
@@ -513,14 +529,9 @@ mod tests {
         );
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
@@ -601,14 +612,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let mut r = Registrar::default();
-        register_plugins_in(
-            &dir,
-            None,
-            &[],
-            host::LuaHostShared::empty(),
-            op::new_ops_buffer(),
-            &mut r,
-        );
+        let shared = host::LuaHostShared::empty();
+        let (lua, slot) = fresh_loader_state(shared.clone());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         assert!(r.palette_entries.is_empty());
+    }
+
+    /// The whole point of unifying init.lua's VM with the plugin VM:
+    /// a config-holder lib at `runtime/lua/<name>.lua` is reachable
+    /// via `require` from BOTH init.lua AND a plugin script, and
+    /// both round-trips return the same cached table — so a user's
+    /// init.lua can pre-mutate the table and the plugin sees the
+    /// mutation when it loads later. Pre-unification each side held
+    /// its own VM and `require` returned a different copy per VM,
+    /// so this only "worked" via whole-file shadow.
+    /// The whole point of unifying init.lua's VM with the plugin VM:
+    /// a config-holder lib at `runtime/lua/ttymap/<name>.lua` is
+    /// reachable via `require "ttymap.<name>"` from BOTH init.lua
+    /// AND a plugin script, and both round-trips return the same
+    /// cached table — so a user's init.lua can pre-mutate the table
+    /// and the plugin sees the mutation when it loads later. Pre-
+    /// unification each side held its own VM and `require` returned
+    /// a different copy per VM, so this only "worked" via whole-file
+    /// shadow.
+    #[test]
+    fn init_lua_can_seed_config_for_a_plugin_via_require() {
+        // Custom runtime layer with a config holder + a plugin that
+        // reads it. The lib at `lua/ttymap/myplug.lua` exposes a
+        // defaults table; the plugin at `plugin/myplug.lua` reads
+        // `cfg.label` at load time and uses it as its palette
+        // command label.
+        let layer = temp_plugins_dir("init-seeds-plugin-config");
+        std::fs::create_dir_all(layer.join("lua").join("ttymap")).expect("mkdir lua/ttymap");
+        std::fs::create_dir_all(layer.join("plugin")).expect("mkdir plugin");
+        std::fs::write(
+            layer.join("lua").join("ttymap").join("myplug.lua"),
+            "return { label = 'default-label' }",
+        )
+        .expect("write lib");
+        std::fs::write(
+            layer.join("plugin").join("myplug.lua"),
+            r#"
+            local cfg = require "ttymap.myplug"
+            ttymap.register_palette_command({
+                label = cfg.label,
+                invoke = function() return true end,
+            })
+            "#,
+        )
+        .expect("write plugin");
+
+        // init.lua-style pre-pass: same VM, mutates the lib's table
+        // before the plugin runs. The Lua cache makes the plugin's
+        // `require "ttymap.myplug"` return the same table. We
+        // configure `package.path` directly rather than touching the
+        // global runtime path — multiple tests share the global
+        // and a parallel run could otherwise step on each other.
+        let lua = mlua::Lua::new();
+        vm::prepend_package_path(&lua, &layer.join("lua"));
+        lua.load(r#"require("ttymap.myplug").label = "from-init""#)
+            .exec()
+            .expect("init pre-pass");
+
+        let shared = host::LuaHostShared::empty();
+        let slot = capture::new_capture_slot();
+        api::install(&lua, shared.clone(), slot.clone(), op::new_ops_buffer())
+            .expect("install ttymap");
+        let mut r = Registrar::default();
+        loader::register_builtin_plugins(&lua, &slot, &[layer], &[], shared, &mut r);
+
+        let labels: Vec<String> = r.palette_entries.iter().map(|e| e.label.clone()).collect();
+        assert!(
+            labels.iter().any(|l| l == "from-init"),
+            "plugin should read the mutated lib's `label`, got {:?}",
+            labels,
+        );
     }
 }

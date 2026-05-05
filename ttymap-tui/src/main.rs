@@ -92,10 +92,12 @@ fn main() {
         return;
     }
 
-    // Run init.lua first, then override with CLI args. `keymap_overrides`
-    // travels to App::new alongside Config because the keymap is
-    // scripted at the same place but lives in its own data shape.
-    let (mut config, keymap_overrides) = ttymap_tui::lua::load_init_lua(Config::default());
+    // Run init.lua first in a fresh Lua VM, then override with CLI
+    // args. `keymap_overrides` travels to App::new alongside Config
+    // because the keymap is scripted at the same place but lives in
+    // its own data shape. The Lua VM lives on — `build_subsystem`
+    // loads every plugin in this same VM (nvim-style single state).
+    let (lua_vm, mut config, keymap_overrides) = ttymap_tui::lua::load_init_lua(Config::default());
 
     if let Some(v) = cli.lat {
         config.engine.map.lat = v;
@@ -135,7 +137,7 @@ fn main() {
         config.engine.map.lon
     );
 
-    if let Err(e) = run_event_loop(config, keymap_overrides) {
+    if let Err(e) = run_event_loop(lua_vm, config, keymap_overrides) {
         eprintln!("Error: {e}");
     }
 }
@@ -144,7 +146,11 @@ fn main() {
 /// (map / Lua), spawns the off-thread input / frame-timer peers,
 /// then hands control to `App::run`. Every thread handle joins
 /// in its `Drop` impl, so teardown is just RAII at end of scope.
-fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std::io::Result<()> {
+fn run_event_loop(
+    lua_vm: mlua::Lua,
+    config: Config,
+    keymap_overrides: KeybindingOverrides,
+) -> std::io::Result<()> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
     // Active theme — owned by App, consumed by the map only at
@@ -181,7 +187,8 @@ fn run_event_loop(config: Config, keymap_overrides: KeybindingOverrides) -> std:
     // entries / event-bus subscriptions, return the populated bundle.
     // All Lua → App traffic rides the shared `OpsBuffer` built
     // inside `build_subsystem`; no separate intent sender needed.
-    let mut lua = ttymap_tui::lua::build_subsystem(&config, map.attribution.clone(), &keymap);
+    let mut lua =
+        ttymap_tui::lua::build_subsystem(lua_vm, &config, map.attribution.clone(), &keymap);
 
     // Palette is a built-in (not a plugin): drain every plugin's
     // palette_entries into a CommandSeed and append the `:` activation.

@@ -2,28 +2,22 @@
 //! ([`LuaCardComponent`], [`LuaPaletteProvider`], future ones).
 //!
 //! Every adapter does the same two things:
-//! 1. **Construction** — spin up a fresh `Lua` VM, install the
-//!    `ttymap.*` host services, evaluate the source, and stash the
-//!    resulting module table in the Lua registry so dispatch hooks
+//! 1. **Construction** — clone the shared `Lua` VM (cheap Arc bump),
+//!    stash the spec table in the Lua registry so dispatch hooks
 //!    can re-fetch it cheaply.
 //! 2. **Dispatch** — for each trait method, look up `module[name]`,
 //!    call it if present, log + recover if absent or erroring.
 //!
 //! [`LuaBridgeHandle`] owns the registry handle + log tag and provides
-//! [`LuaBridgeHandle::try_call`] for the dispatch shape. [`fresh_load`] is
-//! the one-shot construction helper.
+//! [`LuaBridgeHandle::try_call`] for the dispatch shape. [`load_chunk`]
+//! is the per-plugin loader the registrar walks call.
 //!
 //! [`LuaCardComponent`]: super::card_component::LuaCardComponent
 //! [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 
-use std::sync::Arc;
-
 use mlua::{Lua, RegistryKey, Table};
 
-use crate::lua::api::install;
-use crate::lua::capture::{CapturedRegistration, new_capture_slot};
-use crate::lua::host::{LuaHostHandles, LuaHostShared};
-use crate::lua::new_lua;
+use crate::lua::capture::{CaptureSlot, CapturedRegistration};
 
 /// Per-adapter Lua state + the registry handle for the dispatch
 /// table. Both adapters (Component, PaletteProvider) compose this
@@ -113,40 +107,43 @@ pub enum CallOutcome<R> {
     Errored,
 }
 
-/// Build a fresh Lua state, install host services, run `source`, and
-/// hand back the captured registration for the caller to inspect
-/// before constructing a [`LuaBridgeHandle`].
+/// Run `source` in the shared `lua` VM and return the registrations
+/// the script made via `ttymap.register_*` / `ttymap.on_event` /
+/// `ttymap.api.frame.on_tick`.
 ///
 /// nvim-style: the script's existence in `<runtime>/plugin/` is the
-/// registration. Identity = file stem (the caller passes it as
-/// `chunk_name` and forwards it to the registrar). The script
-/// participates in the host loop by calling some combination of:
+/// registration. Identity = file stem (passed as `chunk_name`). The
+/// script participates in the host loop by calling some combination of:
 ///
 /// - `ttymap.api.frame.on_tick(fn)` — per-frame work (paint markers,
 ///   drain async fetches, etc.)
 /// - `ttymap.register_palette_command({label, invoke})` — palette row
 /// - `ttymap.register_keybind(key, callback)` — top-level keybind
+/// - `ttymap.on_event(name, fn)` — generic event subscription
 ///
 /// At least one of those calls is required; a script that subscribes
 /// to nothing surfaces as an `mlua::Error` here.
 ///
-/// - `chunk_name` is reported in Lua error messages; pass the file
-///   stem so a stack trace pinpoints the script.
-/// - `host_tag` is the HTTP User-Agent suffix for `ttymap.http`.
-/// - `ops` is the shared [`crate::compositor::op::OpsBuffer`] every plugin
-///   clones a handle to; all Lua → App traffic (`Op::Push` /
-///   `Op::Close` / `Op::Command`) lands on it.
-pub fn fresh_load(
+/// `slot` is the per-VM capture buffer the `ttymap.register_*`
+/// closures write into. Caller is responsible for draining it before
+/// each call (the function clears stale captures defensively).
+///
+/// `chunk_name` is reported in Lua error messages — pass the plugin's
+/// file stem so a stack trace pinpoints the script.
+pub fn load_chunk(
+    lua: &Lua,
     source: &str,
     chunk_name: &str,
-    host_tag: &'static str,
-    shared: Arc<LuaHostShared>,
-    ops: crate::compositor::op::OpsBuffer,
-) -> mlua::Result<(Lua, CapturedRegistration, LuaHostHandles)> {
-    let lua = new_lua();
-    let slot = new_capture_slot();
-    let handles = install(&lua, host_tag, shared, slot.clone(), ops)?;
+    slot: &CaptureSlot,
+) -> mlua::Result<CapturedRegistration> {
+    // Drain any leftover captures from a prior load — single shared
+    // slot, single drained-and-attributed bucket per plugin.
+    slot.borrow_mut().palette_commands.clear();
+    slot.borrow_mut().keybinds.clear();
+    slot.borrow_mut().event_subscriptions.clear();
+
     lua.load(source).set_name(chunk_name).exec()?;
+
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()
         || !captured.keybinds.is_empty()
@@ -158,5 +155,5 @@ pub fn fresh_load(
              ttymap.register_palette_command, or ttymap.register_keybind)",
         ));
     }
-    Ok((lua, captured, handles))
+    Ok(captured)
 }

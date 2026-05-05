@@ -37,8 +37,10 @@ use mlua::{Lua, Table};
 use crate::config::Config;
 use crate::input::keymap::KeybindingOverrides;
 
-/// Run the init.lua chain against `defaults` and return the
-/// resulting `(Config, KeybindingOverrides)`. nvim-style sysinit:
+/// Run the init.lua chain against `defaults` in the **shared** Lua
+/// VM and return the resulting `(Config, KeybindingOverrides)` plus
+/// the same VM (so `build_subsystem` can load every plugin in it
+/// next, nvim-style). Sysinit chain:
 ///
 /// 1. Bundled defaults at `<bundled-tier>/init.lua` (first hit
 ///    among env / manifest / xdg_data) — ships with ttymap, edits
@@ -54,7 +56,9 @@ use crate::input::keymap::KeybindingOverrides;
 /// all log + leave the prior state intact. A broken bundled init
 /// still lets the user's init.lua run; a broken user init still
 /// lets the bundled defaults take effect.
-pub fn load_init_lua(defaults: Config) -> (Config, KeybindingOverrides) {
+pub fn load_init_lua(defaults: Config) -> (Lua, Config, KeybindingOverrides) {
+    let lua = crate::lua::new_lua();
+
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     if let Some(p) = bundled_init_path()
         && let Some(src) = read_init_file(&p)
@@ -68,14 +72,14 @@ pub fn load_init_lua(defaults: Config) -> (Config, KeybindingOverrides) {
     }
 
     if sources.is_empty() {
-        return (defaults, KeybindingOverrides::new());
+        return (lua, defaults, KeybindingOverrides::new());
     }
 
-    match exec(&sources, &defaults) {
-        Ok((cfg, km)) => (cfg, km),
+    match exec_in(&lua, &sources, &defaults) {
+        Ok((cfg, km)) => (lua, cfg, km),
         Err(e) => {
             log::warn!("init.lua: chain failed: {}", e);
-            (defaults, KeybindingOverrides::new())
+            (lua, defaults, KeybindingOverrides::new())
         }
     }
 }
@@ -122,17 +126,24 @@ fn bundled_init_path() -> Option<PathBuf> {
 
 /// Inner half of [`load_init_lua`] — pure logic split out so unit
 /// tests can drive Lua source directly without faking the XDG path.
-/// Each source in `sources` runs in turn against the same Lua state;
-/// `ttymap.opt.*` mutations and `ttymap.keymap.set/del` calls
+/// Each source in `sources` runs in turn against the supplied Lua
+/// state; `ttymap.opt.*` mutations and `ttymap.keymap.set/del` calls
 /// accumulate, with the last source winning on conflicts.
-pub(crate) fn exec(
+///
+/// Does **not** drop the Lua state — the same VM is used by
+/// [`crate::lua::build_subsystem`] for plugin loading. The
+/// `KeybindingOverrides` are cloned out from the shared
+/// `Rc<RefCell<…>>` (the closures stored on the `ttymap.keymap`
+/// table still hold a reference but become no-ops once we move past
+/// init.lua).
+pub(crate) fn exec_in(
+    lua: &Lua,
     sources: &[(String, PathBuf)],
     defaults: &Config,
 ) -> mlua::Result<(Config, KeybindingOverrides)> {
-    let lua = crate::lua::new_lua();
     let keymap_state: Rc<RefCell<KeybindingOverrides>> =
         Rc::new(RefCell::new(KeybindingOverrides::new()));
-    install_ttymap_global(&lua, defaults, keymap_state.clone())?;
+    install_ttymap_global(lua, defaults, keymap_state.clone())?;
     for (source, path) in sources {
         if let Err(e) = lua
             .load(source)
@@ -142,12 +153,8 @@ pub(crate) fn exec(
             log::warn!("init.lua: {} failed: {}", path.display(), e);
         }
     }
-    let cfg = read_back(&lua, defaults)?;
-    // Drop the Lua state so the only surviving Rc clone is ours.
-    drop(lua);
-    let keymap = Rc::try_unwrap(keymap_state)
-        .map(RefCell::into_inner)
-        .unwrap_or_else(|rc| rc.borrow().clone());
+    let cfg = read_back(lua, defaults)?;
+    let keymap = keymap_state.borrow().clone();
     Ok((cfg, keymap))
 }
 
@@ -347,8 +354,9 @@ mod tests {
 
     fn run(source: &str) -> (Config, KeybindingOverrides) {
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
+        let lua = crate::lua::new_lua();
         let sources = vec![(source.to_string(), PathBuf::from("test"))];
-        exec(&sources, &Config::default()).expect("exec init.lua")
+        exec_in(&lua, &sources, &Config::default()).expect("exec init.lua")
     }
 
     #[test]
@@ -462,6 +470,7 @@ mod tests {
         // load_init_lua handles a broken bundled init while letting
         // the user's init.lua take effect.
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
+        let lua = crate::lua::new_lua();
         let sources = vec![
             (
                 "this is not lua syntax !!!".to_string(),
@@ -472,7 +481,7 @@ mod tests {
                 PathBuf::from("good"),
             ),
         ];
-        let (cfg, _km) = exec(&sources, &Config::default()).expect("exec");
+        let (cfg, _km) = exec_in(&lua, &sources, &Config::default()).expect("exec");
         assert_eq!(
             cfg.engine.render.style, "bright",
             "a broken layer must not stop a later layer's mutations"
