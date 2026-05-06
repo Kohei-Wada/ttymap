@@ -44,7 +44,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mlua::{Lua, Table};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use super::card_parse::{
     KeyAction, key_code_to_lua, parse_footer_hints, parse_item_value, parse_line_value,
@@ -267,7 +267,21 @@ impl LuaCardComponent {
         }
         self.scroll_offset.set(offset);
 
-        let paragraph = Paragraph::new(lines).style(body).scroll((offset, 0));
+        // Wrap long lines at the inner width instead of truncating —
+        // travel-plugin stop notes, wiki article bodies, etc. routinely
+        // exceed the sidebar's column count. `trim: false` preserves
+        // intentional leading whitespace (e.g. "  ▶ 1. Tokyo" becomes
+        // "  Tokyo — neon nights ..." indentation on overflow rows).
+        // Caveat: with wrap on, the scrollbar's "total" count
+        // undercounts because we feed it input-line count, not the
+        // post-wrap render count. ratatui's Paragraph doesn't expose
+        // the latter; the scrollbar position is still directionally
+        // right (offset increases toward the bottom), just slightly
+        // off in scale. Acceptable for sidebar use.
+        let paragraph = Paragraph::new(lines)
+            .style(body)
+            .scroll((offset, 0))
+            .wrap(Wrap { trim: false });
         win.paragraph(paragraph, inner);
         win.scrollbar(outer, total_lines, offset, inner.height);
     }
