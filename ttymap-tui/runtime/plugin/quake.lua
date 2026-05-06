@@ -19,6 +19,7 @@
 -- meaningful.
 
 local sidebar = require("ttymap.sidebar")
+local anim = require("ttymap.animation")
 
 local URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
 local INTERVAL_SEC = 300
@@ -152,7 +153,7 @@ ttymap.api.frame.on_tick(function(map)
                 local top = highest_magnitude(state.quakes)
                 if top then
                     state.initial_jump_done = true
-                    ttymap.map:jump(top.lon, top.lat)
+                    anim.fly_to(top.lon, top.lat)
                     ttymap.notify(string.format(
                         "quake: %d recent", #state.quakes
                     ))
@@ -211,7 +212,7 @@ local function open_panel()
             end
             if key.code == "Enter" then
                 local q = state.quakes[state.selected]
-                if q then ttymap.map:jump(q.lon, q.lat) end
+                if q then anim.fly_to(q.lon, q.lat) end
                 return nil
             end
             if sidebar.is_close_key(key) then

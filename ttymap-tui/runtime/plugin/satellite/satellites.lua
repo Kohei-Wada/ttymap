@@ -28,6 +28,7 @@
 -- prior body for an hour anyway, so this is a non-issue.
 
 local sidebar = require "ttymap.sidebar"
+local anim = require "ttymap.animation"
 
 local M = {}
 
@@ -157,7 +158,7 @@ function M.make(specs)
             if sats[idx].visible then
                 selected = idx
                 local lon, lat = focus_point(sats[idx])
-                if lon then ttymap.map:jump(lon, lat) end
+                if lon then anim.fly_to(lon, lat) end
                 return
             end
         end
@@ -300,7 +301,7 @@ function M.make(specs)
                 local lon, lat = focus_point(sat)
                 if lon then
                     initial_jump_done = true
-                    ttymap.map:jump(lon, lat)
+                    anim.fly_to(lon, lat)
                     break
                 end
             end
@@ -359,7 +360,7 @@ function M.make(specs)
                     -- Re-centre on the focused sat — handy after the
                     -- user pans away to look at something else.
                     local lon, lat = focus_point(sats[selected])
-                    if lon then ttymap.map:jump(lon, lat) end
+                    if lon then anim.fly_to(lon, lat) end
                     return nil
                 end
 

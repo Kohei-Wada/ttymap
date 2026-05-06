@@ -15,6 +15,7 @@
 -- `search.nominatim`.
 
 local nominatim = require("search.nominatim")
+local anim = require("ttymap.animation")
 
 local state = {
     job = nil,
@@ -90,7 +91,7 @@ local function open()
 
         execute = function(idx)
             local c = state.candidates[idx]
-            if c then ttymap.map:jump(c.lon, c.lat) end
+            if c then anim.fly_to(c.lon, c.lat) end
         end,
 
         is_loading = function() return state.pending end,

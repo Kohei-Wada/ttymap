@@ -8,6 +8,7 @@
 local opensky = require("aircraft.opensky")
 local display = require("aircraft.display")
 local sidebar = require("ttymap.sidebar")
+local anim    = require("ttymap.animation")
 
 local state = {
     aircraft       = {},  -- list of { callsign, lon, lat, on_ground, alt, heading }
@@ -121,7 +122,7 @@ local function open()
             end
             if key.code == "Enter" then
                 local a = state.aircraft[state.selected]
-                if a then ttymap.map:jump(a.lon, a.lat) end
+                if a then anim.fly_to(a.lon, a.lat) end
                 return nil
             end
             if sidebar.is_close_key(key) then

@@ -15,6 +15,7 @@
 
 local fmt = require "ttymap.fmt"
 local sidebar = require "ttymap.sidebar"
+local anim = require "ttymap.animation"
 
 local LANGUAGE = "en"
 local LIMIT = 50
@@ -180,7 +181,7 @@ local function move_selection(direction)
     if n == 0 then return end
     state.selected = sidebar.cycle(state.selected, n, direction)
     local a = state.articles[state.selected]
-    if a then ttymap.map:jump(a.lon, a.lat) end
+    if a then anim.fly_to(a.lon, a.lat) end
 end
 
 -- Detail mode and the empty-state placeholder both render as
@@ -315,7 +316,7 @@ local function open()
                 local a = state.articles[state.selected]
                 if a then
                     state.detail = a
-                    ttymap.map:jump(a.lon, a.lat)
+                    anim.fly_to(a.lon, a.lat)
                 end
                 return nil
             end
