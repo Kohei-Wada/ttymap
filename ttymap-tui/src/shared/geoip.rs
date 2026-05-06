@@ -17,7 +17,7 @@ use ttymap_engine::shared::http::HttpClient;
 /// on any network / parse error or rate-limit response; callers fall
 /// back to their configured default.
 pub fn lookup(endpoint: &str, timeout_ms: u64) -> Option<(f64, f64)> {
-    let http = HttpClient::with_timeout("geoip", Duration::from_millis(timeout_ms));
+    let http = HttpClient::with_timeout("geoip", Duration::from_millis(timeout_ms)).ok()?;
     debug!("geoip: lookup {}", endpoint);
 
     let json: serde_json::Value = http.get_json(endpoint).ok()?;

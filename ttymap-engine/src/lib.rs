@@ -22,9 +22,11 @@
 //!   runtime/geoip fields.
 
 pub mod config;
+pub mod error;
 pub mod geo;
 pub mod map;
 pub mod shared;
 pub mod theme;
 
 pub use config::Config;
+pub use error::EngineError;

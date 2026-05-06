@@ -55,7 +55,9 @@ use crate::config::Config;
 /// would pick a different `TileFetcher`. `FetchLane` provides queue
 /// / dedup / priority for any of them; `decoder::spawn_decoder` and
 /// the cache are backend-agnostic.
-pub fn build(config: &Config) -> (TileCache, crossbeam_channel::Receiver<()>) {
+pub fn build(
+    config: &Config,
+) -> Result<(TileCache, crossbeam_channel::Receiver<()>), crate::EngineError> {
     use directories::ProjectDirs;
     use std::fs;
 
@@ -69,17 +71,23 @@ pub fn build(config: &Config) -> (TileCache, crossbeam_channel::Receiver<()>) {
     const HTTP_WORKERS: usize = 6;
 
     let cache_dir = if config.cache.tiles {
-        ProjectDirs::from("", "", "ttymap").map(|proj_dirs| {
-            let dir = proj_dirs.cache_dir().to_path_buf();
-            let _ = fs::create_dir_all(&dir);
-            dir
-        })
+        match ProjectDirs::from("", "", "ttymap") {
+            Some(proj_dirs) => {
+                let dir = proj_dirs.cache_dir().to_path_buf();
+                fs::create_dir_all(&dir).map_err(|source| crate::EngineError::CacheDir {
+                    path: dir.clone(),
+                    source,
+                })?;
+                Some(dir)
+            }
+            None => None,
+        }
     } else {
         None
     };
 
     let (bytes_tx, bytes_rx) = std::sync::mpsc::channel();
-    let http = HttpFetcher::new();
+    let http = HttpFetcher::new()?;
 
     // The lane wraps an HTTP fetcher; if disk cache is enabled, layer
     // a `DiskCachedFetcher` decorator on top so worker-side hits
@@ -102,8 +110,8 @@ pub fn build(config: &Config) -> (TileCache, crossbeam_channel::Receiver<()>) {
     // lane below.
     let disk_fast_path = cache_dir.map(|cache_dir| DiskFastPath { cache_dir });
 
-    (
+    Ok((
         TileCache::new(lane, decoded_rx, config.cache.memory_tiles, disk_fast_path),
         wake_rx,
-    )
+    ))
 }

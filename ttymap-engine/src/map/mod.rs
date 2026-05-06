@@ -118,7 +118,7 @@ pub fn build(
     rows: u16,
     frame_sink: FrameSink,
     theme_id: ThemeId,
-) -> (RenderHandle, MapHandle) {
+) -> Result<(RenderHandle, MapHandle), crate::EngineError> {
     let (width, height) = render::canvas_size(cols, rows);
 
     log::info!(
@@ -129,7 +129,7 @@ pub fn build(
         height
     );
 
-    let (tile_cache, wake_rx) = tile::build(config);
+    let (tile_cache, wake_rx) = tile::build(config)?;
     let attribution = tile_cache.attribution();
 
     let styler = Arc::new(Styler::new(theme_id));
@@ -156,12 +156,12 @@ pub fn build(
         height,
     );
 
-    (
+    Ok((
         render_handle,
         MapHandle {
             state,
             render_client,
             attribution,
         },
-    )
+    ))
 }

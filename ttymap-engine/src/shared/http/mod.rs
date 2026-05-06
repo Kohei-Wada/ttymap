@@ -54,16 +54,16 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    pub fn new(tag: &'static str) -> Self {
+    pub fn new(tag: &'static str) -> Result<Self, crate::EngineError> {
         Self::with_timeout(tag, DEFAULT_TIMEOUT)
     }
 
-    pub fn with_timeout(tag: &'static str, timeout: Duration) -> Self {
+    pub fn with_timeout(tag: &'static str, timeout: Duration) -> Result<Self, crate::EngineError> {
         let inner = builder()
             .timeout(timeout)
             .build()
-            .expect("reqwest client build");
-        Self { inner, tag }
+            .map_err(crate::EngineError::HttpInit)?;
+        Ok(Self { inner, tag })
     }
 
     /// GET + deserialize as JSON. Low-level `debug!` is emitted per

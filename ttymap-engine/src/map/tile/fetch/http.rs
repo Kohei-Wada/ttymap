@@ -27,24 +27,18 @@ pub struct HttpFetcher {
 
 impl HttpFetcher {
     /// Build a fetcher with the default `mapscii.me` base.
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, crate::EngineError> {
         Self::with_base_url(BASE_URL.to_string())
     }
 
     /// Build a fetcher with a custom base URL — useful for tests
     /// against a local mock server, and for future config-driven
     /// alternative tile sources.
-    pub fn with_base_url(base_url: String) -> Self {
-        Self {
-            http: HttpClient::with_timeout("tile", Duration::from_secs(10)),
+    pub fn with_base_url(base_url: String) -> Result<Self, crate::EngineError> {
+        Ok(Self {
+            http: HttpClient::with_timeout("tile", Duration::from_secs(10))?,
             base_url,
-        }
-    }
-}
-
-impl Default for HttpFetcher {
-    fn default() -> Self {
-        Self::new()
+        })
     }
 }
 
@@ -67,14 +61,14 @@ mod tests {
 
     #[test]
     fn url_uses_base_plus_zxy_pbf() {
-        let fetcher = HttpFetcher::with_base_url("http://example.test".to_string());
+        let fetcher = HttpFetcher::with_base_url("http://example.test".to_string()).unwrap();
         assert_eq!(fetcher.base_url, "http://example.test");
         assert_eq!(fetcher.attribution(), ATTRIBUTION);
     }
 
     #[test]
     fn default_uses_mapscii_me_https_base() {
-        let fetcher = HttpFetcher::new();
+        let fetcher = HttpFetcher::new().unwrap();
         assert_eq!(fetcher.base_url, "https://mapscii.me");
     }
 }

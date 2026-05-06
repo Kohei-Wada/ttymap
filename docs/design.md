@@ -254,3 +254,47 @@ labelling, polygon fill, Braille packing) to the render thread
 where it belongs. If a plugin's `on_tick` ever became the bottleneck,
 the right move is to push *that* plugin's compute back to a worker
 thread, not to redesign the boundary.
+
+## Error boundary policy
+
+The engine has one explicit error boundary: **anything reachable
+from `ttymap-tui` through `pub` items in `ttymap-engine` must
+return `Result<_, EngineError>` instead of panicking**. Inside
+that boundary, hot paths keep `unwrap` / `expect`.
+
+The cut, in concrete terms:
+
+- **Public boundary** (`Result<_, EngineError>`): `map::build`,
+  `map::tile::build`, `shared::http::HttpClient::new` /
+  `with_timeout`, and any future public spawn / construction
+  helpers. The TUI binary is the sole external caller — it
+  funnels these to `log::error!` / stderr instead of crashing.
+  `EngineError` is defined in `ttymap-engine/src/error.rs`
+  (thiserror) and folds the existing `shared::http::FetchError`
+  in as a `#[from]` variant so narrow callers (e.g. the Lua
+  `ttymap.http` bridge) can keep using the tighter type.
+- **Internal hot paths** keep their `unwrap`s: the decoder's
+  zigzag stream, the renderer's coordinate / clipping math,
+  Braille bit packing, earcut triangulation, polyline antimeridian
+  split. These are per-frame / per-tile invariants — surfacing
+  them through `Result` would only add an error path on every
+  draw with no real recovery for the caller.
+- **`catch_unwind` islands** (`render::thread::run_loop`,
+  `tile::decoder::spawn_decoder`) are intentional: a panic
+  inside one render frame or one tile decode is contained,
+  logged, and the worker keeps serving. These are *not* a
+  replacement for the public-boundary `Result` rule — they
+  exist because we cannot afford to tear down the whole
+  pipeline for one bad tile.
+- **Mutex poisoning** (`fetch/lane.rs`) currently panics on
+  poison. This is out of scope here — issue #86 owns the
+  mutex-poison policy.
+
+When adding a new engine public API: if the operation can fail
+in a way the caller might want to recover from (config / disk /
+network / spawn), return `Result<_, EngineError>` and add a
+variant if needed. If the failure is an internal invariant
+violation, `unwrap`/`expect` is fine — but consider whether the
+call site really belongs on the public boundary or should be
+hidden behind a constructor that already absorbed the
+invariant.
