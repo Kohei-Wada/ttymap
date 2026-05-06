@@ -13,6 +13,10 @@
 --   anim.fly_to(lon, lat)                            -- pan only, default frames
 --   anim.fly_to(lon, lat, zoom)                      -- with zoom change
 --   anim.fly_to(lon, lat, zoom, { frames = 60 })     -- override duration
+--   anim.fly_to(lon, lat, zoom, {                    -- with completion hooks
+--       on_done   = function() ... end,              --   fired when animation reaches target
+--       on_cancel = function() ... end,              --   fired when animation gets pre-empted
+--   })
 --
 -- Cancellation: a single animation is in flight at a time. A new
 -- `fly_to` call replaces the previous one (smoothly — the new `from`
@@ -20,7 +24,10 @@
 -- input (h/j/k/l pan, +/- zoom, mouse drag) interrupts the animation:
 -- detected by comparing the live map state against the value we
 -- dispatched last frame. If they diverge beyond tolerance, someone
--- else moved the map, so we yield.
+-- else moved the map, so we yield. The `on_cancel` callback (if any)
+-- fires once on pre-emption — by manual input *or* by a fresh
+-- `fly_to` call replacing the in-flight animation. `on_done` fires
+-- only on natural completion.
 
 local M = {}
 
@@ -69,16 +76,33 @@ local function lerp_lon(a, b, t)
     return lon
 end
 
+-- Helper: clear `active` and fire its `on_cancel` callback (if any).
+-- Used by both manual-input pre-emption and by a fresh `fly_to` that
+-- replaces an in-flight animation. Defensive against the callback
+-- itself triggering side effects that re-read `active`.
+local function cancel_active()
+    if not active then return end
+    local cb = active.on_cancel
+    active = nil
+    if cb then cb() end
+end
+
 function M.fly_to(target_lon, target_lat, target_zoom, opts)
     opts = opts or {}
+    -- A fresh fly_to over an in-flight animation is a pre-emption —
+    -- the previous target won't be reached, so its `on_cancel` fires
+    -- (mirrors manual-input pre-emption semantics).
+    cancel_active()
     local lon, lat = ttymap.map:center()
     local zoom = ttymap.map:zoom()
     active = {
-        from     = { lon, lat, zoom },
-        to       = { target_lon, target_lat, target_zoom or zoom },
-        frames   = opts.frames or DEFAULT_FRAMES,
-        elapsed  = 0,
-        expected = nil,
+        from      = { lon, lat, zoom },
+        to        = { target_lon, target_lat, target_zoom or zoom },
+        frames    = opts.frames or DEFAULT_FRAMES,
+        elapsed   = 0,
+        expected  = nil,
+        on_done   = opts.on_done,
+        on_cancel = opts.on_cancel,
     }
 end
 
@@ -94,7 +118,7 @@ ttymap.api.frame.on_tick(function()
         if math.abs(lon - active.expected[1]) > TOL_LL
             or math.abs(lat - active.expected[2]) > TOL_LL
             or math.abs(zoom - active.expected[3]) > TOL_ZOOM then
-            active = nil
+            cancel_active()
             return
         end
     end
@@ -110,7 +134,9 @@ ttymap.api.frame.on_tick(function()
     active.expected = { lon, lat, z }
 
     if t >= 1 then
+        local cb = active.on_done
         active = nil
+        if cb then cb() end
     end
 end)
 

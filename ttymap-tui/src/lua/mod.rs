@@ -256,6 +256,7 @@ mod tests {
             "export",
             "help",
             "search",
+            "travel",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),
