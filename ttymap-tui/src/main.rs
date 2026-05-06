@@ -222,7 +222,12 @@ fn run_event_loop(
     let _frame_timer = FrameTimer::spawn(event_tx.clone(), app.poll_timeout());
 
     log::info!("event loop started");
-    app.run(&mut terminal, &event_rx, &event_tx)?;
+    // Capture the result so terminal teardown runs on both success and
+    // error paths. Without this, an Err from `app.run` would short-
+    // circuit via `?` and skip the kitty / mouse-capture / ratatui
+    // restore below — leaving the terminal in raw mode + alternate
+    // screen while main's error-print fires.
+    let run_result = app.run(&mut terminal, &event_rx, &event_tx);
     log::info!("event loop ended");
 
     if kitty_pushed {
@@ -231,8 +236,8 @@ fn run_event_loop(
             crossterm::event::PopKeyboardEnhancementFlags
         );
     }
-    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     log::info!("terminal restored, exiting");
-    Ok(())
+    run_result.map_err(Into::into)
 }
