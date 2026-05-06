@@ -116,6 +116,21 @@ impl UserData for HostMap {
             let ll = *this.center.lock().expect("center mutex poisoned");
             Ok((ll.lon, ll.lat))
         });
+
+        // `ttymap.map:set_labels_visible(b)` — show / hide every
+        // tile-rendered text label (place names, road names …).
+        // Geometry features (roads, water, fills) keep rendering.
+        // Used by `geo_quiz` hard mode to suppress city-name hints;
+        // any plugin can flip it for screenshot-style clean views.
+        // The flag flips on the render thread and a redraw fires
+        // automatically (the dispatcher pairs it with
+        // `request_map_redraw`).
+        methods.add_method("set_labels_visible", |_, this, visible: bool| {
+            this.ops
+                .borrow_mut()
+                .push(Op::Command(UserCommand::SetLabelsVisible(visible)));
+            Ok(())
+        });
     }
 }
 

@@ -83,6 +83,11 @@ pub enum UserCommand {
     /// canvas dimensions so the render pipeline allocates the right
     /// buffer size for the visible map area.
     ToggleSidebar,
+    /// Toggle tile-rendered text labels (place names, road names,
+    /// …) on the render thread. Geometry features keep rendering.
+    /// Plugin-driven — `ttymap.map:set_labels_visible(b)` is the
+    /// canonical caller (e.g. geo_quiz hard mode hides hints).
+    SetLabelsVisible(bool),
 }
 
 impl UserCommand {

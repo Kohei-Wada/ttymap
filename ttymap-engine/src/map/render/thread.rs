@@ -37,6 +37,11 @@ pub enum RenderTask {
         height: usize,
     },
     SetStyler(Arc<Styler>),
+    /// Toggle tile text labels on / off. The render thread flips
+    /// the renderer's flag in order with other tasks, so a
+    /// `SetLabelsVisible` issued *between* two Draws will only
+    /// affect the second.
+    SetLabelsVisible(bool),
     Shutdown,
 }
 
@@ -81,6 +86,19 @@ impl RenderClient {
     pub fn set_styler(&self, styler: Arc<Styler>) {
         if self.task_tx.send(RenderTask::SetStyler(styler)).is_err() {
             log::warn!("render thread channel closed on set_styler");
+        }
+    }
+
+    /// Toggle tile text labels on the render thread. Caller must
+    /// follow up with a `request_draw` to see the change — this
+    /// command alone only flips the flag.
+    pub fn set_labels_visible(&self, visible: bool) {
+        if self
+            .task_tx
+            .send(RenderTask::SetLabelsVisible(visible))
+            .is_err()
+        {
+            log::warn!("render thread channel closed on set_labels_visible");
         }
     }
 }
@@ -189,6 +207,10 @@ fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
         }
         RenderTask::SetStyler(styler) => {
             pipeline.set_styler(styler);
+            TaskOutcome::Continue
+        }
+        RenderTask::SetLabelsVisible(visible) => {
+            pipeline.set_labels_visible(visible);
             TaskOutcome::Continue
         }
         RenderTask::Shutdown => TaskOutcome::Shutdown,

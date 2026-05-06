@@ -157,6 +157,13 @@ impl RenderPipeline {
         self.renderer.set_styler(styler);
     }
 
+    /// Show / hide tile text labels. Forwards to the underlying
+    /// `Renderer`. No tile cache flush — the styler still classifies
+    /// features the same; only the second-pass symbol draw is gated.
+    pub fn set_labels_visible(&mut self, visible: bool) {
+        self.renderer.set_labels_visible(visible);
+    }
+
     // ── Private ──────────────────────────────────────────────────────────
 
     /// Compute the set of visible tiles for a viewport against the

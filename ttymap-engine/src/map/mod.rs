@@ -94,6 +94,13 @@ impl MapHandle {
         self.render_client.set_styler(styler);
     }
 
+    /// Toggle tile-rendered text labels on the render thread.
+    /// Caller is responsible for the follow-up [`Self::request_redraw`]
+    /// — flipping the flag alone won't redraw the visible frame.
+    pub fn set_labels_visible(&self, visible: bool) {
+        self.render_client.set_labels_visible(visible);
+    }
+
     /// Queue a fresh `RenderTask::Draw` against the current
     /// viewport, carrying any per-frame overlays the caller has
     /// collected (e.g. Lua-pushed polylines drained from
