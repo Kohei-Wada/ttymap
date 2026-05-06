@@ -37,7 +37,7 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider. The list is the answer to "what is ttymap actually for":
+17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for":
 
 | Plugin | What it does |
 | --- | --- |
@@ -45,6 +45,7 @@ Tokyo zoomed in with the wiki panel open:
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
 | `center` | Crosshair at the map centre — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
+| `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map centre lands as close as possible. Submit with Enter, see the great-circle error and a 0-2000 score; Enter again starts the next round. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
 | `info` | Status / debug readouts (zoom, centre, tile cache hit rate). |

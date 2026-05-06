@@ -373,18 +373,19 @@ Errors at any layer are logged + recovered; the chain keeps walking.
 
 ## Bundled plugins (`runtime/plugin/`)
 
-16 total. Each plugin is a reference implementation of one shape —
+17 total. Each plugin is a reference implementation of one shape —
 always-on chrome (`attribution`, `scalebar`, `help`), toggleable
 overlay (`center`, `here`, `ping_simulation`, `terminator`),
 toggleable side panel (`info`, `notify`, `aircraft`, `satellite`,
-`wiki`, `travel`), palette one-shot (`export`, `quake`), or palette
-provider (`search`):
+`wiki`, `travel`), palette one-shot (`export`, `quake`), palette
+provider (`search`), or quick game (`geo_quiz`):
 
 ```
 aircraft/        attribution.lua  center.lua         export.lua
-help.lua         here.lua         info.lua           notify.lua
-ping_simulation.lua  quake.lua    satellite/         scalebar.lua
-search/          terminator.lua   travel/            wiki/
+geo_quiz.lua     help.lua         here.lua           info.lua
+notify.lua       ping_simulation.lua  quake.lua      satellite/
+scalebar.lua     search/          terminator.lua    travel/
+wiki/
 ```
 
 Directory plugins (`aircraft/`, `satellite/`, `search/`, `travel/`,
