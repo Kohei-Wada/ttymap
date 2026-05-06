@@ -150,6 +150,7 @@ impl TileCache {
         let key = TileKey::new(z, x, y);
 
         if self.memory_cache.contains(&key) {
+            debug!("cache: memory hit {}", key);
             return self.memory_cache.get(&key);
         }
 
@@ -157,6 +158,12 @@ impl TileCache {
             && let Some(bytes) = disk::read_disk(&fast.cache_dir, &key)
         {
             let decoded = super::decode::decode(&bytes);
+            debug!(
+                "cache: disk hit {} ({} bytes, {} layers)",
+                key,
+                bytes.len(),
+                decoded.layers.len()
+            );
             self.memory_cache.put(key.clone(), decoded);
             return self.memory_cache.get(&key);
         }
