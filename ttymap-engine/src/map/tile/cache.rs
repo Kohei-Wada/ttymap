@@ -1,4 +1,4 @@
-//! Tile cache (orchestrator) — memory LRU + view state + prefetch.
+//! Tile cache (orchestrator) — memory LRU + view state.
 //!
 //! After the three-layer-pipe refactor, decoding is on its own thread
 //! (`super::decoder`) and arrivals here are already `DecodedTile`s.
@@ -168,63 +168,6 @@ impl TileCache {
         };
         self.client.enqueue(&key, priority);
         None
-    }
-
-    /// Prefetch nearby tiles for smoother panning/zooming.
-    pub fn prefetch(&mut self, center_lon: f64, center_lat: f64, zoom: f64) {
-        let z = crate::geo::base_zoom(zoom);
-        let center = crate::geo::ll2tile(center_lon, center_lat, z);
-        let grid_size = crate::geo::tile_grid_size(z);
-        let cx = center.x.floor() as i32;
-        let cy = center.y.floor() as i32;
-
-        // 1-tile border (no corners)
-        for dy in -2i32..=2 {
-            for dx in -2i32..=2 {
-                if (-1..=1).contains(&dx) && (-1..=1).contains(&dy) {
-                    continue;
-                }
-                if dx.abs() == 2 && dy.abs() == 2 {
-                    continue;
-                }
-                let ty = cy + dy;
-                if ty < 0 || ty >= grid_size {
-                    continue;
-                }
-                let tx = (cx + dx).rem_euclid(grid_size);
-                self.get_tile(z, tx, ty);
-            }
-        }
-
-        // z+1: all 4 children of the center tile, so a zoom-in lands on
-        // already-warm tiles regardless of which quadrant the view
-        // fractionally sits on.
-        if z < 14 {
-            let g = crate::geo::tile_grid_size(z + 1);
-            let base_x = cx * 2;
-            let base_y = cy * 2;
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let ty = base_y + dy;
-                    if ty < 0 || ty >= g {
-                        continue;
-                    }
-                    let tx = (base_x + dx).rem_euclid(g);
-                    self.get_tile(z + 1, tx, ty);
-                }
-            }
-        }
-
-        // z-1 center
-        if z > 0 {
-            let c = crate::geo::ll2tile(center_lon, center_lat, z - 1);
-            let g = crate::geo::tile_grid_size(z - 1);
-            let tx = (c.x.floor() as i32).rem_euclid(g);
-            let ty = c.y.floor() as i32;
-            if ty >= 0 && ty < g {
-                self.get_tile(z - 1, tx, ty);
-            }
-        }
     }
 }
 

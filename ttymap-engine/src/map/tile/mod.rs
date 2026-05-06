@@ -14,7 +14,7 @@
 //!   property.rs  — feature property value type and accessors
 //!   decode/      — pure protobuf → `DecodedTile` (geometry / tags / decompress)
 //!   decoder.rs   — relay thread: bytes → `DecodedTile`, off the render thread
-//!   cache.rs     — memory LRU + view state + prefetch (orchestrator)
+//!   cache.rs     — memory LRU + view state (orchestrator)
 //!   fetch/       — backends that produce bytes (HTTP today, more later);
 //!                  `TileFetcher` is per-backend, `FetchLane<F>` is generic
 //!                  queue / workers / dedup / priority
