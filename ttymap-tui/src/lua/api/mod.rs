@@ -158,7 +158,7 @@ pub fn install(
     ttymap.set(
         "http",
         lua.create_userdata(http::HostHttp {
-            http: HttpClient::new("lua"),
+            http: HttpClient::new("lua").map_err(mlua::Error::external)?,
         })?,
     )?;
     ttymap.set(

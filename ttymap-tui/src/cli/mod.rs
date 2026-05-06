@@ -3,11 +3,9 @@
 //! on CLI parsing + process-level setup.
 //!
 //! Adding a subcommand:
-//!   1. Create `src/commands/<name>.rs` with `pub fn run(...) -> io::Result<()>`
+//!   1. Create `src/commands/<name>.rs` with `pub fn run(...) -> Result<(), Box<dyn std::error::Error>>`
 //!   2. Add a `pub mod <name>;` line below.
 //!   3. Add the variant to [`Command`] and a match arm in [`Command::run`].
-
-use std::io;
 
 use clap::Subcommand;
 
@@ -21,7 +19,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn run(self) -> io::Result<()> {
+    pub fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::Snap(args) => snap::run(args),
         }

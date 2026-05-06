@@ -78,7 +78,7 @@ pub struct SnapArgs {
     pub timeout_ms: u64,
 }
 
-pub fn run(args: SnapArgs) -> io::Result<()> {
+pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
     // snap is headless and doesn't react to keymap, so we drop the
     // keymap overrides and the Lua state returned by load_init_lua.
     // `Config` carries every other init.lua-tunable knob
@@ -93,9 +93,9 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
                 config.engine.map.lon = lon;
             }
             None => {
-                return Err(io::Error::other(
+                return Err(Box::new(io::Error::other(
                     "geoip lookup failed; pass --lat/--lon explicitly or check network",
-                ));
+                )));
             }
         }
     } else {
@@ -131,7 +131,7 @@ pub fn run(args: SnapArgs) -> io::Result<()> {
     // tile::build spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
-    let (tile_cache, _wake_rx) = ttymap_engine::map::tile::build(&config.engine);
+    let (tile_cache, _wake_rx) = ttymap_engine::map::tile::build(&config.engine)?;
     let theme_id = ThemeId::from_name(&config.engine.render.style);
     let styler = Arc::new(Styler::new(theme_id));
     let mut pipeline = RenderPipeline::new(

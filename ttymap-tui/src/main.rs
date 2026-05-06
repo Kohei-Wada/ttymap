@@ -150,7 +150,7 @@ fn run_event_loop(
     lua_vm: mlua::Lua,
     config: Config,
     keymap_overrides: KeybindingOverrides,
-) -> std::io::Result<()> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
     // Active theme — owned by App, consumed by the map only at
@@ -176,7 +176,7 @@ fn run_event_loop(
     // `_render_handle` is a peer to `_input` / `_frame_timer` — held
     // here for `Drop`-driven shutdown, not used otherwise.
     let (_render_handle, map) =
-        ttymap_engine::map::build(&config.engine, cols, rows, frame_sink, theme_id);
+        ttymap_engine::map::build(&config.engine, cols, rows, frame_sink, theme_id)?;
 
     // Keymap is shared input by both the Lua subsystem (help plugin
     // displays it; palette uses it for prefix matching) and the
