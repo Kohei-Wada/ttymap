@@ -417,6 +417,7 @@ here.
 | `ttymap.sidebar`        | `.up_pressed` / `.down_pressed` / `.is_close_key` / `.cycle`  |
 | `ttymap.animation`      | `.fly_to(lon, lat, zoom, opts?)` — frame-based pan animation  |
 | `ttymap.director`       | `.run(fn, opts?)` / `.fly` / `.wait` / `.tween` — coroutine-based scheduler |
+| `ttymap.cities`         | array of `{lon, lat, name, country}` — ~170 worldwide cities  |
 
 `ttymap.animation.fly_to` interpolates `ttymap.map:fly_to` over ~30
 frames (default), with optional `on_done` / `on_cancel` callbacks
