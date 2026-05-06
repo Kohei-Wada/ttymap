@@ -53,7 +53,9 @@
 //! ttymap.api.palette.open(spec) -> Handle   push a palette provider
 //!                                            onto the stack; handle:close()
 //!                                            pops it (idempotent)
-//! ttymap.api.frame.export()                 snapshot the current frame to disk
+//! ttymap.api.frame.to_ansi() -> string?    latest frame as ANSI bytes,
+//!                                            or nil if no frame yet (caller
+//!                                            decides where to persist)
 //! ttymap.api.frame.on_tick(callback)        register a per-frame callback
 //!                                            (called with `MapApi`); multiple
 //!                                            calls per script are stacked

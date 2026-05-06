@@ -192,7 +192,7 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
 `ttymap` global (not under `ttymap.api`) — it enqueues a `notify`
 event on the host bus. The bundled `notify` plugin subscribes via
 `ttymap.on_event("notify", ...)` and renders recent entries
-top-right.
+top-left.
 
 ### MapApi (per-frame drawing)
 

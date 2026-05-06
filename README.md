@@ -48,7 +48,7 @@ Tokyo zoomed in with the wiki panel open:
 | `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map centre lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
-| `info` | Status / debug readouts (zoom, centre, tile cache hit rate). |
+| `info` | Top-right readouts: centre, cursor, zoom, reverse-geocoded place name (Nominatim). |
 | `notify` | Top-left toast popup for every `ttymap.notify(...)` call from any plugin. |
 | `ping_simulation` | "Cyber-attack visualisation"-style growing lines pinging between cities — reference for animated polyline overlays. |
 | `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; coloured markers + sidebar list, auto-jumps to the highest-magnitude event. |

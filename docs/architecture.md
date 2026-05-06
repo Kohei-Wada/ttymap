@@ -29,7 +29,7 @@ mechanics (message flow, render flow, focus, threads).
 ```
 raw event
   ↓ keyboard / mouse / Lua callback / tile arrival / frame timer
-  ↓ produces 0..N UserCommand or AppEvent::FrameReady (pure translation)
+  ↓ produces 0..N UserCommand or AppEvent (FrameReady / Input / Wake / Bus)
   ↓
 App::dispatch(intent)
   ↓
