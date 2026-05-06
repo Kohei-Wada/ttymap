@@ -29,13 +29,24 @@
 -- in charge of the view" convention.
 
 local sidebar = require "ttymap.sidebar"
-local anim    = require "ttymap.animation"
 
 local CELL_DEG        = 10   -- 10° per grid cell (18 × 36 = 648 cells worldwide)
 local TICKS_PER_STEP  = 20   -- ~3 steps/sec at 60fps
 local START_LON       = 0
 local START_LAT       = 30
 local INITIAL_GROWTH  = 3    -- cells gained per fruit
+
+-- Zoom autoscale: as the snake grows, zoom OUT so it stays
+-- usable in the visible window (slither.io convention). The
+-- camera locks on the head every step — manual pan/zoom keys
+-- are absorbed by the focused card.
+local function zoom_for_length(n)
+    if     n < 5  then return 4
+    elseif n < 15 then return 3
+    elseif n < 30 then return 2
+    else               return 1
+    end
+end
 
 -- ── Famous cities — fruit spawns here. Spread across continents
 --    so the snake is forced to cover ground. Coordinates snap to
@@ -164,6 +175,13 @@ local function game_over(reason)
     ttymap.notify(state.last_msg)
 end
 
+local function center_on_head()
+    local head = state.body[1]
+    if head then
+        ttymap.map:fly_to(head.lon, head.lat, zoom_for_length(#state.body))
+    end
+end
+
 local function start()
     state.body         = { { lon = snap(START_LON), lat = snap(START_LAT) } }
     state.direction    = "east"
@@ -174,10 +192,11 @@ local function start()
     state.last_msg     = nil
     spawn_food()
     state.enabled = true
-    -- Glide to a world view so the whole board is visible. Player
-    -- may pan / zoom freely after — the game keeps painting at the
-    -- snake's actual coords.
-    anim.fly_to(0, 20, 3)
+    -- Slither.io-style: camera locks on the head and auto-zooms
+    -- out as the snake grows. The card's handle_key absorbs all
+    -- non-direction keys, so manual pan/zoom can't drift the view
+    -- mid-game.
+    center_on_head()
 end
 
 -- Direction reversal blocker — can't go from east → west in one
@@ -202,9 +221,8 @@ ttymap.api.frame.on_tick(function(map)
         -- card is still open so the player sees their final shape.
         if state.w and #state.body > 0 then
             for i, b in ipairs(state.body) do
-                local glyph = (i == 1) and "●" or "○"
-                local color = (i == 1) and "accent_alt" or "muted"
-                map:point(b.lon, b.lat, glyph, color)
+                local glyph = (i == 1) and "◎" or "●"
+                map:point(b.lon, b.lat, glyph, "muted")
             end
         end
         return
@@ -241,11 +259,16 @@ ttymap.api.frame.on_tick(function(map)
             ttymap.notify(state.last_msg)
             spawn_food()
         end
+        -- Camera always tracks the head — re-centre after the
+        -- step. The zoom recomputes from the (possibly grown)
+        -- body length so the visible window stays reasonable as
+        -- the snake gets longer.
+        center_on_head()
     end
 
     -- Draw snake.
     for i, b in ipairs(state.body) do
-        local glyph = (i == 1) and "●" or "○"
+        local glyph = (i == 1) and "◎" or "●"
         local color = (i == 1) and "accent" or "accent_alt"
         map:point(b.lon, b.lat, glyph, color)
     end
@@ -293,10 +316,10 @@ local function open_card()
                 return nil
             end
             -- Direction keys: arrows + hjkl. Block reverse via
-            -- set_direction. Anything else falls through to the
-            -- base layer (so map pan / palette / theme switch
-            -- still work mid-game — slightly cheating but useful
-            -- for adjusting the view).
+            -- set_direction. Every other key returns nil — the
+            -- card OWNS input during the game (slither.io style),
+            -- so manual pan / zoom / palette can't drift the
+            -- camera away from the head.
             local code = key.code
             if code == "Up"
                 or (code == "Char" and key.char == "k") then
@@ -314,7 +337,7 @@ local function open_card()
                 or (code == "Char" and key.char == "l") then
                 set_direction("east"); return nil
             end
-            return { ignore = true }
+            return nil  -- consume everything else; no fall-through
         end,
     })
 end
