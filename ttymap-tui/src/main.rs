@@ -48,7 +48,7 @@ struct Cli {
     /// level argument: `--log` alone is `debug`; `--log info` /
     /// `--log trace` etc. select an explicit level. Without the flag
     /// no logger is installed (log macros become no-ops).
-    #[arg(long, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug")]
+    #[arg(long, value_name = "LEVEL", num_args = 0..=1, default_missing_value = "debug", global = true)]
     log: Option<String>,
 }
 
