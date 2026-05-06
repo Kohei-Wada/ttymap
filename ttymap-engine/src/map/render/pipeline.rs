@@ -71,21 +71,40 @@ impl RenderPipeline {
     /// instant instead of flashing black while HTTP fetches run.
     ///
     /// Three layers:
-    /// 1. Pan ring at the current zoom (inherited from
-    ///    `tile_cache::prefetch` — a 2-tile ring around the center).
+    /// 1. Outer ring at distance 2 from the center tile at the current
+    ///    zoom — pre-warms tiles for short pans before they enter the
+    ///    visible window.
     /// 2. **Every visible tile's four children at z+1**, so a
     ///    zoom-in lands on already-warm tiles wherever the user is
     ///    looking (not just near the center).
     /// 3. **Every visible tile's parent at z-1** (deduped because
     ///    adjacent tiles share a parent), so zoom-out is also warm.
     pub fn prefetch(&mut self, vp: &Viewport) {
-        // Current-zoom pan ring + center-tile z±1 (kept as-is).
-        self.tile_cache
-            .prefetch(vp.center.lon, vp.center.lat, vp.zoom);
+        let z = crate::geo::base_zoom(vp.zoom);
+        let grid = crate::geo::tile_grid_size(z);
+        let center = crate::geo::ll2tile(vp.center.lon, vp.center.lat, z);
+        let cx = center.x.floor() as i32;
+        let cy = center.y.floor() as i32;
+
+        // Outer ring at distance 2 (5×5 minus inner 3×3 minus corners).
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                if (-1..=1).contains(&dx) && (-1..=1).contains(&dy) {
+                    continue;
+                }
+                if dx.abs() == 2 && dy.abs() == 2 {
+                    continue;
+                }
+                let ty = cy + dy;
+                if ty < 0 || ty >= grid {
+                    continue;
+                }
+                let tx = (cx + dx).rem_euclid(grid);
+                self.tile_cache.get_tile(z, tx, ty);
+            }
+        }
 
         let visible = self.visible_tiles_for(vp);
-
-        let z = crate::geo::base_zoom(vp.zoom);
 
         // z+1: every visible tile's four children.
         if z < 14 {
