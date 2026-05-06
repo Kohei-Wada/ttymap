@@ -37,7 +37,7 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider. The list is the answer to "what is ttymap actually for":
+17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and one full game. The list is the answer to "what is ttymap actually for":
 
 | Plugin | What it does |
 | --- | --- |
@@ -54,6 +54,7 @@ Tokyo zoomed in with the wiki panel open:
 | `satellite` | Multi-sat tracker (ISS, Hubble, …) with TLE fetch from CelesTrak and SGP4 propagation in Lua. |
 | `scalebar` | Bottom-right scale ruler that adapts to current zoom. |
 | `search` | Forward geocoding via Nominatim, palette-provider style with debounced input. |
+| `snake` | Classic Snake game played on the world map. Eat 🍎 placed on famous cities, grow, dodge yourself; arrows / hjkl to move. Demonstrates that the same on_tick + map:point primitives that drive scientific overlays also drive a playable real-time game. |
 | `terminator` | Day/night boundary as a polyline; ☀ subsolar / ☾ antisolar markers; updates from the wall clock. |
 | `travel` | Curated multi-country itineraries (Japan + Italy out of the box) with an animated tour: pre-overview → stop loop → post-overview, driven by `ttymap.director`. |
 | `wiki` | Wikipedia geosearch — markers + side panel of nearby articles; Enter opens an extract paragraph. |

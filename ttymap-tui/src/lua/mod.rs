@@ -258,6 +258,7 @@ mod tests {
             "search",
             "travel",
             "terminator",
+            "snake",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),
