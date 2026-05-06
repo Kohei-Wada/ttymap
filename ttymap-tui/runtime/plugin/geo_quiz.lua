@@ -1,34 +1,36 @@
 -- geo_quiz — "find the city before time runs out" geography game.
 --
 -- A target city pops up; you have ~30 seconds to pan / zoom the
--- map so that its **centre** lands as close to the city as
--- possible. Enter locks your guess (or the timer auto-locks at
--- zero); the camera then flies to the real location and a sidebar
--- card shows the distance error + a 0-1000 score. Enter starts
--- the next round.
+-- map so the **centre** lands as close to the city as possible.
+-- Enter locks the guess (or the timer auto-locks at zero); the
+-- camera flies out to a view that fits both the guess and the
+-- target so the great-circle error is visible at a glance, with
+-- ◎ markers and a connecting line. Enter starts the next round;
+-- q / Esc quits.
 --
--- Activation: `:` palette → "Geo quiz". A focused sidebar card
--- captures Enter / q / Esc but lets every other key — h/j/k/l /
--- mouse / +-/* zoom — fall through to the base layer, so the
--- entire stock map nav surface IS the gameplay.
+-- Two difficulty modes wired as separate palette commands:
 --
--- ttymap-native by design: the map *is* the puzzle, the score is
--- a real great-circle distance, and the reveal is a smooth
--- camera animation rather than a popup.
+--   * **easy** — country shown alongside the city name.
+--   * **hard** — city name only.
+--
+-- Score is a golf-style **cumulative km error** — lower is
+-- better. The card shows the round's error + the running total
+-- across the session, plus the average error per round.
+--
+-- ttymap-native by design: the map *is* the puzzle, panning is
+-- the gameplay verb, and the reveal is a smooth animation rather
+-- than a popup.
 
 local sidebar = require "ttymap.sidebar"
 local anim    = require "ttymap.animation"
 
--- Rounds last ~30s at 60fps. The timer ticks down once per
--- on_tick; a slower terminal just gets a longer wall-clock round
--- (acceptable — the score formula doesn't care, it counts
--- frames-used not wall seconds).
+-- 30s per round at 60fps. The timer ticks down once per
+-- on_tick — a slower terminal just gets a longer wall-clock
+-- round (acceptable, scoring doesn't depend on time anymore).
 local TIME_LIMIT_FRAMES = 1800
-local REVEAL_ZOOM       = 8
 
--- Curated worldwide-recognisable cities. Same shape as the
--- travel plugin's stop list. Spread across continents so a
--- random pick doesn't always land in Europe.
+-- Curated worldwide-recognisable cities. Spread across continents
+-- so a random pick doesn't always land in Europe.
 local CITIES = {
     -- Asia
     { lon = 139.69, lat =  35.69, name = "Tokyo",        country = "Japan" },
@@ -85,9 +87,7 @@ local CITIES = {
     { lon = 174.76, lat = -36.85, name = "Auckland",     country = "New Zealand" },
 }
 
--- Haversine — proper great-circle distance. The lat-only and
--- equirectangular shortcuts blow up over hemispheres, and the
--- score reveals demand a real number anyway.
+-- Haversine — proper great-circle distance.
 local function distance_km(a, b)
     local R = 6371
     local lat1 = math.rad(a.lat)
@@ -98,21 +98,41 @@ local function distance_km(a, b)
     return 2 * R * math.asin(math.min(1, math.sqrt(h)))
 end
 
--- Score: distance bonus drops linearly to 0 over 5000 km of
--- error (≈ Tokyo ↔ Mumbai). Time bonus drops linearly to 0 over
--- the round's full duration. Max 2000.
-local function score_for(distance, frames_used)
-    local d = math.max(0, math.floor(1000 * (1 - distance / 5000)))
-    local t = math.max(0, math.floor(1000 * (1 - frames_used / TIME_LIMIT_FRAMES)))
-    return d + t
+-- Pick a (centre, zoom) that frames both points with a bit of
+-- margin so the reveal shows the whole error at a glance.
+-- Mirrors travel's overview_view heuristic.
+local function reveal_view(p1, p2)
+    -- Antimeridian-aware mid-longitude.
+    local dlon = p2.lon - p1.lon
+    if dlon > 180 then
+        dlon = dlon - 360
+    elseif dlon < -180 then
+        dlon = dlon + 360
+    end
+    local mid_lon = p1.lon + dlon / 2
+    if mid_lon > 180 then mid_lon = mid_lon - 360
+    elseif mid_lon < -180 then mid_lon = mid_lon + 360 end
+    local mid_lat = (p1.lat + p2.lat) / 2
+
+    local span_lon = math.abs(dlon)
+    local span_lat = math.abs(p2.lat - p1.lat)
+    local span = math.max(span_lon, span_lat, 0.5)
+    -- 8.5 - log2(span) clamped to [1, 10]:
+    --   span ≈ 1°  → zoom 8 (close, eg same metro area)
+    --   span ≈ 10° → zoom 5 (regional)
+    --   span ≈ 90° → zoom 2 (continental)
+    local zoom = math.floor(8.5 - math.log(span) / math.log(2))
+    if zoom < 1 then zoom = 1 elseif zoom > 10 then zoom = 10 end
+    return mid_lon, mid_lat, zoom
 end
 
 local state = {
-    target       = nil,   -- { lon, lat, name, country }
+    difficulty   = "easy",      -- "easy" | "hard"
+    target       = nil,         -- { lon, lat, name, country }
     timer_frames = 0,
     submitted    = false,
-    result       = nil,   -- { distance_km, frames_used, score, guess }
-    total_score  = 0,
+    result       = nil,         -- { distance_km, frames_used, guess }
+    total_km     = 0,
     rounds       = 0,
     w            = nil,
 }
@@ -126,9 +146,9 @@ local function start_round()
     state.timer_frames = TIME_LIMIT_FRAMES
     state.submitted    = false
     state.result       = nil
-    -- Snap to a world view so every round starts from the same
-    -- vantage point — fair across rounds, and makes the puzzle
-    -- about navigation, not "where did the camera happen to be".
+    -- Snap to a world view — every round starts from the same
+    -- vantage point so the puzzle is about navigation, not where
+    -- the camera happened to be.
     ttymap.map:fly_to(0, 20, 1)
 end
 
@@ -145,38 +165,44 @@ local function submit()
     local guess_lon, guess_lat = ttymap.map:center()
     local guess = { lon = guess_lon, lat = guess_lat }
     local d = distance_km(guess, state.target)
-    local frames_used = TIME_LIMIT_FRAMES - state.timer_frames
-    local s = score_for(d, frames_used)
     state.result = {
         distance_km = d,
-        frames_used = frames_used,
-        score       = s,
+        frames_used = TIME_LIMIT_FRAMES - state.timer_frames,
         guess       = guess,
     }
-    state.total_score = state.total_score + s
-    state.rounds      = state.rounds + 1
-    -- Reveal — animate to the real city so the result feels like
-    -- an answer, not a lookup.
-    anim.fly_to(state.target.lon, state.target.lat, REVEAL_ZOOM)
+    state.total_km = state.total_km + d
+    state.rounds   = state.rounds + 1
+    -- Reveal: fly to a view that frames both the target and the
+    -- guess so the error is visible at a glance.
+    local mid_lon, mid_lat, zoom = reveal_view(guess, state.target)
+    anim.fly_to(mid_lon, mid_lat, zoom)
 end
 
 ttymap.api.frame.on_tick(function(map)
     if not state.target then return end
 
-    -- Always paint the target marker once submitted (so the
-    -- player sees where they should have aimed). Pre-submit, no
-    -- marker — that would defeat the puzzle.
+    -- Reveal painting. Pre-submit nothing is drawn — that would
+    -- defeat the puzzle.
     if state.submitted then
-        map:point(state.target.lon, state.target.lat, "★", "accent")
-        map:label(state.target.lon, state.target.lat, state.target.name, "accent")
+        local t = state.target
+        map:point(t.lon, t.lat, "◎", "accent")
+        map:label(t.lon, t.lat, t.name, "accent")
         if state.result and state.result.guess then
-            map:point(state.result.guess.lon, state.result.guess.lat, "✗", "accent_alt")
+            local g = state.result.guess
+            map:point(g.lon, g.lat, "◎", "accent_alt")
+            map:label(g.lon, g.lat, "your guess", "accent_alt")
+            -- Polyline connecting guess → target so the player
+            -- sees the magnitude of the error even when the two
+            -- markers don't fit the same screenful.
+            map:polyline({
+                { g.lon, g.lat },
+                { t.lon, t.lat },
+            }, "muted")
         end
         return
     end
 
-    -- Tick the round timer. At zero, lock the guess at whatever
-    -- the camera was last looking at.
+    -- Live round — tick the timer; auto-submit at zero.
     state.timer_frames = state.timer_frames - 1
     if state.timer_frames <= 0 then
         state.timer_frames = 0
@@ -192,38 +218,50 @@ local function build_lines()
 
     if state.submitted and state.result then
         local r = state.result
+        local avg = state.total_km / state.rounds
+        local target_label = string.format("%s, %s", t.name, t.country)
         return {
             { { text = "Result", style = "accent" } },
             { { text = "" } },
-            { { text = string.format("Target:    %s, %s", t.name, t.country), style = "body" } },
-            { { text = string.format("Distance:  %d km", math.floor(r.distance_km + 0.5)), style = "body" } },
-            { { text = string.format("Time used: %.1f s",  r.frames_used / 60), style = "body" } },
-            { { text = string.format("Score:     %d / 2000", r.score), style = "accent_alt" } },
+            { { text = string.format("Target:    %s", target_label), style = "body" } },
+            { { text = string.format("Distance:  %d km",
+                math.floor(r.distance_km + 0.5)), style = "accent_alt" } },
+            { { text = string.format("Time used: %.1f s",
+                r.frames_used / 60), style = "muted" } },
             { { text = "" } },
-            { { text = string.format("Total: %d over %d round%s",
-                state.total_score, state.rounds,
+            { { text = string.format("Total: %d km / %d round%s",
+                math.floor(state.total_km + 0.5), state.rounds,
                 state.rounds == 1 and "" or "s"), style = "muted" } },
+            { { text = string.format("Avg:   %d km / round",
+                math.floor(avg + 0.5)), style = "muted" } },
             { { text = "" } },
-            { { text = "Enter: next round", style = "muted" } },
-            { { text = "q / Esc: quit",     style = "muted" } },
+            { { text = "Enter: next round",  style = "muted" } },
+            { { text = "q / Esc: quit",      style = "muted" } },
         }
     end
 
-    -- Live round.
+    -- Live round — header, target, timer, instructions.
     local seconds = math.ceil(state.timer_frames / 60)
     local timer_style = (seconds <= 5) and "accent" or "body"
-    return {
-        { { text = "Find this city", style = "muted" } },
+    local mode_label = (state.difficulty == "hard") and "HARD" or "easy"
+    local lines = {
+        { { text = "Find this city",   style = "muted" },
+          { text = " · ",               style = "muted" },
+          { text = mode_label,          style = "accent_alt" } },
         { { text = "" } },
-        { { text = t.name,    style = "accent" } },
-        { { text = t.country, style = "muted" } },
-        { { text = "" } },
-        { { text = string.format("Time: %d s", seconds), style = timer_style } },
-        { { text = "" } },
-        { { text = "Pan / zoom to position the centre.", style = "muted" } },
-        { { text = "Enter: lock your guess",             style = "muted" } },
-        { { text = "q / Esc: quit",                      style = "muted" } },
+        { { text = t.name, style = "accent" } },
     }
+    -- Easy mode shows the country as a soft hint; hard hides it.
+    if state.difficulty == "easy" then
+        table.insert(lines, { { text = t.country, style = "muted" } })
+    end
+    table.insert(lines, { { text = "" } })
+    table.insert(lines, { { text = string.format("Time: %d s", seconds), style = timer_style } })
+    table.insert(lines, { { text = "" } })
+    table.insert(lines, { { text = "Pan / zoom to position the centre.", style = "muted" } })
+    table.insert(lines, { { text = "Enter: lock your guess",             style = "muted" } })
+    table.insert(lines, { { text = "q / Esc: quit",                      style = "muted" } })
+    return lines
 end
 
 local function open_card()
@@ -258,17 +296,25 @@ local function open_card()
     })
 end
 
+local function start_session(difficulty)
+    if state.w then
+        close_card()
+        state.target = nil
+        return
+    end
+    state.difficulty = difficulty
+    state.total_km   = 0
+    state.rounds     = 0
+    start_round()
+    open_card()
+end
+
 ttymap.register_palette_command({
-    label  = "Geo quiz",
-    invoke = function()
-        if state.w then
-            close_card()
-            state.target = nil
-            return
-        end
-        state.total_score = 0
-        state.rounds      = 0
-        start_round()
-        open_card()
-    end,
+    label  = "Geo quiz · easy",
+    invoke = function() start_session("easy") end,
+})
+
+ttymap.register_palette_command({
+    label  = "Geo quiz · hard",
+    invoke = function() start_session("hard") end,
 })

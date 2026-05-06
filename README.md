@@ -45,7 +45,7 @@ Tokyo zoomed in with the wiki panel open:
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
 | `center` | Crosshair at the map centre — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
-| `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map centre lands as close as possible. Submit with Enter, see the great-circle error and a 0-2000 score; Enter again starts the next round. |
+| `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map centre lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
 | `info` | Status / debug readouts (zoom, centre, tile cache hit rate). |
