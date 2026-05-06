@@ -120,13 +120,19 @@ local function step(rec)
         })
     elseif directive.kind == "wait" then
         rec.wait_left = directive.frames
-        -- Captured on the first wait tick (deferred). The just-
-        -- completed fly's on_done runs *inside* the animation
-        -- on_tick, which means drain_ops hasn't yet applied its
-        -- final FlyTo to MapState — reading `:center()` here would
-        -- snapshot the pre-fly value and the next tick would falsely
-        -- diverge. One-frame defer lets MapState settle.
         rec.wait_check = nil
+        -- Skip one driver tick before capturing the baseline. step()
+        -- is reachable from inside the *previous* directive's
+        -- callback — most importantly anim's `on_done`, which fires
+        -- during anim's own on_tick, *before* drain_ops applies the
+        -- final FlyTo to MapState. The director's on_tick runs
+        -- right after anim's (same `lua.tick()` pass) and would
+        -- otherwise capture `:center()` at the pre-fly position —
+        -- next tick reads post-fly and false-cancels the script
+        -- the moment the tour starts. Skipping one full driver tick
+        -- lets the App finish its drain_ops between iterations and
+        -- the second wait tick gets a clean post-settle baseline.
+        rec.wait_settle_left = 1
     elseif directive.kind == "tween" then
         rec.tween_elapsed = 0
     end
@@ -190,11 +196,22 @@ ttymap.api.frame.on_tick(function()
             if d then
                 if d.kind == "wait" then
                     -- Detect manual user input during wait: any
-                    -- divergence between the captured map state and
-                    -- the live one means the user (or another
+                    -- divergence between the captured baseline and
+                    -- the live map state means the user (or another
                     -- caller) moved the camera; bail the script.
-                    -- First tick captures, subsequent ticks compare.
-                    if not rec.wait_check then
+                    --
+                    -- Sequence per wait:
+                    --   tick 1 — settle: skip everything except the
+                    --     wait-timer decrement so the App's
+                    --     drain_ops can apply the just-finished
+                    --     fly's final dispatch.
+                    --   tick 2 — capture: snapshot `:center()` /
+                    --     `:zoom()` as the baseline.
+                    --   tick 3+ — compare vs baseline; cancel on
+                    --     divergence.
+                    if rec.wait_settle_left and rec.wait_settle_left > 0 then
+                        rec.wait_settle_left = rec.wait_settle_left - 1
+                    elseif not rec.wait_check then
                         local lon, lat = ttymap.map:center()
                         rec.wait_check = {
                             lon = lon, lat = lat,
