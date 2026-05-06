@@ -722,8 +722,8 @@ mod tests {
             .iter()
             .flat_map(|row| row.iter().map(|(_, k)| *k))
             .collect();
-        assert!(kinds_present.iter().any(|k| *k == StyleKind::Muted));
-        assert!(kinds_present.iter().any(|k| *k == StyleKind::Accent));
+        assert!(kinds_present.contains(&StyleKind::Muted));
+        assert!(kinds_present.contains(&StyleKind::Accent));
     }
 
     #[test]
