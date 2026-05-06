@@ -83,6 +83,12 @@ pub struct Renderer {
     width: usize,
     height: usize,
     scratches: Scratches,
+    /// Toggle for tile-rendered text labels (place names, road
+    /// names, etc.). When false the `draw` symbol pass is
+    /// suppressed; geometry features keep rendering. Plugins flip
+    /// it through `RenderHandle::set_labels_visible`. Default
+    /// `true`.
+    labels_visible: bool,
 }
 
 /// A symbol feature that survived the first pass. Holds the resolved
@@ -105,6 +111,7 @@ impl Renderer {
             width,
             height,
             scratches: Scratches::new(),
+            labels_visible: true,
         }
     }
 
@@ -119,6 +126,15 @@ impl Renderer {
     /// (they don't consult the styler).
     pub fn set_styler(&mut self, styler: Arc<Styler>) {
         self.styler = styler;
+    }
+
+    /// Show / hide tile-rendered text labels (place names, road
+    /// names, …). Geometry features (roads, water, fills) are
+    /// unaffected. Drives the `ttymap.map:set_labels_visible(b)`
+    /// Lua API — used e.g. by the `geo_quiz` plugin's hard mode
+    /// to suppress city-name hints.
+    pub fn set_labels_visible(&mut self, visible: bool) {
+        self.labels_visible = visible;
     }
 
     pub fn width(&self) -> usize {
@@ -193,13 +209,18 @@ impl Renderer {
                     }
 
                     if rule.style_type == StyleType::Symbol {
-                        symbols.push(ResolvedSymbol {
-                            vis: &td.vis,
-                            feature,
-                            color: rule.color,
-                            sort: extract_sort(&feature.properties),
-                            extent,
-                        });
+                        // Skip the entire symbol pass when labels
+                        // are hidden — the Vec stays empty so the
+                        // second-pass draw loop is a no-op.
+                        if self.labels_visible {
+                            symbols.push(ResolvedSymbol {
+                                vis: &td.vis,
+                                feature,
+                                color: rule.color,
+                                sort: extract_sort(&feature.properties),
+                                extent,
+                            });
+                        }
                     } else {
                         let mut ctx = DrawCtx {
                             canvas: &mut self.canvas,

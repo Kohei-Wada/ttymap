@@ -213,6 +213,10 @@ impl Dispatcher {
             }
             UserCommand::Resize(cols, rows) => self.handle_resize(cols, rows),
             UserCommand::ToggleSidebar => self.toggle_sidebar(),
+            UserCommand::SetLabelsVisible(visible) => {
+                self.map.set_labels_visible(visible);
+                self.request_map_redraw();
+            }
         }
         self.notify_post_command(&snapshot);
     }

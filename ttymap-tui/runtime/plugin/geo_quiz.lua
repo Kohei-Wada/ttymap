@@ -157,6 +157,10 @@ local function close_card()
         state.w:close()
         state.w = nil
     end
+    -- Restore tile labels in case hard mode hid them. Idempotent —
+    -- showing labels when they're already on is a no-op on the
+    -- render thread.
+    ttymap.map:set_labels_visible(true)
 end
 
 local function submit()
@@ -305,6 +309,11 @@ local function start_session(difficulty)
     state.difficulty = difficulty
     state.total_km   = 0
     state.rounds     = 0
+    -- Hard mode hides tile-rendered text labels for the whole
+    -- session — without that the country / city names baked into
+    -- the map make every guess trivial. close_card() restores them
+    -- on quit.
+    ttymap.map:set_labels_visible(difficulty ~= "hard")
     start_round()
     open_card()
 end
