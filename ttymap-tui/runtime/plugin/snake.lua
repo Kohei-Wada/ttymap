@@ -175,11 +175,45 @@ local function game_over(reason)
     ttymap.notify(state.last_msg)
 end
 
-local function center_on_head()
-    local head = state.body[1]
-    if head then
-        ttymap.map:fly_to(head.lon, head.lat, zoom_for_length(#state.body))
+-- Shortest-arc lerp for longitude (mirror of ping_simulation /
+-- animation.lua's `interp_lon`). Without this, a head crossing
+-- the antimeridian from 175° to -175° would drag the camera the
+-- long way round the globe.
+local function lerp_lon(a, b, t)
+    local d = b - a
+    if d > 180 then
+        d = d - 360
+    elseif d < -180 then
+        d = d + 360
     end
+    local lon = a + d * t
+    if lon > 180 then
+        lon = lon - 360
+    elseif lon < -180 then
+        lon = lon + 360
+    end
+    return lon
+end
+
+local CAMERA_FOLLOW   = 0.20  -- per-frame camera lerp factor
+local CAMERA_ZOOM_FOLLOW = 0.10
+
+-- Smooth-pursuit camera. Called every frame while the game is
+-- live: lerps the current centre / zoom toward the snake head's
+-- target by a small factor each tick, so the camera glides
+-- continuously instead of teleporting once per step. No anim lib
+-- — direct host fly_to dispatches, which the animation lib
+-- ignores (its `active` is nil during the game).
+local function follow_head()
+    local head = state.body[1]
+    if not head then return end
+    local cur_lon, cur_lat = ttymap.map:center()
+    local cur_zoom = ttymap.map:zoom()
+    local target_zoom = zoom_for_length(#state.body)
+    local new_lon = lerp_lon(cur_lon, head.lon, CAMERA_FOLLOW)
+    local new_lat = cur_lat + (head.lat - cur_lat) * CAMERA_FOLLOW
+    local new_zoom = cur_zoom + (target_zoom - cur_zoom) * CAMERA_ZOOM_FOLLOW
+    ttymap.map:fly_to(new_lon, new_lat, new_zoom)
 end
 
 local function start()
@@ -193,10 +227,18 @@ local function start()
     spawn_food()
     state.enabled = true
     -- Slither.io-style: camera locks on the head and auto-zooms
-    -- out as the snake grows. The card's handle_key absorbs all
-    -- non-direction keys, so manual pan/zoom can't drift the view
-    -- mid-game.
-    center_on_head()
+    -- out as the snake grows, with smooth per-frame lerp so the
+    -- view glides instead of teleporting. The card's handle_key
+    -- absorbs all non-direction keys, so manual pan/zoom can't
+    -- drift the view mid-game.
+    --
+    -- Snap to the start position once on game start, then let
+    -- per-frame `follow_head` take over. (Without the snap, the
+    -- camera would lerp from wherever the user was *before*
+    -- starting the game — which is the right behaviour for
+    -- continuity, but feels slow if the player was on another
+    -- continent.)
+    ttymap.map:fly_to(state.body[1].lon, state.body[1].lat, zoom_for_length(1))
 end
 
 -- Direction reversal blocker — can't go from east → west in one
@@ -259,12 +301,13 @@ ttymap.api.frame.on_tick(function(map)
             ttymap.notify(state.last_msg)
             spawn_food()
         end
-        -- Camera always tracks the head — re-centre after the
-        -- step. The zoom recomputes from the (possibly grown)
-        -- body length so the visible window stays reasonable as
-        -- the snake gets longer.
-        center_on_head()
     end
+
+    -- Per-frame smooth pursuit — runs every tick (not just on
+    -- step boundaries) so the camera glides continuously even
+    -- though the snake itself only advances a cell every
+    -- TICKS_PER_STEP frames.
+    follow_head()
 
     -- Draw snake.
     for i, b in ipairs(state.body) do
