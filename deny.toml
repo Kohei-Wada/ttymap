@@ -35,6 +35,9 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Intra-workspace path deps (`ttymap-engine = { path = ".." }`) read as
+# wildcards but are not real version-spec wildcards.
+allow-wildcard-paths = true
 deny = [
     # Don't ship two copies of TLS stacks in one binary.
     { name = "openssl", deny-multiple-versions = true },
