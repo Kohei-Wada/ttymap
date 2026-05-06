@@ -10,16 +10,17 @@
 --      whole polyline + all markers so the geographic shape of the
 --      trip is visible at a glance. Enter starts the tour, Esc /
 --      Backspace returns to list.
---   3. **tour**: three sub-phases drive the camera. **pre** flies
---      to a bounding-box overview so the user sees the whole trip
---      laid out before plunging in (no jarring teleport-to-Tokyo);
---      **stop** loops through each `route.stops` entry, firing a
---      `ttymap.notify` per arrival; **post** returns to overview
---      for a final wrap-up beat. Manual pan / zoom (or palette
---      re-toggle) cancels at any phase. No polyline during tour
---      (Braille pixel-snapping ripples a static line as the camera
---      glides) — markers carry the journey on their own; future
---      stops show muted, current accent, past accent_alt.
+--   3. **tour**: the camera flies through three phases (pre overview
+--      → stop loop → post overview) driven by `ttymap.director` —
+--      the whole choreography is a single procedural Lua script.
+--      `state.tour.phase` is set inline as the script runs so the
+--      sidebar / on_tick paint can tell where we are. Manual pan /
+--      zoom (or palette re-toggle) cancels at any point via the
+--      animation lib's tolerance check → director.on_cancel.
+--      No polyline during fly motion (Braille pixel-snapping
+--      ripples a static line as the camera glides) — markers carry
+--      the journey on their own; the line surfaces only during
+--      the pre/post overview *dwells* where the camera is parked.
 --
 -- Activation: `:` palette → "Travel". Re-invoking always exits
 -- completely (cancels any tour, closes the panel).
@@ -27,7 +28,7 @@
 -- Adding a country: see `travel/routes/init.lua`.
 
 local sidebar   = require("ttymap.sidebar")
-local anim      = require("ttymap.animation")
+local director  = require("ttymap.director")
 local countries = require("travel.routes")
 
 -- Flatten the per-country tables into a single list of routes,
@@ -49,9 +50,7 @@ end
 -- on_tick doesn't surface dt). Tight 2-second beats keep momentum:
 -- long enough to read the notify popup and absorb the view, short
 -- enough that a 5-stop tour finishes in ~15s.
-local PRE_DWELL_FRAMES  = 120   -- ~2s overview before the journey starts
-local DWELL_FRAMES      = 120   -- ~2s parked at each stop
-local POST_DWELL_FRAMES = 120   -- ~2s overview after final stop
+local DWELL_FRAMES = 120
 
 -- Compute a (centre, zoom) that fits all stops with margin. Logarithmic
 -- zoom heuristic: span doubles → zoom drops by 1. Clamped to a sensible
@@ -69,11 +68,6 @@ local function overview_view(route)
     local center_lon = (min_lon + max_lon) / 2
     local center_lat = (min_lat + max_lat) / 2
     local span = math.max(max_lon - min_lon, max_lat - min_lat, 0.1)
-    -- 8.5 - log2(span) clamped to [3, 11]:
-    --   span ≥ 11°  → zoom 5    (continent / large country)
-    --   span ≈  3°  → zoom 7    (Italian classic, Snow Monkey + Alps)
-    --   span ≈  1°  → zoom 8-9  (Hokkaido, Sicily)
-    --   span ≈ 0.5° → zoom 9-10 (Amalfi)
     local zoom = math.floor(8.5 - math.log(span) / math.log(2))
     if zoom < 3 then zoom = 3 elseif zoom > 11 then zoom = 11 end
     return center_lon, center_lat, zoom
@@ -83,9 +77,8 @@ local state = {
     selected = 1,    -- 1-based index into routes (list mode)
     w        = nil,  -- sidebar card handle while open
     detail   = nil,  -- nil = list mode; a route table = detail mode
-    tour     = nil,  -- nil when not playing; else a tour table
-    --                  { route, phase = "pre"|"stop"|"post",
-    --                    stop_idx, dwell_left }
+    tour     = nil,  -- nil when not playing; else { route, phase, stop_idx }
+    handle   = nil,  -- director handle for the active tour
 }
 
 local function close_panel()
@@ -95,95 +88,61 @@ local function close_panel()
     end
 end
 
-local advance_tour  -- forward decl
+local function start_tour(route)
+    local lon, lat, z = overview_view(route)
+    state.tour = { route = route, phase = "pre_fly", stop_idx = 0 }
+    state.handle = director.run(function()
+        ttymap.notify(string.format("Starting: %s · %s",
+            route.country, route.name))
+        director.fly(lon, lat, z)
 
-local function finish_tour(message)
-    state.tour = nil
-    if message then
-        ttymap.notify(message)
-    end
-end
+        state.tour.phase = "pre_dwell"
+        director.wait(DWELL_FRAMES)
 
--- Generic on_cancel handler — every fly_to in the state machine bails
--- the whole tour the same way.
-local function on_cancel_bail()
-    finish_tour("Tour cancelled")
-end
+        for i, stop in ipairs(route.stops) do
+            state.tour.phase = "stop_fly"
+            state.tour.stop_idx = i
+            director.fly(stop.lon, stop.lat, stop.zoom)
 
--- Schedule a fly_to whose `on_done` parks the camera for `dwell_frames`
--- before the next state-machine transition.
-local function fly_then_dwell(lon, lat, zoom, dwell_frames)
-    anim.fly_to(lon, lat, zoom, {
-        on_done = function()
-            if state.tour then
-                state.tour.dwell_left = dwell_frames
-            end
+            state.tour.phase = "stop_dwell"
+            ttymap.notify(stop.note)
+            director.wait(DWELL_FRAMES)
+        end
+
+        state.tour.phase = "post_fly"
+        ttymap.notify(string.format("Tour complete: %s · %s",
+            route.country, route.name))
+        director.fly(lon, lat, z)
+
+        state.tour.phase = "post_dwell"
+        director.wait(DWELL_FRAMES)
+
+        state.tour   = nil
+        state.handle = nil
+    end, {
+        on_cancel = function()
+            state.tour   = nil
+            state.handle = nil
+            ttymap.notify("Tour cancelled")
         end,
-        on_cancel = on_cancel_bail,
     })
 end
 
-advance_tour = function()
-    local t = state.tour
-    if not t then return end
-
-    if t.phase == "pre" then
-        -- Pre-overview done. Enter stop loop at index 1.
-        t.phase = "stop"
-        t.stop_idx = 1
-        local stop = t.route.stops[1]
-        if not stop then
-            finish_tour("Tour: empty route")
-            return
-        end
-        ttymap.notify(stop.note)
-        fly_then_dwell(stop.lon, stop.lat, stop.zoom, DWELL_FRAMES)
-        return
+local function cancel_tour_silent()
+    if state.handle then
+        state.handle:cancel({ silent = true })
+        state.handle = nil
     end
-
-    if t.phase == "stop" then
-        t.stop_idx = t.stop_idx + 1
-        local stop = t.route.stops[t.stop_idx]
-        if stop then
-            ttymap.notify(stop.note)
-            fly_then_dwell(stop.lon, stop.lat, stop.zoom, DWELL_FRAMES)
-            return
-        end
-        -- All stops visited. Enter post-overview wrap-up.
-        t.phase = "post"
-        ttymap.notify(string.format("Tour complete: %s · %s",
-            t.route.country, t.route.name))
-        local lon, lat, z = overview_view(t.route)
-        fly_then_dwell(lon, lat, z, POST_DWELL_FRAMES)
-        return
-    end
-
-    -- Post-overview dwell expired — tour is done.
-    finish_tour(nil)
-end
-
-local function start_tour(route)
-    state.tour = {
-        route      = route,
-        phase      = "pre",
-        stop_idx   = 0,
-        dwell_left = 0,
-    }
-    ttymap.notify(string.format("Starting: %s · %s",
-        route.country, route.name))
-    local lon, lat, z = overview_view(route)
-    fly_then_dwell(lon, lat, z, PRE_DWELL_FRAMES)
+    state.tour = nil
 end
 
 -- Per-frame map paint. Three cases, in priority order:
 --
 --   * **tour active**: paint markers for every stop, coloured by
 --     phase + position (current accent, past accent_alt, future
---     muted). Future stops let the user see what's coming. No
---     polyline (Braille pixel-snapping ripples a static line as
---     the camera glides). Tour state advances via `advance_tour`
---     from the dwell countdown here and from the `on_done` callback
---     in `fly_then_dwell`.
+--     muted). The polyline surfaces only during pre/post overview
+--     dwells (camera parked = stable line). Phase is set inline by
+--     the director script in `start_tour`.
 --   * **detail mode**: no tour, but a route is selected — paint the
 --     whole polyline + all markers as a preview. Camera is static
 --     here (the user hasn't started flying), so the line is stable.
@@ -192,16 +151,10 @@ ttymap.api.frame.on_tick(function(map)
     local t = state.tour
     if t then
         local route = t.route
-        local current_idx = (t.phase == "stop") and t.stop_idx or 0
+        local current_idx = (t.phase == "stop_fly" or t.phase == "stop_dwell")
+            and t.stop_idx or 0
 
-        -- Route polyline: visible only during the pre/post overview
-        -- *dwells* (camera parked at the bbox view = stable line).
-        -- The pre dwell is the "here is the whole journey" moment
-        -- before the stop-by-stop flight; the post dwell mirrors it
-        -- as a wrap-up. Hidden during all camera motion (pre fly,
-        -- stop fly, post fly) because Braille pixel-snapping ripples
-        -- a static line as the camera glides.
-        if (t.phase == "pre" or t.phase == "post") and t.dwell_left > 0 then
+        if t.phase == "pre_dwell" or t.phase == "post_dwell" then
             local coords = {}
             for _, s in ipairs(route.stops) do
                 table.insert(coords, { s.lon, s.lat })
@@ -213,19 +166,14 @@ ttymap.api.frame.on_tick(function(map)
             local color
             if i == current_idx then
                 color = "accent"
-            elseif t.phase == "post" or i < current_idx then
+            elseif t.phase == "post_fly" or t.phase == "post_dwell"
+                or i < current_idx then
                 color = "accent_alt"
             else
                 color = "muted"
             end
             map:point(s.lon, s.lat, "●", color)
             map:label(s.lon, s.lat, s.name, color)
-        end
-        if t.dwell_left > 0 then
-            t.dwell_left = t.dwell_left - 1
-            if t.dwell_left == 0 then
-                advance_tour()
-            end
         end
         return
     end
@@ -244,6 +192,17 @@ ttymap.api.frame.on_tick(function(map)
 end)
 
 -- ── Detail-mode rendering ─────────────────────────────────────────
+local function phase_label_for(tour)
+    local p = tour.phase
+    if p == "pre_fly" or p == "pre_dwell" then
+        return "Overview — orienting…"
+    elseif p == "post_fly" or p == "post_dwell" then
+        return "Wrap-up — overview…"
+    else
+        return "Tour playing — pan / zoom to cancel."
+    end
+end
+
 local function render_detail(route)
     local lines = {
         { { text = route.country, style = "muted" },
@@ -259,7 +218,8 @@ local function render_detail(route)
     -- overview phases don't single out a row — they're whole-route
     -- moments.
     local current_idx = 0
-    if state.tour and state.tour.route == route and state.tour.phase == "stop" then
+    if state.tour and state.tour.route == route
+        and (state.tour.phase == "stop_fly" or state.tour.phase == "stop_dwell") then
         current_idx = state.tour.stop_idx
     end
     for i, s in ipairs(route.stops) do
@@ -267,7 +227,8 @@ local function render_detail(route)
         if i == current_idx then
             marker, name_style = "▶ ", "accent"
         elseif state.tour and state.tour.route == route
-            and (state.tour.phase == "post" or i < current_idx) then
+            and (state.tour.phase == "post_fly" or state.tour.phase == "post_dwell"
+                 or i < current_idx) then
             marker, name_style = "✓ ", "accent_alt"
         else
             marker, name_style = "  ", "accent_alt"
@@ -282,15 +243,7 @@ local function render_detail(route)
     end
     table.insert(lines, { { text = "" } })
     if state.tour and state.tour.route == route then
-        local phase_label
-        if state.tour.phase == "pre" then
-            phase_label = "Overview — orienting…"
-        elseif state.tour.phase == "post" then
-            phase_label = "Wrap-up — overview…"
-        else
-            phase_label = "Tour playing — pan / zoom to cancel."
-        end
-        table.insert(lines, { { text = phase_label, style = "muted" } })
+        table.insert(lines, { { text = phase_label_for(state.tour), style = "muted" } })
     else
         table.insert(lines, { { text = "Enter: play tour",          style = "muted" } })
         table.insert(lines, { { text = "q / Esc / Backspace: back", style = "muted" } })
@@ -344,12 +297,13 @@ local function open_panel()
         handle_key = function(key)
             -- Tour active: any cancellation key drops back to detail
             -- mode. Manual pan / zoom is handled by the animation
-            -- lib (its tolerance check fires on_cancel which clears
-            -- state.tour); we only catch keys that don't reach the
-            -- map (Esc, etc.).
+            -- lib (its tolerance check fires director.on_cancel
+            -- which clears state.tour); we only catch keys that
+            -- don't reach the map (Esc, etc.).
             if state.tour then
                 if sidebar.is_close_key(key) or key.code == "Backspace" then
-                    finish_tour("Tour cancelled")
+                    cancel_tour_silent()
+                    ttymap.notify("Tour cancelled")
                     return nil
                 end
                 return { ignore = true }
@@ -395,9 +349,7 @@ local function toggle()
     -- cancel any tour, drop detail, close panel. One keypress to
     -- dismiss everything regardless of which sub-state we're in.
     if state.tour or state.detail or state.w then
-        if state.tour then
-            finish_tour(nil)
-        end
+        cancel_tour_silent()
         state.detail = nil
         close_panel()
         return

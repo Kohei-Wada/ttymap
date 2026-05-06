@@ -373,21 +373,21 @@ Errors at any layer are logged + recovered; the chain keeps walking.
 
 ## Bundled plugins (`runtime/plugin/`)
 
-14 total. Each plugin is a reference implementation of one shape —
+15 total. Each plugin is a reference implementation of one shape —
 always-on chrome (`attribution`, `scalebar`, `help`), toggleable
 overlay (`center`, `here`, `ping_simulation`), toggleable side panel
-(`info`, `notify`, `aircraft`, `satellite`, `wiki`), palette
-one-shot (`export`, `quake`), or palette provider (`search`):
+(`info`, `notify`, `aircraft`, `satellite`, `wiki`, `travel`),
+palette one-shot (`export`, `quake`), or palette provider (`search`):
 
 ```
 aircraft/        attribution.lua  center.lua         export.lua
 help.lua         here.lua         info.lua           notify.lua
 ping_simulation.lua  quake.lua    satellite/         scalebar.lua
-search/          wiki/
+search/          travel/          wiki/
 ```
 
-Directory plugins (`aircraft/`, `satellite/`, `search/`, `wiki/`) use
-`<plugin>/init.lua` as the entry; sibling files load via
+Directory plugins (`aircraft/`, `satellite/`, `search/`, `travel/`,
+`wiki/`) use `<plugin>/init.lua` as the entry; sibling files load via
 `require "<plugin>.<name>"`.
 
 `satellite` is a **single multi-sat tracker** — one palette entry,
@@ -396,6 +396,60 @@ plus whatever the user appends to `satellite/init.lua`'s spec list).
 Per-sat key chars (`i` / `h` …) inside the panel toggle individual
 visibility. TLE fetch (CelesTrak) and SGP4 propagation
 (`ttymap.sgp4`) run per visible sat from inside `on_tick`.
+
+`travel` packages curated multi-country itineraries (Japan + Italy
+out of the box) and choreographs an animated tour through each
+route's stops via `ttymap.director` — a perfect demonstration of
+the Lua-side scriptable-scenes layer (see below).
+
+## Shared libraries (`runtime/lua/ttymap/`)
+
+`require`-only Lua modules (no plugin discovery, no `register_*`
+side effects). Each is independently useful from any plugin or
+`init.lua`. Keep the Rust bridge primitive — composition lives
+here.
+
+| Module                  | Surface                                                        |
+| ----------------------- | -------------------------------------------------------------- |
+| `ttymap.fmt`            | `.distance(meters)` — short human-readable distance string    |
+| `ttymap.sidebar`        | `.up_pressed` / `.down_pressed` / `.is_close_key` / `.cycle`  |
+| `ttymap.animation`      | `.fly_to(lon, lat, zoom, opts?)` — frame-based pan animation  |
+| `ttymap.director`       | `.run(fn, opts?)` / `.fly` / `.wait` / `.tween` — coroutine-based scheduler |
+
+`ttymap.animation.fly_to` interpolates `ttymap.map:fly_to` over ~30
+frames (default), with optional `on_done` / `on_cancel` callbacks
+fired on natural completion / pre-emption. Cancellation: manual
+user pan / zoom is detected by comparing live map state against
+the value dispatched last frame (Braille cell tolerance). A fresh
+`fly_to` over an in-flight one fires the previous `on_cancel` —
+pre-emption semantics match manual input.
+
+`ttymap.director` builds a procedural-looking async API on top of
+animation + a frame timer:
+
+```lua
+local director = require "ttymap.director"
+director.run(function()
+    ttymap.notify("Starting tour")
+    director.fly(139.69, 35.69, 10)         -- yields until arrival
+    director.wait(120)                        -- yields 120 frames
+    for _, stop in ipairs(stops) do
+        director.fly(stop.lon, stop.lat, stop.zoom)
+        ttymap.notify(stop.note)
+        director.wait(120)
+    end
+end, { on_cancel = function() ... end })
+```
+
+Internally it's a coroutine + a directive enum (`fly` / `wait` /
+`tween`) yielded back to a single `on_tick` driver. Multiple
+`director.run` calls run in parallel — each registers its own
+coroutine. Cancellation propagates from the animation lib's
+`on_cancel` (manual input pre-empts the active `fly`), or from
+explicit `handle:cancel()`. A natural function return ends the
+script without firing `on_cancel`. The travel plugin's pre /
+stop / post tour is one such script — the whole choreography is
+top-to-bottom procedural Lua, no hand-written state machine.
 
 ## User plugins
 
