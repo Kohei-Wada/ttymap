@@ -55,3 +55,13 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # Supply-chain checks. Linux-only — output is platform-independent,
+  # so the matrix in `check` doesn't apply here.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check all
