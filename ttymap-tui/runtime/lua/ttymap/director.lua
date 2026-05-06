@@ -55,6 +55,14 @@ local anim = require "ttymap.animation"
 local M = {}
 local actives = {}
 
+-- Tolerances for "did the user touch the map during a wait"
+-- detection. Same values the animation lib uses for its own
+-- pre-emption check — loose enough to absorb the float round-trip
+-- through `geo::normalize` + Mercator clamps, tight enough that a
+-- single-cell keyboard pan trips them.
+local TOL_LL   = 0.0005
+local TOL_ZOOM = 0.001
+
 -- ── Handle / cancellation ───────────────────────────────────────
 local Handle = {}
 Handle.__index = Handle
@@ -112,6 +120,13 @@ local function step(rec)
         })
     elseif directive.kind == "wait" then
         rec.wait_left = directive.frames
+        -- Captured on the first wait tick (deferred). The just-
+        -- completed fly's on_done runs *inside* the animation
+        -- on_tick, which means drain_ops hasn't yet applied its
+        -- final FlyTo to MapState — reading `:center()` here would
+        -- snapshot the pre-fly value and the next tick would falsely
+        -- diverge. One-frame defer lets MapState settle.
+        rec.wait_check = nil
     elseif directive.kind == "tween" then
         rec.tween_elapsed = 0
     end
@@ -145,6 +160,11 @@ function M.wait(frames)
 end
 
 function M.tween(setter, frames)
+    -- Guard frames=0 (would divide-by-zero in the per-tick driver
+    -- at `tween_elapsed / d.frames`) and negatives. Clamp to 1 so
+    -- the setter still fires with a final value rather than
+    -- silently dropping the call.
+    if frames < 1 then frames = 1 end
     return coroutine.yield({
         kind   = "tween",
         setter = setter,
@@ -166,10 +186,34 @@ ttymap.api.frame.on_tick(function()
         else
             local d = rec.directive
             local advance = false
+            local cancelled_in_tick = false
             if d then
                 if d.kind == "wait" then
-                    rec.wait_left = rec.wait_left - 1
-                    if rec.wait_left <= 0 then advance = true end
+                    -- Detect manual user input during wait: any
+                    -- divergence between the captured map state and
+                    -- the live one means the user (or another
+                    -- caller) moved the camera; bail the script.
+                    -- First tick captures, subsequent ticks compare.
+                    if not rec.wait_check then
+                        local lon, lat = ttymap.map:center()
+                        rec.wait_check = {
+                            lon = lon, lat = lat,
+                            zoom = ttymap.map:zoom(),
+                        }
+                    else
+                        local lon, lat = ttymap.map:center()
+                        local zoom = ttymap.map:zoom()
+                        if math.abs(lon - rec.wait_check.lon) > TOL_LL
+                            or math.abs(lat - rec.wait_check.lat) > TOL_LL
+                            or math.abs(zoom - rec.wait_check.zoom) > TOL_ZOOM then
+                            cancel_rec(rec)
+                            cancelled_in_tick = true
+                        end
+                    end
+                    if not cancelled_in_tick then
+                        rec.wait_left = rec.wait_left - 1
+                        if rec.wait_left <= 0 then advance = true end
+                    end
                 elseif d.kind == "tween" then
                     rec.tween_elapsed = rec.tween_elapsed + 1
                     local t = math.min(rec.tween_elapsed / d.frames, 1)
@@ -183,7 +227,9 @@ ttymap.api.frame.on_tick(function()
                 end
                 -- "fly": waits on anim's on_done — no per-tick work.
             end
-            if advance then
+            if cancelled_in_tick or rec.dead then
+                table.remove(actives, i)
+            elseif advance then
                 rec.directive = nil
                 step(rec)
                 if rec.dead then
