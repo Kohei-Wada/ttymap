@@ -4,9 +4,13 @@
 -- Windowless: nothing is pushed onto the compositor stack. The
 -- palette `invoke` kicks a geoip GET if one isn't already in flight;
 -- the per-frame `on_tick` callback polls the inflight job and, when
--- the response lands, fires `ttymap.map:jump(...)` and clears state.
+-- the response lands, hands the centre to `ttymap.animation.fly_to`
+-- so the view glides over instead of teleporting (avoids the brief
+-- black-tile gap from landing on un-prefetched coordinates).
 --
 -- The endpoint comes from `ttymap.config:geoip_endpoint()`.
+
+local anim = require "ttymap.animation"
 
 local state = { job = nil }
 
@@ -18,9 +22,9 @@ ttymap.api.frame.on_tick(function()
         if p
             and type(p.latitude) == "number"
             and type(p.longitude) == "number" then
-            ttymap.map:jump(p.longitude, p.latitude)
+            anim.fly_to(p.longitude, p.latitude)
             ttymap.notify(string.format(
-                "Jumped to %.4f, %.4f", p.latitude, p.longitude
+                "Flew to %.4f, %.4f", p.latitude, p.longitude
             ))
         else
             ttymap.notify("here: geoip response missing lat/lon",
