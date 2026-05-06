@@ -83,7 +83,13 @@ end, {
 
 `director.run` registers a coroutine; `director.fly` / `director.wait` / `director.tween` yield until their condition is met. Multiple `run` calls execute in parallel under one `on_tick` driver. Manual user pan / zoom during a `fly` cancels the script via the animation lib's tolerance check — same hook used to bail a tour cleanly.
 
-The travel plugin's pre / stop-loop / post phases are one such script. ping_simulation's per-ping animations are another.
+The travel plugin's pre / stop-loop / post phases are one such script. ping_simulation's per-ping animations are another:
+
+https://github.com/user-attachments/assets/53790bbf-053c-4515-88b6-405b195b82a3
+
+https://github.com/user-attachments/assets/eef66370-2981-475c-9678-39ecf7113bc3
+
+(Regenerate locally with `vhs vhs/travel.tape` / `vhs vhs/ping_simulation.tape`.)
 
 See [`docs/lua-architecture.md`](docs/lua-architecture.md) for the full plugin authoring surface — `ttymap.api.*`, plugin shapes, drain pattern, runtime path resolution, config chain.
 
