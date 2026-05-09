@@ -28,21 +28,27 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
-use super::{Activation, Component};
+use super::{Activation, Component, SpawnComponent};
 use crate::UserCommand;
 use crate::input::keymap::KeyMap;
+use crate::lua::PluginRegistryHandle;
 use ttymap_engine::map::MapAction;
 
 pub struct BaseLayer {
     keymap: KeyMap,
-    /// Activation table: key event → component factory. Populated at
-    /// startup from the [`crate::lua::Registrar`] that each plugin's
-    /// `register_keybind` call contributes to.
-    activations: Vec<Activation>,
-    /// Plugin-supplied footer hints harvested from palette entries
-    /// with a non-empty `hint` (key) at startup. Rendered in the
-    /// footer beside the core keymap shortcuts so the user discovers
-    /// dynamically-registered key binds without hardcoding them.
+    /// Built-in activations BaseLayer dispatches alongside plugin
+    /// activations. Today this is just the `:` palette opener
+    /// pushed by [`crate::palette::install`]. Walked first on
+    /// keypress, so a plugin can't accidentally shadow `:`.
+    builtin_activations: Vec<Activation>,
+    /// Live registry of plugin-declared activations. Cloned from
+    /// `LuaSubsystem` at startup. Keypress dispatch borrows it
+    /// per-event; plugin `:remove()` mutably borrows it from a
+    /// `KeybindHandle` to drop the matching entry.
+    registry: PluginRegistryHandle,
+    /// Plugin-supplied footer hints harvested at startup. Static
+    /// for the program lifetime — adding / removing entries does
+    /// not refresh this list.
     plugin_hints: Vec<(&'static str, &'static str)>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
     /// `KeyMap`) because multi-key sequencing is a base-layer
@@ -53,24 +59,35 @@ pub struct BaseLayer {
 impl BaseLayer {
     pub fn new(
         keymap: KeyMap,
-        activations: Vec<Activation>,
+        builtin_activations: Vec<Activation>,
+        registry: PluginRegistryHandle,
         plugin_hints: Vec<(&'static str, &'static str)>,
     ) -> Self {
         Self {
             keymap,
-            activations,
+            builtin_activations,
+            registry,
             plugin_hints,
             pending_g: false,
         }
     }
 
-    /// Find an activation matching this key (modulo Shift, which we
-    /// strip to match keymap lookup semantics).
-    fn activation_for(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<&Activation> {
+    /// Look up the spawn factory for a key, cloning it out so the
+    /// caller can invoke it without holding a borrow on the
+    /// registry. Built-ins win over plugin entries (so `:` always
+    /// opens the palette regardless of what plugins did). Cloning
+    /// is cheap (Rc reference-count bump).
+    fn lookup_spawn(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<SpawnComponent> {
         let clean = modifiers & !KeyModifiers::SHIFT;
-        self.activations
-            .iter()
-            .find(|a| a.code == code && a.modifiers == clean)
+        for a in &self.builtin_activations {
+            if a.code == code && a.modifiers == clean {
+                return Some(a.spawn.clone());
+            }
+        }
+        self.registry
+            .borrow()
+            .find_activation(code, clean)
+            .map(|a| a.spawn.clone())
     }
 
     /// Advance the `gg` state machine and resolve via the keymap.
@@ -102,13 +119,16 @@ impl Component for BaseLayer {
         // above, so it never reaches here.
         let keymap_msg = self.resolve_keymap(code, modifiers);
 
-        // Activation keys: spawn the plugin's fresh component and
-        // push it on top. Some factories (Lua plugins behind a
-        // `register_keybind` callback) may decline by returning
-        // `None`; the key is still consumed so it doesn't fall
-        // through to the keymap.
-        if let Some(activation) = self.activation_for(code, modifiers) {
-            if let Some(new_component) = (activation.spawn)(win.ctx()) {
+        // Activation keys: clone the spawn factory out (cheap Rc
+        // bump), then invoke. Holding only the cloned factory
+        // means the plugin's own callback can mutably borrow the
+        // registry (e.g. via `KeybindHandle:remove()`) without
+        // tripping a `RefCell` re-entry panic. Some factories (Lua
+        // plugins behind a `register_keybind` callback) may decline
+        // by returning `None`; the key is still consumed so it
+        // doesn't fall through to the keymap.
+        if let Some(spawn) = self.lookup_spawn(code, modifiers) {
+            if let Some(new_component) = spawn(win.ctx()) {
                 win.open(new_component);
             }
             return;
@@ -160,7 +180,12 @@ mod tests {
     };
 
     fn bg() -> BaseLayer {
-        BaseLayer::new(KeyMap::default(), Vec::new(), Vec::new())
+        BaseLayer::new(
+            KeyMap::default(),
+            Vec::new(),
+            crate::lua::new_plugin_registry(),
+            Vec::new(),
+        )
     }
 
     /// Dispatch a key into `bg`. Intent emissions and stack ops both
@@ -199,5 +224,59 @@ mod tests {
         // Now pending_g was reset; this g latches afresh, doesn't fire.
         let ops = dispatch(&mut bg, KeyCode::Char('g'));
         assert!(ops.intents().is_empty());
+    }
+
+    #[test]
+    fn keybind_removed_from_registry_no_longer_dispatches() {
+        // Registry-driven dispatch round-trip: register an activation
+        // for `Z`, confirm the dispatch fires (factory returns Some
+        // so a component would be pushed), then remove the activation
+        // by id and confirm the next `Z` press is a no-op.
+        use super::super::Component;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let registry = crate::lua::new_plugin_registry();
+        let fired = Rc::new(Cell::new(0_u32));
+
+        struct DummyComponent;
+        impl Component for DummyComponent {
+            fn handle_key(&mut self, _: KeyEvent, _: &mut Window) {}
+            fn render(&self, _: &mut RenderWindow) {}
+            fn name(&self) -> &'static str {
+                "dummy"
+            }
+        }
+
+        let id = 42;
+        let fired_for_factory = fired.clone();
+        registry.borrow_mut().add_activation(
+            id,
+            Activation {
+                code: KeyCode::Char('Z'),
+                modifiers: KeyModifiers::NONE,
+                spawn: std::rc::Rc::new(move |_| -> Option<Box<dyn Component>> {
+                    fired_for_factory.set(fired_for_factory.get() + 1);
+                    Some(Box::new(DummyComponent))
+                }),
+            },
+        );
+
+        let mut bg = BaseLayer::new(KeyMap::default(), Vec::new(), registry.clone(), Vec::new());
+
+        let ops = dispatch(&mut bg, KeyCode::Char('Z'));
+        assert!(ops.pushed(), "registered keybind should push a component");
+        assert_eq!(fired.get(), 1);
+
+        // Drop the activation by id — simulating
+        // KeybindHandle:remove() from Lua.
+        assert!(registry.borrow_mut().remove_activation(id));
+
+        let ops = dispatch(&mut bg, KeyCode::Char('Z'));
+        assert!(
+            !ops.pushed(),
+            "removed keybind must not dispatch (factory must not fire)"
+        );
+        assert_eq!(fired.get(), 1, "factory must not have fired again");
     }
 }

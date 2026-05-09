@@ -31,7 +31,7 @@ pub use handle::LuaHandle;
 pub use host::LuaHostShared;
 pub use init_lua::load_init_lua;
 pub use map_api::MapApi;
-pub use registrar::Registrar;
+pub use registrar::{PluginRegistry, PluginRegistryHandle, new_plugin_registry};
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use vm::new_lua;
 
@@ -39,30 +39,30 @@ use std::sync::Arc;
 
 use crate::UserCommand;
 use crate::compositor::op;
-use crate::compositor::{Activation, PaletteEntry};
 use crate::config::Config;
 use crate::input::KeyMap;
 
 /// Result of [`build_subsystem`].
 ///
 /// The runtime-held [`LuaHandle`] is **already constructed** by
-/// `build_subsystem` itself — the App just stores it, no longer
-/// reaches into a registrar to assemble it. The remaining fields are
-/// the parts that flow into the [`crate::compositor`] (activations,
-/// plugin_hints) and the palette installer (palette_entries).
+/// `build_subsystem` itself — the App just stores it. The
+/// `registry` handle is shared with `BaseLayer` and the palette
+/// installer so plugin `:remove()` can mutate it at runtime.
 pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface
     /// App uses to observe state changes and tick plugins.
     pub handle: LuaHandle,
-    /// Per-plugin keymap activations (`<key>` ⇒ spawn component).
-    /// Consumed by the compositor's `BaseLayer`.
-    pub activations: Vec<Activation>,
-    /// Plugin-supplied palette entries — drained by
-    /// [`crate::palette::install`] in `main` before the
-    /// rest of this struct reaches `App::new`.
-    pub palette_entries: Vec<PaletteEntry>,
-    /// `[<key> <name>]` footer hints harvested from
-    /// `palette_entries` *before* the palette installer drains them.
+    /// Live registry of plugin-declared activations + palette
+    /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
+    /// the palette installer (for the `:` activation's per-open
+    /// `CommandSeed` snapshot). Lua-side `PaletteCommandHandle:remove()`
+    /// / `KeybindHandle:remove()` mutably borrow it to drop entries.
+    pub registry: PluginRegistryHandle,
+    /// `[<key> <name>]` footer hints harvested from the registry's
+    /// palette entries at startup. Static for the program lifetime —
+    /// adding / removing entries at runtime does not refresh this
+    /// list (footer redraw avoidance trade-off; trivial to revisit
+    /// if dynamic registration becomes a use case).
     pub plugin_hints: Vec<(&'static str, &'static str)>,
 }
 
@@ -88,7 +88,7 @@ pub fn build_subsystem(
     attribution: Option<String>,
     keymap: &KeyMap,
 ) -> LuaSubsystem {
-    let mut r = Registrar::default();
+    let registry = new_plugin_registry();
 
     // Build the shared runtime-data carrier once. Every Lua plugin
     // (bundled and user) sees the same `ttymap.*` accessor surface;
@@ -116,20 +116,25 @@ pub fn build_subsystem(
     // `ttymap` table.
     let ops = op::new_ops_buffer();
     let slot = capture::new_capture_slot();
-    let host_handles =
-        match api::install(&lua, shared.clone(), slot.clone(), ops.clone(), bus.clone()) {
-            Ok(h) => h,
-            Err(e) => {
-                log::warn!("lua: api::install failed: {} — plugins disabled", e);
-                // Build an empty handle so the App still boots.
-                return LuaSubsystem {
-                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
-                    activations: Vec::new(),
-                    palette_entries: Vec::new(),
-                    plugin_hints: Vec::new(),
-                };
-            }
-        };
+    let host_handles = match api::install(
+        &lua,
+        shared.clone(),
+        slot.clone(),
+        ops.clone(),
+        bus.clone(),
+        registry.clone(),
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            log::warn!("lua: api::install failed: {} — plugins disabled", e);
+            // Build an empty handle so the App still boots.
+            return LuaSubsystem {
+                handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                registry,
+                plugin_hints: Vec::new(),
+            };
+        }
+    };
 
     // Bundled plugins (every `*.lua` under each runtime layer's
     // `plugin/`) always register — disabling one is either an
@@ -141,18 +146,20 @@ pub fn build_subsystem(
         runtime_path(),
         &config.plugins.disable,
         shared.clone(),
-        &mut r,
+        &registry,
     );
 
-    // Harvest the BaseLayer's footer hints. Has to happen *before*
-    // the palette installer drains `palette_entries`. The footer
-    // slot is `[<key> <name>]` — built directly from each entry's
-    // keybinding and `module.name`. No keybinding ⇒ no footer slot.
-    let plugin_hints: Vec<(&'static str, &'static str)> = r
-        .palette_entries
+    // Harvest BaseLayer's footer hints from the registry's palette
+    // entries. Snapshot at startup — we don't refresh on runtime
+    // remove. The footer slot is `[<key> <name>]`, built directly
+    // from each entry's keybinding and `module.name`. No keybinding
+    // ⇒ no footer slot.
+    let plugin_hints: Vec<(&'static str, &'static str)> = registry
+        .borrow()
+        .palette_entries()
         .iter()
-        .filter(|e| !e.hint.is_empty())
-        .map(|e| {
+        .filter(|(_, e)| !e.hint.is_empty())
+        .map(|(_, e)| {
             let key: &'static str = Box::leak(e.hint.clone().into_boxed_str());
             (key, e.name)
         })
@@ -167,8 +174,7 @@ pub fn build_subsystem(
 
     LuaSubsystem {
         handle,
-        activations: r.activations,
-        palette_entries: r.palette_entries,
+        registry,
         plugin_hints,
     }
 }
@@ -228,15 +234,16 @@ mod tests {
     fn every_bundled_script_registers() {
         runtimepath::ensure_runtime_path_for_tests();
         let shared = host::LuaHostShared::empty();
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
         let (lua, slot, bus) = fresh_loader_state(shared.clone());
-        loader::register_builtin_plugins(&lua, &slot, &rtp, &[], shared, &mut r);
+        loader::register_builtin_plugins(&lua, &slot, &rtp, &[], shared, &registry);
 
-        let palette: std::collections::HashSet<String> = r
-            .palette_entries
+        let palette: std::collections::HashSet<String> = registry
+            .borrow()
+            .palette_entries()
             .iter()
-            .map(|e| e.label.to_lowercase())
+            .map(|(_, e)| e.label.to_lowercase())
             .collect();
         // info / scalebar / attribution always subscribe a tick
         // (always-on chrome). Panel migrations (aircraft / quake /
@@ -300,6 +307,7 @@ mod tests {
             slot.clone(),
             op::new_ops_buffer(),
             bus.clone(),
+            new_plugin_registry(),
         )
         .expect("install ttymap");
         let captured = bridge::handle::load_chunk(&lua, source, name, &slot).expect("load chunk");
@@ -326,6 +334,7 @@ mod tests {
             slot.clone(),
             op::new_ops_buffer(),
             bus.clone(),
+            new_plugin_registry(),
         )
         .expect("install ttymap");
         (lua, slot, bus)
@@ -396,9 +405,9 @@ mod tests {
         );
 
         let shared = host::LuaHostShared::empty();
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared.clone(), &mut r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared.clone(), &registry);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
@@ -427,8 +436,12 @@ mod tests {
         std::fs::write(dir.join(file_name), lua).expect("write plugin file");
     }
 
-    fn labels(r: &Registrar) -> Vec<String> {
-        r.palette_entries.iter().map(|e| e.label.clone()).collect()
+    fn labels(r: &PluginRegistryHandle) -> Vec<String> {
+        r.borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.clone())
+            .collect()
     }
 
     #[test]
@@ -445,11 +458,11 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "second", invoke = function() return true end })"#,
         );
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
-        let ls = labels(&r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        let ls = labels(&registry);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
         assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
     }
@@ -466,11 +479,11 @@ mod tests {
         std::fs::write(dir.join("README.md"), "ignore me").unwrap();
         std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
-        let ls = labels(&r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        let ls = labels(&registry);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
         assert!(ls[0].contains("ok"));
     }
@@ -491,12 +504,12 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "beta", invoke = function() return true end })"#,
         );
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let disable = vec!["beta".to_string()];
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &disable, shared, &mut r);
-        let ls = labels(&r);
+        register_plugins_in(&lua, &slot, &dir, None, &disable, shared, &registry);
+        let ls = labels(&registry);
         assert!(ls.iter().any(|l| l.contains("alpha")));
         assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
     }
@@ -516,11 +529,11 @@ mod tests {
         )
         .expect("write init.lua");
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
-        let ls = labels(&r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        let ls = labels(&registry);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
             "expected biggie/init.lua to register, got {:?}",
@@ -542,12 +555,12 @@ mod tests {
         )
         .expect("write fmt.lua");
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
         assert!(
-            !labels(&r).iter().any(|l| l.contains("libonly")),
+            !labels(&registry).iter().any(|l| l.contains("libonly")),
             "lib-only subdir must not register as a plugin"
         );
     }
@@ -562,11 +575,11 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
         );
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
-        let ls = labels(&r);
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        let ls = labels(&registry);
         // Broken plugin doesn't make it in; the good one still does.
         assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
         assert!(
@@ -645,11 +658,11 @@ mod tests {
         let dir = std::env::temp_dir().join("ttymap-lua-test-missing-xxx-yyy");
         let _ = std::fs::remove_dir_all(&dir);
 
-        let mut r = Registrar::default();
+        let registry = new_plugin_registry();
         let shared = host::LuaHostShared::empty();
         let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
-        assert!(r.palette_entries.is_empty());
+        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        assert_eq!(registry.borrow().palette_entry_count(), 0);
     }
 
     /// The whole point of unifying init.lua's VM with the plugin VM:
@@ -711,18 +724,24 @@ mod tests {
         let shared = host::LuaHostShared::empty();
         let slot = capture::new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let registry = new_plugin_registry();
         api::install(
             &lua,
             shared.clone(),
             slot.clone(),
             op::new_ops_buffer(),
             bus,
+            registry.clone(),
         )
         .expect("install ttymap");
-        let mut r = Registrar::default();
-        loader::register_builtin_plugins(&lua, &slot, &[layer], &[], shared, &mut r);
+        loader::register_builtin_plugins(&lua, &slot, &[layer], &[], shared, &registry);
 
-        let labels: Vec<String> = r.palette_entries.iter().map(|e| e.label.clone()).collect();
+        let labels: Vec<String> = registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.clone())
+            .collect();
         assert!(
             labels.iter().any(|l| l == "from-init"),
             "plugin should read the mutated lib's `label`, got {:?}",

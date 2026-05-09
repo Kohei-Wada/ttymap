@@ -7,6 +7,8 @@
 //! [`super::base::BaseLayer`] consumes [`Activation`]s; the palette
 //! installer consumes [`PaletteEntry`]s.
 
+use std::rc::Rc;
+
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::component::{Component, Context};
@@ -21,7 +23,14 @@ use super::component::{Component, Context};
 /// — used by Lua plugins whose activation callback returned a falsy
 /// value, signalling "I read my state and decided not to open this
 /// time".
-pub type SpawnComponent = Box<dyn Fn(&Context) -> Option<Box<dyn Component>>>;
+///
+/// Stored as `Rc<dyn Fn>` rather than `Box<dyn Fn>` so the registry
+/// can clone the factory out under a short borrow and invoke it
+/// after the borrow drops — letting a Lua plugin's activation
+/// callback safely call `:remove()` on its own
+/// `KeybindHandle` / `PaletteCommandHandle` without `RefCell`
+/// re-entry panicking. The clone is a cheap reference-count bump.
+pub type SpawnComponent = Rc<dyn Fn(&Context) -> Option<Box<dyn Component>>>;
 
 /// One activation entry — "when this key is pressed while nothing
 /// modal is above the bottom layer, invoke `spawn` and push the

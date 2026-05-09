@@ -78,8 +78,9 @@ ttymap-tui/src/lua/
     card_parse.rs       Lua-table → CardSpec parsing helpers
     palette_handle.rs   PaletteHandle (mirror of CardHandle)
     event_handle.rs     EventHandle returned by on_event / on_tick
-    registrar_handle.rs PaletteCommandHandle / KeybindHandle (stub
-                        :remove() pending live-registry refactor)
+    registrar_handle.rs PaletteCommandHandle / KeybindHandle —
+                        :remove() drops the matching entry from the
+                        live PluginRegistry by ID
 ```
 
 The host-side pub/sub registry that Lua subscribers attach to is
@@ -142,24 +143,25 @@ plugin lifetime uniformly.
 
 - `ttymap.on_event(name, fn) -> EventHandle` — subscribe to a host
   event by name. See the [Event bus](#event-bus) for the canonical
-  event-name set. `:remove()` drops the subscriber.
+  event-name set. `:remove()` drops the subscriber from the bus.
 - `ttymap.api.frame.on_tick(fn) -> EventHandle` — sugar for
   `ttymap.on_event("tick", fn)`. `:remove()` drops the subscriber.
 - `ttymap.register_palette_command({ label, invoke, hint }) -> PaletteCommandHandle`
   — adds a palette row whose `invoke` callback runs in the shared
-  Lua state when selected.
+  Lua state when selected. `:remove()` drops the entry from the
+  live `PluginRegistry`; the next palette open won't list it.
 - `ttymap.register_keybind(key, callback) -> KeybindHandle` —
-  single-char top-level keybind. Callback runs in the shared Lua
-  state.
+  single-char top-level keybind. `:remove()` drops the activation
+  from the live `PluginRegistry`; the next keypress for that key
+  falls through to the keymap as if the plugin had never bound it.
 
-Today `EventHandle:remove()` wires end-to-end (the bus is live
-throughout the program's lifetime). `PaletteCommandHandle:remove()` /
-`KeybindHandle:remove()` are stubbed warns: the registrar's
-`palette_entries` / `activations` move out into the palette
-installer / `BaseLayer` at startup, so live removal needs the
-`PluginRegistry` refactor to land first. The handle shape is
-forward-compatible — existing plugins that just discard the return
-value keep working.
+All four handles share the disposable shape so a single
+`ttymap.plugin` Lua wrapper can manage activate/deactivate
+uniformly. Removal is idempotent — calling `:remove()` on an
+already-dropped handle is a no-op. If the palette is open with an
+entry visible at the moment a plugin removes it, selecting that
+entry afterwards silently no-ops (the `CommandSeed`'s id-based
+lookup against the registry returns `None`).
 
 ### Event bus
 
