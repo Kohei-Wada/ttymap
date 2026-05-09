@@ -79,6 +79,7 @@ local state = {
     rounds       = 0,
     w            = nil,
 }
+local tick_handle = nil  -- on_tick subscription while a session is active
 
 local function pick_target()
     return CITIES[math.random(#CITIES)]
@@ -99,6 +100,10 @@ local function close_card()
     if state.w then
         state.w:close()
         state.w = nil
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
     end
     -- Restore tile labels in case hard mode hid them. Idempotent —
     -- showing labels when they're already on is a no-op on the
@@ -125,7 +130,9 @@ local function submit()
     anim.fly_to(mid_lon, mid_lat, zoom)
 end
 
-ttymap.api.frame.on_tick(function(map)
+-- Per-frame work runs only while a session is active (subscribed in
+-- `open_card`, removed in `close_card`).
+local function on_tick(map)
     if not state.target then return end
 
     -- Reveal painting. Pre-submit nothing is drawn — that would
@@ -155,7 +162,7 @@ ttymap.api.frame.on_tick(function(map)
         state.timer_frames = 0
         submit()
     end
-end)
+end
 
 local function build_lines()
     local t = state.target
@@ -213,6 +220,7 @@ end
 
 local function open_card()
     if state.w then return end
+    tick_handle = ttymap.api.frame.on_tick(on_tick)
     state.w = ttymap.api.card.open({
         name = "geo_quiz",
         footer_hints = {

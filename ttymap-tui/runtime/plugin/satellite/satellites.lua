@@ -188,8 +188,8 @@ function M.make(specs)
         return items
     end
 
-    local w = nil  -- card handle while open; nil while closed (also
-                   -- the enabled flag for the loop)
+    local w = nil           -- card handle while open; nil while closed
+    local tick_handle = nil -- on_tick subscription while open
 
     local function paint_markers(map)
         -- Spatial dedup for group entries: at low zoom Starlink-class
@@ -308,10 +308,24 @@ function M.make(specs)
         end
     end
 
+    -- Per-frame work: drains TLE fetches, propagates SGP4 for visible
+    -- sats, paints markers. Subscribed only while the panel is open
+    -- (handle stored in `tick_handle`); removing the subscription on
+    -- close stops SGP4 propagation entirely (was previously gated by
+    -- `if not w then return` early-return inside the callback).
+    local function on_tick(map)
+        step(map)
+        paint_markers(map)
+    end
+
     local function close()
         if w then
             w:close()
             w = nil
+            if tick_handle then
+                tick_handle:remove()
+                tick_handle = nil
+            end
             initial_jump_done = false
         end
     end
@@ -322,6 +336,7 @@ function M.make(specs)
             return selected
         end
 
+        tick_handle = ttymap.api.frame.on_tick(on_tick)
         w = ttymap.api.card.open({
             name = "satellite",
             footer_hints = hints,
@@ -377,17 +392,6 @@ function M.make(specs)
     local function toggle()
         if w then close() else open() end
     end
-
-    -- Per-frame work runs only while the panel is open: drains
-    -- TLE fetches, propagates SGP4 for visible sats, paints markers.
-    -- Closing the panel (`w = nil`) immediately stops propagation
-    -- and the markers vanish, mirroring the legacy "Component
-    -- pushed only while open" behavior.
-    ttymap.api.frame.on_tick(function(map)
-        if not w then return end
-        step(map)
-        paint_markers(map)
-    end)
 
     return {
         open = open,

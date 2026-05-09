@@ -91,11 +91,11 @@ pub(super) fn register_one(
     r: &mut Registrar,
 ) {
     // Run the script in the shared VM to capture its activation
-    // surfaces and tick subscriptions. We keep clones of `lua` in
-    // every closure that fires later so module-level locals
-    // (e.g. an `enabled` flag) survive across the program's
-    // lifetime — that's the hook for plugin-side toggle state. All
-    // such clones share the underlying `Arc<LuaInner>`.
+    // surfaces. We keep clones of `lua` in every closure that fires
+    // later so module-level locals (e.g. a `local handle = nil` for
+    // toggle-state plugins) survive across the program's lifetime —
+    // that's the hook for plugin-side state. All such clones share
+    // the underlying `Arc<LuaInner>`.
     let captured = match bridge::handle::load_chunk(lua, source, name, slot) {
         Ok(c) => c,
         Err(e) => {
@@ -104,16 +104,11 @@ pub(super) fn register_one(
         }
     };
 
-    // Every `ttymap.on_event(name, fn)` (and its sugar
-    // `ttymap.api.frame.on_tick(fn)` which lowers to event "tick")
-    // capture lands on the bus as a Lua subscriber. The shared
-    // Lua is cloned (cheap Arc bump) into each entry so the callback
-    // stays invokable for the program's lifetime. Order =
-    // registration order.
-    for sub in captured.event_subscriptions {
-        r.event_bus
-            .subscribe_lua(sub.event_name, name, lua.clone(), sub.callback);
-    }
+    // `ttymap.on_event(name, fn)` and `ttymap.api.frame.on_tick(fn)`
+    // subscribe to the bus directly at call time (each returns an
+    // `EventHandle` to the Lua side). They no longer flow through
+    // the capture slot; the slot's `events_registered` counter is
+    // bumped instead so the load gate sees them.
 
     // Surface plugin metadata to help. Only entries with a key
     // bind are listed today (matching the prior harvest filter); a

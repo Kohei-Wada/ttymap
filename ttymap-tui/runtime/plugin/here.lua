@@ -13,8 +13,9 @@
 local anim = require "ttymap.animation"
 
 local state = { job = nil }
+local tick_handle = nil  -- on_tick subscription while a fetch is in flight
 
-ttymap.api.frame.on_tick(function()
+local function drain(_map)
     if not state.job then return end
     local body = state.job:try_take()
     if body then
@@ -31,14 +32,24 @@ ttymap.api.frame.on_tick(function()
                           { level = "warn" })
         end
         state.job = nil
+        -- Job done; remove ourselves from the tick bus until the
+        -- user invokes again. Avoids the per-frame `if not job` cost
+        -- across the whole program lifetime.
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
     end
-end)
+end
 
 ttymap.register_palette_command({
     label = "Jump to here (current location)",
     invoke = function()
         if not state.job then
             state.job = ttymap.http:fetch(ttymap.config:geoip_endpoint())
+            if not tick_handle then
+                tick_handle = ttymap.api.frame.on_tick(drain)
+            end
         end
     end,
 })

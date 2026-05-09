@@ -51,8 +51,9 @@ ttymap-tui/src/lua/
                    LuaHostHandles, NotifyEntry, PluginEntry) — Rust
                    structs the api/ namespaces read/write
   capture.rs       receptacle types for plugin → host registration
-                   (PaletteCommandSpec, KeybindSpec, EventSubscription,
-                   CapturedRegistration, CaptureSlot)
+                   (PaletteCommandSpec, KeybindSpec,
+                   CapturedRegistration, CaptureSlot — events
+                   bypass capture and subscribe directly to the bus)
   api/             Rust→Lua API binding (the `ttymap` global).
                    File ↔ Lua-namespace 1:1 (file name = `ttymap.<X>`).
     mod.rs         install() — assembles the namespace userdatas;
@@ -76,6 +77,9 @@ ttymap-tui/src/lua/
     card_handle.rs      CardHandle + CloseFlag + CloseFlagWrapper
     card_parse.rs       Lua-table → CardSpec parsing helpers
     palette_handle.rs   PaletteHandle (mirror of CardHandle)
+    event_handle.rs     EventHandle returned by on_event / on_tick
+    registrar_handle.rs PaletteCommandHandle / KeybindHandle (stub
+                        :remove() pending live-registry refactor)
 ```
 
 The host-side pub/sub registry that Lua subscribers attach to is
@@ -130,17 +134,32 @@ userdatas:
 
 ### Activation surfaces
 
-Top-level functions the script's setup body calls:
+Top-level functions the script's setup body calls. Each returns a
+disposable handle whose `:remove()` (`:close()` for the
+compositor-stack openers) drops that registration — VS-Code-style
+unified shape so a single `ttymap.plugin` Lua wrapper can manage
+plugin lifetime uniformly.
 
-- `ttymap.on_event(name, fn)` — subscribe to a host event by name.
-  See the [Event bus](#event-bus) for the canonical event-name set.
-- `ttymap.api.frame.on_tick(fn)` — sugar for
-  `ttymap.on_event("tick", fn)`.
-- `ttymap.register_palette_command({ label, invoke, hint })` — adds a
-  palette row whose `invoke` callback runs in the shared Lua state
-  when selected.
-- `ttymap.register_keybind(key, callback)` — single-char top-level
-  keybind. Callback runs in the shared Lua state.
+- `ttymap.on_event(name, fn) -> EventHandle` — subscribe to a host
+  event by name. See the [Event bus](#event-bus) for the canonical
+  event-name set. `:remove()` drops the subscriber.
+- `ttymap.api.frame.on_tick(fn) -> EventHandle` — sugar for
+  `ttymap.on_event("tick", fn)`. `:remove()` drops the subscriber.
+- `ttymap.register_palette_command({ label, invoke, hint }) -> PaletteCommandHandle`
+  — adds a palette row whose `invoke` callback runs in the shared
+  Lua state when selected.
+- `ttymap.register_keybind(key, callback) -> KeybindHandle` —
+  single-char top-level keybind. Callback runs in the shared Lua
+  state.
+
+Today `EventHandle:remove()` wires end-to-end (the bus is live
+throughout the program's lifetime). `PaletteCommandHandle:remove()` /
+`KeybindHandle:remove()` are stubbed warns: the registrar's
+`palette_entries` / `activations` move out into the palette
+installer / `BaseLayer` at startup, so live removal needs the
+`PluginRegistry` refactor to land first. The handle shape is
+forward-compatible — existing plugins that just discard the return
+value keep working.
 
 ### Event bus
 

@@ -25,10 +25,9 @@ use crate::lua::api::map;
 /// plugin can't freeze the loop.
 pub fn dispatch_tick(bus: &EventBus, map: &mut MapApi<'_>) {
     let cell = RefCell::new(map);
-    bus.for_each_lua_subscriber("tick", |plugin, lua, callback| {
+    bus.for_each_lua_subscriber("tick", |plugin, lua, f| {
         let result: mlua::Result<()> = lua.scope(|scope| {
             let map_table = map::make_map_table(lua, scope, &cell)?;
-            let f: mlua::Function = lua.registry_value(callback)?;
             f.call::<()>(map_table)
         });
         if let Err(e) = result {

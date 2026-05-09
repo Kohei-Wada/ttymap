@@ -1,10 +1,18 @@
 //! Receptacle types for plugin → host registration.
 //!
 //! When a script calls `ttymap.register_palette_command(spec)` /
-//! `ttymap.register_keybind(key, fn)` / `ttymap.on_event(name, fn)`
-//! at setup time, the host doesn't act on those calls immediately —
-//! it captures them into a [`CaptureSlot`] and consumes the captured
-//! [`CapturedRegistration`] after `lua.load(source).exec()` returns.
+//! `ttymap.register_keybind(key, fn)` at setup time, the host doesn't
+//! act on those calls immediately — it captures them into a
+//! [`CaptureSlot`] and consumes the captured [`CapturedRegistration`]
+//! after `lua.load(source).exec()` returns.
+//!
+//! `ttymap.on_event(name, fn)` and `ttymap.api.frame.on_tick(fn)` are
+//! **not** captured — they subscribe directly against the
+//! [`EventBus`](crate::event::EventBus) at call time and return a
+//! Lua-facing `EventHandle` so plugins can `:remove()` later. The
+//! [`Self::events_registered`] counter just tracks how many events
+//! the script subscribed during load so [`load_chunk`] can keep its
+//! "must subscribe to something" gate intact for tick-only plugins.
 //!
 //! Not a Lua namespace — these are Rust holding types. Lives at
 //! `lua/` (sibling of `lua/host.rs`) so the `api/` directory stays
@@ -13,6 +21,8 @@
 //! The capturers themselves (the Rust closures registered on the
 //! `ttymap` table) live in [`crate::lua::api::register`] and
 //! [`crate::lua::api::imperative`].
+//!
+//! [`load_chunk`]: crate::lua::bridge::handle::load_chunk
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -39,16 +49,6 @@ pub struct KeybindSpec {
     pub callback: RegistryKey,
 }
 
-/// One subscription declared via `ttymap.on_event(name, fn)` (or its
-/// `ttymap.api.frame.on_tick(fn)` sugar, which lowers to event name
-/// `"tick"`). The host walks these at register time and pushes one
-/// [`Subscriber::Lua`](crate::event::Subscriber) into the
-/// [`EventBus`](crate::event::EventBus) bucket for `event_name`.
-pub struct EventSubscription {
-    pub event_name: &'static str,
-    pub callback: RegistryKey,
-}
-
 /// Everything a single plugin file's setup phase declared. nvim-
 /// style: each activation surface is a separate explicit call with
 /// its own Lua callback. Plugins own whether/when to push by
@@ -56,16 +56,29 @@ pub struct EventSubscription {
 /// `ttymap.api.card.open(spec)` / `ttymap.api.palette.open(spec)`.
 /// Per-frame work subscribes via `ttymap.api.frame.on_tick(fn)` —
 /// stacked: each call appends a callback that fires every frame.
-/// Other events go through `ttymap.on_event(name, fn)`.
+/// Other events go through `ttymap.on_event(name, fn)`. Both
+/// subscribe directly against the [`EventBus`] and bump
+/// [`Self::events_registered`] so the load gate sees them.
 #[derive(Default)]
 pub struct CapturedRegistration {
     /// Each `ttymap.register_palette_command({label, invoke})` call.
     pub palette_commands: Vec<PaletteCommandSpec>,
     /// Each `ttymap.register_keybind(key, callback)` call.
     pub keybinds: Vec<KeybindSpec>,
-    /// Each `ttymap.on_event(name, fn)` call (and `on_tick` sugar).
-    /// Order = registration order across event names.
-    pub event_subscriptions: Vec<EventSubscription>,
+    /// Plugin name being loaded right now. Set by [`load_chunk`]
+    /// before executing the script and used by `on_tick` /
+    /// `on_event` capturers to attribute the bus subscriber to the
+    /// right plugin (for log prefixes / debugging). `None` outside a
+    /// `load_chunk` call.
+    ///
+    /// [`load_chunk`]: crate::lua::bridge::handle::load_chunk
+    pub current_plugin: Option<&'static str>,
+    /// Count of `ttymap.on_event` / `ttymap.api.frame.on_tick` calls
+    /// the script made during this load. Used purely as a "did the
+    /// script subscribe to anything?" signal by [`load_chunk`]'s
+    /// gate; the actual subscriptions live on the
+    /// [`EventBus`](crate::event::EventBus).
+    pub events_registered: usize,
 }
 
 /// Slot used by a fresh Lua state to capture the script's

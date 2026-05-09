@@ -25,8 +25,8 @@ local URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.g
 local INTERVAL_SEC = 300
 local NOTABLE_MAGNITUDE = 5.0
 
-local enabled = false  -- "feed running"; flipped by palette command
-local w = nil          -- sidebar handle while open
+local tick_handle = nil  -- on_tick subscription while feed is running
+local w = nil            -- sidebar handle while open
 
 local state = {
     quakes = {},   -- list of { lon, lat, mag, place, time_ms }
@@ -92,7 +92,7 @@ end
 -- returns an empty list — either the feed is off, or the first
 -- fetch hasn't returned yet.
 local function build_lines()
-    if not enabled then
+    if not tick_handle then
         return {
             { { text = "(feed off)",                 style = "muted" } },
             { { text = "Toggle from :Toggle quakes", style = "muted" } },
@@ -105,7 +105,7 @@ local function build_lines()
 end
 
 local function build_items()
-    if not enabled then return {} end
+    if not tick_handle then return {} end
     local now_sec = os.time()
     local items = {}
     for _, q in ipairs(state.quakes) do
@@ -127,10 +127,10 @@ local function build_items()
 end
 
 -- Per-frame work: drains the in-flight fetch, schedules the next
--- one, and paints markers. Driven by the `enabled` flag (palette
--- toggle) — the sidebar visibility is independent.
-ttymap.api.frame.on_tick(function(map)
-    if not enabled then return end
+-- one, and paints markers. Subscribed only while the feed is on
+-- (palette toggle below holds the handle). The sidebar visibility
+-- is independent — closing the panel doesn't pause the feed.
+local function on_tick(map)
     if state.job then
         local body = state.job:try_take()
         if body then
@@ -179,7 +179,7 @@ ttymap.api.frame.on_tick(function(map)
         local marker = q.mag >= NOTABLE_MAGNITUDE and "✸" or "·"
         map:point(q.lon, q.lat, marker, color)
     end
-end)
+end
 
 local function close_panel()
     if w then
@@ -225,7 +225,12 @@ local function open_panel()
 end
 
 local function toggle_feed()
-    enabled = not enabled
+    if tick_handle then
+        tick_handle:remove()
+        tick_handle = nil
+    else
+        tick_handle = ttymap.api.frame.on_tick(on_tick)
+    end
 end
 
 local function toggle_panel()

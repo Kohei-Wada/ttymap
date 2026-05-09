@@ -17,7 +17,8 @@ local state = {
     last_fetch_sec = 0,   -- wall-clock second of last fetch start
     initial_done   = false, -- whether the first fetch after open landed
 }
-local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
+local w = nil       -- card handle while open; nil while closed
+local tick_handle = nil  -- on_tick subscription while open; nil while closed
 
 -- Empty-state placeholder. Used by the bridge when `items()`
 -- below returns an empty list (= no fetch result yet).
@@ -37,12 +38,12 @@ local function build_items()
     return items
 end
 
--- Per-frame work runs only while the panel is open: drains the
--- in-flight fetch, schedules the next one, and paints markers.
--- Closing the panel (`w = nil`) immediately stops fetching, which
--- preserves the legacy "no traffic when hidden" budget behavior.
-ttymap.api.frame.on_tick(function(map)
-    if not w then return end
+-- Per-frame work: drain the in-flight fetch, schedule the next one,
+-- and paint markers. Subscribed only while the panel is open — when
+-- the panel closes the on_tick handle is `:remove()`d so this
+-- callback is gone from the bus iteration entirely (no per-frame
+-- fetch / paint cost when aircraft is hidden).
+local function on_tick(map)
     -- Drain any in-flight fetch.
     if state.job then
         local body = state.job:try_take()
@@ -85,12 +86,16 @@ ttymap.api.frame.on_tick(function(map)
         local color = (i == state.selected) and "accent_alt" or "accent"
         map:point(a.lon, a.lat, display.marker_for(a), color)
     end
-end)
+end
 
 local function close()
     if w then
         w:close()
         w = nil
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
         -- Reset the first-fetch flag so the next open re-shows the
         -- "N in view" popup. Without this, reopening would silently
         -- reuse stale state.
@@ -100,6 +105,7 @@ end
 
 local function open()
     if w then return end
+    tick_handle = ttymap.api.frame.on_tick(on_tick)
     w = ttymap.api.card.open({
         name = "aircraft",
         footer_hints = {

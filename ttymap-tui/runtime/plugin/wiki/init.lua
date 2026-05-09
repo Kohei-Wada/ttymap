@@ -29,7 +29,8 @@ local state = {
     pending_pages = nil,    -- titles + coords + dist between geosearch and extracts
     needs_refresh = false,  -- true on (re)open and on 'r'
 }
-local w = nil  -- card handle while open; nil while closed (also acts as enabled flag)
+local w = nil            -- card handle while open; nil while closed
+local tick_handle = nil  -- on_tick subscription while open
 
 local function geosearch_url(lat, lon)
     return string.format(
@@ -223,12 +224,12 @@ local function build_items()
     return items
 end
 
--- Per-frame work runs only while the panel is open: drives the
--- geosearch → extracts state machine, kicks the initial fetch,
--- and paints article markers. Closing the panel (`w = nil`)
--- immediately stops the pipeline and the markers vanish.
-ttymap.api.frame.on_tick(function(map)
-    if not w then return end
+-- Per-frame work: drives the geosearch → extracts state machine,
+-- kicks the initial fetch, and paints article markers. Subscribed
+-- only while the panel is open (handle stored in `tick_handle`),
+-- removed on close so this callback is gone from the bus iteration
+-- entirely when wiki is hidden.
+local function on_tick(map)
     if state.needs_refresh and not state.job then
         state.needs_refresh = false
         start_refresh()
@@ -242,12 +243,16 @@ ttymap.api.frame.on_tick(function(map)
         local color = (i == state.selected) and "accent_alt" or "accent"
         map:point(a.lon, a.lat, "●", color)
     end
-end)
+end
 
 local function close()
     if w then
         w:close()
         w = nil
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
     end
 end
 
@@ -255,6 +260,7 @@ local function open()
     if w then return end
     -- Trigger a fresh fetch on (re)open.
     state.needs_refresh = true
+    tick_handle = ttymap.api.frame.on_tick(on_tick)
     w = ttymap.api.card.open({
         name = "wiki",
         footer_hints = {
