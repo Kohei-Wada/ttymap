@@ -20,7 +20,11 @@
 //! Surface today:
 //!
 //! ```text
-//! ttymap.http   :fetch(url) -> Job          background HTTP GET (UTF-8 body)
+//! ttymap.http   :fetch(url) -> Job          background HTTP GET (UTF-8 body).
+//!                                            Job: :try_take() polls; :cancel()
+//!                                            disposes (idempotent — buffered
+//!                                            body becomes unreachable from
+//!                                            try_take after cancel).
 //! ttymap.http   :fetch_cached(url, ttl) -> Job  disk-cached GET; on HTTP
 //!                                            error falls back to the
 //!                                            stale on-disk copy if any

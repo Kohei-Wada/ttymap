@@ -18,8 +18,12 @@
 //! `LuaJob` is the matching one-shot fetch handle. It stays alive
 //! in the Lua state until the plugin drops its reference (or until
 //! the setup-state Lua VM itself is dropped at program exit).
+//! Lua-side: `job:try_take()` polls for the body, `job:cancel()`
+//! requests early disposal — the worker drops its result, and any
+//! already-buffered body becomes unreachable from `try_take`.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::SystemTime;
 
@@ -48,8 +52,18 @@ impl UserData for HostHttp {
 /// One-shot fetch handle. Stays alive in the Lua state until the
 /// plugin drops its reference (or until the setup-state Lua VM
 /// itself is dropped at program exit).
+///
+/// `cancelled` is a flag the spawning thread checks at two points
+/// (before the cache hit send and before the post-fetch send) and
+/// `try_take` honours after the fact. Calling `cancel()` makes the
+/// job poll-empty from then on regardless of whether the worker
+/// finished — the in-flight HTTP request itself isn't aborted (the
+/// underlying `reqwest` GET runs to completion, just into the void),
+/// so the only cost of a cancelled fetch is the worker thread
+/// finishing its current iteration silently.
 pub struct LuaJob {
     rx: mpsc::Receiver<String>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl LuaJob {
@@ -61,6 +75,8 @@ impl LuaJob {
     /// network path automatically.
     fn spawn(http: &HttpClient, url: String, cache_ttl: Option<u64>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_for_worker = cancelled.clone();
         let http = http.clone();
         let path = cache_ttl.and_then(|_| http_cache_path(&url));
         thread::spawn(move || {
@@ -72,7 +88,9 @@ impl LuaJob {
                 && age.as_secs() < ttl
                 && let Ok(body) = std::fs::read_to_string(p)
             {
-                let _ = tx.send(body);
+                if !cancelled_for_worker.load(Ordering::Relaxed) {
+                    let _ = tx.send(body);
+                }
                 return;
             }
 
@@ -86,7 +104,9 @@ impl LuaJob {
                             }
                             let _ = std::fs::write(p, &body);
                         }
-                        let _ = tx.send(body);
+                        if !cancelled_for_worker.load(Ordering::Relaxed) {
+                            let _ = tx.send(body);
+                        }
                     }
                     Err(e) => log::warn!("lua-host: http:fetch {}: not utf-8: {}", url, e),
                 },
@@ -96,6 +116,7 @@ impl LuaJob {
                     // flaky upstream doesn't strand them.
                     if let Some(p) = path.as_ref()
                         && let Ok(body) = std::fs::read_to_string(p)
+                        && !cancelled_for_worker.load(Ordering::Relaxed)
                     {
                         log::info!("lua-host: http:fetch {}: using stale cache", url);
                         let _ = tx.send(body);
@@ -103,14 +124,27 @@ impl LuaJob {
                 }
             }
         });
-        Self { rx }
+        Self { rx, cancelled }
     }
 }
 
 impl UserData for LuaJob {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method_mut("try_take", |_, this, _: mlua::Variadic<mlua::Value>| {
+            // Cancelled jobs report no body even if the worker
+            // raced and managed to send one before the cancel
+            // landed — `cancel()` should look the same to the
+            // caller regardless of timing.
+            if this.cancelled.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
             Ok(this.rx.try_recv().ok())
+        });
+        // Idempotent — calling cancel twice (or after the worker
+        // has already produced a body) is a harmless no-op.
+        methods.add_method("cancel", |_, this, _: ()| {
+            this.cancelled.store(true, Ordering::Relaxed);
+            Ok(())
         });
     }
 }
@@ -137,12 +171,20 @@ fn http_cache_path(url: &str) -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
 
+    fn make_job() -> (mpsc::Sender<String>, LuaJob) {
+        let (tx, rx) = mpsc::channel::<String>();
+        let job = LuaJob {
+            rx,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        (tx, job)
+    }
+
     #[test]
     fn job_try_take_returns_nil_before_send() {
         // Build a job by hand (skip the HTTP path) so we can
         // assert try_take's non-blocking behaviour.
-        let (tx, rx) = mpsc::channel::<String>();
-        let job = LuaJob { rx };
+        let (tx, job) = make_job();
         let lua = mlua::Lua::new();
         let ud = lua.create_userdata(job).expect("create_userdata");
         let result: Option<String> = lua
@@ -158,5 +200,37 @@ mod tests {
             .call(ud)
             .expect("call");
         assert_eq!(result.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn cancel_makes_subsequent_try_take_return_nil_even_with_buffered_body() {
+        // Race scenario: worker already enqueued a body before the
+        // caller cancelled. `cancel()` must still look like a clean
+        // disposal — the buffered body becomes unreachable from
+        // `try_take`, regardless of timing.
+        let (tx, job) = make_job();
+        let lua = mlua::Lua::new();
+        let ud = lua.create_userdata(job).expect("create_userdata");
+
+        // Worker sends, then caller cancels — a tight race
+        // collapsed onto a single thread for determinism.
+        tx.send("late".to_string()).unwrap();
+        lua.load("select(1, ...):cancel()")
+            .call::<()>(ud.clone())
+            .expect("cancel");
+
+        let result: Option<String> = lua
+            .load("return select(1, ...):try_take()")
+            .call(ud.clone())
+            .expect("call");
+        assert!(
+            result.is_none(),
+            "cancelled job must report no body even if buffered"
+        );
+
+        // Calling cancel twice is harmless.
+        lua.load("select(1, ...):cancel()")
+            .call::<()>(ud)
+            .expect("second cancel");
     }
 }
