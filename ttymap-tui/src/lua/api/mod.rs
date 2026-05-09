@@ -142,6 +142,7 @@ pub fn install(
     slot: CaptureSlot,
     ops: crate::compositor::op::OpsBuffer,
     bus: std::rc::Rc<crate::event::EventBus>,
+    registry: crate::lua::registrar::PluginRegistryHandle,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -189,7 +190,7 @@ pub fn install(
     // inspects the slot after the script finishes loading. Each is
     // opt-in and explicit; the host never auto-adds a palette row
     // or keybind from the plugin's `name` / `label` fields.
-    register::install(lua, &ttymap, slot.clone(), bus.clone())?;
+    register::install(lua, &ttymap, slot.clone(), bus.clone(), registry)?;
 
     // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
     // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
@@ -243,8 +244,16 @@ mod tests {
         let slot = new_capture_slot();
         let ops = crate::compositor::op::new_ops_buffer();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let handles = install(&lua, LuaHostShared::empty(), slot, ops.clone(), bus)
-            .expect("install ttymap table");
+        let registry = crate::lua::new_plugin_registry();
+        let handles = install(
+            &lua,
+            LuaHostShared::empty(),
+            slot,
+            ops.clone(),
+            bus,
+            registry,
+        )
+        .expect("install ttymap table");
         (lua, handles, ops)
     }
 
@@ -378,6 +387,7 @@ mod tests {
             slot,
             crate::compositor::op::new_ops_buffer(),
             bus,
+            crate::lua::new_plugin_registry(),
         )
         .expect("install ttymap table");
 
@@ -416,6 +426,7 @@ mod tests {
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
+            crate::lua::new_plugin_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -448,6 +459,7 @@ mod tests {
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
+            crate::lua::new_plugin_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -478,6 +490,7 @@ mod tests {
             slot,
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
+            crate::lua::new_plugin_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -512,6 +525,7 @@ mod tests {
             slot,
             crate::compositor::op::new_ops_buffer(),
             bus,
+            crate::lua::new_plugin_registry(),
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();

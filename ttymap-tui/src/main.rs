@@ -187,19 +187,16 @@ fn run_event_loop(
     // entries / event-bus subscriptions, return the populated bundle.
     // All Lua → App traffic rides the shared `OpsBuffer` built
     // inside `build_subsystem`; no separate intent sender needed.
-    let mut lua =
-        ttymap_tui::lua::build_subsystem(lua_vm, &config, map.attribution.clone(), &keymap);
+    let lua = ttymap_tui::lua::build_subsystem(lua_vm, &config, map.attribution.clone(), &keymap);
 
-    // Palette is a built-in (not a plugin): drain every plugin's
-    // palette_entries into a CommandSeed and append the `:` activation.
-    // Must run after every plugin's register call.
-    ttymap_tui::palette::install(
-        &keymap,
-        &mut lua.activations,
-        std::mem::take(&mut lua.palette_entries),
-    );
+    // Palette is a built-in (not a plugin): build a CommandSeed
+    // around the live PluginRegistry and append the `:` activation
+    // to a fresh built-ins Vec. Must run after every plugin's
+    // register call so the seed sees them.
+    let mut builtin_activations: Vec<ttymap_tui::compositor::Activation> = Vec::new();
+    ttymap_tui::palette::install(&keymap, &mut builtin_activations, lua.registry.clone());
 
-    let mut app = App::new(config, keymap, theme_id, map, lua);
+    let mut app = App::new(config, keymap, theme_id, map, builtin_activations, lua);
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;

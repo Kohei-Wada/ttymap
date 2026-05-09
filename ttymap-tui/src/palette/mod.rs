@@ -212,22 +212,24 @@ impl Component for PaletteComponent {
 }
 
 /// Install the palette as a built-in. Unlike a plugin's `register`,
-/// this is a **sink**: bake `palette_entries` (every entry
-/// contributed by earlier plugin registration) into a
-/// [`CommandSeed`] and append a single `:` activation pointing at a
-/// fresh [`PaletteComponent`]. Must be called **after** every
-/// plugin's `register`.
+/// this is a **sink**: prebuild a [`CommandSeed`] that holds the
+/// static map-action half plus a clone of the live
+/// [`PluginRegistryHandle`](crate::lua::PluginRegistryHandle), and
+/// append a single `:` activation. Each open snapshots the registry
+/// freshly so plugins can `:remove()` (or, in a future PR, register
+/// at runtime) and the next open reflects it. Must be called
+/// **after** every plugin's `register`.
 pub fn install(
     keymap: &KeyMap,
     activations: &mut Vec<Activation>,
-    palette_entries: Vec<crate::compositor::PaletteEntry>,
+    registry: crate::lua::PluginRegistryHandle,
 ) {
-    let seed = Rc::new(CommandSeed::build(keymap, palette_entries));
+    let seed = Rc::new(CommandSeed::build(keymap, registry));
     let seed_for_spawn = seed;
     activations.push(Activation {
         code: KeyCode::Char(':'),
         modifiers: KeyModifiers::NONE,
-        spawn: Box::new(move |ctx: &Context| -> Option<Box<dyn Component>> {
+        spawn: Rc::new(move |ctx: &Context| -> Option<Box<dyn Component>> {
             Some(Box::new(PaletteComponent::new_default(
                 seed_for_spawn.clone(),
                 ctx.theme_id,

@@ -35,7 +35,13 @@ use mlua::RegistryKey;
 /// and can be invoked from the persistent Lua state at activation
 /// time. The state must be kept alive (held by the registrar) for
 /// the program lifetime.
+///
+/// `id` is the same monotonic ID the corresponding
+/// [`crate::lua::bridge::registrar_handle::PaletteCommandHandle`]
+/// returned to Lua holds — so when the plugin calls `:remove()` the
+/// host can find this entry in the live registry and drop it.
 pub struct PaletteCommandSpec {
+    pub id: u64,
     pub label: String,
     pub hint: String,
     pub invoke: RegistryKey,
@@ -44,7 +50,10 @@ pub struct PaletteCommandSpec {
 /// One keybind declared via `ttymap.register_keybind(key, callback)`.
 /// `key` is a single Char activation; `callback` runs at press time
 /// and (truthy return) opts into pushing the file's plugin component.
+///
+/// `id` is the matching handle ID; see [`PaletteCommandSpec::id`].
 pub struct KeybindSpec {
+    pub id: u64,
     pub key: char,
     pub callback: RegistryKey,
 }

@@ -76,23 +76,29 @@ impl App {
         keymap: KeyMap,
         theme_id: ThemeId,
         map: MapHandle,
+        builtin_activations: Vec<crate::compositor::Activation>,
         lua: LuaSubsystem,
     ) -> Self {
         let LuaSubsystem {
             handle: lua,
-            activations,
+            registry,
             plugin_hints,
-            // `palette_entries` was already drained by
-            // `palette::install` from main; nothing left for App to
-            // consume.
-            palette_entries: _,
         } = lua;
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
-        // pushed on top.
+        // pushed on top. BaseLayer borrows the live `PluginRegistry`
+        // so plugin `KeybindHandle:remove()` updates are visible on
+        // the next keypress; built-in activations (today: just `:`
+        // for the palette) are kept in their own Vec so plugins
+        // can't accidentally shadow host shortcuts.
         let mut compositor = Compositor::new();
-        compositor.push(Box::new(BaseLayer::new(keymap, activations, plugin_hints)));
+        compositor.push(Box::new(BaseLayer::new(
+            keymap,
+            builtin_activations,
+            registry,
+            plugin_hints,
+        )));
 
         App {
             dispatcher: Dispatcher::new(

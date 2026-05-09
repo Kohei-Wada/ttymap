@@ -23,6 +23,7 @@ use crate::lua::bridge::registrar_handle::{
     KeybindHandle, PaletteCommandHandle, allocate_handle_id,
 };
 use crate::lua::capture::{CaptureSlot, KeybindSpec, PaletteCommandSpec};
+use crate::lua::registrar::PluginRegistryHandle;
 
 /// Install the activation-surface entries onto an existing `ttymap`
 /// table. Called from [`super::install`] before the imperative
@@ -32,9 +33,10 @@ pub(super) fn install(
     ttymap: &Table,
     slot: CaptureSlot,
     bus: Rc<EventBus>,
+    registry: PluginRegistryHandle,
 ) -> mlua::Result<()> {
-    install_register_palette_command(lua, ttymap, slot.clone())?;
-    install_register_keybind(lua, ttymap, slot.clone())?;
+    install_register_palette_command(lua, ttymap, slot.clone(), registry.clone())?;
+    install_register_keybind(lua, ttymap, slot.clone(), registry)?;
     install_on_event(lua, ttymap, slot, bus)?;
     Ok(())
 }
@@ -43,6 +45,7 @@ fn install_register_palette_command(
     lua: &Lua,
     ttymap: &Table,
     slot: CaptureSlot,
+    registry: PluginRegistryHandle,
 ) -> mlua::Result<()> {
     ttymap.set(
         "register_palette_command",
@@ -60,17 +63,23 @@ fn install_register_palette_command(
                 let invoke_key = lua.create_registry_value(invoke)?;
                 let id = allocate_handle_id();
                 slot.borrow_mut().palette_commands.push(PaletteCommandSpec {
+                    id,
                     label,
                     hint,
                     invoke: invoke_key,
                 });
-                Ok(PaletteCommandHandle::new(id))
+                Ok(PaletteCommandHandle::new(id, registry.clone()))
             },
         )?,
     )
 }
 
-fn install_register_keybind(lua: &Lua, ttymap: &Table, slot: CaptureSlot) -> mlua::Result<()> {
+fn install_register_keybind(
+    lua: &Lua,
+    ttymap: &Table,
+    slot: CaptureSlot,
+    registry: PluginRegistryHandle,
+) -> mlua::Result<()> {
     ttymap.set(
         "register_keybind",
         lua.create_function(
@@ -83,10 +92,11 @@ fn install_register_keybind(lua: &Lua, ttymap: &Table, slot: CaptureSlot) -> mlu
                 let callback_key = lua.create_registry_value(callback)?;
                 let id = allocate_handle_id();
                 slot.borrow_mut().keybinds.push(KeybindSpec {
+                    id,
                     key: c,
                     callback: callback_key,
                 });
-                Ok(KeybindHandle::new(id))
+                Ok(KeybindHandle::new(id, registry.clone()))
             },
         )?,
     )

@@ -1,36 +1,44 @@
 //! [`CommandProvider`] — the default palette provider.
 //!
-//! Built once at startup from:
+//! Built per palette open from:
 //! - map actions (harvested from [`MapAction::all_listed`] with keymap
-//!   hints)
-//! - plugin palette entries harvested from the
-//!   [`Registrar`](crate::lua::Registrar) and drained into this
-//!   provider at composition time
+//!   hints — static, cached on [`CommandSeed`])
+//! - plugin palette entries — read live from the shared
+//!   [`PluginRegistry`](crate::lua::PluginRegistry) so plugin
+//!   `:remove()` / dynamic registration is reflected on the next
+//!   palette open
 //!
 //! A dynamic "Theme" entry is appended per-open with the current
 //! `ThemeId` so the "(current)" hint stays accurate after runtime
 //! theme changes.
+//!
+//! Plugin entries carry their handle ID (`Kind::PluginEntry(u64)`)
+//! rather than a `Vec` index, so a stale snapshot pointing at a
+//! since-removed entry resolves to `None` at execute time and
+//! silently no-ops instead of dispatching against a phantom factory.
 
 use std::rc::Rc;
 
 use crate::UserCommand;
-use crate::compositor::{Context, PaletteEntry as RegistrarEntry};
+use crate::compositor::Context;
 use crate::input::keymap::KeyMap;
+use crate::lua::PluginRegistryHandle;
 use crate::theme::ThemeId;
 use ttymap_engine::map::MapAction;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 
-/// Static snapshot of the default provider's entry list — built once
-/// at composition time, held as `Rc` so the palette activation
-/// closure can clone cheaply for each push.
+/// Cached static-half of the palette source. Held as `Rc` so the
+/// `:` activation closure can clone cheaply for each push. The
+/// dynamic plugin half is read from `registry` at
+/// [`CommandProvider::build`] time per open.
 pub struct CommandSeed {
     map_actions: Vec<(MapAction, String)>, // (action, key hint)
-    plugin_entries: Vec<RegistrarEntry>,
+    registry: PluginRegistryHandle,
 }
 
 impl CommandSeed {
-    pub fn build(keymap: &KeyMap, plugin_entries: Vec<RegistrarEntry>) -> Self {
+    pub fn build(keymap: &KeyMap, registry: PluginRegistryHandle) -> Self {
         let map_actions = MapAction::all_listed()
             .iter()
             .map(|a| {
@@ -40,7 +48,7 @@ impl CommandSeed {
             .collect();
         Self {
             map_actions,
-            plugin_entries,
+            registry,
         }
     }
 }
@@ -49,9 +57,13 @@ impl CommandSeed {
 enum Kind {
     /// Plain map action — selecting runs `UserCommand::Map(action)`.
     MapAction(MapAction),
-    /// Plugin-registered Spawn / Run entry — selecting invokes the
-    /// closure in `CommandSeed::plugin_entries[idx]`.
-    PluginEntry(usize),
+    /// Plugin-registered entry — selecting looks up the matching
+    /// [`PaletteEntry`](crate::compositor::PaletteEntry) in the live
+    /// [`PluginRegistry`](crate::lua::PluginRegistry) by ID and
+    /// invokes its factory. If the entry has been `:remove()`d
+    /// since this snapshot was built, the lookup returns `None` and
+    /// the palette closes silently.
+    PluginEntry(u64),
     /// "Theme" entry — swaps provider to [`ThemeProvider`].
     OpenThemeProvider(ThemeId),
 }
@@ -83,11 +95,16 @@ impl CommandProvider {
             });
         }
 
-        for (i, entry) in seed.plugin_entries.iter().enumerate() {
+        // Snapshot the plugin entries from the live registry. We
+        // keep label / hint locally so the palette can render
+        // without re-borrowing during paint; the factory itself
+        // stays in the registry and we look it up by id at execute
+        // time.
+        for (id, entry) in seed.registry.borrow().palette_entries() {
             all.push(Entry {
                 label: entry.label.clone(),
                 hint: entry.hint.clone(),
-                kind: Kind::PluginEntry(i),
+                kind: Kind::PluginEntry(*id),
             });
         }
 
@@ -150,11 +167,27 @@ impl PaletteProvider for CommandProvider {
         };
         match &self.all[entry_idx].kind {
             Kind::MapAction(a) => PaletteAction::Run(vec![UserCommand::Map(a.clone())]),
-            Kind::PluginEntry(i) => {
-                let entry = &self.seed.plugin_entries[*i];
+            Kind::PluginEntry(id) => {
+                // Live lookup against the registry — the entry may
+                // have been `:remove()`d between palette open and
+                // selection. Clone the factory out under a short
+                // borrow and drop the borrow before invoking, so
+                // the spawn callback is free to mutably borrow the
+                // registry (e.g. to call `:remove()` on its own
+                // handle).
+                let factory = self
+                    .seed
+                    .registry
+                    .borrow()
+                    .palette_entry(*id)
+                    .map(|e| e.spawn.clone());
+                let Some(spawn) = factory else {
+                    log::info!("palette: entry id={} no longer registered, ignoring", id);
+                    return PaletteAction::Close;
+                };
                 // Factory may decline (Lua plugin returned falsy);
                 // close the palette without pushing in that case.
-                match (entry.spawn)(ctx) {
+                match spawn(ctx) {
                     Some(c) => PaletteAction::Push(c),
                     None => PaletteAction::Close,
                 }

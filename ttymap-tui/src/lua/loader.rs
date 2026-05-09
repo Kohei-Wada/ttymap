@@ -32,7 +32,7 @@ use crate::compositor::{Activation, PaletteEntry, SpawnComponent};
 use crate::lua::bridge;
 use crate::lua::capture::CaptureSlot;
 use crate::lua::host;
-use crate::lua::registrar::Registrar;
+use crate::lua::registrar::PluginRegistryHandle;
 
 /// Register every bundled Lua plugin with the registrar by walking
 /// `<layer>/plugin/*.lua` for each layer in `runtime_path`, in
@@ -49,7 +49,7 @@ pub fn register_builtin_plugins(
     runtime_path: &[PathBuf],
     disable: &[String],
     shared: Arc<host::LuaHostShared>,
-    r: &mut Registrar,
+    registry: &PluginRegistryHandle,
 ) {
     if runtime_path.is_empty() {
         log::warn!("lua: empty runtime path, no bundled plugins will load");
@@ -68,7 +68,7 @@ pub fn register_builtin_plugins(
             Some(&mut seen),
             disable,
             shared.clone(),
-            r,
+            registry,
         );
     }
 }
@@ -88,7 +88,7 @@ pub(super) fn register_one(
     name: &'static str,
     source: &'static str,
     shared: Arc<host::LuaHostShared>,
-    r: &mut Registrar,
+    registry: &PluginRegistryHandle,
 ) {
     // Run the script in the shared VM to capture its activation
     // surfaces. We keep clones of `lua` in every closure that fires
@@ -137,7 +137,7 @@ pub(super) fn register_one(
     // the App drains every frame. The factory itself never builds
     // or returns a Component; pushing is fully Lua-driven now.
     let build_factory = |gate_key: mlua::RegistryKey, lua_clone: mlua::Lua| -> SpawnComponent {
-        Box::new(move |_ctx| {
+        std::rc::Rc::new(move |_ctx| {
             run_lua_callback(&lua_clone, &gate_key, name);
             None
         })
@@ -145,20 +145,26 @@ pub(super) fn register_one(
 
     for cmd in captured.palette_commands {
         let factory = build_factory(cmd.invoke, lua.clone());
-        r.palette_entries.push(PaletteEntry {
-            label: cmd.label,
-            hint: cmd.hint,
-            name,
-            spawn: factory,
-        });
+        registry.borrow_mut().add_palette_entry(
+            cmd.id,
+            PaletteEntry {
+                label: cmd.label,
+                hint: cmd.hint,
+                name,
+                spawn: factory,
+            },
+        );
     }
     for bind in captured.keybinds {
         let factory = build_factory(bind.callback, lua.clone());
-        r.activations.push(Activation {
-            code: KeyCode::Char(bind.key),
-            modifiers: KeyModifiers::NONE,
-            spawn: factory,
-        });
+        registry.borrow_mut().add_activation(
+            bind.id,
+            Activation {
+                code: KeyCode::Char(bind.key),
+                modifiers: KeyModifiers::NONE,
+                spawn: factory,
+            },
+        );
     }
 
     // `lua` was cloned into each factory closure (clones share the
@@ -230,7 +236,7 @@ pub(super) fn register_plugins_in(
     mut seen: Option<&mut HashSet<String>>,
     disable: &[String],
     shared: Arc<host::LuaHostShared>,
-    r: &mut Registrar,
+    registry: &PluginRegistryHandle,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -289,6 +295,6 @@ pub(super) fn register_plugins_in(
         // Cost: a few KB per plugin per program lifetime.
         let name: &'static str = Box::leak(stem.to_string().into_boxed_str());
         let source: &'static str = Box::leak(source.into_boxed_str());
-        register_one(lua, slot, name, source, shared.clone(), r);
+        register_one(lua, slot, name, source, shared.clone(), registry);
     }
 }
