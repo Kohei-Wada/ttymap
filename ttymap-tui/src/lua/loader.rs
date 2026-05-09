@@ -91,11 +91,11 @@ pub(super) fn register_one(
     r: &mut Registrar,
 ) {
     // Run the script in the shared VM to capture its activation
-    // surfaces and tick subscriptions. We keep clones of `lua` in
-    // every closure that fires later so module-level locals
-    // (e.g. an `enabled` flag) survive across the program's
-    // lifetime — that's the hook for plugin-side toggle state. All
-    // such clones share the underlying `Arc<LuaInner>`.
+    // surfaces. We keep clones of `lua` in every closure that fires
+    // later so module-level locals (e.g. a `local handle = nil` for
+    // toggle-state plugins) survive across the program's lifetime —
+    // that's the hook for plugin-side state. All such clones share
+    // the underlying `Arc<LuaInner>`.
     let captured = match bridge::handle::load_chunk(lua, source, name, slot) {
         Ok(c) => c,
         Err(e) => {

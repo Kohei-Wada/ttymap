@@ -26,16 +26,7 @@
 --     stays below (full night) — which is exactly what happens at
 --     each solstice.
 
-local enabled = false
-
-local function toggle()
-    enabled = not enabled
-end
-
-ttymap.register_palette_command({
-    label  = "Toggle terminator",
-    invoke = toggle,
-})
+local handle = nil
 
 local function solar_declination_rad(yday)
     return math.rad(23.45) * math.sin(math.rad(360 / 365 * (284 + yday)))
@@ -98,9 +89,7 @@ local function recompute()
     cache.moon   = { lon_anti, -lat_sub }
 end
 
-ttymap.api.frame.on_tick(function(map)
-    if not enabled then return end
-
+local function on_tick(map)
     local now_ts = os.time()
     if now_ts ~= cache.last_ts then
         cache.last_ts = now_ts
@@ -110,4 +99,18 @@ ttymap.api.frame.on_tick(function(map)
     map:polyline(cache.coords, "muted")
     map:point(cache.sun[1],  cache.sun[2],  "☀", "accent_alt")
     map:point(cache.moon[1], cache.moon[2], "☾", "muted")
-end)
+end
+
+local function toggle()
+    if handle then
+        handle:remove()
+        handle = nil
+    else
+        handle = ttymap.api.frame.on_tick(on_tick)
+    end
+end
+
+ttymap.register_palette_command({
+    label  = "Toggle terminator",
+    invoke = toggle,
+})

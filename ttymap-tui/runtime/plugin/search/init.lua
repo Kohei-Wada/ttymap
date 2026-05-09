@@ -23,26 +23,23 @@ local state = {
     last_query = "",
     candidates = {},  -- list of { name, lon, lat }
 }
+local tick_handle = nil  -- on_tick subscription while a fetch is in flight
 
--- Per-frame async drain. Runs whether or not the palette is open —
--- the in-flight job outlives a re-open if the user dismisses and
--- reopens the palette mid-fetch (state is module-scoped).
-ttymap.api.frame.on_tick(function()
-    if state.job then
-        local body = state.job:try_take()
-        if body then
-            local payload = ttymap.json:parse(body)
-            if not payload then
-                -- Short-circuit so we don't follow up with a
-                -- misleading `No results for "X"` info popup —
-                -- there may well be results, we just couldn't read
-                -- the response.
-                ttymap.notify("search: Nominatim response unparseable",
-                              { level = "warn" })
-                state.pending = false
-                state.job = nil
-                return
-            end
+local function drain(_map)
+    if not state.job then return end
+    local body = state.job:try_take()
+    if body then
+        local payload = ttymap.json:parse(body)
+        if not payload then
+            -- Short-circuit so we don't follow up with a
+            -- misleading `No results for "X"` info popup —
+            -- there may well be results, we just couldn't read
+            -- the response.
+            ttymap.notify("search: Nominatim response unparseable",
+                          { level = "warn" })
+            state.pending = false
+            state.job = nil
+        else
             state.candidates = nominatim.parse(payload)
             if #state.candidates == 0 and state.last_query ~= "" then
                 ttymap.notify(string.format(
@@ -52,8 +49,23 @@ ttymap.api.frame.on_tick(function()
             state.pending = false
             state.job = nil
         end
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
     end
-end)
+end
+
+-- Subscribe a tick drain only while a fetch is in flight; remove
+-- once the job lands. The in-flight job outlives a palette
+-- re-open: if the user dismisses + reopens mid-fetch, the
+-- module-scoped `state.job` carries through and the still-live
+-- `tick_handle` keeps draining.
+local function ensure_tick()
+    if not tick_handle then
+        tick_handle = ttymap.api.frame.on_tick(drain)
+    end
+end
 
 local function open()
     ttymap.api.palette.open({
@@ -79,6 +91,7 @@ local function open()
             state.candidates = {}
             state.job = ttymap.http:fetch(nominatim.url(trimmed))
             state.pending = true
+            ensure_tick()
         end,
 
         items = function()

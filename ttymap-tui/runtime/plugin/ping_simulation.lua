@@ -32,23 +32,8 @@ local ret_steps = 45
 local pause     = 20
 local cycle     = out_steps + ret_steps + pause
 
-local enabled = false
+local handle = nil
 local frame   = 0
-
-local function toggle()
-  enabled = not enabled
-  if enabled then
-    -- Reset phase so the next activation starts the animation
-    -- cleanly from the beginning rather than wherever the silent
-    -- counter happened to land.
-    frame = 0
-  end
-end
-
-ttymap.register_palette_command({
-  label  = "Toggle ping simulation",
-  invoke = toggle,
-})
 
 -- Interpolate lon along the shortest-arc path around the globe so
 -- e.g. Tokyo→NY traces over the Pacific (146°) instead of via
@@ -74,10 +59,7 @@ local function interp_lon(src_lon, dst_lon, t)
   return lon
 end
 
-ttymap.api.frame.on_tick(function(map)
-  if not enabled then
-    return
-  end
+local function on_tick(map)
   frame = frame + 1
 
   -- Always-on endpoint markers — show where each ping's route starts
@@ -111,4 +93,22 @@ ttymap.api.frame.on_tick(function(map)
     -- else: pause phase, draw nothing.
     ::continue::
   end
-end)
+end
+
+local function toggle()
+  if handle then
+    handle:remove()
+    handle = nil
+  else
+    -- Reset phase so the next activation starts the animation
+    -- cleanly from the beginning rather than wherever the previous
+    -- session left off.
+    frame = 0
+    handle = ttymap.api.frame.on_tick(on_tick)
+  end
+end
+
+ttymap.register_palette_command({
+  label  = "Toggle ping simulation",
+  invoke = toggle,
+})

@@ -1,20 +1,22 @@
 -- center marker — toggle a fixed crosshair at the map's current
--- centre. The plugin lives as an always-on plugin loop; visibility
--- is a plugin-internal flag the activation callbacks flip. Setup
--- state is shared between the callbacks and the plugin's `loop`,
--- so `enabled = not enabled` in `register_keybind` is visible on
--- the next paint tick.
+-- centre. Toggle pattern: when enabled, an `on_tick` subscriber is
+-- registered against the bus and its `EventHandle` is held; toggle
+-- off calls `:remove()` so the callback is genuinely gone from the
+-- bus iteration (no per-frame `if not enabled then return end`
+-- early-return cost when the marker is hidden).
 
-local enabled = false
-
-ttymap.api.frame.on_tick(function(map)
-    if not enabled then return end
-    local lon, lat = map:center()
-    map:point(lon, lat, "+", "accent_alt")
-end)
+local handle = nil
 
 local function toggle()
-    enabled = not enabled
+    if handle then
+        handle:remove()
+        handle = nil
+    else
+        handle = ttymap.api.frame.on_tick(function(map)
+            local lon, lat = map:center()
+            map:point(lon, lat, "+", "accent_alt")
+        end)
+    end
 end
 
 ttymap.register_palette_command({

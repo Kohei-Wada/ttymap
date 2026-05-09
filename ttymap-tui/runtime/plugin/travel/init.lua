@@ -80,11 +80,16 @@ local state = {
     tour     = nil,  -- nil when not playing; else { route, phase, stop_idx }
     handle   = nil,  -- director handle for the active tour
 }
+local tick_handle = nil  -- on_tick subscription while the panel is open
 
 local function close_panel()
     if state.w then
         state.w:close()
         state.w = nil
+        if tick_handle then
+            tick_handle:remove()
+            tick_handle = nil
+        end
     end
 end
 
@@ -136,7 +141,8 @@ local function cancel_tour_silent()
     state.tour = nil
 end
 
--- Per-frame map paint. Three cases, in priority order:
+-- Per-frame map paint. Subscribed only while the panel is open; the
+-- callback handles three cases in priority order:
 --
 --   * **tour active**: paint markers for every stop, coloured by
 --     phase + position (current accent, past accent_alt, future
@@ -147,7 +153,7 @@ end
 --     whole polyline + all markers as a preview. Camera is static
 --     here (the user hasn't started flying), so the line is stable.
 --   * **list mode**: nothing to paint.
-ttymap.api.frame.on_tick(function(map)
+local function on_tick(map)
     local t = state.tour
     if t then
         local route = t.route
@@ -189,7 +195,7 @@ ttymap.api.frame.on_tick(function(map)
             map:point(s.lon, s.lat, "●", "accent_alt")
         end
     end
-end)
+end
 
 -- ── Detail-mode rendering ─────────────────────────────────────────
 local function phase_label_for(tour)
@@ -281,6 +287,7 @@ end
 local function open_panel()
     if state.w then return end
     local n = #routes
+    tick_handle = ttymap.api.frame.on_tick(on_tick)
     state.w = ttymap.api.card.open({
         name = "travel",
         -- footer_hints is read once at construction (static table —

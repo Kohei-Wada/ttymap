@@ -132,9 +132,9 @@ pub fn build_subsystem(
         };
 
     // Bundled plugins (every `*.lua` under each runtime layer's
-    // `plugin/`) always register — disabling one is an edit to the
-    // script itself (`enabled = false` in the spec). Higher-priority
-    // layers shadow lower ones by stem.
+    // `plugin/`) always register — disabling one is either an
+    // entry in `ttymap.opt.disable` (skipped at the walker) or a
+    // higher-priority runtime layer shadowing it by stem.
     loader::register_builtin_plugins(
         &lua,
         &slot,
@@ -238,11 +238,13 @@ mod tests {
             .iter()
             .map(|e| e.label.to_lowercase())
             .collect();
-        // info / scalebar / attribution / center each subscribe one
-        // tick callback (always-on chrome / toggleable overlay).
-        // Panel migrations (aircraft / quake / wiki / search / here /
-        // satellite) also subscribe a tick for async drain + paint,
-        // so this is a lower bound rather than equality.
+        // info / scalebar / attribution always subscribe a tick
+        // (always-on chrome). Panel migrations (aircraft / quake /
+        // wiki / search / here / satellite) subscribe a tick for
+        // async drain + paint. Toggle-on-demand plugins (center,
+        // terminator) only subscribe when active, so they don't
+        // count here. Lower bound rather than equality so adding a
+        // builtin doesn't require updating a magic number.
         let tick_count = bus.count("tick");
 
         // Toggles + spawns: each leaves a palette entry whose label
