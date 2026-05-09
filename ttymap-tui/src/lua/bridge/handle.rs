@@ -129,25 +129,39 @@ pub enum CallOutcome<R> {
 /// each call (the function clears stale captures defensively).
 ///
 /// `chunk_name` is reported in Lua error messages — pass the plugin's
-/// file stem so a stack trace pinpoints the script.
+/// file stem so a stack trace pinpoints the script. The same value
+/// is set as `slot.current_plugin` for the duration of `exec` so
+/// `on_tick` / `on_event` capturers can attribute their bus
+/// subscriptions to this plugin.
 pub fn load_chunk(
     lua: &Lua,
     source: &str,
-    chunk_name: &str,
+    chunk_name: &'static str,
     slot: &CaptureSlot,
 ) -> mlua::Result<CapturedRegistration> {
-    // Drain any leftover captures from a prior load — single shared
-    // slot, single drained-and-attributed bucket per plugin.
-    slot.borrow_mut().palette_commands.clear();
-    slot.borrow_mut().keybinds.clear();
-    slot.borrow_mut().event_subscriptions.clear();
+    // Reset slot state for this load — single shared slot, single
+    // drained-and-attributed bucket per plugin.
+    {
+        let mut s = slot.borrow_mut();
+        s.palette_commands.clear();
+        s.keybinds.clear();
+        s.events_registered = 0;
+        s.current_plugin = Some(chunk_name);
+    }
 
-    lua.load(source).set_name(chunk_name).exec()?;
+    let exec_result = lua.load(source).set_name(chunk_name).exec();
+
+    // Always clear `current_plugin` after exec so a stray API call
+    // outside a load (shouldn't happen in production, but tests may
+    // poke at things) can't accidentally attribute to the last
+    // loaded plugin.
+    slot.borrow_mut().current_plugin = None;
+    exec_result?;
 
     let captured = std::mem::take(&mut *slot.borrow_mut());
     let has_surface = !captured.palette_commands.is_empty()
         || !captured.keybinds.is_empty()
-        || !captured.event_subscriptions.is_empty();
+        || captured.events_registered > 0;
     if !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap registration API \

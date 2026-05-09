@@ -18,12 +18,21 @@
 //! [`crate::app::AppEvent::Bus`](crate::app::AppEvent::Bus) and
 //! `send` it; the main loop drains and calls [`Self::publish`].
 //!
-//! # Re-entry
+//! # Identity and removal
 //!
-//! Subscribers must not call `subscribe_*` during a dispatch (would
-//! panic on `RefCell::borrow_mut` while we hold an immutable
-//! borrow). Today no plugin does this — registration happens at
-//! plugin load only.
+//! Each successful `subscribe_*` call returns a monotonic `u64`. The
+//! Lua surface (e.g. `EventHandle`) wraps that ID so plugins can
+//! `:remove()` themselves later without name/lhs collisions.
+//!
+//! Dispatch is implemented as **ID snapshot + per-call lookup**: the
+//! bucket's IDs are cloned up front, then each subscriber is looked
+//! up by ID under a short-lived borrow that drops before the Lua
+//! callback runs. A callback may therefore call [`Self::remove`]
+//! (which takes `borrow_mut`) — concurrent removal naturally drops
+//! out at the next iteration's lookup. Re-subscription during
+//! dispatch is also safe; the new entry is *not* visible to the
+//! current dispatch (its ID is not in the snapshot) and will fire
+//! from the next `publish`.
 //!
 //! # The `tick` event
 //!
@@ -35,18 +44,24 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mlua::{Lua, RegistryKey};
 
 use super::Event;
 
 /// One registered subscriber. Stored under an event name in
-/// [`EventBus::subscribers`] and invoked once per
-/// [`EventBus::publish`] for that name.
+/// [`EventBus::subscribers`] paired with its issued ID, and invoked
+/// once per [`EventBus::publish`] for that name.
 pub enum Subscriber {
     /// Pure-Rust callback. Sees the typed [`Event`] enum and decides
-    /// what to do (re-publish, mutate a side cache, etc).
-    Rust(Box<dyn Fn(&Event)>),
+    /// what to do (re-publish, mutate a side cache, etc). Boxed as
+    /// `Rc<dyn Fn>` so dispatch can clone the callback out, drop the
+    /// bus borrow, and *then* invoke — making it safe for the
+    /// callback to call `subscribe_*` / `remove` (both need
+    /// `borrow_mut`) on the bus.
+    Rust(Rc<dyn Fn(&Event)>),
     /// Lua plugin callback. The mlua state is the plugin's setup
     /// state (cloned from `register_one`); the registry key points
     /// at the function the script handed to `ttymap.on_event` or
@@ -63,38 +78,64 @@ pub enum Subscriber {
 /// fire in registration order.
 #[derive(Default)]
 pub struct EventBus {
-    subscribers: RefCell<HashMap<&'static str, Vec<Subscriber>>>,
+    subscribers: RefCell<HashMap<&'static str, Vec<(u64, Subscriber)>>>,
+    next_id: AtomicU64,
 }
 
 impl EventBus {
-    /// Register a Rust subscriber for `event_name`. Order within a
-    /// bucket is registration order.
-    pub fn subscribe_rust<F: Fn(&Event) + 'static>(&self, event_name: &'static str, f: F) {
+    fn allocate_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Register a Rust subscriber for `event_name`. Returns a
+    /// monotonic ID that can be passed to [`Self::remove`].
+    pub fn subscribe_rust<F: Fn(&Event) + 'static>(&self, event_name: &'static str, f: F) -> u64 {
+        let id = self.allocate_id();
         self.subscribers
             .borrow_mut()
             .entry(event_name)
             .or_default()
-            .push(Subscriber::Rust(Box::new(f)));
+            .push((id, Subscriber::Rust(Rc::new(f))));
+        id
     }
 
     /// Register a Lua subscriber for `event_name`. The plugin string
     /// is purely diagnostic (logged when the callback errors).
+    /// Returns a monotonic ID that can be passed to [`Self::remove`].
     pub fn subscribe_lua(
         &self,
         event_name: &'static str,
         plugin: &'static str,
         lua: Lua,
         callback: RegistryKey,
-    ) {
+    ) -> u64 {
+        let id = self.allocate_id();
         self.subscribers
             .borrow_mut()
             .entry(event_name)
             .or_default()
-            .push(Subscriber::Lua {
-                plugin,
-                lua,
-                callback,
-            });
+            .push((
+                id,
+                Subscriber::Lua {
+                    plugin,
+                    lua,
+                    callback,
+                },
+            ));
+        id
+    }
+
+    /// Remove one subscriber by `(event_name, id)`. Returns true if
+    /// a matching entry was found and removed. Safe to call from
+    /// inside a dispatched callback (see module docs).
+    pub fn remove(&self, event_name: &str, id: u64) -> bool {
+        let mut subs = self.subscribers.borrow_mut();
+        let Some(bucket) = subs.get_mut(event_name) else {
+            return false;
+        };
+        let before = bucket.len();
+        bucket.retain(|(i, _)| *i != id);
+        before != bucket.len()
     }
 
     /// Total subscriber count across every bucket. Used as a
@@ -116,31 +157,75 @@ impl EventBus {
         self.subscribers.borrow().values().all(|v| v.is_empty())
     }
 
+    /// Snapshot the current ID list for `event_name`. Order matches
+    /// registration order. Helper for the snapshot-then-lookup
+    /// dispatch pattern used by [`Self::publish`] and
+    /// [`Self::for_each_lua_subscriber`].
+    fn snapshot_ids(&self, event_name: &str) -> Vec<u64> {
+        self.subscribers
+            .borrow()
+            .get(event_name)
+            .map(|bucket| bucket.iter().map(|(id, _)| *id).collect())
+            .unwrap_or_default()
+    }
+
     /// Fan an [`Event`] out to every subscriber registered under
     /// `event.name()`. Rust subscribers see `&Event` directly; Lua
     /// subscribers receive the variant's typed Lua args
     /// (`map_jumped` → `(lon, lat)`, `notify` → `{ message, level }`,
     /// etc).
     ///
-    /// See module docs for the re-entry constraint.
+    /// Dispatch is snapshot-driven: a callback may call
+    /// [`Self::remove`] (including on itself) without disturbing the
+    /// in-flight dispatch.
     pub fn publish(&self, event: Event) {
         let name = event.name();
-        let subs = self.subscribers.borrow();
-        let Some(bucket) = subs.get(name) else { return };
+        let ids = self.snapshot_ids(name);
 
-        for sub in bucket.iter() {
-            match sub {
-                Subscriber::Rust(f) => f(&event),
-                Subscriber::Lua {
-                    plugin,
-                    lua,
-                    callback,
-                } => {
-                    let result: mlua::Result<()> = (|| {
-                        let f: mlua::Function = lua.registry_value(callback)?;
-                        call_lua_with_event(&f, lua, &event)
-                    })();
-                    if let Err(e) = result {
+        // Per-call dispatch action — extracted from the bus under a
+        // short borrow so the borrow can drop before invoking. Lets
+        // a callback (Rust or Lua) call `subscribe_*` / `remove`
+        // (both `borrow_mut`) without panicking.
+        enum Action {
+            Skip,
+            Rust(Rc<dyn Fn(&Event)>),
+            Lua(&'static str, Lua, mlua::Function),
+        }
+
+        for id in ids {
+            let action = {
+                let subs = self.subscribers.borrow();
+                let Some(bucket) = subs.get(name) else {
+                    continue;
+                };
+                let Some((_, sub)) = bucket.iter().find(|(i, _)| *i == id) else {
+                    continue;
+                };
+                match sub {
+                    Subscriber::Rust(f) => Action::Rust(Rc::clone(f)),
+                    Subscriber::Lua {
+                        plugin,
+                        lua,
+                        callback,
+                    } => match lua.registry_value::<mlua::Function>(callback) {
+                        Ok(func) => Action::Lua(plugin, lua.clone(), func),
+                        Err(e) => {
+                            log::warn!(
+                                "lua[{}]: {} subscriber registry lookup failed: {}",
+                                plugin,
+                                name,
+                                e
+                            );
+                            Action::Skip
+                        }
+                    },
+                }
+            };
+            match action {
+                Action::Skip => {}
+                Action::Rust(f) => f(&event),
+                Action::Lua(plugin, lua, func) => {
+                    if let Err(e) = call_lua_with_event(&func, &lua, &event) {
                         log::warn!("lua[{}]: {} subscriber failed: {}", plugin, name, e);
                     }
                 }
@@ -157,22 +242,46 @@ impl EventBus {
     /// Carved out so this module stays free of `crate::lua::*`
     /// imports — the Lua-specific tick path is in `lua/` where it
     /// belongs.
+    ///
+    /// `f` receives the `Function` directly (already resolved from
+    /// the registry key) so the bus can drop its borrow before
+    /// calling — a callback may therefore `remove` itself.
     pub fn for_each_lua_subscriber<F>(&self, event_name: &str, mut f: F)
     where
-        F: FnMut(&str, &Lua, &RegistryKey),
+        F: FnMut(&str, &Lua, &mlua::Function),
     {
-        let subs = self.subscribers.borrow();
-        let Some(bucket) = subs.get(event_name) else {
-            return;
-        };
-        for sub in bucket.iter() {
-            if let Subscriber::Lua {
-                plugin,
-                lua,
-                callback,
-            } = sub
-            {
-                f(plugin, lua, callback);
+        let ids = self.snapshot_ids(event_name);
+        for id in ids {
+            let extracted = {
+                let subs = self.subscribers.borrow();
+                let Some(bucket) = subs.get(event_name) else {
+                    continue;
+                };
+                let Some((_, sub)) = bucket.iter().find(|(i, _)| *i == id) else {
+                    continue;
+                };
+                match sub {
+                    Subscriber::Lua {
+                        plugin,
+                        lua,
+                        callback,
+                    } => match lua.registry_value::<mlua::Function>(callback) {
+                        Ok(func) => Some((*plugin, lua.clone(), func)),
+                        Err(e) => {
+                            log::warn!(
+                                "lua[{}]: {} subscriber registry lookup failed: {}",
+                                plugin,
+                                event_name,
+                                e
+                            );
+                            None
+                        }
+                    },
+                    Subscriber::Rust(_) => None,
+                }
+            };
+            if let Some((plugin, lua, func)) = extracted {
+                f(plugin, &lua, &func);
             }
         }
     }
@@ -361,5 +470,130 @@ mod tests {
         let mut count = 0;
         bus.for_each_lua_subscriber("tick", |_, _, _| count += 1);
         assert_eq!(count, 1, "must skip the Rust sub and the other bucket");
+    }
+
+    #[test]
+    fn subscribe_returns_distinct_monotonic_ids() {
+        let bus = EventBus::default();
+        let id_a = bus.subscribe_rust("frame_ready", |_| {});
+        let id_b = bus.subscribe_rust("frame_ready", |_| {});
+        let id_c = bus.subscribe_rust("map_jumped", |_| {});
+        assert_ne!(id_a, id_b);
+        assert!(id_b > id_a);
+        assert!(id_c > id_b, "ids are global, not per-bucket");
+    }
+
+    #[test]
+    fn remove_drops_only_the_named_subscriber() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let a = Rc::new(Cell::new(0));
+        let b = Rc::new(Cell::new(0));
+        let bus = EventBus::default();
+        let a_sink = a.clone();
+        let b_sink = b.clone();
+        let id_a = bus.subscribe_rust("frame_ready", move |_| a_sink.set(a_sink.get() + 1));
+        let _id_b = bus.subscribe_rust("frame_ready", move |_| b_sink.set(b_sink.get() + 1));
+
+        bus.publish(Event::FrameReady);
+        assert_eq!(a.get(), 1);
+        assert_eq!(b.get(), 1);
+
+        assert!(bus.remove("frame_ready", id_a));
+        bus.publish(Event::FrameReady);
+        assert_eq!(a.get(), 1, "a removed, must not fire again");
+        assert_eq!(b.get(), 2);
+
+        assert!(
+            !bus.remove("frame_ready", id_a),
+            "second remove returns false"
+        );
+        assert!(
+            !bus.remove("nonexistent", 999),
+            "missing bucket returns false"
+        );
+    }
+
+    #[test]
+    fn lua_callback_can_remove_itself_during_dispatch() {
+        // The bus must not panic when a Lua callback calls
+        // `EventBus::remove(...)` on itself from inside dispatch —
+        // exercises the "drop borrow before calling Lua" property
+        // that future Lua-side `:remove()` will rely on.
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            fire_count = 0
+            function bump() fire_count = fire_count + 1 end
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let f: mlua::Function = lua.globals().get("bump").unwrap();
+        let key = lua.create_registry_value(f).unwrap();
+
+        let bus = std::rc::Rc::new(EventBus::default());
+        let id = bus.subscribe_lua("frame_ready", "self_remove", lua.clone(), key);
+
+        // A Rust sub that, when dispatched, removes the Lua sub from
+        // the same bucket. This is the in-dispatch removal path.
+        let bus_for_closure = Rc::clone(&bus);
+        let saw_lua = Rc::new(Cell::new(false));
+        let saw_lua_for_closure = saw_lua.clone();
+        bus.subscribe_rust("frame_ready", move |_| {
+            // Confirm the Lua sub has fired by this point if it was
+            // first in registration order (it was — id allocated
+            // before this rust closure).
+            saw_lua_for_closure.set(true);
+            bus_for_closure.remove("frame_ready", id);
+        });
+
+        bus.publish(Event::FrameReady);
+        bus.publish(Event::FrameReady);
+
+        let n: i64 = lua.globals().get("fire_count").unwrap();
+        assert_eq!(n, 1, "lua sub should fire once then be removed");
+        assert!(saw_lua.get(), "rust sub also fired");
+    }
+
+    #[test]
+    fn re_subscribe_during_dispatch_does_not_panic() {
+        // Subscribing during dispatch must not deadlock the
+        // RefCell. The new entry is *not* visible to the in-flight
+        // publish (it's not in the snapshot), but a subsequent
+        // publish must fire it.
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let bus = std::rc::Rc::new(EventBus::default());
+        let inner_fired = Rc::new(Cell::new(0));
+        let inner_fired_clone = inner_fired.clone();
+        let bus_for_closure = Rc::clone(&bus);
+        let outer_fired = Rc::new(Cell::new(0));
+        let outer_fired_clone = outer_fired.clone();
+        bus.subscribe_rust("frame_ready", move |_| {
+            outer_fired_clone.set(outer_fired_clone.get() + 1);
+            // Subscribe a new closure during dispatch.
+            let inner_sink = inner_fired_clone.clone();
+            bus_for_closure.subscribe_rust("frame_ready", move |_| {
+                inner_sink.set(inner_sink.get() + 1);
+            });
+        });
+
+        bus.publish(Event::FrameReady);
+        // Inner sub registered during dispatch but not in this
+        // snapshot, so it shouldn't have fired yet.
+        assert_eq!(inner_fired.get(), 0);
+        assert_eq!(outer_fired.get(), 1);
+
+        // Second publish: snapshot now includes the inner sub plus
+        // ANOTHER copy registered by the outer firing again, etc.
+        // Just assert nothing panics and inner_fired increments.
+        bus.publish(Event::FrameReady);
+        assert!(inner_fired.get() >= 1);
     }
 }

@@ -7,6 +7,7 @@
 //! how Lua is wired internally" boundary — all bus dispatch and
 //! host-state plumbing lives behind this type.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
@@ -18,13 +19,17 @@ use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::frame::MapFrame;
 
 /// Runtime-held part of the Lua subsystem (built by
-/// [`crate::lua::build_subsystem`] and lifted out of the registrar by
-/// [`Self::take_from_registrar`]). Wraps the event bus and per-plugin
-/// host-state channels so callers (App) interact through
+/// [`crate::lua::build_subsystem`]). Wraps the event bus and
+/// per-plugin host-state channels so callers (App) interact through
 /// semantic methods rather than touching the bus or channels
 /// directly.
+///
+/// The bus is wrapped in [`Rc`] because the same instance is
+/// referenced by every `EventHandle` userdata returned to Lua
+/// (`ttymap.on_event` / `ttymap.api.frame.on_tick`) — they keep a
+/// `Rc<EventBus>` to call `remove(...)` on `:remove()`.
 pub struct LuaHandle {
-    bus: EventBus,
+    bus: Rc<EventBus>,
     host_handles: Vec<LuaHostHandles>,
     /// Shared buffer that Lua callbacks push [`Op`]s into; App
     /// drains via [`Self::drain_ops`] once per loop iteration.
@@ -39,7 +44,7 @@ pub struct LuaHandle {
 
 impl LuaHandle {
     pub fn new(
-        bus: EventBus,
+        bus: Rc<EventBus>,
         host_handles: Vec<LuaHostHandles>,
         ops: OpsBuffer,
         shared: Arc<LuaHostShared>,

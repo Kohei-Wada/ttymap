@@ -137,6 +137,7 @@ pub fn install(
     shared: Arc<LuaHostShared>,
     slot: CaptureSlot,
     ops: crate::compositor::op::OpsBuffer,
+    bus: std::rc::Rc<crate::event::EventBus>,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -178,17 +179,18 @@ pub fn install(
     ttymap.set("log", lua.create_userdata(HostLog::new("lua".to_string()))?)?;
 
     // Activation surfaces (`register_palette_command` /
-    // `register_keybind` / `on_event`) — capturers that push into
-    // the shared [`CaptureSlot`] which the host inspects after the
-    // script finishes loading. Each is opt-in and explicit; the
-    // host never auto-adds a palette row or keybind from the
-    // plugin's `name` / `label` fields.
-    register::install(lua, &ttymap, slot.clone())?;
+    // `register_keybind` / `on_event`) — `register_*` capturers
+    // push into the shared [`CaptureSlot`]; `on_event` subscribes
+    // directly against the bus and returns a handle. The host
+    // inspects the slot after the script finishes loading. Each is
+    // opt-in and explicit; the host never auto-adds a palette row
+    // or keybind from the plugin's `name` / `label` fields.
+    register::install(lua, &ttymap, slot.clone(), bus.clone())?;
 
     // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
     // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
     // makes from inside its callbacks.
-    imperative::install(lua, &ttymap, slot, ops.clone(), shared.clone())?;
+    imperative::install(lua, &ttymap, slot, ops.clone(), shared.clone(), bus)?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
@@ -229,14 +231,16 @@ mod tests {
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors
-    /// the production install path; the capture slot is dropped since
-    /// these tests don't exercise registration.
+    /// the production install path; the capture slot and bus are
+    /// dropped since these tests don't exercise registration or
+    /// dispatch.
     fn install_for_test() -> (mlua::Lua, LuaHostHandles, crate::compositor::op::OpsBuffer) {
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
         let ops = crate::compositor::op::new_ops_buffer();
-        let handles =
-            install(&lua, LuaHostShared::empty(), slot, ops.clone()).expect("install ttymap table");
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let handles = install(&lua, LuaHostShared::empty(), slot, ops.clone(), bus)
+            .expect("install ttymap table");
         (lua, handles, ops)
     }
 
@@ -363,11 +367,13 @@ mod tests {
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
         let slot = new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             shared.clone(),
             slot,
             crate::compositor::op::new_ops_buffer(),
+            bus,
         )
         .expect("install ttymap table");
 
@@ -392,18 +398,20 @@ mod tests {
     }
 
     #[test]
-    fn api_frame_on_tick_registers_each_callback() {
-        // Each `ttymap.api.frame.on_tick(fn)` call must land as one
-        // entry in the capture slot's `ticks` vector. Multiple calls
-        // stack in registration order; the host walks the slot at
-        // `register_one` time and pushes one TickEntry per key.
+    fn api_frame_on_tick_subscribes_each_callback_against_the_bus() {
+        // Each `ttymap.api.frame.on_tick(fn)` call subscribes
+        // directly to the bus (one entry per call) and bumps the
+        // slot's events_registered counter so the load gate sees
+        // tick-only plugins.
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
+            bus.clone(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -414,33 +422,28 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        let cap = slot.borrow();
         assert_eq!(
-            cap.event_subscriptions.len(),
+            bus.count("tick"),
             2,
-            "two on_tick calls -> two entries"
+            "two on_tick calls -> two bus subscribers"
         );
-        assert!(
-            cap.event_subscriptions
-                .iter()
-                .all(|s| s.event_name == "tick"),
-            "on_tick must lower to event name `tick`"
-        );
+        assert_eq!(slot.borrow().events_registered, 2);
     }
 
     #[test]
-    fn on_event_captures_subscription_under_the_named_event() {
+    fn on_event_subscribes_against_the_named_bucket() {
         // `ttymap.on_event(name, fn)` — generic surface. Each call
-        // must land as one entry tagged with the supplied event name.
-        // Multiple distinct names lower to distinct buckets in the
-        // event bus.
+        // subscribes directly under its event name on the shared
+        // bus; multiple distinct names land in distinct buckets.
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             slot.clone(),
             crate::compositor::op::new_ops_buffer(),
+            bus.clone(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -452,14 +455,43 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        let cap = slot.borrow();
-        assert_eq!(cap.event_subscriptions.len(), 3);
-        let names: Vec<&str> = cap
-            .event_subscriptions
-            .iter()
-            .map(|s| s.event_name)
-            .collect();
-        assert_eq!(names, vec!["tick", "frame_ready", "frame_ready"]);
+        assert_eq!(slot.borrow().events_registered, 3);
+        assert_eq!(bus.count("tick"), 1);
+        assert_eq!(bus.count("frame_ready"), 2);
+    }
+
+    #[test]
+    fn on_event_returns_handle_whose_remove_drops_subscriber() {
+        // The handle returned to Lua exposes a single `:remove()`
+        // method; calling it must remove that exact subscriber from
+        // the bus. Idempotent: a second call is a no-op.
+        let lua = mlua::Lua::new();
+        let slot = new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let _handles = install(
+            &lua,
+            LuaHostShared::empty(),
+            slot,
+            crate::compositor::op::new_ops_buffer(),
+            bus.clone(),
+        )
+        .expect("install ttymap table");
+        lua.load(
+            r#"
+            handle = ttymap.on_event("frame_ready", function() end)
+            "#,
+        )
+        .exec()
+        .expect("subscribe");
+        assert_eq!(bus.count("frame_ready"), 1);
+        lua.load(r#"handle:remove(); handle:remove()"#)
+            .exec()
+            .expect("remove");
+        assert_eq!(
+            bus.count("frame_ready"),
+            0,
+            "handle:remove() must drop the subscriber"
+        );
     }
 
     #[test]
@@ -469,11 +501,13 @@ mod tests {
         // error at register time so the plugin author finds it.
         let lua = mlua::Lua::new();
         let slot = new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             slot,
             crate::compositor::op::new_ops_buffer(),
+            bus,
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();

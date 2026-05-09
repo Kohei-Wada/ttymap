@@ -102,6 +102,13 @@ pub fn build_subsystem(
         keymap_entries(keymap),
     ));
 
+    // Build the event bus first — it's shared between the API
+    // surface (so `on_event` / `on_tick` can subscribe directly and
+    // return an `EventHandle` carrying back a clone) and the
+    // [`LuaHandle`] (so App publishes go through the same bus
+    // every plugin subscribed against).
+    let bus = std::rc::Rc::new(crate::event::EventBus::default());
+
     // Extend the existing `ttymap` global (created by init.lua's
     // pre-pass with `opt` + `keymap`) with the plugin runtime API:
     // `http`, `map`, `api`, `register_*`, `notify`, `on_event`. One
@@ -109,19 +116,20 @@ pub fn build_subsystem(
     // `ttymap` table.
     let ops = op::new_ops_buffer();
     let slot = capture::new_capture_slot();
-    let host_handles = match api::install(&lua, shared.clone(), slot.clone(), ops.clone()) {
-        Ok(h) => h,
-        Err(e) => {
-            log::warn!("lua: api::install failed: {} — plugins disabled", e);
-            // Build an empty handle so the App still boots.
-            return LuaSubsystem {
-                handle: LuaHandle::new(std::mem::take(&mut r.event_bus), Vec::new(), ops, shared),
-                activations: Vec::new(),
-                palette_entries: Vec::new(),
-                plugin_hints: Vec::new(),
-            };
-        }
-    };
+    let host_handles =
+        match api::install(&lua, shared.clone(), slot.clone(), ops.clone(), bus.clone()) {
+            Ok(h) => h,
+            Err(e) => {
+                log::warn!("lua: api::install failed: {} — plugins disabled", e);
+                // Build an empty handle so the App still boots.
+                return LuaSubsystem {
+                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                    activations: Vec::new(),
+                    palette_entries: Vec::new(),
+                    plugin_hints: Vec::new(),
+                };
+            }
+        };
 
     // Bundled plugins (every `*.lua` under each runtime layer's
     // `plugin/`) always register — disabling one is an edit to the
@@ -150,18 +158,12 @@ pub fn build_subsystem(
         })
         .collect();
 
-    // Lift the runtime parts (bus + the single shared host handles)
-    // out of the registrar and wrap them into the [`LuaHandle`]
-    // right here, so callers never see the bus or the channels and
-    // never have to assemble a handle themselves. `shared` lives on
-    // as the handle's own clone — App writes into shared cells
+    // Wrap the shared bus + the single shared host handles into the
+    // [`LuaHandle`], so callers never see the bus or the channels
+    // and never have to assemble a handle themselves. `shared` lives
+    // on as the handle's own clone — App writes into shared cells
     // (e.g. `current_frame`) through `LuaHandle` semantic methods.
-    let handle = LuaHandle::new(
-        std::mem::take(&mut r.event_bus),
-        vec![host_handles],
-        ops,
-        shared,
-    );
+    let handle = LuaHandle::new(bus, vec![host_handles], ops, shared);
 
     LuaSubsystem {
         handle,
@@ -228,7 +230,7 @@ mod tests {
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
         let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, bus) = fresh_loader_state(shared.clone());
         loader::register_builtin_plugins(&lua, &slot, &rtp, &[], shared, &mut r);
 
         let palette: std::collections::HashSet<String> = r
@@ -241,7 +243,7 @@ mod tests {
         // Panel migrations (aircraft / quake / wiki / search / here /
         // satellite) also subscribe a tick for async drain + paint,
         // so this is a lower bound rather than equality.
-        let tick_count = r.event_bus.count("tick");
+        let tick_count = bus.count("tick");
 
         // Toggles + spawns: each leaves a palette entry whose label
         // contains the plugin's stem (lowercased). `satellite` is the
@@ -275,35 +277,61 @@ mod tests {
     /// throwaway Lua state and returns the captured registration so
     /// the test can assert on the activation surfaces and tick
     /// subscriptions. Mirrors what `register_one` does at
-    /// registration time.
-    fn parse_spec(source: &str, name: &str) -> (mlua::Lua, capture::CapturedRegistration) {
+    /// registration time. The bus is returned alongside so tests
+    /// can assert against `on_event` / `on_tick` subscriptions
+    /// (those subscribe directly to the bus rather than into the
+    /// capture slot).
+    fn parse_spec(
+        source: &'static str,
+        name: &'static str,
+    ) -> (
+        mlua::Lua,
+        capture::CapturedRegistration,
+        std::rc::Rc<crate::event::EventBus>,
+    ) {
         let lua = new_lua();
         let slot = capture::new_capture_slot();
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
         api::install(
             &lua,
             host::LuaHostShared::empty(),
             slot.clone(),
             op::new_ops_buffer(),
+            bus.clone(),
         )
         .expect("install ttymap");
         let captured = bridge::handle::load_chunk(&lua, source, name, &slot).expect("load chunk");
-        (lua, captured)
+        (lua, captured, bus)
     }
 
     /// Helper for `register_plugins_in`-driven tests. Builds a fresh
     /// Lua state with the runtime API installed and returns the
-    /// `(lua, slot)` pair the dir-discovery tests pass into the
-    /// loader.
-    fn fresh_loader_state(shared: Arc<host::LuaHostShared>) -> (mlua::Lua, capture::CaptureSlot) {
+    /// `(lua, slot, bus)` triple the dir-discovery tests pass into
+    /// the loader.
+    fn fresh_loader_state(
+        shared: Arc<host::LuaHostShared>,
+    ) -> (
+        mlua::Lua,
+        capture::CaptureSlot,
+        std::rc::Rc<crate::event::EventBus>,
+    ) {
         let lua = new_lua();
         let slot = capture::new_capture_slot();
-        api::install(&lua, shared, slot.clone(), op::new_ops_buffer()).expect("install ttymap");
-        (lua, slot)
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        api::install(
+            &lua,
+            shared,
+            slot.clone(),
+            op::new_ops_buffer(),
+            bus.clone(),
+        )
+        .expect("install ttymap");
+        (lua, slot, bus)
     }
 
     #[test]
     fn explicit_palette_command_and_keybind_are_captured() {
-        let (_lua, c) = parse_spec(
+        let (_lua, c, _bus) = parse_spec(
             r#"
             ttymap.register_palette_command({ label = "Toggle x", invoke = function() return true end })
             ttymap.register_keybind("i", function() return true end)
@@ -317,13 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn on_tick_subscriptions_are_captured() {
-        // Each `ttymap.api.frame.on_tick(fn)` call lands as a
-        // separate entry in `captured.ticks`. Order = registration
-        // order (Vec push semantics). Combined with at least one
-        // activation surface so the load passes the
-        // "must subscribe to something" gate.
-        let (_lua, c) = parse_spec(
+    fn on_tick_subscriptions_land_on_the_bus() {
+        // Each `ttymap.api.frame.on_tick(fn)` call subscribes
+        // directly against the bus and bumps `events_registered`.
+        // Combined with at least one activation surface so the load
+        // passes the "must subscribe to something" gate.
+        let (_lua, c, bus) = parse_spec(
             r#"
             ttymap.api.frame.on_tick(function(_map) end)
             ttymap.api.frame.on_tick(function(_map) end)
@@ -331,7 +358,8 @@ mod tests {
             "#,
             "x",
         );
-        assert_eq!(c.event_subscriptions.len(), 2);
+        assert_eq!(c.events_registered, 2);
+        assert_eq!(bus.count("tick"), 2);
     }
 
     #[test]
@@ -339,11 +367,12 @@ mod tests {
         // A script that only subscribes via `on_tick` (no palette
         // command, no keybind) is a valid plugin — always-on chrome
         // like info / scalebar fits this shape.
-        let (_lua, c) = parse_spec(r#"ttymap.api.frame.on_tick(function(_map) end)"#, "chrome");
+        let (_lua, c, bus) =
+            parse_spec(r#"ttymap.api.frame.on_tick(function(_map) end)"#, "chrome");
         assert!(c.palette_commands.is_empty());
         assert!(c.keybinds.is_empty());
-        assert_eq!(c.event_subscriptions.len(), 1);
-        assert_eq!(c.event_subscriptions[0].event_name, "tick");
+        assert_eq!(c.events_registered, 1);
+        assert_eq!(bus.count("tick"), 1);
     }
 
     #[test]
@@ -366,7 +395,7 @@ mod tests {
 
         let shared = host::LuaHostShared::empty();
         let mut r = Registrar::default();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared.clone(), &mut r);
 
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
@@ -416,7 +445,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
@@ -437,7 +466,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert_eq!(ls.len(), 1, "got {:?}", ls);
@@ -463,7 +492,7 @@ mod tests {
         let mut r = Registrar::default();
         let disable = vec!["beta".to_string()];
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &disable, shared, &mut r);
         let ls = labels(&r);
         assert!(ls.iter().any(|l| l.contains("alpha")));
@@ -487,7 +516,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         assert!(
@@ -513,7 +542,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         assert!(
             !labels(&r).iter().any(|l| l.contains("libonly")),
@@ -533,7 +562,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         let ls = labels(&r);
         // Broken plugin doesn't make it in; the good one still does.
@@ -616,7 +645,7 @@ mod tests {
 
         let mut r = Registrar::default();
         let shared = host::LuaHostShared::empty();
-        let (lua, slot) = fresh_loader_state(shared.clone());
+        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
         register_plugins_in(&lua, &slot, &dir, None, &[], shared, &mut r);
         assert!(r.palette_entries.is_empty());
     }
@@ -679,8 +708,15 @@ mod tests {
 
         let shared = host::LuaHostShared::empty();
         let slot = capture::new_capture_slot();
-        api::install(&lua, shared.clone(), slot.clone(), op::new_ops_buffer())
-            .expect("install ttymap");
+        let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        api::install(
+            &lua,
+            shared.clone(),
+            slot.clone(),
+            op::new_ops_buffer(),
+            bus,
+        )
+        .expect("install ttymap");
         let mut r = Registrar::default();
         loader::register_builtin_plugins(&lua, &slot, &[layer], &[], shared, &mut r);
 

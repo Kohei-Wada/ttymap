@@ -26,10 +26,12 @@
 
 use mlua::{Lua, Table};
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
-use crate::lua::capture::{CaptureSlot, EventSubscription};
+use crate::event::EventBus;
+use crate::lua::capture::CaptureSlot;
 use crate::lua::host::LuaHostShared;
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
@@ -40,12 +42,13 @@ pub(super) fn install(
     slot: CaptureSlot,
     ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
+    bus: Rc<EventBus>,
 ) -> mlua::Result<()> {
     let api = lua.create_table()?;
 
     api.set("card", build_card_table(lua, ops.clone())?)?;
     api.set("palette", build_palette_table(lua, ops.clone())?)?;
-    api.set("frame", build_frame_table(lua, slot, ops, shared)?)?;
+    api.set("frame", build_frame_table(lua, slot, ops, shared, bus)?)?;
 
     ttymap.set("api", api)?;
     Ok(())
@@ -122,6 +125,7 @@ fn build_frame_table(
     slot: CaptureSlot,
     _ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
+    bus: Rc<EventBus>,
 ) -> mlua::Result<Table> {
     let frame_api = lua.create_table()?;
 
@@ -144,18 +148,31 @@ fn build_frame_table(
     // because the existing plugin set + docs use it everywhere and
     // it reads more naturally for the per-frame use case. New
     // event surfaces should use `ttymap.on_event` directly.
+    //
+    // Subscribes directly against the [`EventBus`] at call time and
+    // returns an [`EventHandle`] so plugins can `:remove()` later.
+    // The slot's `current_plugin` provides the log attribution; the
+    // counter bump keeps the `load_chunk` "must subscribe to
+    // something" gate happy for tick-only plugins.
+    let bus_for_on_tick = bus;
+    let slot_for_on_tick = slot;
     frame_api.set(
         "on_tick",
-        lua.create_function(move |lua, callback: mlua::Function| -> mlua::Result<()> {
-            let key = lua.create_registry_value(callback)?;
-            slot.borrow_mut()
-                .event_subscriptions
-                .push(EventSubscription {
-                    event_name: "tick",
-                    callback: key,
-                });
-            Ok(())
-        })?,
+        lua.create_function(
+            move |lua,
+                  callback: mlua::Function|
+                  -> mlua::Result<crate::lua::bridge::event_handle::EventHandle> {
+                use crate::lua::bridge::event_handle::EventHandle;
+                let plugin = slot_for_on_tick
+                    .borrow()
+                    .current_plugin
+                    .unwrap_or("(unknown)");
+                let key = lua.create_registry_value(callback)?;
+                let id = bus_for_on_tick.subscribe_lua("tick", plugin, lua.clone(), key);
+                slot_for_on_tick.borrow_mut().events_registered += 1;
+                Ok(EventHandle::new(bus_for_on_tick.clone(), "tick", id))
+            },
+        )?,
     )?;
     Ok(frame_api)
 }
