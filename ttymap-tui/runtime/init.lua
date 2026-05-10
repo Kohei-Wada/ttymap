@@ -1,14 +1,22 @@
--- Bundled defaults for ttymap. Runs first in the init.lua chain;
--- the user's `~/.config/ttymap/init.lua` runs after this in the
--- same Lua state and can override anything set here (last-wins on
--- the shared `ttymap.opt.*` table).
+-- Bundled defaults for ttymap. The order is the standard layered
+-- one (system → bundled → user):
 --
--- Every value below is the Rust-side default. Source of truth:
--- `src/config.rs`. Edit a line to change the shipping default
--- (lands via PR); users override per-leaf in their own init.lua.
+--   1. seed `ttymap.opt.*` defaults (bundled — shipping values)
+--   2. activate the bundled plugin set via `require`
+--   3. pull in the user's `~/.config/ttymap/init.lua` LAST, so
+--      user mutations / handle :remove() / user `require`s win
+--
+-- The user-config loader is a Lua lib (`ttymap.user_config`); Rust
+-- never names the user-config path. To replace the bundled set
+-- entirely, point `$TTYMAP_RUNTIME` at your own runtime layer with
+-- its own `init.lua`.
+--
+-- Source of truth for the option defaults below: `src/config.rs`.
+-- Editing a line here changes the shipping default (via PR); users
+-- override per-leaf in their own init.lua.
 
 ------------------------------------------------------------
--- ttymap.opt.map — initial viewport + zoom envelope.
+-- 1. ttymap.opt.map — initial viewport + zoom envelope.
 ------------------------------------------------------------
 ttymap.opt.map.lat       = 52.51298   -- Berlin
 ttymap.opt.map.lon       = 13.42012
@@ -36,15 +44,47 @@ ttymap.opt.geoip.endpoint   = "https://ipapi.co/json/"    -- Must return ipapi.c
 ttymap.opt.geoip.timeout_ms = 2000
 
 ------------------------------------------------------------
--- ttymap.opt.disable — opt-out plugin list. Stems are file
--- names under any `<runtime>/plugin/` minus `.lua`. Users
--- should `table.insert(ttymap.opt.disable, "X")` rather than
--- reassign, otherwise bundled entries get clobbered.
-------------------------------------------------------------
-ttymap.opt.disable = {}
-
-------------------------------------------------------------
 -- ttymap.opt.runtime — event-loop / overlay redraw rates.
 ------------------------------------------------------------
 ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
+
+------------------------------------------------------------
+-- 2. Bundled plugins — chrome first, then everything else
+-- (alphabetical). Adjust per file to taste.
+------------------------------------------------------------
+require "info"
+require "scalebar"
+require "attribution"
+require "notify"
+require "help"
+
+require "aircraft"
+require "center"
+require "export"
+require "geo_quiz"
+require "here"
+require "ping_simulation"
+require "quake"
+require "satellite"
+require "search"
+require "terminator"
+require "travel"
+require "wiki"
+
+------------------------------------------------------------
+-- 3. User init.lua — runs LAST so the user wins:
+--   * override any `ttymap.opt.*` set above
+--   * `ttymap.keymap.set/del`
+--   * `require` user plugins (their registrations stack on top of
+--     bundled; the registry scans in registration order, so for a
+--     keybind conflict the user must `:remove()` the bundled handle
+--     first — bundled plugins don't expose their handles by default,
+--     so this is mostly a "use a different keybind" situation)
+--   * use the handle returned by your own `register_palette_command`
+--     / `register_keybind` / `on_event` and call `:remove()` on it
+--     to drop a registration later
+-- Missing / broken user file = logged-and-skipped, the host keeps
+-- booting.
+------------------------------------------------------------
+require("ttymap.user_config").load()

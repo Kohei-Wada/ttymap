@@ -79,11 +79,11 @@ pub struct SnapArgs {
 }
 
 pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // snap is headless and doesn't react to keymap, so we drop the
-    // keymap overrides and the Lua state returned by load_init_lua.
-    // `Config` carries every other init.lua-tunable knob
-    // (geoip / cache / render).
-    let (_lua, mut config, _) = crate::lua::load_init_lua(config::Config::default());
+    // snap is headless and doesn't activate plugins, so we use the
+    // config-only init.lua entry (no API install, no plugin requires).
+    // `Config` carries every init.lua-tunable knob (geoip / cache /
+    // render); plugins would just slow snap down.
+    let mut config = crate::lua::read_init_lua_config_only(config::Config::default());
 
     // Resolve center: --here wins, then --lat/--lon, then config default.
     if args.here {

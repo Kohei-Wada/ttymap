@@ -6,10 +6,13 @@ Lua 5.4 vendored.
 
 ## Plugin model
 
-nvim-style. **A `.lua` file in a `<runtime>/plugin/` directory is a
-plugin** — there is no `register_plugin` ceremony. Identity = file
-stem (used for log tags, stem-dedup across runtime layers, and
-`ttymap.opt.disable` matching).
+nvim-style. **A `.lua` file (or `<name>/init.lua` directory) under a
+`<runtime>/plugin/` layer is a require-able plugin module** — there
+is no `register_plugin` ceremony. Activation is explicit: every plugin
+is `require`-d from an `init.lua` file. The bundled `runtime/init.lua`
+requires the default set; the user's `~/.config/ttymap/init.lua` may
+add or override. Identity = the require name (also used for log tags
+and `ttymap.help:palette_entries()`).
 
 A script joins host loops by calling some combination of:
 
@@ -32,15 +35,22 @@ Split by intent, not by domain:
 
 ```
 ttymap-tui/src/lua/
-  mod.rs           LuaSubsystem + build_subsystem orchestration
-  vm.rs            new_lua + package.searchers / package.path setup
-  loader.rs        register_builtin_plugins, register_one,
-                   register_plugins_in — disk walk + per-plugin wiring
+  mod.rs           LuaSubsystem + merged build_subsystem (creates
+                   the VM, installs API surface, runs the init.lua
+                   chain — single entry point, no separate walker)
+  vm.rs            new_lua + install_builtin_searcher (libs in
+                   `lua/`) + install_plugin_searcher (top-level
+                   plugin requires from `plugin/`, wraps with
+                   register_one for attribution)
+  plugin_loader.rs register_one — per-plugin chunk runner; called
+                   from the plugin searcher's wrapper closure to
+                   drain the capture slot into the registry
   tick.rs          dispatch_tick(bus, map) — per-frame fan-out of
                    the "tick" bucket on the host EventBus
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
-  init_lua.rs      runs the init.lua chain in the shared Lua state
-                   (opt + keymap pre-pass)
+  init_lua.rs      run_init_lua_chain (system → user init.lua in
+                   the shared VM); read_init_lua_config_only is
+                   the snap-only thin path
   handle.rs        LuaHandle — shared host plumbing (drain_ops, tick,
                    notify_*) the App calls into
   registrar.rs     Registrar — collects activations / palette entries
@@ -343,20 +353,34 @@ Layer 2 path is the maintainer's home dir baked at compile time; on a
 user machine it doesn't exist and is filtered out, so user > bundled
 in production.
 
-`register_builtin_plugins` walks the list with **stem dedup** — so
-`~/.config/ttymap/plugin/wiki.lua` shadows the bundled `wiki`. The
-`package.searchers` and `package.path` extensions also walk every
-layer.
+The plugin-aware `package.searchers` entry installed by
+`vm::install_plugin_searcher` owns **all** `<layer>/plugin/...`
+resolution. It walks the runtime path on every require:
+
+- **Top-level** (`require "wiki"`) → `<layer>/plugin/wiki.lua` or
+  `<layer>/plugin/wiki/init.lua`, first hit wins. User > bundled by
+  runtime-path priority. Runs through the wrapper, attribution lands
+  under `wiki`.
+- **Dotted** (`require "travel.routes.italy"` from inside
+  `plugin/travel/init.lua`) → `<layer>/plugin/travel/routes/italy.lua`.
+  Plain chunk, no attribution wrap.
+
+`package.path` carries `<layer>/lua/` only — `plugin/` is exclusively
+the plugin searcher's domain. Each searcher has one job: lib
+searcher + `package.path` for `<layer>/lua/...`, plugin searcher
+for everything under `<layer>/plugin/...`.
 
 ### `plugin/` vs `lua/`
 
-- `<layer>/plugin/*.lua` — auto-discovered plugins.
+- `<layer>/plugin/<name>.lua` or `<layer>/plugin/<name>/init.lua` —
+  the plugin entry. Top-level `require "<name>"` from init.lua hits
+  the plugin searcher's wrapper, which calls `register_one` so
+  `ttymap.register_*` calls inside the chunk attribute under
+  `<name>`. Internal sub-modules under `<layer>/plugin/<name>/...`
+  are resolved by the same searcher as plain chunks (no wrap).
 - `<layer>/lua/<dot.path>.lua` — `require`'d shared libs only
-  (e.g. `ttymap.fmt`). Auto-discovery never touches `lua/`.
-
-Resolution for the `lua/` tier is a custom `package.searchers` entry
-that walks every runtime layer, mirroring Neovim's runtime-path
-searcher.
+  (e.g. `ttymap.fmt`). Resolved via `package.path` (and the lib
+  searcher fallback); plain chunks, no attribution.
 
 ### `make install`
 
@@ -365,36 +389,65 @@ Runs `cargo install --path .`, then copies `runtime/plugin/`,
 `~/.local/share/ttymap/`. `cargo install` alone fails fast with a
 "did you make install?" message.
 
-## Config (`init.lua` chain)
+## Config (`init.lua` chain) — also the plugin entry point
 
-Two `init.lua` files run **first** in the shared Lua state, before
-any plugin loads — last-wins on `ttymap.opt.*` and `ttymap.keymap`:
+Rust runs **only** the bundled `<bundled-tier>/init.lua`. That file
+is in charge of when (and whether) to load the user's init.lua
+— Lua-side ordering policy, no Rust involvement. Rust does not
+even name the user-config path: that's owned by a Lua lib,
+`ttymap.user_config`, at `runtime/lua/ttymap/user_config.lua`.
 
-1. `<bundled-tier>/init.lua` (first hit among env / manifest / xdg_data)
-2. `~/.config/ttymap/init.lua`
+By the time bundled init.lua runs, the API surface is fully
+installed: `build_subsystem` does `ttymap.opt` / `ttymap.keymap`
+pre-pass, then `api::install` adds `http` / `map` / `api` /
+`register_*` / `notify` / `on_event`, then the plugin-aware
+`package.searchers` entry is inserted. Then the bundled init.lua
+runs and drives the rest.
 
-`init.lua` runs in the same Lua VM that every plugin loads in. The
-init pre-pass installs `ttymap.opt` and `ttymap.keymap` on the
-`ttymap` global; the plugin runtime install (`api::install`) extends
-the same global with `http`, `map`, `api`, `register_*`, `notify`,
-`on_event`. So `init.lua` can both tune `ttymap.opt.*` (host-owned
-settings) AND `require "ttymap.<plugin>"` to mutate plugin-specific
-config holders that the plugin will read when it loads next.
+The bundled init.lua's job (`ttymap-tui/runtime/init.lua`) — standard
+layered order (system → bundled → user):
 
-`load_init_lua` exposes:
+1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with
+   Rust seeds; serves as the documented schema).
+2. `require` the bundled plugin set — they register before user
+   config sees the registry.
+3. `require("ttymap.user_config").load()` — resolves the user
+   init.lua path (`$XDG_CONFIG_HOME/ttymap/init.lua` or
+   `$HOME/.config/ttymap/init.lua`) and `dofile`s it.
 
-- **`opt.*`** — pre-populated table tree seeded from Rust defaults.
-  User mutates leaves.
+User init.lua can then:
+
+- mutate `ttymap.opt.*` (last-wins on the shared table)
+- call `ttymap.keymap.set/del`
+- `require "<plugin>"` to activate user plugins (their
+  registrations stack on top of bundled in the registry)
+- call `:remove()` on handles returned by their own
+  `register_palette_command` / `register_keybind` / `on_event` to
+  drop registrations later
+
+Disabling a bundled plugin from user init.lua is intentionally
+not part of this flow (bundled has already registered by the time
+user runs). To opt out of the bundled set wholesale, point
+`$TTYMAP_RUNTIME` at a custom runtime layer with your own
+`init.lua`.
+
+`ttymap.opt.*` exposes:
+
+- **`opt.*` leaves** — pre-populated table tree seeded from Rust
+  defaults. User mutates leaves.
 - **`keymap.set(...)`** / **`keymap.del(...)`** — backed by a shared
   `KeybindingOverrides` map.
-- **`opt.disable = { "wiki", "quake" }`** — skips matching plugins at
-  registration time (stem-match).
 
-Errors at any layer are logged + recovered; the chain keeps walking.
+To replace the bundled defaults wholesale (e.g. fork the plugin set),
+set `$TTYMAP_RUNTIME` to your own runtime layer with its own
+`init.lua`.
+
+Errors at any layer are logged + recovered; the host keeps booting.
 
 ## Bundled plugins (`runtime/plugin/`)
 
-17 total. Each plugin is a reference implementation of one shape —
+17 total, all `require`-d from `runtime/init.lua`. Each plugin is a
+reference implementation of one shape —
 always-on chrome (`attribution`, `scalebar`, `help`), toggleable
 overlay (`center`, `here`, `ping_simulation`, `terminator`),
 toggleable side panel (`info`, `notify`, `aircraft`, `satellite`,
@@ -478,12 +531,18 @@ top-to-bottom procedural Lua, no hand-written state machine.
 ## User plugins
 
 Drop a `*.lua` file (or a `<plugin>/init.lua` directory) into
-`~/.config/ttymap/plugin/`. Same walker, same lifecycle.
+`~/.config/ttymap/plugin/`, then add `require "<plugin>"` to
+`~/.config/ttymap/init.lua` to activate it. Auto-discovery was
+removed — the require makes activation explicit and gives you
+control over load order. `~/.config/ttymap/plugin/` files without
+a corresponding require are silently ignored; the bootstrap logs
+a one-shot warning to point that out.
 
 The directory layout lets a large plugin spread its source across
 `<plugin>/init.lua` + sibling files (`<plugin>/state.lua`, etc.)
-reachable via `require "<plugin>.state"` through the extended
-`package.path`.
+reachable via `require "<plugin>.state"`. The plugin searcher
+resolves both top-level and dotted names against `<layer>/plugin/`;
+top-level wraps with attribution, dotted is a plain chunk.
 
 ## Footer hints
 

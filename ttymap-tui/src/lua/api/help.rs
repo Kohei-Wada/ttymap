@@ -20,11 +20,16 @@ impl UserData for HostHelp {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         // `ttymap.help:keymap_entries() -> [{key, label}, …]` —
         // keybindings for built-in map actions, formatted for
-        // help-style display. Always returns the same data
-        // (immutable after startup).
+        // help-style display. Read at every call so post-init.lua
+        // population is visible.
         methods.add_method("keymap_entries", |lua, this, _: ()| {
             let table = lua.create_table()?;
-            for (i, (key, label)) in this.shared.keymap_entries.iter().enumerate() {
+            let entries = this.shared.keymap_entries.lock();
+            let entries = match &entries {
+                Ok(g) => g.as_slice(),
+                Err(_) => &[],
+            };
+            for (i, (key, label)) in entries.iter().enumerate() {
                 let row = lua.create_table()?;
                 row.set("key", key.as_str())?;
                 row.set("label", label.as_str())?;

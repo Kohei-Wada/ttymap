@@ -19,8 +19,8 @@ pub mod capture;
 pub mod handle;
 pub mod host;
 pub mod init_lua;
-pub mod loader;
 pub mod map_api;
+pub mod plugin_loader;
 pub mod registrar;
 pub mod runtimepath;
 pub mod tick;
@@ -29,7 +29,7 @@ pub mod vm;
 pub use bridge::palette_provider::LuaPaletteProvider;
 pub use handle::LuaHandle;
 pub use host::LuaHostShared;
-pub use init_lua::load_init_lua;
+pub use init_lua::read_init_lua_config_only;
 pub use map_api::MapApi;
 pub use registrar::{PluginRegistry, PluginRegistryHandle, new_plugin_registry};
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
@@ -41,6 +41,7 @@ use crate::UserCommand;
 use crate::compositor::op;
 use crate::config::Config;
 use crate::input::KeyMap;
+use crate::input::keymap::KeybindingOverrides;
 
 /// Result of [`build_subsystem`].
 ///
@@ -66,56 +67,78 @@ pub struct LuaSubsystem {
     pub plugin_hints: Vec<(&'static str, &'static str)>,
 }
 
-/// Build the Lua plugin subsystem: load every `*.lua` under the
-/// runtime path's `plugin/` layers in the **shared** Lua VM
-/// (`lua` argument — the same VM `init.lua` already ran in via
-/// [`load_init_lua`]), register their activations / palette entries
-/// / event-bus subscriptions, and assemble the runtime [`LuaHandle`].
+/// Build the Lua plugin subsystem: create the shared VM, install
+/// the API surface, run the init.lua chain (which `require`s every
+/// bundled plugin via the plugin-aware `package.searchers` entry,
+/// and lets the user's `~/.config/ttymap/init.lua` add or override),
+/// then return the populated subsystem alongside the parsed
+/// [`Config`] and [`KeybindingOverrides`].
 ///
 /// nvim-style: a single Lua state hosts init.lua, every bundled
-/// plugin, and every user plugin. `init.lua`'s `require "ttymap.<X>"`
-/// returns the same module a plugin gets later, so per-plugin config
-/// holders (`runtime/lua/ttymap/<plugin>.lua`) work the natural way:
-/// init.lua mutates the lib's table, the plugin reads the mutated
-/// values when it loads.
+/// plugin, and every user plugin. The whole bootstrap is one
+/// function — there is no separate plugin-discovery walker.
+///
+/// Bootstrap order:
+///
+/// 1. Build registry / slot / shared / ops / bus.
+/// 2. `vm::new_lua()` — fresh VM with the lib searcher + extended
+///    `package.path` for runtime layers.
+/// 3. Install the `ttymap` global's pre-pass surface (`opt`,
+///    `keymap`) so init.lua can mutate config defaults.
+/// 4. `api::install` — extends `ttymap` with the runtime API
+///    (`register_*`, `on_event`, `http`, `map`, …). Plugins need
+///    these *during* their require, so this MUST run before init.lua.
+/// 5. `vm::install_plugin_searcher` — inserts the plugin-aware
+///    searcher at position 2 of `package.searchers`. Now any
+///    top-level `require "<name>"` from init.lua resolves to a
+///    `<layer>/plugin/<name>.lua` (or `<name>/init.lua`) and
+///    attributions land under `<name>` in the registry.
+/// 6. Run the init.lua chain (system → user). All plugin requires
+///    fire here.
+/// 7. `read_back` parses `ttymap.opt.*` into `Config`; clone
+///    `KeybindingOverrides` from the keymap-state cell.
+/// 8. Build the live `KeyMap` from overrides, fold its rows into
+///    `shared.keymap_entries` so `ttymap.help:keymap_entries()` sees
+///    them at render time. The brief register-time emptiness is
+///    invisible — help.lua queries lazily.
+/// 9. Harvest plugin hints, assemble [`LuaHandle`].
 ///
 /// **Does not install the palette** — that step runs from the
 /// composition root after this returns, draining `palette_entries`
 /// into a default `:`-palette provider.
-pub fn build_subsystem(
-    lua: mlua::Lua,
-    config: &Config,
-    attribution: Option<String>,
-    keymap: &KeyMap,
-) -> LuaSubsystem {
+pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
     let registry = new_plugin_registry();
-
-    // Build the shared runtime-data carrier once. Every Lua plugin
-    // (bundled and user) sees the same `ttymap.*` accessor surface;
-    // there is no per-plugin Rust glue, no per-plugin upvalue
-    // injection. Adding a new bundled plugin is one file under
-    // `runtime/plugin/`; adding a user plugin is one file in
-    // `~/.config/ttymap/plugin/`.
-    let shared = Arc::new(LuaHostShared::new(
-        attribution,
-        config.geoip.endpoint.clone(),
-        keymap_entries(keymap),
-    ));
-
-    // Build the event bus first — it's shared between the API
-    // surface (so `on_event` / `on_tick` can subscribe directly and
-    // return an `EventHandle` carrying back a clone) and the
-    // [`LuaHandle`] (so App publishes go through the same bus
-    // every plugin subscribed against).
+    let shared = Arc::new(LuaHostShared::new(defaults.geoip.endpoint.clone()));
     let bus = std::rc::Rc::new(crate::event::EventBus::default());
-
-    // Extend the existing `ttymap` global (created by init.lua's
-    // pre-pass with `opt` + `keymap`) with the plugin runtime API:
-    // `http`, `map`, `api`, `register_*`, `notify`, `on_event`. One
-    // install for the whole subsystem; every plugin sees the same
-    // `ttymap` table.
     let ops = op::new_ops_buffer();
     let slot = capture::new_capture_slot();
+
+    let lua = vm::new_lua();
+
+    // init.lua's `ttymap` pre-pass (`opt` + `keymap`) — must run
+    // before `api::install` so `api::install` extends the existing
+    // table rather than clobbering it.
+    let keymap_state = match init_lua::install_ttymap_global(&lua, &defaults) {
+        Ok(state) => state,
+        Err(e) => {
+            log::warn!("lua: install_ttymap_global failed: {} — using defaults", e);
+            let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
+            return (
+                LuaSubsystem {
+                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                    registry,
+                    plugin_hints: Vec::new(),
+                },
+                defaults,
+                KeybindingOverrides::new(),
+                keymap,
+            );
+        }
+    };
+
+    // API surface. Every plugin sees `ttymap.register_*` /
+    // `ttymap.on_event` / `ttymap.http` / `ttymap.map` / … the
+    // moment its require fires.
     let host_handles = match api::install(
         &lua,
         shared.clone(),
@@ -127,27 +150,55 @@ pub fn build_subsystem(
         Ok(h) => h,
         Err(e) => {
             log::warn!("lua: api::install failed: {} — plugins disabled", e);
-            // Build an empty handle so the App still boots.
-            return LuaSubsystem {
-                handle: LuaHandle::new(bus, Vec::new(), ops, shared),
-                registry,
-                plugin_hints: Vec::new(),
-            };
+            let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
+            return (
+                LuaSubsystem {
+                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                    registry,
+                    plugin_hints: Vec::new(),
+                },
+                defaults,
+                KeybindingOverrides::new(),
+                keymap,
+            );
         }
     };
 
-    // Bundled plugins (every `*.lua` under each runtime layer's
-    // `plugin/`) always register — disabling one is either an
-    // entry in `ttymap.opt.disable` (skipped at the walker) or a
-    // higher-priority runtime layer shadowing it by stem.
-    loader::register_builtin_plugins(
+    // Now plugins requested via `require "<name>"` from init.lua get
+    // resolved through the plugin-aware searcher and run via
+    // `plugin_loader::register_one`, so their `register_*` /
+    // `on_event` calls attribute under `<name>`.
+    if let Err(e) = vm::install_plugin_searcher(
         &lua,
-        &slot,
-        runtime_path(),
-        &config.plugins.disable,
+        runtime_path().to_vec(),
+        slot.clone(),
+        registry.clone(),
         shared.clone(),
-        &registry,
-    );
+    ) {
+        log::warn!("lua: failed to install plugin searcher: {}", e);
+    }
+
+    // Run the bundled init.lua. It pulls in user config itself via
+    // `require("ttymap.user_config").load()` (a Lua-side lib),
+    // which keeps the user-config-path knowledge fully on the Lua
+    // side — Rust never names `~/.config/ttymap/init.lua`. Errors
+    // are logged + recovered.
+    init_lua::run_system_init_lua(&lua);
+
+    // Read `ttymap.opt.*` mutations back into `Config`. Type errors
+    // silently fall back to the seeded value — a typo doesn't crash
+    // the host.
+    let config = init_lua::read_back(&lua, &defaults).unwrap_or_else(|e| {
+        log::warn!("lua: read_back failed: {} — falling back to defaults", e);
+        defaults
+    });
+
+    let keymap_overrides = keymap_state.borrow().clone();
+    let keymap = KeyMap::with_overrides(&keymap_overrides);
+
+    // Populate the keymap-entries snapshot help reads at render time.
+    // Live data — runtime keymap overrides surface here.
+    shared.set_keymap_entries(UserCommand::keymap_help_entries(&keymap));
 
     // Harvest BaseLayer's footer hints from the registry's palette
     // entries. Snapshot at startup — we don't refresh on runtime
@@ -165,34 +216,59 @@ pub fn build_subsystem(
         })
         .collect();
 
-    // Wrap the shared bus + the single shared host handles into the
-    // [`LuaHandle`], so callers never see the bus or the channels
-    // and never have to assemble a handle themselves. `shared` lives
-    // on as the handle's own clone — App writes into shared cells
-    // (e.g. `current_frame`) through `LuaHandle` semantic methods.
+    // Surface a one-shot warning if the user has files in
+    // `~/.config/ttymap/plugin/` — that directory is no longer
+    // auto-loaded; users must add `require "<name>"` lines to their
+    // `init.lua`.
+    warn_on_legacy_user_plugin_dir();
+
     let handle = LuaHandle::new(bus, vec![host_handles], ops, shared);
 
-    LuaSubsystem {
-        handle,
-        registry,
-        plugin_hints,
-    }
+    (
+        LuaSubsystem {
+            handle,
+            registry,
+            plugin_hints,
+        },
+        config,
+        keymap_overrides,
+        keymap,
+    )
 }
 
-/// Build the `(key-binding, action-label)` pairs that the help
-/// plugin surfaces via `ttymap.help:keymap_entries()`. Live data —
-/// runtime keymap overrides surface here.
-fn keymap_entries(keymap: &KeyMap) -> Vec<(String, String)> {
-    UserCommand::keymap_help_entries(keymap)
+/// Log a warning if `~/.config/ttymap/plugin/` exists and contains
+/// `.lua` files. Auto-discovery there was removed; users must
+/// `require` their plugins from `~/.config/ttymap/init.lua`.
+fn warn_on_legacy_user_plugin_dir() {
+    use directories::ProjectDirs;
+    let Some(dirs) = ProjectDirs::from("", "", "ttymap") else {
+        return;
+    };
+    let plugin_dir = dirs.config_dir().join("plugin");
+    let Ok(entries) = std::fs::read_dir(&plugin_dir) else {
+        return;
+    };
+    let has_lua = entries.filter_map(Result::ok).any(|e| {
+        e.path()
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s == "lua")
+            .unwrap_or(false)
+    });
+    if has_lua {
+        log::warn!(
+            "lua: {} is no longer auto-loaded. Add `require \"<name>\"` lines to ~/.config/ttymap/init.lua. See docs/lua-architecture.md.",
+            plugin_dir.display()
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::loader::register_plugins_in;
     use super::vm::{install_builtin_searcher, prepend_package_path};
     use super::*;
     use mlua::{Lua, Result};
-    use std::path::Path;
+    use std::path::PathBuf;
 
     #[test]
     fn lua_evaluates_a_basic_expression() {
@@ -223,73 +299,10 @@ mod tests {
         Ok(())
     }
 
-    /// Every bundled script must register cleanly through the same
-    /// dispatcher production uses. Asserts each plugin shows up in
-    /// some registrar slot (palette / key bind / tick) — the
-    /// dispatcher just routes whatever the script subscribes to,
-    /// so this round-trips the parse + meta + wire path. Set-
-    /// membership rather than counts so adding a builtin doesn't
-    /// require updating magic numbers.
-    #[test]
-    fn every_bundled_script_registers() {
-        runtimepath::ensure_runtime_path_for_tests();
-        let shared = host::LuaHostShared::empty();
-        let registry = new_plugin_registry();
-        let rtp = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime")];
-        let (lua, slot, bus) = fresh_loader_state(shared.clone());
-        loader::register_builtin_plugins(&lua, &slot, &rtp, &[], shared, &registry);
-
-        let palette: std::collections::HashSet<String> = registry
-            .borrow()
-            .palette_entries()
-            .iter()
-            .map(|(_, e)| e.label.to_lowercase())
-            .collect();
-        // info / scalebar / attribution always subscribe a tick
-        // (always-on chrome). Panel migrations (aircraft / quake /
-        // wiki / search / here / satellite) subscribe a tick for
-        // async drain + paint. Toggle-on-demand plugins (center,
-        // terminator) only subscribe when active, so they don't
-        // count here. Lower bound rather than equality so adding a
-        // builtin doesn't require updating a magic number.
-        let tick_count = bus.count("tick");
-
-        // Toggles + spawns: each leaves a palette entry whose label
-        // contains the plugin's stem (lowercased). `satellite` is the
-        // single multi-sat tracker — ISS / Hubble live as in-panel
-        // entries inside it, not as separate palette toggles.
-        for stem in [
-            "aircraft",
-            "satellite",
-            "quake",
-            "wiki",
-            "here",
-            "export",
-            "help",
-            "search",
-            "travel",
-            "terminator",
-            "geo quiz",
-        ] {
-            assert!(
-                palette.iter().any(|l| l.contains(stem)),
-                "expected `{stem}` palette entry, got {palette:?}",
-            );
-        }
-        assert!(
-            tick_count >= 4,
-            "info/scalebar/attribution/center should each subscribe a tick callback (got {tick_count})"
-        );
-    }
-
-    /// Helper for capture inspection tests. Runs the source in a
-    /// throwaway Lua state and returns the captured registration so
-    /// the test can assert on the activation surfaces and tick
-    /// subscriptions. Mirrors what `register_one` does at
-    /// registration time. The bus is returned alongside so tests
-    /// can assert against `on_event` / `on_tick` subscriptions
-    /// (those subscribe directly to the bus rather than into the
-    /// capture slot).
+    /// Helper for capture-inspection tests. Drives the host API
+    /// install (so `ttymap.register_*` etc. exist) and runs the
+    /// source through `load_chunk` directly — same path the
+    /// plugin-aware searcher takes via `register_one`.
     fn parse_spec(
         source: &'static str,
         name: &'static str,
@@ -314,30 +327,75 @@ mod tests {
         (lua, captured, bus)
     }
 
-    /// Helper for `register_plugins_in`-driven tests. Builds a fresh
-    /// Lua state with the runtime API installed and returns the
-    /// `(lua, slot, bus)` triple the dir-discovery tests pass into
-    /// the loader.
-    fn fresh_loader_state(
-        shared: Arc<host::LuaHostShared>,
+    /// Build a Lua VM with the plugin-aware searcher pointed at a
+    /// custom runtime layer. Returns `(lua, registry, shared, bus)`
+    /// so tests can drive `lua.load(r#"require '<name>'"#).exec()`
+    /// and assert what landed in the registry / shared snapshot.
+    fn fresh_pluginsearcher_state(
+        layer: &Path,
     ) -> (
         mlua::Lua,
-        capture::CaptureSlot,
+        PluginRegistryHandle,
+        Arc<host::LuaHostShared>,
         std::rc::Rc<crate::event::EventBus>,
     ) {
         let lua = new_lua();
+        // Extend package.path so lib requires resolve from the custom
+        // layer, mirroring the production setup `vm::new_lua` does for
+        // the global runtime path. `plugin/` is NOT added here — the
+        // plugin searcher (installed below) owns that tree.
+        vm::prepend_package_path(&lua, &layer.join("lua"));
+        let shared = host::LuaHostShared::empty();
         let slot = capture::new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let registry = new_plugin_registry();
         api::install(
             &lua,
-            shared,
+            shared.clone(),
             slot.clone(),
             op::new_ops_buffer(),
             bus.clone(),
-            new_plugin_registry(),
+            registry.clone(),
         )
         .expect("install ttymap");
-        (lua, slot, bus)
+        vm::install_plugin_searcher(
+            &lua,
+            vec![layer.to_path_buf()],
+            slot,
+            registry.clone(),
+            shared.clone(),
+        )
+        .expect("install plugin searcher");
+        (lua, registry, shared, bus)
+    }
+
+    /// Build a private temp directory rooted at the OS's temp dir.
+    /// `unique` should differ per test so parallel runs don't
+    /// stomp on each other.
+    fn temp_layer(unique: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ttymap-lua-test-{}", unique));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("plugin")).expect("mkdir plugin");
+        std::fs::create_dir_all(dir.join("lua")).expect("mkdir lua");
+        dir
+    }
+
+    fn write_plugin(layer: &Path, file_name: &str, lua: &str) {
+        std::fs::write(layer.join("plugin").join(file_name), lua).expect("write plugin");
+    }
+
+    fn write_plugin_dir(layer: &Path, name: &str, lua: &str) {
+        let dir = layer.join("plugin").join(name);
+        std::fs::create_dir_all(&dir).expect("mkdir plugin dir");
+        std::fs::write(dir.join("init.lua"), lua).expect("write plugin init.lua");
+    }
+
+    fn labels(r: &PluginRegistryHandle) -> Vec<String> {
+        r.borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.clone())
+            .collect()
     }
 
     #[test]
@@ -387,15 +445,15 @@ mod tests {
     }
 
     #[test]
-    fn registering_a_plugin_publishes_metadata() {
-        // Round-trip the registration path: a Lua source declaring
-        // `key` + `label` should land in the shared snapshot help
-        // reads via `ttymap.help:palette_entries()`. The plugin's
-        // identity is the file stem (`demo`), passed to the registrar
-        // by the walker.
-        let dir = temp_plugins_dir("publish-meta");
+    fn init_lua_require_attributes_plugin_correctly() {
+        // `require "demo"` from init.lua-equivalent driver must
+        // route through the plugin searcher's wrapper, set
+        // current_plugin = "demo" via load_chunk, drain captures
+        // into the registry under name "demo", and surface help
+        // metadata in the shared palette_entries snapshot.
+        let layer = temp_layer("require-attribution");
         write_plugin(
-            &dir,
+            &layer,
             "demo.lua",
             r#"
             ttymap.api.frame.on_tick(function(_map) end)
@@ -404,11 +462,23 @@ mod tests {
             "#,
         );
 
-        let shared = host::LuaHostShared::empty();
-        let registry = new_plugin_registry();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared.clone(), &registry);
+        let (lua, registry, shared, _bus) = fresh_pluginsearcher_state(&layer);
+        lua.load(r#"require "demo""#).exec().expect("require demo");
 
+        // Registry entry attributed under "demo".
+        let names: Vec<&'static str> = registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.name)
+            .collect();
+        assert!(
+            names.contains(&"demo"),
+            "plugin should attribute under its require name, got {:?}",
+            names
+        );
+
+        // Shared snapshot for help.
         let entries = shared.palette_entries.lock().expect("lock palette_entries");
         let demo = entries
             .iter()
@@ -418,121 +488,22 @@ mod tests {
         assert_eq!(demo.label, "Toggle demo");
     }
 
-    // ── directory-based discovery ───────────────────────────────
-
-    use std::path::PathBuf;
-
-    /// Build a private temp directory rooted at the OS's temp dir.
-    /// `unique` should differ per test so parallel runs don't
-    /// stomp on each other.
-    fn temp_plugins_dir(unique: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ttymap-lua-test-{}", unique));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
-    }
-
-    fn write_plugin(dir: &Path, file_name: &str, lua: &str) {
-        std::fs::write(dir.join(file_name), lua).expect("write plugin file");
-    }
-
-    fn labels(r: &PluginRegistryHandle) -> Vec<String> {
-        r.borrow()
-            .palette_entries()
-            .iter()
-            .map(|(_, e)| e.label.clone())
-            .collect()
-    }
-
     #[test]
-    fn dir_discovery_registers_each_lua_file_under_its_stem() {
-        let dir = temp_plugins_dir("registers");
-        write_plugin(
-            &dir,
-            "first.lua",
-            r#"ttymap.register_palette_command({ label = "first", invoke = function() return true end })"#,
-        );
-        write_plugin(
-            &dir,
-            "second.lua",
-            r#"ttymap.register_palette_command({ label = "second", invoke = function() return true end })"#,
-        );
-
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
-        let ls = labels(&registry);
-        assert!(ls.iter().any(|l| l.contains("first")), "got {:?}", ls);
-        assert!(ls.iter().any(|l| l.contains("second")), "got {:?}", ls);
-    }
-
-    #[test]
-    fn dir_discovery_skips_non_lua_files() {
-        let dir = temp_plugins_dir("skip-non-lua");
-        write_plugin(
-            &dir,
-            "ok.lua",
-            r#"ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
-        );
-        // README, backup files, etc. should be ignored.
-        std::fs::write(dir.join("README.md"), "ignore me").unwrap();
-        std::fs::write(dir.join("ok.lua.bak"), "ignore me too").unwrap();
-
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
-        let ls = labels(&registry);
-        assert_eq!(ls.len(), 1, "got {:?}", ls);
-        assert!(ls[0].contains("ok"));
-    }
-
-    #[test]
-    fn dir_discovery_honours_opt_disable_list() {
-        // `ttymap.opt.disable = { "beta" }` — the walker skips the
-        // matching stem at registration time.
-        let dir = temp_plugins_dir("opt-disable");
-        write_plugin(
-            &dir,
-            "alpha.lua",
-            r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
-        );
-        write_plugin(
-            &dir,
-            "beta.lua",
-            r#"ttymap.register_palette_command({ label = "beta", invoke = function() return true end })"#,
-        );
-
-        let registry = new_plugin_registry();
-        let disable = vec!["beta".to_string()];
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &disable, shared, &registry);
-        let ls = labels(&registry);
-        assert!(ls.iter().any(|l| l.contains("alpha")));
-        assert!(!ls.iter().any(|l| l.contains("beta")), "got {:?}", ls);
-    }
-
-    #[test]
-    fn dir_discovery_picks_up_plugin_subdirectory_with_init_lua() {
-        // `<dir>/wiki/init.lua` registers as plugin `wiki`, mirroring
-        // Neovim's plugin directory convention. Lets a large script
-        // spread its source across sibling files (state.lua, api.lua,
-        // etc.) reachable via `require "wiki.state"` through the
-        // extended package.path.
-        let dir = temp_plugins_dir("dir-layout");
-        std::fs::create_dir_all(dir.join("biggie")).expect("mkdir");
-        std::fs::write(
-            dir.join("biggie").join("init.lua"),
+    fn directory_plugin_is_required_via_init_lua() {
+        // `<layer>/plugin/wiki/init.lua` is the plugin entry; user
+        // does `require "wiki"`. Mirrors a directory-shaped bundled
+        // plugin (e.g. travel/, satellite/).
+        let layer = temp_layer("require-dir-plugin");
+        write_plugin_dir(
+            &layer,
+            "biggie",
             r#"ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
-        )
-        .expect("write init.lua");
+        );
 
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        lua.load(r#"require "biggie""#)
+            .exec()
+            .expect("require biggie");
         let ls = labels(&registry);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -542,51 +513,96 @@ mod tests {
     }
 
     #[test]
-    fn dir_discovery_skips_subdirectory_without_init_lua() {
-        // Shared lib namespaces (e.g. `<dir>/ttymap/` carrying
-        // `fmt.lua` and similar) are siblings of plugins, not
-        // plugins themselves. Without an `init.lua` in the dir,
-        // the walker leaves them alone.
-        let dir = temp_plugins_dir("dir-no-init");
-        std::fs::create_dir_all(dir.join("libonly")).expect("mkdir");
+    fn lib_require_does_not_attribute_as_plugin() {
+        // A lib at `lua/ttymap/foo.lua` is required via
+        // `require "ttymap.foo"`. Dotted name → plugin searcher
+        // skips. Resolves via package.path → loads as plain chunk.
+        // No registration happens (libs don't call register_*).
+        let layer = temp_layer("lib-require");
+        std::fs::create_dir_all(layer.join("lua").join("ttymap")).expect("mkdir lua/ttymap");
         std::fs::write(
-            dir.join("libonly").join("fmt.lua"),
-            r#"return { format = function(s) return s end }"#,
+            layer.join("lua").join("ttymap").join("foo.lua"),
+            r#"return { value = 42 }"#,
         )
-        .expect("write fmt.lua");
+        .expect("write lib");
 
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
-        assert!(
-            !labels(&registry).iter().any(|l| l.contains("libonly")),
-            "lib-only subdir must not register as a plugin"
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        let v: i64 = lua
+            .load(r#"return require("ttymap.foo").value"#)
+            .eval()
+            .expect("require ttymap.foo");
+        assert_eq!(v, 42);
+        // Lib never goes through the plugin wrapper, so registry stays empty.
+        assert_eq!(registry.borrow().palette_entry_count(), 0);
+    }
+
+    #[test]
+    fn requiring_same_plugin_twice_only_fires_once() {
+        // Lua's `package.loaded` cache: after the first require runs
+        // the plugin wrapper, subsequent `require "demo"` calls return
+        // the cached value (true, since wrapper returns nil) without
+        // re-executing the wrapper. So system + user init.lua both
+        // doing `require "demo"` register exactly one entry.
+        let layer = temp_layer("dedup");
+        write_plugin(
+            &layer,
+            "demo.lua",
+            r#"ttymap.register_palette_command({ label = "demo", invoke = function() return true end })"#,
+        );
+
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        lua.load(r#"require "demo"; require "demo""#)
+            .exec()
+            .expect("double require");
+
+        assert_eq!(
+            registry.borrow().palette_entry_count(),
+            1,
+            "duplicate require must not double-register"
         );
     }
 
     #[test]
-    fn dir_discovery_skips_broken_lua_but_keeps_going() {
-        let dir = temp_plugins_dir("broken");
-        write_plugin(&dir, "broken.lua", "this is not lua syntax !!!");
-        write_plugin(
-            &dir,
-            "ok.lua",
-            r#"ttymap.register_palette_command({ label = "ok", invoke = function() return true end })"#,
-        );
+    fn submodule_require_skips_plugin_wrap() {
+        // `require "travel.routes.italy"` from inside a plugin must
+        // resolve as a plain chunk via package.path's
+        // `<layer>/plugin/?.lua` — NOT through the plugin wrapper
+        // (which would register "travel.routes.italy" as a fake
+        // plugin). Only the top-level `travel` require triggers the
+        // wrapper.
+        let layer = temp_layer("submodule");
+        let travel_dir = layer.join("plugin").join("travel");
+        std::fs::create_dir_all(travel_dir.join("routes")).expect("mkdir routes");
+        std::fs::write(
+            travel_dir.join("routes").join("italy.lua"),
+            r#"return { city = "Rome" }"#,
+        )
+        .expect("write submodule");
+        std::fs::write(
+            travel_dir.join("init.lua"),
+            r#"
+            local italy = require "travel.routes.italy"
+            ttymap.register_palette_command({
+                label = italy.city,
+                invoke = function() return true end,
+            })
+            "#,
+        )
+        .expect("write travel/init.lua");
 
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
-        let ls = labels(&registry);
-        // Broken plugin doesn't make it in; the good one still does.
-        assert!(ls.iter().any(|l| l.contains("ok")), "got {:?}", ls);
-        assert!(
-            !ls.iter().any(|l| l.contains("broken")),
-            "broken plugin should not register, got {:?}",
-            ls,
-        );
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        lua.load(r#"require "travel""#)
+            .exec()
+            .expect("require travel");
+        let names: Vec<&'static str> = registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.name)
+            .collect();
+        // Only one entry, attributed to "travel" — the submodule did
+        // not become a plugin under name "travel.routes.italy".
+        assert_eq!(names, vec!["travel"]);
     }
 
     #[test]
@@ -595,7 +611,9 @@ mod tests {
         // `package.path` at it, then `require "helper"` from a
         // plain Lua chunk. The require must resolve to the file
         // we wrote — proves the extension is wired.
-        let dir = temp_plugins_dir("require");
+        let dir = std::env::temp_dir().join("ttymap-lua-test-pkgpath-helper");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
         std::fs::write(
             dir.join("helper.lua"),
             "return { greet = function(name) return 'hi ' .. name end }",
@@ -644,61 +662,33 @@ mod tests {
         // (system Lua paths, mlua's defaults) stay reachable, so
         // a `require "doesnotexist"` still produces the standard
         // "module not found" error rather than something exotic.
-        let dir = temp_plugins_dir("require-passthrough");
+        let dir = std::env::temp_dir().join("ttymap-lua-test-pkgpath-passthrough");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
         let lua = Lua::new();
         prepend_package_path(&lua, &dir);
         let res: mlua::Result<i64> = lua.load(r#"return require("doesnotexist")"#).eval();
         assert!(res.is_err(), "non-existent require should still error");
     }
 
-    #[test]
-    fn dir_discovery_no_op_when_directory_is_missing() {
-        // A path that doesn't exist must not panic or error — the
-        // common case is "user has never created a plugins/ dir".
-        let dir = std::env::temp_dir().join("ttymap-lua-test-missing-xxx-yyy");
-        let _ = std::fs::remove_dir_all(&dir);
-
-        let registry = new_plugin_registry();
-        let shared = host::LuaHostShared::empty();
-        let (lua, slot, _bus) = fresh_loader_state(shared.clone());
-        register_plugins_in(&lua, &slot, &dir, None, &[], shared, &registry);
-        assert_eq!(registry.borrow().palette_entry_count(), 0);
-    }
-
-    /// The whole point of unifying init.lua's VM with the plugin VM:
-    /// a config-holder lib at `runtime/lua/<name>.lua` is reachable
-    /// via `require` from BOTH init.lua AND a plugin script, and
-    /// both round-trips return the same cached table — so a user's
-    /// init.lua can pre-mutate the table and the plugin sees the
-    /// mutation when it loads later. Pre-unification each side held
-    /// its own VM and `require` returned a different copy per VM,
-    /// so this only "worked" via whole-file shadow.
     /// The whole point of unifying init.lua's VM with the plugin VM:
     /// a config-holder lib at `runtime/lua/ttymap/<name>.lua` is
     /// reachable via `require "ttymap.<name>"` from BOTH init.lua
     /// AND a plugin script, and both round-trips return the same
     /// cached table — so a user's init.lua can pre-mutate the table
-    /// and the plugin sees the mutation when it loads later. Pre-
-    /// unification each side held its own VM and `require` returned
-    /// a different copy per VM, so this only "worked" via whole-file
-    /// shadow.
+    /// and the plugin sees the mutation when it loads later.
     #[test]
     fn init_lua_can_seed_config_for_a_plugin_via_require() {
-        // Custom runtime layer with a config holder + a plugin that
-        // reads it. The lib at `lua/ttymap/myplug.lua` exposes a
-        // defaults table; the plugin at `plugin/myplug.lua` reads
-        // `cfg.label` at load time and uses it as its palette
-        // command label.
-        let layer = temp_plugins_dir("init-seeds-plugin-config");
+        let layer = temp_layer("init-seeds-plugin-config");
         std::fs::create_dir_all(layer.join("lua").join("ttymap")).expect("mkdir lua/ttymap");
-        std::fs::create_dir_all(layer.join("plugin")).expect("mkdir plugin");
         std::fs::write(
             layer.join("lua").join("ttymap").join("myplug.lua"),
             "return { label = 'default-label' }",
         )
         .expect("write lib");
-        std::fs::write(
-            layer.join("plugin").join("myplug.lua"),
+        write_plugin(
+            &layer,
+            "myplug.lua",
             r#"
             local cfg = require "ttymap.myplug"
             ttymap.register_palette_command({
@@ -706,35 +696,20 @@ mod tests {
                 invoke = function() return true end,
             })
             "#,
-        )
-        .expect("write plugin");
+        );
 
-        // init.lua-style pre-pass: same VM, mutates the lib's table
-        // before the plugin runs. The Lua cache makes the plugin's
-        // `require "ttymap.myplug"` return the same table. We
-        // configure `package.path` directly rather than touching the
-        // global runtime path — multiple tests share the global
-        // and a parallel run could otherwise step on each other.
-        let lua = mlua::Lua::new();
-        vm::prepend_package_path(&lua, &layer.join("lua"));
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        // init.lua-style pre-pass: mutate the lib's table BEFORE the
+        // plugin requires it. Lua's module cache makes the plugin's
+        // `require "ttymap.myplug"` return the same table.
         lua.load(r#"require("ttymap.myplug").label = "from-init""#)
             .exec()
             .expect("init pre-pass");
-
-        let shared = host::LuaHostShared::empty();
-        let slot = capture::new_capture_slot();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let registry = new_plugin_registry();
-        api::install(
-            &lua,
-            shared.clone(),
-            slot.clone(),
-            op::new_ops_buffer(),
-            bus,
-            registry.clone(),
-        )
-        .expect("install ttymap");
-        loader::register_builtin_plugins(&lua, &slot, &[layer], &[], shared, &registry);
+        // Now activate the plugin; it should pick up the mutated
+        // label.
+        lua.load(r#"require "myplug""#)
+            .exec()
+            .expect("require myplug");
 
         let labels: Vec<String> = registry
             .borrow()
@@ -748,4 +723,135 @@ mod tests {
             labels,
         );
     }
+
+    /// End-to-end: run the merged bootstrap against the in-repo
+    /// `runtime/init.lua` (which `require`s every bundled plugin)
+    /// and assert each plugin lands in the registry. Set-membership
+    /// rather than counts so adding a builtin doesn't require
+    /// updating magic numbers.
+    #[test]
+    fn every_bundled_script_registers_via_init_lua_chain() {
+        runtimepath::ensure_runtime_path_for_tests();
+        let (subsystem, _config, _km, _keymap) = build_subsystem(Config::default());
+
+        let palette: std::collections::HashSet<String> = subsystem
+            .registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.to_lowercase())
+            .collect();
+
+        // Toggles + spawns: each leaves a palette entry whose label
+        // contains the plugin's stem (lowercased). `satellite` is the
+        // single multi-sat tracker — ISS / Hubble live as in-panel
+        // entries inside it, not as separate palette toggles.
+        for stem in [
+            "aircraft",
+            "satellite",
+            "quake",
+            "wiki",
+            "here",
+            "export",
+            "help",
+            "search",
+            "travel",
+            "terminator",
+            "geo quiz",
+        ] {
+            assert!(
+                palette.iter().any(|l| l.contains(stem)),
+                "expected `{stem}` palette entry, got {palette:?}",
+            );
+        }
+    }
+
+    /// Driver test for the Lua-driven user-config flow: bundled
+    /// `runtime/init.lua` runs the bundled plugin set FIRST, then
+    /// pulls in user config LAST via
+    /// `require("ttymap.user_config").load()`. User init.lua should
+    /// activate user plugins via `require` (same path as bundled —
+    /// the searcher wrapper drains the slot per plugin); calling
+    /// `register_*` directly from init.lua isn't supported because
+    /// nothing drains the slot for the bare init chunk.
+    ///
+    /// Stubs `ttymap.user_config` via `package.preload` so the test
+    /// doesn't have to mutate the real `~/.config/ttymap/init.lua`
+    /// (or the user's HOME).
+    #[test]
+    fn user_init_lua_runs_after_bundled_plugin_set() {
+        let layer = temp_layer("user-after-bundled");
+        // Bundled plugin.
+        write_plugin(
+            &layer,
+            "alpha.lua",
+            r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
+        );
+        // "User" plugin (lives in the same layer for the test;
+        // production would put this under `~/.config/ttymap/plugin/`).
+        write_plugin(
+            &layer,
+            "user_beta.lua",
+            r#"ttymap.register_palette_command({ label = "user-beta", invoke = function() return true end })"#,
+        );
+        // Bundled init.lua: standard order — bundled plugin first,
+        // user config last.
+        std::fs::write(
+            layer.join("init.lua"),
+            r#"
+            require "alpha"
+            require("ttymap.user_config").load()
+            "#,
+        )
+        .expect("write bundled init.lua");
+
+        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+
+        // Stub `ttymap.user_config.load()`: simulates a user
+        // init.lua. At the point it runs, the bundled plugin's
+        // palette entry must already exist — proving user runs
+        // AFTER bundled. Then it requires a user plugin.
+        lua.load(
+            r#"
+            package.preload["ttymap.user_config"] = function()
+                return {
+                    load = function()
+                        _G.bundled_loaded_at_user_time =
+                            package.loaded.alpha and 1 or 0
+                        require "user_beta"
+                    end,
+                }
+            end
+            "#,
+        )
+        .exec()
+        .expect("install user_config stub");
+
+        let bundled_init = std::fs::read_to_string(layer.join("init.lua")).unwrap();
+        lua.load(&bundled_init)
+            .set_name("bundled-init")
+            .exec()
+            .expect("run bundled init");
+
+        // Bundled was already loaded by the time user_config.load ran.
+        let count: i64 = lua
+            .globals()
+            .get("bundled_loaded_at_user_time")
+            .expect("global");
+        assert_eq!(
+            count, 1,
+            "bundled plugin should have loaded BEFORE user config"
+        );
+        // Both entries land in registration order: bundled first,
+        // then user.
+        let labels: Vec<String> = registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.clone())
+            .collect();
+        assert_eq!(labels, vec!["alpha", "user-beta"]);
+    }
+
+    use std::path::Path;
 }

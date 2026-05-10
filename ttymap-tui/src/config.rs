@@ -7,12 +7,15 @@
 //! Split with the engine: [`ttymap_engine::Config`] owns the
 //! map/render/cache subset the rendering engine actually consumes;
 //! this struct wraps it with binary-only knobs (geoip, runtime,
-//! plugin disable list, keybinding overrides). Engine-side fields
-//! are reached via `config.engine.<sub>.<field>`.
+//! keybinding overrides). Engine-side fields are reached via
+//! `config.engine.<sub>.<field>`.
 //!
-//! The actual loader lives in [`crate::lua::init_lua::load_init_lua`].
-//! This module just owns the struct definitions and their `Default`
-//! impls (which act as the seed Lua starts from).
+//! The actual loader lives in
+//! [`crate::lua::build_subsystem`] (and the snap-only
+//! `read_init_lua_config_only` helper in
+//! [`crate::lua::init_lua`]). This module just owns the struct
+//! definitions and their `Default` impls (which act as the seed
+//! Lua starts from).
 
 pub use crate::input::keymap::KeybindingOverrides;
 pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
@@ -22,18 +25,7 @@ pub struct Config {
     /// Engine-side settings consumed by the map / render pipeline.
     pub engine: ttymap_engine::Config,
     pub geoip: GeoipConfig,
-    pub plugins: PluginsConfig,
     pub runtime: RuntimeConfig,
-}
-
-#[derive(Default, Clone)]
-pub struct PluginsConfig {
-    /// User-supplied opt-out list, matched against each plugin's
-    /// stem (file name minus `.lua`). Set via
-    /// `ttymap.opt.disable = { "wiki", "quake" }` in init.lua.
-    /// Plugins matching any entry are silently skipped at
-    /// registration time.
-    pub disable: Vec<String>,
 }
 
 #[derive(Clone)]

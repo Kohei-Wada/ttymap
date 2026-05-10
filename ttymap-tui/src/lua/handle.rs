@@ -96,6 +96,16 @@ impl LuaHandle {
         }
     }
 
+    /// Set the tile provider's attribution string the
+    /// `ttymap.tile:attribution()` Lua surface returns. Called by
+    /// the binary once at startup, after the tile cache spins up
+    /// (the engine config — which determines the active backend's
+    /// attribution — comes from the Lua bootstrap, so the cell is
+    /// populated post-`build_subsystem`).
+    pub fn set_attribution(&self, attribution: Option<String>) {
+        self.shared.set_attribution(attribution);
+    }
+
     /// Notify observers that the map centred on a new location.
     pub fn notify_map_jumped(&self, ll: LonLat) {
         self.bus.publish(Event::MapJumped(ll));
