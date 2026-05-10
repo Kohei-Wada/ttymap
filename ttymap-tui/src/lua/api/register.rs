@@ -13,8 +13,9 @@
 //! [`EventBus`](crate::event::EventBus) and returns an
 //! [`EventHandle`].
 
+use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use mlua::{Lua, Table};
@@ -157,13 +158,32 @@ fn install_register_keybind(
     )
 }
 
+/// Intern an event name to a `&'static str`. The bus's bucket key
+/// is `&'static str` (cheap copy + comparison), but Lua hands us a
+/// `String` per call. Naively `Box::leak`ing on every call would
+/// leak unbounded memory if the same name is registered many times
+/// (a plugin churning `on_event(name, fn)` / `:remove()` cycles).
+/// The interner ensures **one leak per distinct name** for the
+/// program lifetime; repeat calls reuse the existing static.
+///
+/// Single-threaded in practice (Lua main thread only) but the
+/// `Mutex` keeps it `Sync` for free.
+fn intern_event_name(name: &str) -> &'static str {
+    static INTERNED: LazyLock<Mutex<HashSet<&'static str>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut set = INTERNED.lock().expect("event-name interner poisoned");
+    if let Some(&existing) = set.get(name) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+
 /// `ttymap.on_event(name, fn) -> EventHandle` — generic pub/sub
 /// subscription. Subscribes directly against the
 /// [`EventBus`](crate::event::EventBus) at call time and returns a
 /// handle whose `:remove()` drops the exact subscriber.
-///
-/// The event name is leaked (`Box::leak`) so the bus's `&'static
-/// str` key requirement is met.
 fn install_on_event(lua: &Lua, ttymap: &Table, bus: Rc<EventBus>) -> mlua::Result<()> {
     ttymap.set(
         "on_event",
@@ -176,10 +196,10 @@ fn install_on_event(lua: &Lua, ttymap: &Table, bus: Rc<EventBus>) -> mlua::Resul
                         "ttymap.on_event: event name must be a non-empty string",
                     ));
                 }
-                let leaked: &'static str = Box::leak(event_name.into_boxed_str());
+                let interned = intern_event_name(&event_name);
                 let key = lua.create_registry_value(callback)?;
-                let id = bus.subscribe_lua(leaked, lua.clone(), key);
-                Ok(EventHandle::new(bus.clone(), leaked, id))
+                let id = bus.subscribe_lua(interned, lua.clone(), key);
+                Ok(EventHandle::new(bus.clone(), interned, id))
             },
         )?,
     )
