@@ -8,10 +8,11 @@ use ttymap_tui::input::thread::InputHandle;
 #[derive(Parser)]
 #[command(
     name = "ttymap",
-    about = "Terminal map viewer — renders Mapbox Vector Tiles as Braille characters",
-    long_about = "ttymap is a terminal-based map viewer written in Rust.\n\
+    about = "Terminal-native scriptable globe — Mapbox Vector Tiles as Braille, scripted with Lua",
+    long_about = "ttymap is a terminal-native scriptable globe written in Rust.\n\
         It renders Mapbox Vector Tiles (MVT/protobuf) as Unicode Braille characters\n\
-        with ANSI 256-color in your terminal.\n\n\
+        with ANSI 256-color in your terminal, on top of a Lua plugin runtime\n\
+        for live data overlays, animated camera tours, and custom map UIs.\n\n\
         Inspired by and based on mapscii (https://github.com/rastapasta/mapscii).\n\n\
         Config file:    ~/.config/ttymap/init.lua\n\
         User plugins:   ~/.config/ttymap/lua/plugin/  (activate via `require \"plugin.<name>\"` in init.lua)\n\
