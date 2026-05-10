@@ -46,6 +46,7 @@ Tokyo zoomed in with the wiki panel open:
 | `center` | Crosshair at the map center — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
 | `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map center lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
+| `geohash` | `m` → today's [xkcd #426 geohashing](https://xkcd.com/426/) coordinate inside your current 1°×1° graticule (DJIA opening hashed via MD5 + 30W rule), marker + sidebar with target / DJIA / distance + bearing from you. The point is to physically go there. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
 | `info` | Top-right readouts: center, cursor, zoom, reverse-geocoded place name (Nominatim). |
