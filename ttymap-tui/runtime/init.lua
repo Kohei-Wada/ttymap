@@ -38,13 +38,6 @@ ttymap.opt.cache.tiles        = true  -- Persist decoded tiles under ~/.cache/tt
 ttymap.opt.cache.memory_tiles = 512   -- Decoded-tile LRU capacity. ~22 tiles per view.
 
 ------------------------------------------------------------
--- ttymap.opt.geoip — IP-based location on startup.
-------------------------------------------------------------
-ttymap.opt.geoip.on_startup = false                       -- Equivalent to passing --here
-ttymap.opt.geoip.endpoint   = "https://ipapi.co/json/"    -- Must return ipapi.co-shaped JSON.
-ttymap.opt.geoip.timeout_ms = 2000
-
-------------------------------------------------------------
 -- ttymap.opt.runtime — event-loop / overlay redraw rates.
 ------------------------------------------------------------
 ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).

@@ -6,7 +6,7 @@
 //!
 //! Split with the engine: [`ttymap_engine::Config`] owns the
 //! map/render/cache subset the rendering engine actually consumes;
-//! this struct wraps it with binary-only knobs (geoip, runtime,
+//! this struct wraps it with binary-only knobs (runtime,
 //! keybinding overrides). Engine-side fields are reached via
 //! `config.engine.<sub>.<field>`.
 //!
@@ -24,29 +24,7 @@ pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
 pub struct Config {
     /// Engine-side settings consumed by the map / render pipeline.
     pub engine: ttymap_engine::Config,
-    pub geoip: GeoipConfig,
     pub runtime: RuntimeConfig,
-}
-
-#[derive(Clone)]
-pub struct GeoipConfig {
-    /// Jump to IP-based location on startup (can also be enabled by `--here`).
-    pub on_startup: bool,
-    /// IP geolocation endpoint. Must return JSON with `latitude`/`longitude`
-    /// numeric fields (ipapi.co shape).
-    pub endpoint: String,
-    /// Timeout for the IP geolocation request, in milliseconds.
-    pub timeout_ms: u64,
-}
-
-impl Default for GeoipConfig {
-    fn default() -> Self {
-        Self {
-            on_startup: false,
-            endpoint: "https://ipapi.co/json/".to_string(),
-            timeout_ms: 2000,
-        }
-    }
 }
 
 #[derive(Clone)]

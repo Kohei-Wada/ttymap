@@ -109,16 +109,16 @@ Installs `~/.cargo/bin/ttymap` + `~/.local/share/ttymap/` (bundled runtime). Sin
 ```bash
 ttymap                                       # default position
 ttymap --lat 35.68 --lon 139.76 --zoom 10    # Tokyo
-ttymap --here                                # IP-based current location
 ttymap --style bright                        # bright theme
 ```
+
+For "jump to my current location" use the bundled `here` plugin from the `:` palette — it does an IP-geolocation lookup on demand and flies the camera over.
 
 **Headless snapshot:**
 
 ```bash
 ttymap snap --lat 35.68 --lon 139.76 --zoom 12               # → stdout
 ttymap snap --lat 35.68 --lon 139.76 --zoom 12 -o tokyo.ans  # → file
-ttymap snap --here --cols 120 --rows 40                      # IP-located, sized
 ```
 
 `snap` emits raw xterm-256 ANSI; `cat` the file in any compatible terminal or pipe to `less -R`.

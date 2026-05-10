@@ -1,5 +1,11 @@
 //! `ttymap.config` userdata — read-only access to host-side config
 //! values plugins may need at runtime.
+//!
+//! Currently empty: every former accessor (`:geoip_endpoint()`) was
+//! a third-party-API-specific endpoint that belonged in Lua-side
+//! plugin config (`runtime/lua/ttymap/<name>.lua`), not on the host
+//! struct. Kept as a userdata stub so `ttymap.config` still
+//! resolves; future plugin-agnostic accessors land here.
 
 use std::sync::Arc;
 
@@ -8,6 +14,7 @@ use mlua::UserData;
 use crate::lua::host::LuaHostShared;
 
 pub(super) struct HostConfig {
+    #[allow(dead_code)]
     shared: Arc<LuaHostShared>,
 }
 
@@ -17,13 +24,4 @@ impl HostConfig {
     }
 }
 
-impl UserData for HostConfig {
-    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        // `ttymap.config:geoip_endpoint() -> string` — configured geoip
-        // URL (`ttymap.opt.geoip.endpoint` in init.lua). The here
-        // plugin GETs this to resolve the user's location.
-        methods.add_method("geoip_endpoint", |_, this, _: ()| {
-            Ok(this.shared.geoip_endpoint.clone())
-        });
-    }
-}
+impl UserData for HostConfig {}

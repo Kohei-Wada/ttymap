@@ -52,8 +52,8 @@ pub mod palette;
 pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
-/// Wraps [`ttymap_engine::Config`] with binary-only knobs (geoip,
-/// runtime, plugin disable list).
+/// Wraps [`ttymap_engine::Config`] with binary-only knobs (runtime,
+/// plugin disable list).
 pub mod config;
 
 /// Theme — binary-side ratatui adapter (`UiTheme`) and semantic-tag
@@ -85,12 +85,3 @@ pub mod event;
 /// bridge/ adapts Lua specs to Rust traits (`Component`,
 /// `PaletteProvider`).
 pub mod lua;
-
-// ── Internal modules (not part of the external surface) ──────────────────
-//
-// These are marked `pub` so integration tests and benchmarks under
-// `tests/` / `benches/` — which are compiled as external crates — can
-// reach them. `#[doc(hidden)]` signals "not stable API" to consumers.
-
-#[doc(hidden)]
-pub mod shared;

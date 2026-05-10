@@ -3,7 +3,7 @@
 //! Subset of the binary's settings that the rendering engine actually
 //! consumes: tile cache, initial viewport, render style/language. The
 //! binary wraps this with its own runtime (poll timeout / sidebar
-//! width / …), geoip, and plugin-disable list.
+//! width / …) and plugin-disable list.
 //!
 //! No I/O lives here — `Default` is the seed; the binary populates
 //! the live values from `init.lua` via `crate::lua::load_init_lua`.

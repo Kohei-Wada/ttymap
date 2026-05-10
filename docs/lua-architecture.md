@@ -69,7 +69,9 @@ ttymap-tui/src/lua/
     sgp4.rs        ttymap.sgp4   TLE parse / propagate
     map.rs         ttymap.map    HostMap userdata (jump/zoom/fly_to/center)
                                 + make_map_table (per-frame on_tick `map` arg)
-    config.rs      ttymap.config :geoip_endpoint
+    config.rs      ttymap.config (currently empty userdata; endpoint
+                                   config moved to per-plugin Lua libs
+                                   at runtime/lua/ttymap/<name>.lua)
     help.rs        ttymap.help   :keymap_entries / :palette_entries
     log.rs         ttymap.log    :info / :warn / :error
     tile.rs        ttymap.tile   :attribution
@@ -146,7 +148,7 @@ userdatas:
 | `ttymap.json`    | `:parse(s)` → table or nil, `:stringify(value)` → string                                       |
 | `ttymap.sgp4`    | `:parse_tle`, `:parse_tles`, `:propagate`, `:propagate_batch`                                  |
 | `ttymap.tile`    | `:attribution()`                                                                               |
-| `ttymap.config`  | `:geoip_endpoint()`                                                                            |
+| `ttymap.config`  | (currently empty userdata)                                                                     |
 | `ttymap.help`    | `:keymap_entries()`, `:palette_entries()`                                                      |
 | `ttymap.log`     | `:info(msg)`, `:warn(msg)`, `:error(msg)` — forward to host log at target `lua`                |
 | `ttymap.storage` | `:open(namespace)` → `Store`; `Store:get(key, default)`, `:set(key, v)`, `:delete(key)`        |

@@ -9,7 +9,6 @@
 //!
 //! ttymap.opt.render.style              = "bright"
 //! ttymap.opt.cache.memory_tiles        = 1024
-//! ttymap.opt.geoip.on_startup          = true
 //! ttymap.opt.runtime.poll_timeout_ms   = 33   -- ~30 Hz
 //!
 //! ttymap.keymap.set("zoom_in", { "i", "+" })
@@ -183,12 +182,6 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     cache.set("memory_tiles", d.engine.cache.memory_tiles)?;
     opt.set("cache", cache)?;
 
-    let geoip = lua.create_table()?;
-    geoip.set("on_startup", d.geoip.on_startup)?;
-    geoip.set("endpoint", d.geoip.endpoint.clone())?;
-    geoip.set("timeout_ms", d.geoip.timeout_ms)?;
-    opt.set("geoip", geoip)?;
-
     let runtime = lua.create_table()?;
     runtime.set("poll_timeout_ms", d.runtime.poll_timeout_ms)?;
     runtime.set("overlay_redraw_ms", d.runtime.overlay_redraw_ms)?;
@@ -285,17 +278,6 @@ pub(crate) fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
             cfg.engine.cache.memory_tiles = v;
         }
     }
-    if let Ok(t) = opt.get::<Table>("geoip") {
-        if let Ok(v) = t.get::<bool>("on_startup") {
-            cfg.geoip.on_startup = v;
-        }
-        if let Ok(v) = t.get::<String>("endpoint") {
-            cfg.geoip.endpoint = v;
-        }
-        if let Ok(v) = t.get::<u64>("timeout_ms") {
-            cfg.geoip.timeout_ms = v;
-        }
-    }
     if let Ok(t) = opt.get::<Table>("runtime") {
         if let Ok(v) = t.get::<u64>("poll_timeout_ms") {
             cfg.runtime.poll_timeout_ms = v;
@@ -356,19 +338,6 @@ mod tests {
     fn opt_map_zoom_optional_can_be_set() {
         let (cfg, _) = run(r#"ttymap.opt.map.zoom = 10"#);
         assert_eq!(cfg.engine.map.zoom, Some(10.0));
-    }
-
-    #[test]
-    fn opt_geoip_full_section_takes_effect() {
-        let src = r#"
-            ttymap.opt.geoip.on_startup = true
-            ttymap.opt.geoip.endpoint   = "https://example.com/ip"
-            ttymap.opt.geoip.timeout_ms = 500
-        "#;
-        let (cfg, _) = run(src);
-        assert!(cfg.geoip.on_startup);
-        assert_eq!(cfg.geoip.endpoint, "https://example.com/ip");
-        assert_eq!(cfg.geoip.timeout_ms, 500);
     }
 
     #[test]

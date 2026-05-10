@@ -26,11 +26,11 @@ struct Cli {
     command: Option<Subcommand>,
 
     /// Initial latitude
-    #[arg(long, conflicts_with = "here")]
+    #[arg(long)]
     lat: Option<f64>,
 
     /// Initial longitude
-    #[arg(long, conflicts_with = "here")]
+    #[arg(long)]
     lon: Option<f64>,
 
     /// Initial zoom level
@@ -40,10 +40,6 @@ struct Cli {
     /// Style preset (dark, bright)
     #[arg(long)]
     style: Option<String>,
-
-    /// Jump to IP-based current location on startup
-    #[arg(long)]
-    here: bool,
 
     /// Write debug logs to ~/.local/state/ttymap/ttymap.log. Optional
     /// level argument: `--log` alone is `debug`; `--log info` /
@@ -125,23 +121,6 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         // Unknown values get normalised to "dark" by the styler's
         // fallback at construction time; just hand the raw string in.
         config.engine.render.style = v;
-    }
-
-    if cli.here || config.geoip.on_startup {
-        match ttymap_tui::shared::geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
-            Some((lat, lon)) => {
-                log::info!("geoip: resolved to {}, {}", lat, lon);
-                config.engine.map.lat = lat;
-                config.engine.map.lon = lon;
-            }
-            None => {
-                log::warn!(
-                    "geoip lookup failed, using default {}, {}",
-                    config.engine.map.lat,
-                    config.engine.map.lon
-                );
-            }
-        }
     }
 
     log::info!(
