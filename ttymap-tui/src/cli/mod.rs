@@ -29,17 +29,23 @@ impl Command {
             Self::ApiInfo(args) => api_info::run(args),
         }
     }
+}
 
-    /// Whether this subcommand needs `lua::resolve_runtime_path` /
-    /// `set_runtime_path` to have run before [`Self::run`]. `snap`
-    /// reads init.lua for config knobs, so it does. `api-info` is a
-    /// pure metadata dump from compile-time `&'static` data — it must
-    /// keep working on a freshly-installed system that has nothing in
-    /// `~/.config/ttymap` or `~/.local/share/ttymap` yet.
-    pub fn needs_runtime(&self) -> bool {
-        match self {
-            Self::Snap(_) => true,
-            Self::ApiInfo(_) => false,
+/// Resolve and cache the layered runtime path. Aborts the process
+/// with a one-line message if every layer is missing — there's no
+/// graceful degradation for callers that need init.lua to load.
+///
+/// Each subcommand calls this itself (the headless `snap` wants
+/// init.lua-tunable config; `api-info` doesn't and skips the call).
+/// Same goes for the interactive event loop. Keeping the call inside
+/// the consumer matches "each subcommand owns its setup" — the binary
+/// entry is just a dispatcher.
+pub fn init_runtime_or_exit() {
+    match crate::lua::resolve_runtime_path() {
+        Ok(p) => crate::lua::set_runtime_path(p),
+        Err(e) => {
+            eprintln!("ttymap: {}", e);
+            std::process::exit(1);
         }
     }
 }

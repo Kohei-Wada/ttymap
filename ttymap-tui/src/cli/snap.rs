@@ -73,6 +73,11 @@ pub struct SnapArgs {
 }
 
 pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // `snap` reads init.lua for tunables, so it needs the layered
+    // runtime path resolved. Each subcommand owns its setup — the
+    // binary entry doesn't pre-resolve on our behalf.
+    super::init_runtime_or_exit();
+
     // snap is headless and doesn't activate plugins, so we use the
     // config-only init.lua entry (no API install, no plugin requires).
     // `Config` carries every init.lua-tunable knob (cache / render);

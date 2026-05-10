@@ -66,15 +66,10 @@ fn main() {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
     }
 
-    // Subcommands run a single task and exit without booting the full
-    // interactive app. Runtime path resolution is gated by
-    // `Command::needs_runtime` so pure-metadata subcommands
-    // (`api-info`) work on freshly-installed systems that haven't
-    // populated `~/.config/ttymap` or `~/.local/share/ttymap` yet.
+    // Each subcommand owns its setup (`init_runtime_or_exit` etc.).
+    // The dispatcher just routes — no pre-resolution, no per-command
+    // capability flags.
     if let Some(cmd) = cli.command {
-        if cmd.needs_runtime() {
-            init_runtime_path();
-        }
         if let Err(e) = cmd.run() {
             eprintln!("error: {e}");
             std::process::exit(1);
@@ -82,25 +77,9 @@ fn main() {
         return;
     }
 
-    init_runtime_path();
     if let Err(e) = run_event_loop(cli) {
         eprintln!("Error: {e}");
     }
-}
-
-/// Resolve and cache the layered runtime path. Aborts the process
-/// with a one-line message if every layer is missing — there's no
-/// graceful degradation for the interactive app or for the `snap`
-/// subcommand, both of which need init.lua to load.
-fn init_runtime_path() {
-    let runtime_path = match ttymap_tui::lua::resolve_runtime_path() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("ttymap: {}", e);
-            std::process::exit(1);
-        }
-    };
-    ttymap_tui::lua::set_runtime_path(runtime_path);
 }
 
 /// Composition root: builds the event channel, every subsystem
@@ -108,6 +87,11 @@ fn init_runtime_path() {
 /// then hands control to `App::run`. Every thread handle joins
 /// in its `Drop` impl, so teardown is just RAII at end of scope.
 fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve the layered runtime path before anything Lua-shaped
+    // spins up — `build_subsystem` reaches for it during VM setup and
+    // when the bundled `init.lua` runs.
+    ttymap_tui::cli::init_runtime_or_exit();
+
     // Lua bootstrap runs first — `build_subsystem` creates the VM,
     // installs the API, and runs the init.lua chain (which `require`s
     // every bundled plugin). The tile cache spins up next; its
