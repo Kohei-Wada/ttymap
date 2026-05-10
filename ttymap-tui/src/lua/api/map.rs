@@ -34,9 +34,95 @@ use mlua::{Lua, Scope, Table, UserData};
 use crate::UserCommand;
 use crate::compositor::op::{Op, OpsBuffer};
 use crate::lua::MapApi;
+use crate::lua::api::spec::{MethodSpec, NamespaceSpec, ParamSpec};
 use crate::lua::map_api::Anchor;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::MapAction;
+
+// ── ttymap.map machine-readable spec ────────────────────────────────
+//
+// Describes the **persistent `ttymap.map` userdata** (`HostMap`) only.
+// The per-frame `map` table handed to `on_tick` callbacks
+// (`make_map_table`) is a distinct surface and gets its own spec when
+// issue #300 ships the rest of the rollout.
+
+/// Describe the `ttymap.map` namespace for `ttymap api-info`.
+pub fn spec() -> NamespaceSpec {
+    NamespaceSpec {
+        path: "ttymap.map",
+        methods: &[
+            MethodSpec {
+                name: "jump",
+                params: &[
+                    ParamSpec {
+                        name: "lon",
+                        ty: "number",
+                    },
+                    ParamSpec {
+                        name: "lat",
+                        ty: "number",
+                    },
+                ],
+                returns: "nil",
+                doc: "Recentre the map on the given coordinate. \
+                      Fire-and-forget; the host treats it identically \
+                      to a keymap-driven jump.",
+            },
+            MethodSpec {
+                name: "zoom",
+                params: &[ParamSpec {
+                    name: "level",
+                    ty: "number?",
+                }],
+                returns: "number?",
+                doc: "Setter when given a level (clamped host-side, \
+                      fire-and-forget). No-arg form returns the current \
+                      zoom from the shared cell the host refreshes per \
+                      dispatch.",
+            },
+            MethodSpec {
+                name: "fly_to",
+                params: &[
+                    ParamSpec {
+                        name: "lon",
+                        ty: "number",
+                    },
+                    ParamSpec {
+                        name: "lat",
+                        ty: "number",
+                    },
+                    ParamSpec {
+                        name: "zoom",
+                        ty: "number",
+                    },
+                ],
+                returns: "nil",
+                doc: "Composite recenter + zoom in one dispatch — \
+                      avoids the intermediate new-centre / old-zoom \
+                      frame `jump` + `zoom` separately would render.",
+            },
+            MethodSpec {
+                name: "center",
+                params: &[],
+                returns: "(number, number)",
+                doc: "Latest map centre as `lon, lat`. Read from the \
+                      shared cell the host refreshes on every dispatch \
+                      path that carries a `Window` / `MapApi`.",
+            },
+            MethodSpec {
+                name: "set_labels_visible",
+                params: &[ParamSpec {
+                    name: "visible",
+                    ty: "boolean",
+                }],
+                returns: "nil",
+                doc: "Show or hide every tile-rendered text label \
+                      (place names, road names …). Geometry features \
+                      keep rendering. Triggers a redraw automatically.",
+            },
+        ],
+    }
+}
 
 // ── ttymap.map (persistent userdata) ────────────────────────────────
 
@@ -561,6 +647,24 @@ mod tests {
             }
         }
         assert!(found, "expected 'x' cell painted somewhere");
+    }
+
+    /// `spec()` enumerates the persistent `ttymap.map` userdata's
+    /// methods. Order isn't asserted (it's free to grow), but every
+    /// known method must show up — guards against a method being added
+    /// to `add_methods` and silently missed by the spec, which would
+    /// drift `ttymap api-info` output away from runtime reality.
+    #[test]
+    fn spec_lists_every_known_host_map_method() {
+        let s = super::spec();
+        assert_eq!(s.path, "ttymap.map");
+        let names: Vec<&str> = s.methods.iter().map(|m| m.name).collect();
+        for expected in ["jump", "zoom", "fly_to", "center", "set_labels_visible"] {
+            assert!(
+                names.contains(&expected),
+                "spec() missing method `{expected}` — names = {names:?}",
+            );
+        }
     }
 
     /// `map:label(0, 0, "hi", 214)` accepts an integer colour — the

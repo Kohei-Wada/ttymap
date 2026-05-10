@@ -66,10 +66,33 @@ fn main() {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
     }
 
-    // Resolve runtime path before any Lua state spins up. Both the
-    // interactive app and the `snap` subcommand reach for it; doing
-    // this once at the top means we fail fast with a single error
-    // message rather than hitting the same wall in two places.
+    // Subcommands run a single task and exit without booting the full
+    // interactive app. Runtime path resolution is gated by
+    // `Command::needs_runtime` so pure-metadata subcommands
+    // (`api-info`) work on freshly-installed systems that haven't
+    // populated `~/.config/ttymap` or `~/.local/share/ttymap` yet.
+    if let Some(cmd) = cli.command {
+        if cmd.needs_runtime() {
+            init_runtime_path();
+        }
+        if let Err(e) = cmd.run() {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    init_runtime_path();
+    if let Err(e) = run_event_loop(cli) {
+        eprintln!("Error: {e}");
+    }
+}
+
+/// Resolve and cache the layered runtime path. Aborts the process
+/// with a one-line message if every layer is missing — there's no
+/// graceful degradation for the interactive app or for the `snap`
+/// subcommand, both of which need init.lua to load.
+fn init_runtime_path() {
     let runtime_path = match ttymap_tui::lua::resolve_runtime_path() {
         Ok(p) => p,
         Err(e) => {
@@ -78,20 +101,6 @@ fn main() {
         }
     };
     ttymap_tui::lua::set_runtime_path(runtime_path);
-
-    // Subcommands run a single task and exit without booting the full
-    // interactive app.
-    if let Some(cmd) = cli.command {
-        if let Err(e) = cmd.run() {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    if let Err(e) = run_event_loop(cli) {
-        eprintln!("Error: {e}");
-    }
 }
 
 /// Composition root: builds the event channel, every subsystem

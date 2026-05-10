@@ -111,6 +111,7 @@ pub mod http;
 pub mod json;
 pub mod map;
 pub mod sgp4;
+pub mod spec;
 
 mod config;
 mod help;
