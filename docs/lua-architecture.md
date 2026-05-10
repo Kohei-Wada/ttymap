@@ -73,6 +73,10 @@ ttymap-tui/src/lua/
     help.rs        ttymap.help   :keymap_entries / :palette_entries
     log.rs         ttymap.log    :info / :warn / :error
     tile.rs        ttymap.tile   :attribution
+    storage.rs     ttymap.storage :open(ns) -> Store userdata
+                                  (:get(k, default) / :set(k, v) / :delete(k);
+                                   JSON-on-disk under XDG data dir; atomic
+                                   write; corrupt / missing → default)
     register.rs    `ttymap.register_*` / `on_event` — every call pushes
                    directly into the live PluginRegistry / EventBus and
                    returns a Lua-facing handle (no deferred capture)
@@ -145,6 +149,7 @@ userdatas:
 | `ttymap.config`  | `:geoip_endpoint()`                                                                            |
 | `ttymap.help`    | `:keymap_entries()`, `:palette_entries()`                                                      |
 | `ttymap.log`     | `:info(msg)`, `:warn(msg)`, `:error(msg)` — forward to host log at target `lua`                |
+| `ttymap.storage` | `:open(namespace)` → `Store`; `Store:get(key, default)`, `:set(key, v)`, `:delete(key)`        |
 
 ### Activation surfaces
 
