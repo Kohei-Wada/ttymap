@@ -3,7 +3,7 @@
 //! subscriptions.
 //!
 //! `register_palette_command` / `register_keybind` push entries
-//! **directly** into the [`PluginRegistry`] (no deferred capture, no
+//! **directly** into the [`LuaRegistry`] (no deferred capture, no
 //! per-script slot). The host doesn't track which script registered
 //! what; "plugin" is purely a Lua-side organisational unit (one .lua
 //! file's worth of `register_*` calls). Each call returns a handle
@@ -27,13 +27,13 @@ use crate::lua::bridge::registrar_handle::{
     KeybindHandle, PaletteCommandHandle, allocate_handle_id,
 };
 use crate::lua::host::{HelpEntry, LuaHostShared};
-use crate::lua::registrar::PluginRegistryHandle;
+use crate::lua::registrar::LuaRegistryHandle;
 
 pub(super) fn install(
     lua: &Lua,
     ttymap: &Table,
     bus: Rc<EventBus>,
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
     shared: Arc<LuaHostShared>,
 ) -> mlua::Result<()> {
     install_register_palette_command(lua, ttymap, registry.clone(), shared)?;
@@ -45,7 +45,7 @@ pub(super) fn install(
 fn install_register_palette_command(
     lua: &Lua,
     ttymap: &Table,
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
     shared: Arc<LuaHostShared>,
 ) -> mlua::Result<()> {
     ttymap.set(
@@ -112,7 +112,7 @@ fn install_register_palette_command(
 fn install_register_keybind(
     lua: &Lua,
     ttymap: &Table,
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
 ) -> mlua::Result<()> {
     ttymap.set(
         "register_keybind",

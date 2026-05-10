@@ -5,21 +5,21 @@
 //!
 //! Both handles expose a single `:remove()` method that drops the
 //! matching entry from the live
-//! [`PluginRegistry`](crate::lua::registrar::PluginRegistry). The
+//! [`LuaRegistry`](crate::lua::registrar::LuaRegistry). The
 //! verb matches [`super::event_handle::EventHandle::remove`] so a
 //! plugin author can dispose any registration uniformly. Idempotent
 //! — `:remove()` on an already-removed handle is a no-op.
 //!
 //! Each handle carries an `id: u64` allocated at registration call
 //! site (the same id stored alongside the entry in the registry),
-//! plus a clone of the `Rc<RefCell<PluginRegistry>>` so `:remove()`
+//! plus a clone of the `Rc<RefCell<LuaRegistry>>` so `:remove()`
 //! can mutably borrow and find the entry by ID.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mlua::UserData;
 
-use crate::lua::registrar::PluginRegistryHandle;
+use crate::lua::registrar::LuaRegistryHandle;
 
 /// Process-global counter for registrar handle IDs. Bumped once per
 /// `register_palette_command` or `register_keybind` call. Unique
@@ -37,18 +37,18 @@ pub fn allocate_handle_id() -> u64 {
 /// Lua-facing handle returned by `ttymap.register_palette_command(...)`.
 ///
 /// `:remove()` calls
-/// [`PluginRegistry::remove_palette_entry`](crate::lua::registrar::PluginRegistry::remove_palette_entry)
+/// [`LuaRegistry::remove_palette_entry`](crate::lua::registrar::LuaRegistry::remove_palette_entry)
 /// — the entry is gone from the next palette open. If the palette
 /// is already on screen with the entry visible, selecting it after
 /// removal silently no-ops (the registry lookup at execute time
 /// returns `None`).
 pub struct PaletteCommandHandle {
     id: u64,
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
 }
 
 impl PaletteCommandHandle {
-    pub fn new(id: u64, registry: PluginRegistryHandle) -> Self {
+    pub fn new(id: u64, registry: LuaRegistryHandle) -> Self {
         Self { id, registry }
     }
 }
@@ -65,16 +65,16 @@ impl UserData for PaletteCommandHandle {
 /// Lua-facing handle returned by `ttymap.register_keybind(...)`.
 ///
 /// `:remove()` calls
-/// [`PluginRegistry::remove_activation`](crate::lua::registrar::PluginRegistry::remove_activation)
+/// [`LuaRegistry::remove_activation`](crate::lua::registrar::LuaRegistry::remove_activation)
 /// — the next keypress for that key falls through to the keymap as
 /// if the plugin had never bound it.
 pub struct KeybindHandle {
     id: u64,
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
 }
 
 impl KeybindHandle {
-    pub fn new(id: u64, registry: PluginRegistryHandle) -> Self {
+    pub fn new(id: u64, registry: LuaRegistryHandle) -> Self {
         Self { id, registry }
     }
 }
@@ -92,7 +92,7 @@ impl UserData for KeybindHandle {
 mod tests {
     use super::*;
     use crate::compositor::{Activation, Component, PaletteEntry};
-    use crate::lua::registrar::new_plugin_registry;
+    use crate::lua::registrar::new_lua_registry;
     use crossterm::event::{KeyCode, KeyModifiers};
 
     fn fake_palette_entry() -> PaletteEntry {
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn palette_command_handle_remove_drops_entry_from_registry() {
-        let registry = new_plugin_registry();
+        let registry = new_lua_registry();
         let id = 42;
         registry
             .borrow_mut()
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn keybind_handle_remove_drops_activation_from_registry() {
-        let registry = new_plugin_registry();
+        let registry = new_lua_registry();
         let id = 7;
         registry.borrow_mut().add_activation(id, fake_activation());
         assert_eq!(registry.borrow().activation_count(), 1);

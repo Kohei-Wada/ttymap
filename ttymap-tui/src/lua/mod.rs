@@ -29,7 +29,7 @@ pub use handle::LuaHandle;
 pub use host::LuaHostShared;
 pub use init_lua::read_init_lua_config_only;
 pub use map_api::MapApi;
-pub use registrar::{PluginRegistry, PluginRegistryHandle, new_plugin_registry};
+pub use registrar::{LuaRegistry, LuaRegistryHandle, new_lua_registry};
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use vm::new_lua;
 
@@ -51,12 +51,12 @@ pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface
     /// App uses to observe state changes and tick plugins.
     pub handle: LuaHandle,
-    /// Live registry of plugin-declared activations + palette
+    /// Live registry of Lua-registered activations + palette
     /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
     /// the palette installer (for the `:` activation's per-open
     /// `CommandSeed` snapshot). Lua-side `PaletteCommandHandle:remove()`
     /// / `KeybindHandle:remove()` mutably borrow it to drop entries.
-    pub registry: PluginRegistryHandle,
+    pub registry: LuaRegistryHandle,
     /// `[<key> <label>]` footer hints harvested from the registry's
     /// palette entries at startup. Static for the program lifetime —
     /// adding / removing entries at runtime does not refresh this
@@ -103,7 +103,7 @@ pub struct LuaSubsystem {
 /// composition root after this returns, draining `palette_entries`
 /// into a default `:`-palette provider.
 pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
-    let registry = new_plugin_registry();
+    let registry = new_lua_registry();
     let shared = Arc::new(LuaHostShared::new(defaults.geoip.endpoint.clone()));
     let bus = std::rc::Rc::new(crate::event::EventBus::default());
     let ops = op::new_ops_buffer();
@@ -262,12 +262,12 @@ mod tests {
         source: &'static str,
     ) -> (
         mlua::Lua,
-        PluginRegistryHandle,
+        LuaRegistryHandle,
         std::rc::Rc<crate::event::EventBus>,
     ) {
         let lua = new_lua();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let registry = new_plugin_registry();
+        let registry = new_lua_registry();
         api::install(
             &lua,
             host::LuaHostShared::empty(),
@@ -296,7 +296,7 @@ mod tests {
         layer: &Path,
     ) -> (
         mlua::Lua,
-        PluginRegistryHandle,
+        LuaRegistryHandle,
         Arc<host::LuaHostShared>,
         std::rc::Rc<crate::event::EventBus>,
     ) {
@@ -307,7 +307,7 @@ mod tests {
         vm::prepend_package_path(&lua, &layer.join("lua"));
         let shared = host::LuaHostShared::empty();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let registry = new_plugin_registry();
+        let registry = new_lua_registry();
         api::install(
             &lua,
             shared.clone(),
@@ -358,7 +358,7 @@ mod tests {
         std::fs::write(dir.join("init.lua"), lua).expect("write plugin init.lua");
     }
 
-    fn labels(r: &PluginRegistryHandle) -> Vec<String> {
+    fn labels(r: &LuaRegistryHandle) -> Vec<String> {
         r.borrow()
             .palette_entries()
             .iter()
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn register_palette_command_and_keybind_land_in_registry() {
         // `ttymap.register_palette_command(spec)` + `ttymap.register_keybind(key, fn)`
-        // push directly into the live `PluginRegistry`. No deferred
+        // push directly into the live `LuaRegistry`. No deferred
         // capture — the entries are visible the moment the chunk
         // returns.
         let (_lua, registry, _bus) = run_in_fresh_vm(

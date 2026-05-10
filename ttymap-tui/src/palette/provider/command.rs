@@ -4,7 +4,7 @@
 //! - map actions (harvested from [`MapAction::all_listed`] with keymap
 //!   hints — static, cached on [`CommandSeed`])
 //! - plugin palette entries — read live from the shared
-//!   [`PluginRegistry`](crate::lua::PluginRegistry) so plugin
+//!   [`LuaRegistry`](crate::lua::LuaRegistry) so plugin
 //!   `:remove()` / dynamic registration is reflected on the next
 //!   palette open
 //!
@@ -22,7 +22,7 @@ use std::rc::Rc;
 use crate::UserCommand;
 use crate::compositor::Context;
 use crate::input::keymap::KeyMap;
-use crate::lua::PluginRegistryHandle;
+use crate::lua::LuaRegistryHandle;
 use crate::theme::ThemeId;
 use ttymap_engine::map::MapAction;
 
@@ -34,11 +34,11 @@ use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 /// [`CommandProvider::build`] time per open.
 pub struct CommandSeed {
     map_actions: Vec<(MapAction, String)>, // (action, key hint)
-    registry: PluginRegistryHandle,
+    registry: LuaRegistryHandle,
 }
 
 impl CommandSeed {
-    pub fn build(keymap: &KeyMap, registry: PluginRegistryHandle) -> Self {
+    pub fn build(keymap: &KeyMap, registry: LuaRegistryHandle) -> Self {
         let map_actions = MapAction::all_listed()
             .iter()
             .map(|a| {
@@ -59,7 +59,7 @@ enum Kind {
     MapAction(MapAction),
     /// Plugin-registered entry — selecting looks up the matching
     /// [`PaletteEntry`](crate::compositor::PaletteEntry) in the live
-    /// [`PluginRegistry`](crate::lua::PluginRegistry) by ID and
+    /// [`LuaRegistry`](crate::lua::LuaRegistry) by ID and
     /// invokes its factory. If the entry has been `:remove()`d
     /// since this snapshot was built, the lookup returns `None` and
     /// the palette closes silently.

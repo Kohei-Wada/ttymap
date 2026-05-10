@@ -140,7 +140,7 @@ pub fn install(
     shared: Arc<LuaHostShared>,
     ops: crate::compositor::op::OpsBuffer,
     bus: std::rc::Rc<crate::event::EventBus>,
-    registry: crate::lua::registrar::PluginRegistryHandle,
+    registry: crate::lua::registrar::LuaRegistryHandle,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -183,7 +183,7 @@ pub fn install(
 
     // Activation surfaces (`register_palette_command` /
     // `register_keybind` / `on_event`) — every call pushes directly
-    // into the live `PluginRegistry` (or, for `on_event`, subscribes
+    // into the live `LuaRegistry` (or, for `on_event`, subscribes
     // directly against the bus) and returns a Lua-facing handle.
     // No deferred capture, no per-script slot.
     register::install(lua, &ttymap, bus.clone(), registry, shared.clone())?;
@@ -250,7 +250,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let ops = crate::compositor::op::new_ops_buffer();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let registry = crate::lua::new_plugin_registry();
+        let registry = crate::lua::new_lua_registry();
         let handles = install(&lua, LuaHostShared::empty(), ops.clone(), bus, registry)
             .expect("install ttymap table");
         (lua, handles, ops)
@@ -384,7 +384,7 @@ mod tests {
             shared.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus,
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
 
@@ -419,7 +419,7 @@ mod tests {
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -449,7 +449,7 @@ mod tests {
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -477,7 +477,7 @@ mod tests {
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -510,7 +510,7 @@ mod tests {
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus,
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();

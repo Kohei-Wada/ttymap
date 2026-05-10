@@ -180,7 +180,7 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     lua.handle.set_attribution(map.attribution.clone());
 
     // Palette is a built-in (not a plugin): build a CommandSeed
-    // around the live PluginRegistry and append the `:` activation
+    // around the live LuaRegistry and append the `:` activation
     // to a fresh built-ins Vec. Must run after every plugin's
     // register call so the seed sees them.
     let mut builtin_activations: Vec<ttymap_tui::compositor::Activation> = Vec::new();

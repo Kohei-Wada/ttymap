@@ -214,7 +214,7 @@ impl Component for PaletteComponent {
 /// Install the palette as a built-in. Unlike a plugin's `register`,
 /// this is a **sink**: prebuild a [`CommandSeed`] that holds the
 /// static map-action half plus a clone of the live
-/// [`PluginRegistryHandle`](crate::lua::PluginRegistryHandle), and
+/// [`LuaRegistryHandle`](crate::lua::LuaRegistryHandle), and
 /// append a single `:` activation. Each open snapshots the registry
 /// freshly so plugins can `:remove()` (or, in a future PR, register
 /// at runtime) and the next open reflects it. Must be called
@@ -222,7 +222,7 @@ impl Component for PaletteComponent {
 pub fn install(
     keymap: &KeyMap,
     activations: &mut Vec<Activation>,
-    registry: crate::lua::PluginRegistryHandle,
+    registry: crate::lua::LuaRegistryHandle,
 ) {
     let seed = Rc::new(CommandSeed::build(keymap, registry));
     let seed_for_spawn = seed;

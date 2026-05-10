@@ -87,7 +87,7 @@ impl App {
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
-        // pushed on top. BaseLayer borrows the live `PluginRegistry`
+        // pushed on top. BaseLayer borrows the live `LuaRegistry`
         // so plugin `KeybindHandle:remove()` updates are visible on
         // the next keypress; built-in activations (today: just `:`
         // for the palette) are kept in their own Vec so plugins
