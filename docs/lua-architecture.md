@@ -64,7 +64,8 @@ ttymap-tui/src/lua/
                    also installs top-level `ttymap.notify` /
                    `ttymap.on_event` on the global
     http.rs        ttymap.http   :fetch / :fetch_cached / :url_encode
-    json.rs        ttymap.json   :parse
+    json.rs        ttymap.json   :parse / :stringify
+                                  (lua_to_json shared with storage.rs)
     sgp4.rs        ttymap.sgp4   TLE parse / propagate
     map.rs         ttymap.map    HostMap userdata (jump/zoom/fly_to/center)
                                 + make_map_table (per-frame on_tick `map` arg)
@@ -138,7 +139,7 @@ userdatas:
 |------------------|------------------------------------------------------------------------------------------------|
 | `ttymap.http`    | `:fetch(url)`, `:fetch_cached(url, ttl_secs)`, `:url_encode(s)`                                |
 | `ttymap.map`     | `:jump(lon, lat)`, `:zoom(level)`, `:zoom()` getter, `:fly_to(lon, lat, zoom)`, `:center()`    |
-| `ttymap.json`    | `:parse(s)` → table or nil                                                                     |
+| `ttymap.json`    | `:parse(s)` → table or nil, `:stringify(value)` → string                                       |
 | `ttymap.sgp4`    | `:parse_tle`, `:parse_tles`, `:propagate`, `:propagate_batch`                                  |
 | `ttymap.tile`    | `:attribution()`                                                                               |
 | `ttymap.config`  | `:geoip_endpoint()`                                                                            |
