@@ -24,10 +24,10 @@
 //!   and we read the table back after the chunk runs.
 //! - `ttymap.keymap.set/del` — real Lua functions that mutate a
 //!   shared [`KeybindingOverrides`] map in Rust.
-//! - `require "<name>"` — top-level requires resolve via the
-//!   plugin-aware searcher (see [`crate::lua::vm::install_plugin_searcher`]).
-//!   On hit, the plugin runs in the shared VM and its `register_*`
-//!   calls attribute to `<name>` in the [`LuaRegistry`].
+//! - `require "plugin.<name>"` — resolves via standard
+//!   `package.path` (`<layer>/lua/plugin/<name>.lua`). The chunk
+//!   runs in the shared VM and its `register_*` calls push
+//!   directly into the live [`LuaRegistry`].
 //!
 //! Recovery posture matches the rest of the bridge: a missing,
 //! unreadable, or throwing `init.lua` logs a warning and the loader

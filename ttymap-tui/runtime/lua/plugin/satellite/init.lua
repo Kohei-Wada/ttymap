@@ -4,10 +4,10 @@
 -- (plugin loop + window open/close) for the configured sat list.
 -- In-panel key chars (`i`, `H` …) toggle individual visibility;
 -- `Enter` re-centres on the focused one. To track an extra
--- satellite, copy this file to `~/.config/ttymap/plugin/satellite/init.lua`
+-- satellite, copy this file to `~/.config/ttymap/lua/plugin/satellite/init.lua`
 -- and append its NORAD ID + a free key char.
 
-local s = require("satellite.satellites").make({
+local s = require("plugin.satellite.satellites").make({
     -- Manned LEO stations.
     { display = "ISS",      norad_id = 25544, color = "accent_alt", key = "i" },
     { display = "Tiangong", norad_id = 48274, color = "highlight",  key = "T" },

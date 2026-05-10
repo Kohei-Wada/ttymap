@@ -17,17 +17,6 @@
 -- override per-leaf in their own init.lua.
 
 ------------------------------------------------------------
--- 0. Install the plugin-aware `package.searchers` entry. The
--- host (Rust) does not know about the `<layer>/plugin/...`
--- convention; `ttymap.plugin_searcher` (a Lua lib) owns that
--- resolution, using only the `ttymap.runtime_path` primitive
--- Rust exposes — the chunk runs as a plain `load(source)()`,
--- with `register_*` calls inside pushing directly into the
--- live host registry.
-------------------------------------------------------------
-require("ttymap.plugin_searcher").install()
-
-------------------------------------------------------------
 -- 1. ttymap.opt.map — initial viewport + zoom envelope.
 ------------------------------------------------------------
 ttymap.opt.map.lat       = 52.51298   -- Berlin
@@ -71,25 +60,29 @@ require("ttymap.notify").setup()
 
 ------------------------------------------------------------
 -- 3. Bundled plugins — chrome first, then everything else
--- (alphabetical). Adjust per file to taste.
+-- (alphabetical). Adjust per file to taste. Each lives at
+-- `<layer>/lua/plugin/<name>.lua` (or `<name>/init.lua`) and is
+-- required as a standard Lua module via `package.path` — no
+-- custom searcher, no host-side plugin attribution. "Plugin"
+-- is just a `.lua` file's worth of `register_*` calls.
 ------------------------------------------------------------
-require "info"
-require "scalebar"
-require "attribution"
-require "help"
+require "plugin.info"
+require "plugin.scalebar"
+require "plugin.attribution"
+require "plugin.help"
 
-require "aircraft"
-require "center"
-require "export"
-require "geo_quiz"
-require "here"
-require "ping_simulation"
-require "quake"
-require "satellite"
-require "search"
-require "terminator"
-require "travel"
-require "wiki"
+require "plugin.aircraft"
+require "plugin.center"
+require "plugin.export"
+require "plugin.geo_quiz"
+require "plugin.here"
+require "plugin.ping_simulation"
+require "plugin.quake"
+require "plugin.satellite"
+require "plugin.search"
+require "plugin.terminator"
+require "plugin.travel"
+require "plugin.wiki"
 
 ------------------------------------------------------------
 -- 4. User init.lua — runs LAST so the user wins:

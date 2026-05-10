@@ -1,13 +1,13 @@
 # Lua subsystem
 
 ttymap's plugin system is Lua-only. All in-tree plugins live in
-`runtime/plugin/`; the Rust side is the binding layer. `mlua` with
+`runtime/lua/plugin/`; the Rust side is the binding layer. `mlua` with
 Lua 5.4 vendored.
 
 ## Plugin model
 
 nvim-style. **A `.lua` file (or `<name>/init.lua` directory) under a
-`<runtime>/plugin/` layer is a require-able plugin module** — there
+`<runtime>/lua/plugin/` layer is a require-able plugin module** — there
 is no `register_plugin` ceremony. Activation is explicit: every plugin
 is `require`-d from an `init.lua` file. The bundled `runtime/init.lua`
 requires the default set; the user's `~/.config/ttymap/init.lua` may
@@ -38,10 +38,10 @@ ttymap-tui/src/lua/
   mod.rs           LuaSubsystem + merged build_subsystem (creates
                    the VM, installs API surface, runs the init.lua
                    chain — single entry point, no separate walker)
-  vm.rs            new_lua + install_builtin_searcher (libs in
-                   `lua/`); `<layer>/plugin/...` resolution lives
-                   in the Lua-side `ttymap.plugin_searcher` lib,
-                   not in Rust
+  vm.rs            new_lua + install_builtin_searcher (any
+                   `<layer>/lua/<dot.path>.lua`, including
+                   `plugin.<name>`) — standard `package.path`,
+                   no custom plugin searcher
   tick.rs          dispatch_tick(bus, map) — per-frame fan-out of
                    the "tick" bucket on the host EventBus
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
@@ -50,7 +50,7 @@ ttymap-tui/src/lua/
                    the snap-only thin path
   handle.rs        LuaHandle — shared host plumbing (drain_ops, tick,
                    notify_*) the App calls into
-  registrar.rs     PluginRegistry — live registry of activations +
+  registrar.rs     LuaRegistry — live registry of activations +
                    palette entries; `register_*` calls push directly
                    here, Lua handles `:remove()` drop entries by ID
   map_api.rs       host-side MapApi struct (per-frame draw surface,
@@ -285,7 +285,7 @@ the plugin reads it via `require`, and `init.lua` mutates it via
 -- runtime/lua/ttymap/export.lua  (config holder)
 return { dir = nil }   -- nil → built-in default
 
--- runtime/plugin/export.lua  (plugin reads it)
+-- runtime/lua/plugin/export.lua  (plugin reads it)
 local cfg = require "ttymap.export"
 local function destination()
     return cfg.dir or os.getenv("PWD") or "."
@@ -360,42 +360,43 @@ Layer 2 path is the maintainer's home dir baked at compile time; on a
 user machine it doesn't exist and is filtered out, so user > bundled
 in production.
 
-The plugin-aware `package.searchers` entry is installed by the
-Lua lib `ttymap.plugin_searcher`
-(`runtime/lua/ttymap/plugin_searcher.lua`); the bundled
-`runtime/init.lua` calls `.install()` once before any plugin
-`require`. The searcher walks `ttymap.runtime_path` (a list Rust
-populates with the resolved layers) on every require, finds the
-file at `<layer>/plugin/<rel>.lua` or `<layer>/plugin/<rel>/init.lua`
-(first hit wins, user > bundled by runtime-path priority), and runs
-it as a plain `load(source)()` chunk. Whatever `register_*` calls
-the chunk makes push directly into the live registry — there is no
-Rust-side attribution wrap, no per-plugin slot, no notion of
-plugin identity on the host side.
+Plugins resolve as **plain Lua modules** under
+`<layer>/lua/plugin/<name>.lua` (or
+`<layer>/lua/plugin/<name>/init.lua`). They share the same
+`package.path` mechanism as any other lib — bundled `runtime/init.lua`
+activates each by name with `require "plugin.<name>"`. There is no
+custom searcher, no host-side plugin attribution: the chunk runs
+once, `register_*` calls inside push directly into the live
+registry, and Lua's `package.loaded` cache makes a duplicate
+`require` from user init.lua a no-op.
 
-The Rust side knows neither the `plugin/` directory layout nor the
-searcher logic — it only owns the `ttymap.runtime_path` primitive.
+The Rust side knows neither the `plugin/` directory convention nor
+the searcher logic — it only owns the `ttymap.runtime_path`
+primitive (used to extend `package.path` for every layer).
 `package.path` carries `<layer>/lua/` only.
 
-### `plugin/` vs `lua/`
+### `lua/plugin/` vs `lua/ttymap/`
 
-- `<layer>/plugin/<name>.lua` or `<layer>/plugin/<name>/init.lua` —
-  a plugin entry. `require "<name>"` from init.lua hits the
-  plugin searcher and runs the chunk; `ttymap.register_*` calls
-  inside push directly into the live registry. Internal sub-modules
-  under `<layer>/plugin/<name>/...` are resolved by the same
-  searcher; the `name.lua` / `name/init.lua` precedence is identical
-  for both top-level and sub-module requires.
-- `<layer>/lua/<dot.path>.lua` — `require`'d shared libs only
-  (e.g. `ttymap.fmt`). Resolved via `package.path` (and the lib
-  searcher fallback).
+- `<layer>/lua/plugin/<name>.lua` or
+  `<layer>/lua/plugin/<name>/init.lua` — a plugin: a `.lua` file
+  whose top level calls `register_palette_command` /
+  `register_keybind` / `on_event` to add itself to the runtime.
+  `require "plugin.<name>"` from init.lua activates it. Sub-modules
+  resolve as `require "plugin.<name>.<sub>"`.
+- `<layer>/lua/ttymap/<name>.lua` — a lib: a `.lua` file that
+  returns a module table for callers to use (`ttymap.fmt`,
+  `ttymap.notify`, `ttymap.user_config`). No `register_*` side
+  effects.
+
+Both are reachable from the same `package.path` — the convention
+is purely organisational. A "plugin" can be moved under `ttymap/`
+to be a lib (or vice versa) without any host-side changes.
 
 ### `make install`
 
-Runs `cargo install --path .`, then copies `runtime/plugin/`,
-`runtime/lua/`, and `runtime/init.lua` under
-`~/.local/share/ttymap/`. `cargo install` alone fails fast with a
-"did you make install?" message.
+Runs `cargo install --path .`, then copies `runtime/lua/` and
+`runtime/init.lua` under `~/.local/share/ttymap/`. `cargo install`
+alone fails fast with a "did you make install?" message.
 
 ## Config (`init.lua` chain) — also the plugin entry point
 
@@ -452,7 +453,7 @@ set `$TTYMAP_RUNTIME` to your own runtime layer with its own
 
 Errors at any layer are logged + recovered; the host keeps booting.
 
-## Bundled plugins (`runtime/plugin/`)
+## Bundled plugins (`runtime/lua/plugin/`)
 
 16 total, all `require`-d from `runtime/init.lua`. Each plugin is a
 reference implementation of one shape —
@@ -544,17 +545,17 @@ top-to-bottom procedural Lua, no hand-written state machine.
 ## User plugins
 
 Drop a `*.lua` file (or a `<plugin>/init.lua` directory) into
-`~/.config/ttymap/plugin/`, then add `require "<plugin>"` to
+`~/.config/ttymap/lua/plugin/`, then add `require "<plugin>"` to
 `~/.config/ttymap/init.lua` to activate it. Auto-discovery was
 removed — the require makes activation explicit and gives you
-control over load order. `~/.config/ttymap/plugin/` files without
+control over load order. `~/.config/ttymap/lua/plugin/` files without
 a corresponding require are silently ignored; the bootstrap logs
 a one-shot warning to point that out.
 
 The directory layout lets a large plugin spread its source across
 `<plugin>/init.lua` + sibling files (`<plugin>/state.lua`, etc.)
 reachable via `require "<plugin>.state"`. The plugin searcher
-resolves both top-level and dotted names against `<layer>/plugin/`;
+resolves both top-level and dotted names against `<layer>/lua/plugin/`;
 top-level wraps with attribution, dotted is a plain chunk.
 
 ## Footer hints

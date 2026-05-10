@@ -67,7 +67,7 @@ Top-level namespaces:
 
 The binary builds an ordered list of runtime layers (Neovim-style
 runtimepath). Higher layers shadow lower ones — drop a
-`~/.config/ttymap/plugin/wiki.lua` to replace bundled `wiki`.
+`~/.config/ttymap/lua/plugin/wiki.lua` to replace bundled `wiki`.
 
 1. `$TTYMAP_RUNTIME` — env override (escape hatch for hackers / CI / multiple checkouts)
 2. `$CARGO_MANIFEST_DIR/runtime` — `cargo run` from a git checkout (dev wins over stale install)
@@ -76,7 +76,7 @@ runtimepath). Higher layers shadow lower ones — drop a
 
 A layer counts only when it has a `plugin/` or `lua/` subdirectory.
 The user-tier is empty by default; you opt in by creating
-`~/.config/ttymap/plugin/` (require-able plugin modules — activate
+`~/.config/ttymap/lua/plugin/` (require-able plugin modules — activate
 by adding a `require "<name>"` to your init.lua) or
 `~/.config/ttymap/lua/` (`require`'d shared libs).
 
@@ -85,7 +85,7 @@ by adding a `require "<name>"` to your init.lua) or
 | Path | Content |
 |------|---------|
 | `~/.config/ttymap/init.lua` | Configuration |
-| `~/.config/ttymap/plugin/` | User Lua plugins (`*.lua` or `<name>/init.lua`); activate via `require "<name>"` in init.lua |
+| `~/.config/ttymap/lua/plugin/` | User Lua plugins (`*.lua` or `<name>/init.lua`); activate via `require "<name>"` in init.lua |
 | `~/.config/ttymap/lua/` | User shared libs / overrides for bundled `lua/` scripts |
 | `~/.local/share/ttymap/plugin/` | Bundled Lua plugins (placed by `make install`) |
 | `~/.local/share/ttymap/lua/ttymap/` | Bundled shared libs (`fmt`, `sidebar`) |

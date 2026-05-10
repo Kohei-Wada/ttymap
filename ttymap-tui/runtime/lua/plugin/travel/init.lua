@@ -29,7 +29,7 @@
 
 local sidebar   = require("ttymap.sidebar")
 local director  = require("ttymap.director")
-local countries = require("travel.routes")
+local countries = require("plugin.travel.routes")
 
 -- Flatten the per-country tables into a single list of routes,
 -- annotating each with the country name so the sidebar can show

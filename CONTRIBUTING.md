@@ -22,13 +22,13 @@ the roadmap — even if you don't plan to implement it yourself.
 - **File an issue** — anything goes. Bug reports, "is this
   intentional?", "would you take a PR for X?", plugin proposals.
 - **Write a plugin** — fastest way to extend ttymap without touching
-  Rust. Drop a `*.lua` into `~/.config/ttymap/plugin/` to test
+  Rust. Drop a `*.lua` into `~/.config/ttymap/lua/plugin/` to test
   without rebuilding. See
   [docs/lua-architecture.md](docs/lua-architecture.md). Reference
   plugins:
-  - Simplest fetch+render: `runtime/plugin/quake.lua`
-  - Full panel + selection + modal: `runtime/plugin/wiki/`
-  - Debounced palette picker: `runtime/plugin/search/`
+  - Simplest fetch+render: `runtime/lua/plugin/quake.lua`
+  - Full panel + selection + modal: `runtime/lua/plugin/wiki/`
+  - Debounced palette picker: `runtime/lua/plugin/search/`
 - **Add a feature to core** — open an issue first to sanity-check it
   isn't plugin material. Core stays lean (see the Roadmap section
   in [README.md](README.md)).

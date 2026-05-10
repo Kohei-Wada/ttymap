@@ -5,8 +5,8 @@
 -- OpenSky REST client lives in `aircraft.opensky`; the formatting +
 -- marker helpers live in `aircraft.display`.
 
-local opensky = require("aircraft.opensky")
-local display = require("aircraft.display")
+local opensky = require("plugin.aircraft.opensky")
+local display = require("plugin.aircraft.display")
 local sidebar = require("ttymap.sidebar")
 local anim    = require("ttymap.animation")
 

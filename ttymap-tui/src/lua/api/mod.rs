@@ -220,11 +220,12 @@ pub fn install(
 
     // ── ttymap.runtime_path ──────────────────────────────────────────
     //
-    // The resolved runtime layer list as a 1-indexed Lua array. The
-    // bundled `ttymap.plugin_searcher` Lua lib reads this to walk
-    // `<layer>/plugin/...` for plugin require resolution. Rust never
-    // names the `plugin/` subdirectory itself — that string lives
-    // entirely in the Lua searcher.
+    // The resolved runtime layer list as a 1-indexed Lua array.
+    // Mostly informational on the Lua side today (vm::new_lua
+    // already prepends `<layer>/lua/` to package.path for every
+    // layer); kept exposed so future Lua libs that need to walk
+    // the layer list (alternate searchers, lazy-loaders, etc.)
+    // have it available without a Rust round-trip.
     let layers: Vec<String> = crate::lua::runtime_path()
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
