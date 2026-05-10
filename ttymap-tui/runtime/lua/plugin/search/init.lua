@@ -14,7 +14,7 @@
 -- The Nominatim REST client (URL builder + result parser) lives in
 -- `search.nominatim`.
 
-local nominatim = require("search.nominatim")
+local nominatim = require("plugin.search.nominatim")
 local anim = require("ttymap.animation")
 
 local state = {

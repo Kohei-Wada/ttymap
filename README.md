@@ -30,7 +30,7 @@ Tokyo zoomed in with the wiki panel open:
 - **Map core** — MVT decoding, Mercator projection, Braille rendering at 2×4 sub-pixels per cell, ANSI 256-color, per-feature spatial indexing (R-tree). The original `mapscii`-style terminal viewer is here as one component.
 - **Vim-style navigation** — `hjkl` pan, `b`/`w` fast pan, `C-u`/`C-d` half-screen pan, `a`/`z` zoom, `gg` world view, `0` reset, mouse drag + scroll.
 - **Command palette** — `:` for actions, `/` for Nominatim location search.
-- **Lua plugin runtime** — every in-tree feature is a Lua script under `runtime/plugin/`; user plugins go in `~/.config/ttymap/plugin/` (Neovim-style stem-dedup).
+- **Lua plugin runtime** — every in-tree feature is a Lua script under `runtime/lua/plugin/`; user plugins go in `~/.config/ttymap/lua/plugin/` (Neovim-style stem-dedup).
 - **Lua-based config** — `~/.config/ttymap/init.lua`, with conditional / computed values (the killer feature over TOML).
 - **Scriptable scenes** — `ttymap.animation.fly_to` (frame-based pan/zoom) + `ttymap.director` (coroutine scheduler with `fly` / `wait` / `tween` primitives). Plugins can choreograph multi-step camera + overlay sequences as procedural Lua.
 - **Headless snapshot** — `ttymap snap …` writes the current view as ANSI text for dashboards / cron / pipes.
@@ -58,7 +58,7 @@ Tokyo zoomed in with the wiki panel open:
 | `travel` | Curated multi-country itineraries (Japan + Italy out of the box) with an animated tour: pre-overview → stop loop → post-overview, driven by `ttymap.director`. |
 | `wiki` | Wikipedia geosearch — markers + side panel of nearby articles; Enter opens an extract paragraph. |
 
-Each lives as a single `*.lua` (or directory with `init.lua`) under [`ttymap-tui/runtime/plugin/`](ttymap-tui/runtime/plugin/) — readable as a tutorial for writing your own.
+Each lives as a single `*.lua` (or directory with `init.lua`) under [`ttymap-tui/runtime/lua/plugin/`](ttymap-tui/runtime/lua/plugin/) — readable as a tutorial for writing your own.
 
 ## Scriptable scenes
 

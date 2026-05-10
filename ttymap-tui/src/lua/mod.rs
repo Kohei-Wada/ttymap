@@ -68,7 +68,7 @@ pub struct LuaSubsystem {
 
 /// Build the Lua plugin subsystem: create the shared VM, install
 /// the API surface, run the init.lua chain (which `require`s every
-/// bundled plugin via the plugin-aware `package.searchers` entry,
+/// bundled plugin as `plugin.<name>` via standard `package.path`,
 /// and lets the user's `~/.config/ttymap/init.lua` add or override),
 /// then return the populated subsystem alongside the parsed
 /// [`Config`] and [`KeybindingOverrides`].
@@ -81,17 +81,17 @@ pub struct LuaSubsystem {
 ///
 /// 1. Build registry / shared / ops / bus.
 /// 2. `vm::new_lua()` — fresh VM with the lib searcher + extended
-///    `package.path` for runtime layers.
+///    `package.path` for runtime layers (covers both libs and
+///    `plugin.<name>` modules under `<layer>/lua/`).
 /// 3. Install the `ttymap` global's pre-pass surface (`opt`,
 ///    `keymap`) so init.lua can mutate config defaults.
 /// 4. `api::install` — extends `ttymap` with the runtime API
 ///    (`register_*`, `on_event`, `http`, `map`, …). Plugins need
 ///    these *during* their require, so this MUST run before init.lua.
-/// 5. Run the init.lua chain (system → user). The system init.lua
-///    `require`s `ttymap.plugin_searcher` to install the plugin-aware
-///    searcher itself. All plugin requires fire here; each
-///    `register_*` call inside a plugin chunk pushes directly into
-///    the live registry / bus.
+/// 5. Run the init.lua chain (system → user). All `require
+///    "plugin.<name>"` calls fire here; each `register_*` call
+///    inside a plugin chunk pushes directly into the live registry
+///    / bus.
 /// 6. `read_back` parses `ttymap.opt.*` into `Config`; clone
 ///    `KeybindingOverrides` from the keymap-state cell.
 /// 7. Build the live `KeyMap` from overrides, fold its rows into
@@ -159,16 +159,12 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         }
     };
 
-    // Run the bundled init.lua. It installs the plugin-aware
-    // `package.searchers` entry itself via
-    // `require("ttymap.plugin_searcher").install()` (a Lua-side
-    // lib that walks the `ttymap.runtime_path` primitive
-    // `api::install` exposed and runs each plugin chunk as a
-    // plain `load(source)()`), then pulls in user config via
-    // `require("ttymap.user_config").load()`. Both the
-    // user-config path and the plugin-directory layout live
-    // entirely on the Lua side — Rust knows neither. Errors are
-    // logged + recovered.
+    // Run the bundled init.lua. It `require`s every bundled
+    // plugin as `plugin.<name>` (resolves via the prepended
+    // `package.path`), then pulls in user config via
+    // `require("ttymap.user_config").load()`. The user-config
+    // path lives entirely on the Lua side — Rust never names it.
+    // Errors are logged + recovered.
     init_lua::run_system_init_lua(&lua);
 
     // Read `ttymap.opt.*` mutations back into `Config`. Type errors
@@ -281,19 +277,16 @@ mod tests {
         (lua, registry, bus)
     }
 
-    /// Build a Lua VM with the plugin-aware searcher pointed at a
-    /// custom runtime layer. Returns `(lua, registry, shared, bus)`
-    /// so tests can drive `lua.load(r#"require '<name>'"#).exec()`
-    /// and assert what landed in the registry / shared snapshot.
+    /// Build a Lua VM with `package.path` extended for a custom
+    /// runtime layer. Returns `(lua, registry, shared, bus)` so tests
+    /// can drive `lua.load(r#"require 'plugin.<name>'"#).exec()` and
+    /// assert what landed in the registry / shared snapshot.
     ///
-    /// The plugin searcher itself is the Lua-side
-    /// `ttymap.plugin_searcher` lib (resolved through the lib
-    /// searcher reading the global runtime path — set by
-    /// `ensure_runtime_path_for_tests` to the in-repo `runtime/`).
-    /// The test layer overrides `ttymap.runtime_path` so the
-    /// searcher walks the test's temp directory instead of the
-    /// global.
-    fn fresh_pluginsearcher_state(
+    /// Plugins resolve as standard Lua modules under
+    /// `<layer>/lua/plugin/<name>.lua` via the prepended
+    /// `package.path` — there is no custom searcher, no host-side
+    /// plugin attribution.
+    fn fresh_lua_layer_state(
         layer: &Path,
     ) -> (
         mlua::Lua,
@@ -303,8 +296,9 @@ mod tests {
     ) {
         runtimepath::ensure_runtime_path_for_tests();
         let lua = new_lua();
-        // Extend package.path so lib requires (e.g. user plugins'
-        // own helper modules) resolve from the test layer too.
+        // Prepend the test layer's `lua/` to package.path so
+        // `require "plugin.<name>"` (and lib requires) resolve from
+        // the temp dir before the global runtime layers.
         vm::prepend_package_path(&lua, &layer.join("lua"));
         let shared = host::LuaHostShared::empty();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
@@ -318,23 +312,6 @@ mod tests {
         )
         .expect("install ttymap");
 
-        // Override `ttymap.runtime_path` so the Lua-side plugin
-        // searcher walks the test's temp layer, not the global
-        // runtime path that `api::install` populated.
-        let ttymap: mlua::Table = lua.globals().get("ttymap").expect("ttymap table");
-        let layers = lua
-            .create_sequence_from(vec![layer.to_string_lossy().into_owned()])
-            .expect("create runtime_path table");
-        ttymap
-            .set("runtime_path", layers)
-            .expect("override runtime_path");
-
-        // Install the Lua-side plugin searcher (resolved as a lib
-        // via the in-repo `runtime/lua/ttymap/plugin_searcher.lua`).
-        lua.load(r#"require("ttymap.plugin_searcher").install()"#)
-            .exec()
-            .expect("install Lua plugin searcher");
-
         (lua, registry, shared, bus)
     }
 
@@ -344,17 +321,17 @@ mod tests {
     fn temp_layer(unique: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ttymap-lua-test-{}", unique));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("plugin")).expect("mkdir plugin");
-        std::fs::create_dir_all(dir.join("lua")).expect("mkdir lua");
+        std::fs::create_dir_all(dir.join("lua").join("plugin")).expect("mkdir lua/plugin");
         dir
     }
 
     fn write_plugin(layer: &Path, file_name: &str, lua: &str) {
-        std::fs::write(layer.join("plugin").join(file_name), lua).expect("write plugin");
+        std::fs::write(layer.join("lua").join("plugin").join(file_name), lua)
+            .expect("write plugin");
     }
 
     fn write_plugin_dir(layer: &Path, name: &str, lua: &str) {
-        let dir = layer.join("plugin").join(name);
+        let dir = layer.join("lua").join("plugin").join(name);
         std::fs::create_dir_all(&dir).expect("mkdir plugin dir");
         std::fs::write(dir.join("init.lua"), lua).expect("write plugin init.lua");
     }
@@ -412,10 +389,10 @@ mod tests {
 
     #[test]
     fn require_pushes_palette_entry_into_registry() {
-        // `require "demo"` from init.lua-equivalent driver routes
-        // through the plugin searcher's wrapper which executes the
-        // chunk; the chunk's `register_*` calls push directly into
-        // the live registry.
+        // `require "plugin.demo"` from init.lua-equivalent driver
+        // executes the chunk via standard `package.path`; the
+        // chunk's `register_*` calls push directly into the live
+        // registry.
         let layer = temp_layer("require-pushes-entry");
         write_plugin(
             &layer,
@@ -427,8 +404,10 @@ mod tests {
             "#,
         );
 
-        let (lua, registry, shared, _bus) = fresh_pluginsearcher_state(&layer);
-        lua.load(r#"require "demo""#).exec().expect("require demo");
+        let (lua, registry, shared, _bus) = fresh_lua_layer_state(&layer);
+        lua.load(r#"require "plugin.demo""#)
+            .exec()
+            .expect("require plugin.demo");
 
         let labels: Vec<String> = registry
             .borrow()
@@ -453,9 +432,9 @@ mod tests {
 
     #[test]
     fn directory_plugin_is_required_via_init_lua() {
-        // `<layer>/plugin/wiki/init.lua` is the plugin entry; user
-        // does `require "wiki"`. Mirrors a directory-shaped bundled
-        // plugin (e.g. travel/, satellite/).
+        // `<layer>/lua/plugin/wiki/init.lua` is the plugin entry;
+        // user does `require "plugin.wiki"`. Mirrors a directory-
+        // shaped bundled plugin (e.g. travel/, satellite/).
         let layer = temp_layer("require-dir-plugin");
         write_plugin_dir(
             &layer,
@@ -463,10 +442,10 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
-        lua.load(r#"require "biggie""#)
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        lua.load(r#"require "plugin.biggie""#)
             .exec()
-            .expect("require biggie");
+            .expect("require plugin.biggie");
         let ls = labels(&registry);
         assert!(
             ls.iter().any(|l| l.contains("biggie")),
@@ -476,11 +455,12 @@ mod tests {
     }
 
     #[test]
-    fn lib_require_does_not_attribute_as_plugin() {
+    fn lib_require_does_not_register_anything() {
         // A lib at `lua/ttymap/foo.lua` is required via
-        // `require "ttymap.foo"`. Dotted name → plugin searcher
-        // skips. Resolves via package.path → loads as plain chunk.
-        // No registration happens (libs don't call register_*).
+        // `require "ttymap.foo"`. Resolves through package.path the
+        // same way a plugin require does — there is no special
+        // attribution path. The lib just returns a value; no
+        // `register_*` calls fire, so the registry stays empty.
         let layer = temp_layer("lib-require");
         std::fs::create_dir_all(layer.join("lua").join("ttymap")).expect("mkdir lua/ttymap");
         std::fs::write(
@@ -489,23 +469,22 @@ mod tests {
         )
         .expect("write lib");
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
         let v: i64 = lua
             .load(r#"return require("ttymap.foo").value"#)
             .eval()
             .expect("require ttymap.foo");
         assert_eq!(v, 42);
-        // Lib never goes through the plugin wrapper, so registry stays empty.
         assert_eq!(registry.borrow().palette_entry_count(), 0);
     }
 
     #[test]
     fn requiring_same_plugin_twice_only_fires_once() {
         // Lua's `package.loaded` cache: after the first require runs
-        // the plugin wrapper, subsequent `require "demo"` calls return
-        // the cached value (true, since wrapper returns nil) without
-        // re-executing the wrapper. So system + user init.lua both
-        // doing `require "demo"` register exactly one entry.
+        // the chunk, subsequent `require "plugin.demo"` calls return
+        // the cached value without re-executing. So system + user
+        // init.lua both doing the same require register exactly
+        // one entry.
         let layer = temp_layer("dedup");
         write_plugin(
             &layer,
@@ -513,8 +492,8 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "demo", invoke = function() return true end })"#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
-        lua.load(r#"require "demo"; require "demo""#)
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        lua.load(r#"require "plugin.demo"; require "plugin.demo""#)
             .exec()
             .expect("double require");
 
@@ -526,14 +505,15 @@ mod tests {
     }
 
     #[test]
-    fn submodule_require_skips_plugin_wrap() {
-        // `require "travel.routes.italy"` from inside a plugin must
-        // resolve as a plain chunk via package.path's
-        // `<layer>/plugin/?.lua` — NOT through the plugin wrapper.
-        // The submodule returns a value used by the parent plugin's
+    fn submodule_require_resolves_as_plain_module() {
+        // `require "plugin.travel.routes.italy"` from inside the
+        // travel plugin's init.lua resolves through package.path
+        // the same way the top-level `require "plugin.travel"`
+        // does — both are just Lua module requires now. The
+        // submodule returns a value used by the parent plugin's
         // `register_palette_command` call.
         let layer = temp_layer("submodule");
-        let travel_dir = layer.join("plugin").join("travel");
+        let travel_dir = layer.join("lua").join("plugin").join("travel");
         std::fs::create_dir_all(travel_dir.join("routes")).expect("mkdir routes");
         std::fs::write(
             travel_dir.join("routes").join("italy.lua"),
@@ -543,7 +523,7 @@ mod tests {
         std::fs::write(
             travel_dir.join("init.lua"),
             r#"
-            local italy = require "travel.routes.italy"
+            local italy = require "plugin.travel.routes.italy"
             ttymap.register_palette_command({
                 label = italy.city,
                 invoke = function() return true end,
@@ -552,19 +532,18 @@ mod tests {
         )
         .expect("write travel/init.lua");
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
-        lua.load(r#"require "travel""#)
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        lua.load(r#"require "plugin.travel""#)
             .exec()
-            .expect("require travel");
+            .expect("require plugin.travel");
         let labels: Vec<String> = registry
             .borrow()
             .palette_entries()
             .iter()
             .map(|(_, e)| e.label.clone())
             .collect();
-        // Exactly one palette entry — the submodule returned a value
-        // (not a plugin in its own right) and the parent's
-        // `register_palette_command` call used it as the label.
+        // Exactly one palette entry — the submodule returned a
+        // value, parent registered with that value as label.
         assert_eq!(labels, vec!["Rome"]);
     }
 
@@ -661,7 +640,7 @@ mod tests {
             "#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
         // init.lua-style pre-pass: mutate the lib's table BEFORE the
         // plugin requires it. Lua's module cache makes the plugin's
         // `require "ttymap.myplug"` return the same table.
@@ -670,9 +649,9 @@ mod tests {
             .expect("init pre-pass");
         // Now activate the plugin; it should pick up the mutated
         // label.
-        lua.load(r#"require "myplug""#)
+        lua.load(r#"require "plugin.myplug""#)
             .exec()
-            .expect("require myplug");
+            .expect("require plugin.myplug");
 
         let labels: Vec<String> = registry
             .borrow()
@@ -732,11 +711,9 @@ mod tests {
     /// Driver test for the Lua-driven user-config flow: bundled
     /// `runtime/init.lua` runs the bundled plugin set FIRST, then
     /// pulls in user config LAST via
-    /// `require("ttymap.user_config").load()`. User init.lua should
-    /// activate user plugins via `require` (same path as bundled —
-    /// the searcher wrapper drains the slot per plugin); calling
-    /// `register_*` directly from init.lua isn't supported because
-    /// nothing drains the slot for the bare init chunk.
+    /// `require("ttymap.user_config").load()`. User init.lua
+    /// activates user plugins via `require "plugin.<name>"` (same
+    /// path as bundled — both go through `package.path`).
     ///
     /// Stubs `ttymap.user_config` via `package.preload` so the test
     /// doesn't have to mutate the real `~/.config/ttymap/init.lua`
@@ -751,7 +728,8 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
         );
         // "User" plugin (lives in the same layer for the test;
-        // production would put this under `~/.config/ttymap/plugin/`).
+        // production would put this under
+        // `~/.config/ttymap/lua/plugin/`).
         write_plugin(
             &layer,
             "user_beta.lua",
@@ -762,13 +740,13 @@ mod tests {
         std::fs::write(
             layer.join("init.lua"),
             r#"
-            require "alpha"
+            require "plugin.alpha"
             require("ttymap.user_config").load()
             "#,
         )
         .expect("write bundled init.lua");
 
-        let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
+        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
 
         // Stub `ttymap.user_config.load()`: simulates a user
         // init.lua. At the point it runs, the bundled plugin's
@@ -780,8 +758,8 @@ mod tests {
                 return {
                     load = function()
                         _G.bundled_loaded_at_user_time =
-                            package.loaded.alpha and 1 or 0
-                        require "user_beta"
+                            package.loaded["plugin.alpha"] and 1 or 0
+                        require "plugin.user_beta"
                     end,
                 }
             end

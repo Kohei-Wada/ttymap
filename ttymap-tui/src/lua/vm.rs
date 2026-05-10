@@ -16,13 +16,13 @@
 //!   each layer's `lua/` to `package.path` so the stdlib
 //!   `package.path` searcher resolves the same lib paths.
 //!
-//! This module does **not** know about the `<layer>/plugin/` tree.
-//! Plugin resolution lives in a Lua lib
-//! (`runtime/lua/ttymap/plugin_searcher.lua`), which the bundled
-//! `runtime/init.lua` installs early via `require`. Rust exposes
-//! one primitive the Lua searcher needs (`ttymap.runtime_path`) —
-//! see `crate::lua::api::install`. The chunk itself runs as a
-//! plain `load(source)()`; "plugin" identity exists only in Lua.
+//! Plugins resolve as **plain Lua modules** under
+//! `<layer>/lua/plugin/<name>.lua` — same `package.path` mechanism
+//! as any other lib (`ttymap.fmt`, `ttymap.notify`, …). The
+//! bundled `runtime/init.lua` activates each by name with
+//! `require "plugin.<name>"`. There is no special plugin searcher;
+//! "plugin" is just a Lua-side organisational unit (a `.lua` file
+//! that calls `register_*`).
 
 use std::path::Path;
 
@@ -43,10 +43,9 @@ use crate::lua::runtime_path;
 ///    so the stdlib `package.path` searcher resolves the same lib
 ///    paths.
 ///
-/// `<layer>/plugin/...` is **not** added to `package.path` and
-/// nothing in this file knows about it — that tree is Lua's
-/// concern, owned by the `ttymap.plugin_searcher` lib that
-/// bundled `runtime/init.lua` installs.
+/// `<layer>/lua/plugin/<name>.lua` resolves via the same
+/// `package.path` mechanism as any other lib — `require
+/// "plugin.<name>"` from `runtime/init.lua` Just Works.
 pub fn new_lua() -> Lua {
     let lua = Lua::new();
     if let Err(e) = install_builtin_searcher(&lua) {

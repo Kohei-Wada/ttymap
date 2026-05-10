@@ -121,11 +121,11 @@ pub fn ensure_runtime_path_for_tests() {
 }
 
 /// `true` iff `dir` exists. The layer's internal layout
-/// (`plugin/` vs `lua/` etc.) is not Rust's concern — Lua-side
-/// libs (`ttymap.plugin_searcher`, `ttymap.user_config`) decide
-/// what to look for under each layer. The manifest path baked at
-/// compile time naturally filters out on user machines because
-/// it doesn't exist there.
+/// (`lua/`, `lua/plugin/`, etc.) is not Rust's concern — bundled
+/// `runtime/init.lua` and user `init.lua` decide what to
+/// `require` under each layer. The manifest path baked at compile
+/// time naturally filters out on user machines because it
+/// doesn't exist there.
 fn is_valid(dir: &Path) -> bool {
     dir.is_dir()
 }

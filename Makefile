@@ -1,16 +1,18 @@
 # ttymap install layout (XDG, nvim-style):
 #
 #   ~/.cargo/bin/ttymap                     — the binary (cargo install)
-#   ~/.local/share/ttymap/plugin/           — bundled auto-discovered plugins
-#   ~/.local/share/ttymap/lua/              — bundled require'able lib scripts
+#   ~/.local/share/ttymap/lua/              — bundled libs + plugins
+#                                             (`plugin/<name>.lua` and
+#                                             `ttymap/<name>.lua` both
+#                                             live here, resolved via
+#                                             standard `package.path`)
 #
 # Single-user, no root. `/etc/ttymap` and `/usr/local/share/ttymap`
 # layouts are intentionally unsupported — ttymap is a per-user TUI,
 # system-wide installs aren't worth the path-juggling.
 #
 # `cargo install` alone places only the binary; the binary fails
-# fast when it can't find any runtime layer (none of `plugin/` or
-# `lua/` exist on disk).
+# fast when it can't find any runtime layer (no `lua/` on disk).
 
 XDG_DATA_HOME ?= $(HOME)/.local/share
 DATA_DIR      := $(XDG_DATA_HOME)/ttymap
@@ -26,7 +28,7 @@ help:
 	@echo 'Targets:'
 	@echo '  install          cargo install + place runtime under $$XDG_DATA_HOME/ttymap/'
 	@echo '  install-bin      cargo install only (binary → ~/.cargo/bin/ttymap)'
-	@echo '  install-runtime  place runtime only (plugin/ + lua/ under ~/.local/share/ttymap/)'
+	@echo '  install-runtime  place runtime only (lua/ + init.lua under ~/.local/share/ttymap/)'
 	@echo '  uninstall        remove binary and runtime'
 	@echo '  clean            cargo clean'
 	@echo '  help             show this message'
@@ -44,14 +46,15 @@ install-bin:
 	cargo install --path ttymap-tui --force
 
 install-runtime:
-	# Wipe + re-create both tiers so files removed from runtime/
+	# Wipe + re-create the lua/ tree so files removed from runtime/
 	# (e.g. a bundled plugin merged into a multi-entry pack) don't
 	# linger and get re-registered as duplicate palette entries on
-	# the next run. Safe — both target dirs are exclusively for
+	# the next run. Safe — the target dir is exclusively for
 	# bundled scripts; user overrides live under XDG_CONFIG_HOME/ttymap.
+	# Also wipe a stale `plugin/` from previous installs (pre-#NNN
+	# layout had `plugin/` as a sibling of `lua/`).
 	rm -rf $(DATA_DIR)/plugin $(DATA_DIR)/lua
-	mkdir -p $(DATA_DIR)/plugin $(DATA_DIR)/lua
-	cp -r ttymap-tui/runtime/plugin/. $(DATA_DIR)/plugin/
+	mkdir -p $(DATA_DIR)/lua
 	cp -r ttymap-tui/runtime/lua/. $(DATA_DIR)/lua/
 	cp ttymap-tui/runtime/init.lua $(DATA_DIR)/init.lua
 
