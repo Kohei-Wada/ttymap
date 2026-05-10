@@ -1,9 +1,9 @@
-//! `PluginRegistry` — live home for plugin-declared activations and
+//! `LuaRegistry` — live home for Lua-registered activations and
 //! palette entries.
 //!
 //! Lua scripts call `ttymap.register_keybind(key, fn)` /
 //! `ttymap.register_palette_command(spec)` and each call pushes
-//! directly into [`PluginRegistry`] paired with a monotonic handle
+//! directly into [`LuaRegistry`] paired with a monotonic handle
 //! ID. The Lua-facing handle (`KeybindHandle` / `PaletteCommandHandle`)
 //! exposes `:remove()` which finds and drops the entry by that ID.
 //! The host has no notion of "plugin" — that's purely a Lua-side
@@ -18,7 +18,7 @@
 //! - `PaletteCommandHandle:remove()` / `KeybindHandle:remove()` from
 //!   Lua mutably borrow it to drop the matching entry by ID
 //!
-//! `PluginRegistry` stays alive for the program's lifetime, owned
+//! `LuaRegistry` stays alive for the program's lifetime, owned
 //! jointly through `Rc` clones by every consumer.
 //!
 //! Lives in `lua/` rather than `compositor/` because it's purely the
@@ -31,29 +31,29 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::compositor::{Activation, PaletteEntry};
 
-/// Live registry of plugin-supplied activations + palette entries.
+/// Live registry of Lua-registered activations + palette entries.
 /// Each entry is paired with the handle ID Lua holds, so a
 /// `:remove()` from Lua can find and drop the exact entry.
 ///
-/// Order is registration order (a `Vec<(id, T)>`), mirroring the
-/// loader's iteration order over capture specs. Removal is `retain`
-/// — `O(n)` linear, but the entry counts top out at the
-/// total-plugin-count plus a handful per plugin in practice.
+/// Order is registration order (a `Vec<(id, T)>`). Removal is
+/// `retain` — `O(n)` linear, but the entry counts stay small in
+/// practice (a handful of registrations per script across the
+/// whole program lifetime).
 #[derive(Default)]
-pub struct PluginRegistry {
+pub struct LuaRegistry {
     activations: Vec<(u64, Activation)>,
     palette_entries: Vec<(u64, PaletteEntry)>,
 }
 
-/// Cheap-clone shared owner of a [`PluginRegistry`]. Cloned into
+/// Cheap-clone shared owner of a [`LuaRegistry`]. Cloned into
 /// every consumer that needs to read or mutate the registry.
-pub type PluginRegistryHandle = Rc<RefCell<PluginRegistry>>;
+pub type LuaRegistryHandle = Rc<RefCell<LuaRegistry>>;
 
-pub fn new_plugin_registry() -> PluginRegistryHandle {
-    Rc::new(RefCell::new(PluginRegistry::default()))
+pub fn new_lua_registry() -> LuaRegistryHandle {
+    Rc::new(RefCell::new(LuaRegistry::default()))
 }
 
-impl PluginRegistry {
+impl LuaRegistry {
     pub fn add_activation(&mut self, id: u64, a: Activation) {
         self.activations.push((id, a));
     }
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn add_then_remove_activation_round_trip() {
-        let mut r = PluginRegistry::default();
+        let mut r = LuaRegistry::default();
         r.add_activation(7, fake_activation('a'));
         r.add_activation(8, fake_activation('b'));
         assert_eq!(r.activation_count(), 2);
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn add_then_remove_palette_entry_round_trip() {
-        let mut r = PluginRegistry::default();
+        let mut r = LuaRegistry::default();
         r.add_palette_entry(11, fake_palette_entry("alpha"));
         r.add_palette_entry(12, fake_palette_entry("beta"));
         assert_eq!(r.palette_entry_count(), 2);
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn palette_entries_iter_preserves_registration_order() {
-        let mut r = PluginRegistry::default();
+        let mut r = LuaRegistry::default();
         r.add_palette_entry(1, fake_palette_entry("first"));
         r.add_palette_entry(2, fake_palette_entry("second"));
         r.add_palette_entry(3, fake_palette_entry("third"));

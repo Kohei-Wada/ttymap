@@ -31,7 +31,7 @@ use super::window::{RenderWindow, Window};
 use super::{Activation, Component, SpawnComponent};
 use crate::UserCommand;
 use crate::input::keymap::KeyMap;
-use crate::lua::PluginRegistryHandle;
+use crate::lua::LuaRegistryHandle;
 use ttymap_engine::map::MapAction;
 
 pub struct BaseLayer {
@@ -41,14 +41,14 @@ pub struct BaseLayer {
     /// pushed by [`crate::palette::install`]. Walked first on
     /// keypress, so a plugin can't accidentally shadow `:`.
     builtin_activations: Vec<Activation>,
-    /// Live registry of plugin-declared activations. Cloned from
+    /// Live registry of Lua-registered activations. Cloned from
     /// `LuaSubsystem` at startup. Keypress dispatch borrows it
-    /// per-event; plugin `:remove()` mutably borrows it from a
+    /// per-event; Lua `:remove()` mutably borrows it from a
     /// `KeybindHandle` to drop the matching entry.
-    registry: PluginRegistryHandle,
-    /// Plugin-supplied footer hints harvested at startup. Static
-    /// for the program lifetime — adding / removing entries does
-    /// not refresh this list.
+    registry: LuaRegistryHandle,
+    /// Lua-supplied footer hints harvested at startup. Static for
+    /// the program lifetime — adding / removing entries does not
+    /// refresh this list.
     footer_hints: Vec<(&'static str, &'static str)>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
     /// `KeyMap`) because multi-key sequencing is a base-layer
@@ -60,7 +60,7 @@ impl BaseLayer {
     pub fn new(
         keymap: KeyMap,
         builtin_activations: Vec<Activation>,
-        registry: PluginRegistryHandle,
+        registry: LuaRegistryHandle,
         footer_hints: Vec<(&'static str, &'static str)>,
     ) -> Self {
         Self {
@@ -183,7 +183,7 @@ mod tests {
         BaseLayer::new(
             KeyMap::default(),
             Vec::new(),
-            crate::lua::new_plugin_registry(),
+            crate::lua::new_lua_registry(),
             Vec::new(),
         )
     }
@@ -236,7 +236,7 @@ mod tests {
         use std::cell::Cell;
         use std::rc::Rc;
 
-        let registry = crate::lua::new_plugin_registry();
+        let registry = crate::lua::new_lua_registry();
         let fired = Rc::new(Cell::new(0_u32));
 
         struct DummyComponent;
