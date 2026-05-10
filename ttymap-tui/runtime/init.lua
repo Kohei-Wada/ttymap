@@ -74,6 +74,7 @@ require "plugin.quake"
 require "plugin.satellite"
 require "plugin.search"
 require "plugin.terminator"
+require "plugin.traceroute"
 require "plugin.travel"
 require "plugin.wiki"
 

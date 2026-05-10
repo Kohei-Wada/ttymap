@@ -55,6 +55,7 @@ Tokyo zoomed in with the wiki panel open:
 | `scalebar` | Bottom-right scale ruler that adapts to current zoom. |
 | `search` | Forward geocoding via Nominatim, palette-provider style with debounced input. |
 | `terminator` | Day/night boundary as a polyline; ☀ subsolar / ☾ antisolar markers; updates from the wall clock. |
+| `traceroute` | `r` → host prompt → animated polyline grows hop-by-hop along the route as `traceroute(8)` resolves each next-hop IP via ip-api.com; sidebar lists hops (Enter to fly to a router), per-hop colour gradient, consecutive `*` runs collapsed in the panel. |
 | `travel` | Curated multi-country itineraries (Japan + Italy out of the box) with an animated tour: pre-overview → stop loop → post-overview, driven by `ttymap.director`. |
 | `wiki` | Wikipedia geosearch — markers + side panel of nearby articles; Enter opens an extract paragraph. |
 
