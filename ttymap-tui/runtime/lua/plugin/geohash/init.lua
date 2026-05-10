@@ -1,16 +1,21 @@
 -- geohash — xkcd #426 daily-destination plugin.
 --
 -- Press `m` (or `:` palette → "Geohash today") to:
---   1. Read the current map center and snap to its 1°×1° graticule
+--   1. Resolve the user's real location via geoip (reusing
+--      `ttymap.here.endpoint`). The map center is unsuitable —
+--      right after a fresh launch it's the default seed (Berlin),
+--      not where the user actually is, and geohashing is a
+--      "physically go there" ritual.
+--   2. Snap to the 1°×1° graticule covering that location
 --      (truncate-toward-zero, NOT floor — see algorithm.graticule_of).
---   2. Fetch the day's DJIA opening from Crox's plain-text service
+--   3. Fetch the day's DJIA opening from Crox's plain-text service
 --      (cached aggressively — DJIA never changes once published).
 --      West of -30° longitude the 30W rule kicks in: use the
 --      previous calendar day's DJIA so participants don't have to
 --      wait until NYSE opens.
---   3. MD5 "YYYY-MM-DD-DDDDD.DD" and split the digest into two hex
+--   4. MD5 "YYYY-MM-DD-DDDDD.DD" and split the digest into two hex
 --      fractions → today's destination inside the graticule.
---   4. Drop a marker, fly the camera over, open a sidebar card with
+--   5. Drop a marker, fly the camera over, open a sidebar card with
 --      target / DJIA / distance-from-you readouts.
 --
 -- The marker stays drawn every frame as long as a result is held;
@@ -25,10 +30,11 @@
 -- to physically visit it (or as close as terrain / property lines
 -- allow).
 
-local algo    = require "plugin.geohash.algorithm"
-local config  = require "ttymap.geohash"
-local sidebar = require "ttymap.sidebar"
-local anim    = require "ttymap.animation"
+local algo        = require "plugin.geohash.algorithm"
+local config      = require "ttymap.geohash"
+local here_config = require "ttymap.here"
+local sidebar     = require "ttymap.sidebar"
+local anim        = require "ttymap.animation"
 
 ------------------------------------------------------------------
 -- Module-level state
@@ -39,9 +45,15 @@ local anim    = require "ttymap.animation"
 local current = nil  -- { date, djia_date, djia, lat_int, lon_int,
                      --   target_lat, target_lon, is_30w }
 
--- A fetch in flight (or nil). The on_tick callback drains the job's
--- response and promotes the resolved data into `current`.
-local pending = nil  -- { date, djia_date, lat_int, lon_int, is_30w, job }
+-- A request in flight (or nil). Geohashing needs two HTTP fetches
+-- in series: geoip (to find the user's real graticule — using the
+-- map center would give "geohash for Berlin" right after a fresh
+-- launch) and then DJIA (which needs to know the longitude first
+-- to apply the 30W rule). `phase` tracks where we are.
+local pending = nil  -- nil OR
+                     -- { phase = "geoip", date, geoip_job }
+                     -- { phase = "djia",  date, djia_date, lat_int,
+                     --   lon_int, is_30w, djia_job }
 
 local card_handle = nil
 local tick_handle = nil
@@ -89,9 +101,15 @@ end
 
 local function build_lines()
     if pending then
+        local sub
+        if pending.phase == "geoip" then
+            sub = "Locating you…"
+        else
+            sub = "Fetching DJIA " .. pending.djia_date .. "…"
+        end
         return {
-            { { text = "Geohash · " .. pending.date,                  style = "accent" } },
-            { { text = "Fetching DJIA " .. pending.djia_date .. "…", style = "muted"  } },
+            { { text = "Geohash · " .. pending.date, style = "accent" } },
+            { { text = sub,                          style = "muted"  } },
         }
     end
     if not current then
@@ -158,9 +176,53 @@ end
 -- lifetime is cheaper than juggling subscribe/unsubscribe.
 ------------------------------------------------------------------
 
+-- Phase 1 → 2 transition: geoip resolved, now we know the user's
+-- graticule and can decide the DJIA date (30W rule), so fire the
+-- DJIA fetch.
+local function transition_to_djia(lat, lon)
+    local lat_int = algo.graticule_of(lat)
+    local lon_int = algo.graticule_of(lon)
+    local date = pending.date
+    -- 30W rule: west of -30° longitude, midnight local time happens
+    -- before NYSE opens, so the day's DJIA isn't published yet.
+    -- Fall back to the previous calendar day. Crox handles weekend
+    -- / holiday rollback within its own response.
+    local djia_date, is_30w
+    if lon_int < -30 then
+        djia_date, is_30w = shift_day(date, -1), true
+    else
+        djia_date, is_30w = date, false
+    end
+    pending = {
+        phase     = "djia",
+        date      = date,
+        djia_date = djia_date,
+        lat_int   = lat_int,
+        lon_int   = lon_int,
+        is_30w    = is_30w,
+        djia_job  = ttymap.http:fetch_cached(
+            djia_url_for(djia_date), config.djia_ttl_s),
+    }
+end
+
 local function on_tick(map)
-    if pending and pending.job then
-        local body = pending.job:try_take()
+    if pending and pending.phase == "geoip" and pending.geoip_job then
+        local body = pending.geoip_job:try_take()
+        if body then
+            local p = ttymap.json:parse(body)
+            if p
+                and type(p.latitude) == "number"
+                and type(p.longitude) == "number" then
+                transition_to_djia(p.latitude, p.longitude)
+            else
+                ttymap.notify(
+                    "geohash: geoip response missing lat/lon",
+                    { level = "warn" })
+                pending = nil
+            end
+        end
+    elseif pending and pending.phase == "djia" and pending.djia_job then
+        local body = pending.djia_job:try_take()
         if body then
             local djia = parse_djia(body)
             if not djia then
@@ -207,32 +269,19 @@ local function compute_today()
         ttymap.notify("geohash: fetch already in flight")
         return
     end
-    local center_lon, center_lat = ttymap.map:center()
-    local lat_int = algo.graticule_of(center_lat)
-    local lon_int = algo.graticule_of(center_lon)
-    local date = today_str()
-
-    -- 30W rule: west of -30° longitude, midnight local time happens
-    -- before NYSE opens, so the day's DJIA isn't published yet.
-    -- Fall back to the previous calendar day's value. Crox's service
-    -- handles weekend / holiday rollback within its own response, so
-    -- one day back is enough here.
-    local djia_date, is_30w
-    if lon_int < -30 then
-        djia_date, is_30w = shift_day(date, -1), true
-    else
-        djia_date, is_30w = date, false
-    end
-
+    -- Phase 1: resolve the user's real location via geoip. Geohashing
+    -- is "physically go to this point" — the map center would give
+    -- the wrong graticule right after a fresh launch (default view
+    -- is Berlin, regardless of where the user actually is).
+    --
+    -- Reuses `ttymap.here.endpoint` so a single override applies to
+    -- both the `here` plugin and this one. Cached for 1h: the user's
+    -- network location doesn't change minute-to-minute, but we want
+    -- to refresh occasionally for travelling users.
     pending = {
-        date       = date,
-        djia_date  = djia_date,
-        lat_int    = lat_int,
-        lon_int    = lon_int,
-        is_30w     = is_30w,
-        job        = ttymap.http:fetch_cached(
-                        djia_url_for(djia_date),
-                        config.djia_ttl_s),
+        phase     = "geoip",
+        date      = today_str(),
+        geoip_job = ttymap.http:fetch_cached(here_config.endpoint, 3600),
     }
     if not card_handle then open_card() end
     if not tick_handle then
