@@ -37,7 +37,7 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for":
+16 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
 
 | Plugin | What it does |
 | --- | --- |
@@ -49,7 +49,6 @@ Tokyo zoomed in with the wiki panel open:
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
 | `info` | Top-right readouts: center, cursor, zoom, reverse-geocoded place name (Nominatim). |
-| `notify` | Top-left toast popup for every `ttymap.notify(...)` call from any plugin. |
 | `ping_simulation` | "Cyber-attack visualisation"-style growing lines pinging between cities — reference for animated polyline overlays. |
 | `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; colored markers + sidebar list, auto-jumps to the highest-magnitude event. |
 | `satellite` | Multi-sat tracker (ISS, Hubble, …) with TLE fetch from CelesTrak and SGP4 propagation in Lua. |

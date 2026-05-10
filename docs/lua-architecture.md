@@ -223,9 +223,14 @@ Called from inside callbacks (palette invoke, keybind, on_tick):
 
 `ttymap.notify(msg [, opts])` is a top-level function on the
 `ttymap` global (not under `ttymap.api`) — it enqueues a `notify`
-event on the host bus. The bundled `notify` plugin subscribes via
-`ttymap.on_event("notify", ...)` and renders recent entries
-top-left.
+event on the host bus. The bundled `ttymap.notify` lib
+(`runtime/lua/ttymap/notify.lua`, wired up by
+`runtime/init.lua`'s `require("ttymap.notify").setup()`) subscribes
+via `ttymap.on_event("notify", ...)` and renders recent entries
+top-left. Pass `setup({ ttl_s = …, ring_cap = …,
+max_text_width = … })` to override the renderer knobs; skipping
+the call disables the toast renderer entirely (the bus event still
+fires for any other subscriber).
 
 ### MapApi (per-frame drawing)
 
@@ -449,21 +454,26 @@ Errors at any layer are logged + recovered; the host keeps booting.
 
 ## Bundled plugins (`runtime/plugin/`)
 
-17 total, all `require`-d from `runtime/init.lua`. Each plugin is a
+16 total, all `require`-d from `runtime/init.lua`. Each plugin is a
 reference implementation of one shape —
 always-on chrome (`attribution`, `scalebar`, `help`), toggleable
 overlay (`center`, `here`, `ping_simulation`, `terminator`),
-toggleable side panel (`info`, `notify`, `aircraft`, `satellite`,
-`wiki`, `travel`), palette one-shot (`export`, `quake`), palette
-provider (`search`), or quick game (`geo_quiz`):
+toggleable side panel (`info`, `aircraft`, `satellite`, `wiki`,
+`travel`), palette one-shot (`export`, `quake`), palette provider
+(`search`), or quick game (`geo_quiz`):
 
 ```
 aircraft/        attribution.lua  center.lua         export.lua
 geo_quiz.lua     help.lua         here.lua           info.lua
-notify.lua       ping_simulation.lua  quake.lua      satellite/
-scalebar.lua     search/          terminator.lua    travel/
-wiki/
+ping_simulation.lua  quake.lua    satellite/         scalebar.lua
+search/          terminator.lua   travel/            wiki/
 ```
+
+The toast renderer for `ttymap.notify(...)` lives as a lib at
+`runtime/lua/ttymap/notify.lua`, not as a plugin — it's
+infrastructure for every plugin's notify calls, with knobs that
+naturally belong on a `setup({...})` call. `runtime/init.lua`
+wires it up via `require("ttymap.notify").setup()`.
 
 Directory plugins (`aircraft/`, `satellite/`, `search/`, `travel/`,
 `wiki/`) use `<plugin>/init.lua` as the entry; sibling files load via

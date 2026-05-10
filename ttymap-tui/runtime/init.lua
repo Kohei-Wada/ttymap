@@ -2,8 +2,9 @@
 -- one (system → bundled → user):
 --
 --   1. seed `ttymap.opt.*` defaults (bundled — shipping values)
---   2. activate the bundled plugin set via `require`
---   3. pull in the user's `~/.config/ttymap/init.lua` LAST, so
+--   2. wire bundled libs (`ttymap.notify` etc.) via `setup()`
+--   3. activate the bundled plugin set via `require`
+--   4. pull in the user's `~/.config/ttymap/init.lua` LAST, so
 --      user mutations / handle :remove() / user `require`s win
 --
 -- The user-config loader is a Lua lib (`ttymap.user_config`); Rust
@@ -61,13 +62,20 @@ ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
 
 ------------------------------------------------------------
--- 2. Bundled plugins — chrome first, then everything else
+-- 2. Bundled libs — infrastructure consumed by every plugin's
+-- `ttymap.notify(msg)` calls. A lib (not plugin) so users can
+-- pass `setup({ ttl_s = …, ring_cap = …, max_text_width = … })`
+-- to tweak the renderer; skipping the call disables it entirely.
+------------------------------------------------------------
+require("ttymap.notify").setup()
+
+------------------------------------------------------------
+-- 3. Bundled plugins — chrome first, then everything else
 -- (alphabetical). Adjust per file to taste.
 ------------------------------------------------------------
 require "info"
 require "scalebar"
 require "attribution"
-require "notify"
 require "help"
 
 require "aircraft"
@@ -84,7 +92,7 @@ require "travel"
 require "wiki"
 
 ------------------------------------------------------------
--- 3. User init.lua — runs LAST so the user wins:
+-- 4. User init.lua — runs LAST so the user wins:
 --   * override any `ttymap.opt.*` set above
 --   * `ttymap.keymap.set/del`
 --   * `require` user plugins (their registrations stack on top of
