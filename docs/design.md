@@ -208,7 +208,7 @@ Earlier iterations enforced "one component per type" via
 `Any::type_id` so a second activation focused the existing instance
 instead of stacking a duplicate. We removed it: plugins that wanted
 "open or focus existing" still had to write the close branch
-themselves (toggle behaviour for re-press of the activation key),
+themselves (toggle behavior for re-press of the activation key),
 and plugins that legitimately wanted multiple instances (multi-card
 panels) were fighting the dedup. The Rust core now stays ignorant of
 plugin identity; toggle is a plugin-side policy decision (capture

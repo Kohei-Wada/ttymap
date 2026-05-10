@@ -57,7 +57,7 @@ Top-level namespaces:
 | `ttymap.opt.map` | initial lat/lon/zoom + zoom envelope |
 | `ttymap.opt.render` | style preset, label language |
 | `ttymap.opt.cache` | LRU size, on-disk persist toggle |
-| `ttymap.opt.geoip` | endpoint, timeout, on-startup behaviour |
+| `ttymap.opt.geoip` | endpoint, timeout, on-startup behavior |
 | `ttymap.opt.runtime` | poll/redraw cadence, sidebar width |
 | `ttymap.keymap.set(action, keys)` | rebind a built-in action |
 | `ttymap.keymap.del(action)` | drop a built-in binding |

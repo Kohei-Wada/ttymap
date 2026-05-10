@@ -34,7 +34,7 @@ raw event
 App::dispatch(intent)
   ↓
     UserCommand::Map(action)        → MapState::process_action(&action)
-                                     (Map(MapAction::Jump(loc)) recentres,
+                                     (Map(MapAction::Jump(loc)) recenters,
                                       Map(MapAction::Pan…) scrolls, etc.)
     UserCommand::Quit               → break the event loop
     UserCommand::SetTheme(id)       → App::switch_theme (rebuilds styler + UI theme)
@@ -96,12 +96,12 @@ main thread (ratatui draw):
 Focus is a `focused_idx` into the Compositor stack, **decoupled from
 stack position**. Pushing a modal puts focus on it; `Tab` moves
 focus back to the base layer without popping the modal (the old
-`Focus::Background` behaviour). Stack order never changes through
+`Focus::Background` behavior). Stack order never changes through
 cycling — only which component receives keys first.
 
 **No framework-side dedup.** nvim-style: pressing an activation key
 twice produces two instances of the plugin on the stack. Plugins
-that want toggle behaviour close themselves in their own
+that want toggle behavior close themselves in their own
 `handle_key` (typically: capture the `CardHandle` returned by
 `api.card.open`, and on the activation key call `:close()` and nil
 out the handle). This keeps the Rust core ignorant of plugin

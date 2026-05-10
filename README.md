@@ -41,17 +41,17 @@ Tokyo zoomed in with the wiki panel open:
 
 | Plugin | What it does |
 | --- | --- |
-| `aircraft` | Live aircraft markers from the OpenSky public ADS-B feed; sidebar list with altitude / speed; Enter centres the map. |
+| `aircraft` | Live aircraft markers from the OpenSky public ADS-B feed; sidebar list with altitude / speed; Enter centers the map. |
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
-| `center` | Crosshair at the map centre — handy when fast-panning. |
+| `center` | Crosshair at the map center — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
-| `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map centre lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
+| `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map center lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
-| `info` | Top-right readouts: centre, cursor, zoom, reverse-geocoded place name (Nominatim). |
+| `info` | Top-right readouts: center, cursor, zoom, reverse-geocoded place name (Nominatim). |
 | `notify` | Top-left toast popup for every `ttymap.notify(...)` call from any plugin. |
 | `ping_simulation` | "Cyber-attack visualisation"-style growing lines pinging between cities — reference for animated polyline overlays. |
-| `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; coloured markers + sidebar list, auto-jumps to the highest-magnitude event. |
+| `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; colored markers + sidebar list, auto-jumps to the highest-magnitude event. |
 | `satellite` | Multi-sat tracker (ISS, Hubble, …) with TLE fetch from CelesTrak and SGP4 propagation in Lua. |
 | `scalebar` | Bottom-right scale ruler that adapts to current zoom. |
 | `search` | Forward geocoding via Nominatim, palette-provider style with debounced input. |
@@ -170,7 +170,7 @@ CI runs on Linux, macOS, and Windows for every push (see [`.github/workflows/ci.
 ### Troubleshooting
 
 - **Windows: install via `cargo` directly** — `make install` assumes a POSIX shell. Until the Makefile grows a Windows path, build with `cargo build --release` and copy `target/release/ttymap.exe` plus the `ttymap-tui/runtime/` directory to wherever you want them. Set `TTYMAP_RUNTIME=path\to\runtime` if you don't place it under the platform-default data dir (`%APPDATA%\ttymap\runtime`).
-- **Windows: use Windows Terminal, not legacy ConHost** — Braille glyphs and xterm-256 colours need a font with full Braille coverage (Cascadia Mono works) and a terminal that respects 256-colour ANSI. Legacy ConHost (the default `cmd.exe` window pre-Windows 11) renders Braille as boxes and clamps to 16 colours.
+- **Windows: use Windows Terminal, not legacy ConHost** — Braille glyphs and xterm-256 colors need a font with full Braille coverage (Cascadia Mono works) and a terminal that respects 256-color ANSI. Legacy ConHost (the default `cmd.exe` window pre-Windows 11) renders Braille as boxes and clamps to 16 colors.
 - **macOS: tile cache & exported frames live under `~/Library/Caches/ttymap` and `~/Library/Application Support/ttymap`** — different from Linux's XDG paths. The `directories` crate handles this transparently; only relevant if you script around the cache.
 - **Mouse drag/scroll on Windows** — works in Windows Terminal; some third-party emulators don't forward mouse events. Toggle off via config if your terminal traps them.
 
