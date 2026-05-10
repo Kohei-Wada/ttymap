@@ -142,6 +142,23 @@ Rust 2024 edition. The build uses `protox` so no system `protoc` is needed.
 - **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director`), plugin shapes, dispatcher semantics.
 - **[docs/design.md](docs/design.md)** — load-bearing design decisions (UserCommand vs direct call, controller split, Drop-based cleanup).
 
+## Third-party services
+
+ttymap talks to a few public APIs out of the box. The Rust HTTP layer caps per-host request rates globally (token bucket per host suffix in `ttymap-engine/src/shared/http/rate_limit.rs`) so usage from many users stays within published limits, but for **heavy / automated use you should run your own**.
+
+- **Tiles** — default source is **`http://mapscii.me/`** (vector tiles, OpenMapTiles schema). Fine for casual use; for scripted overlays that pan continuously, anything multi-host, or anything you'd be uncomfortable having attributed to your IP, host your own. Alternate backends are in flight ([#30](https://github.com/Kohei-Wada/ttymap/issues/30) MBTiles, [#31](https://github.com/Kohei-Wada/ttymap/issues/31) PMTiles).
+- **Forward geocoding** (search palette) — public **Nominatim** (`https://nominatim.openstreetmap.org`). Capped at **1 rps globally** per [OSMF policy](https://operations.osmfoundation.org/policies/nominatim/). Override in `init.lua` to point at a private instance:
+  ```lua
+  require("ttymap.search").endpoint = "https://my-nominatim.example.com/search"
+  ```
+- **IP geolocation** (`--here`) — public **`ipapi.co`**. One-shot, on startup only.
+- **Wikipedia / Wikimedia** (wiki plugin) — `*.wikipedia.org` capped at **5 rps globally** (self-imposed safety margin; Wikipedia has no hard QPS but advises against bursts).
+- **Earthquake feed** (quake plugin) — USGS public summary feed (no rate limit; their CDN handles it).
+- **Aircraft** (aircraft plugin) — OpenSky anonymous endpoint ([#98](https://github.com/Kohei-Wada/ttymap/issues/98) tracks the strict daily quota — register an API key for higher limits).
+- **Satellites** (satellite plugin) — CelesTrak TLE feed; refresh window is hours, not seconds.
+
+User-Agent on every request is `ttymap/<version> (https://github.com/Kohei-Wada/ttymap)` so upstream operators can tell us apart from anonymous traffic.
+
 ## Origin
 
 ttymap started as a Rust port of [mapscii](https://github.com/rastapasta/mapscii) — same Braille rendering, same MVT pipeline, same vim-style nav. The Lua plugin runtime and the scriptable-scenes layer (animation + director) grew on top once the engine was solid; the result is a different category of tool now, but mapscii is the seed and deserves the credit.

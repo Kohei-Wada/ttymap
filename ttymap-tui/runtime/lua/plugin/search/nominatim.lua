@@ -1,17 +1,23 @@
 -- search.nominatim — Nominatim forward-geocoding REST client.
 --
--- Source: https://nominatim.openstreetmap.org/search
--- Free public endpoint; debounce keeps it from being hammered while
--- the user types.
+-- Endpoint is read from `ttymap.search.endpoint` (default points at
+-- the public OSM Nominatim instance, rate-limited to 1 rps by the
+-- Rust HTTP layer per OSMF policy). Users with a private Nominatim
+-- override via `require("ttymap.search").endpoint = "..."` in
+-- init.lua; the change takes effect on the next query — no restart.
+--
+-- Debounce in the search palette keeps the same prefix from being
+-- re-fetched per keystroke; the rate-limiter is the global cap.
+
+local config = require "ttymap.search"
 
 local M = {}
 
-local SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 local LIMIT = 5
 
 function M.url(query)
     return string.format("%s?q=%s&format=json&limit=%d",
-        SEARCH_URL, ttymap.http:url_encode(query), LIMIT)
+        config.endpoint, ttymap.http:url_encode(query), LIMIT)
 end
 
 function M.parse(payload)
