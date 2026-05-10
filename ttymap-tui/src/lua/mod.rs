@@ -178,27 +178,11 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         log::warn!("lua: failed to install plugin searcher: {}", e);
     }
 
-    // Expose `ttymap.load_user_config()` so the bundled
-    // `runtime/init.lua` can call it at the point of its choosing
-    // (typically: after seeding defaults, before requiring bundled
-    // plugins — letting the user pre-mark `package.loaded.X = true`
-    // to skip a bundled plugin).
-    {
-        let lua_for_user = lua.clone();
-        let load_user_config = lua.create_function(move |_, _: ()| -> mlua::Result<()> {
-            init_lua::run_user_init_lua(&lua_for_user);
-            Ok(())
-        });
-        if let Ok(f) = load_user_config
-            && let Ok(globals) = lua.globals().get::<mlua::Table>("ttymap")
-        {
-            let _ = globals.set("load_user_config", f);
-        }
-    }
-
-    // Run the bundled init.lua. It calls `ttymap.load_user_config()`
-    // partway through so user opts/skip-marks land before bundled
-    // requires fire. Errors are logged + recovered.
+    // Run the bundled init.lua. It pulls in user config itself via
+    // `require("ttymap.user_config").load()` (a Lua-side lib),
+    // which keeps the user-config-path knowledge fully on the Lua
+    // side — Rust never names `~/.config/ttymap/init.lua`. Errors
+    // are logged + recovered.
     init_lua::run_system_init_lua(&lua);
 
     // Read `ttymap.opt.*` mutations back into `Config`. Type errors
@@ -785,56 +769,50 @@ mod tests {
     /// Driver test for the Lua-driven user-config flow: a user
     /// init.lua marking `package.loaded.<bundled>` truthy must skip
     /// that bundled plugin's `require`. Proves the bundled
-    /// `runtime/init.lua` calls `ttymap.load_user_config()` BEFORE
-    /// requiring plugins, and that the dedup hook is the right way
-    /// for users to disable bundled plugins.
+    /// `runtime/init.lua` runs `require("ttymap.user_config").load()`
+    /// BEFORE requiring plugins, and that `package.loaded` is the
+    /// right hook for users to disable bundled plugins.
+    ///
+    /// Stubs `ttymap.user_config` via `package.preload` so the test
+    /// doesn't have to mutate the real `~/.config/ttymap/init.lua`
+    /// (or the user's HOME).
     #[test]
     fn user_init_lua_can_skip_a_bundled_plugin_via_package_loaded() {
         let layer = temp_layer("user-skip-bundled");
-        // Bundled plugin set: just one plugin to keep the test tight.
+        // Bundled plugin set: one plugin to keep the test tight.
         write_plugin(
             &layer,
             "alpha.lua",
             r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
         );
-        // Bundled init.lua: invokes load_user_config, then requires
-        // the bundled plugin.
+        // Bundled init.lua: pulls in user config (stubbed below),
+        // then requires the bundled plugin.
         std::fs::write(
             layer.join("init.lua"),
             r#"
-            ttymap.load_user_config()
+            require("ttymap.user_config").load()
             require "alpha"
             "#,
         )
         .expect("write bundled init.lua");
-        // User init.lua: pre-marks the plugin as loaded so the
-        // bundled require becomes a no-op.
-        let user_dir = temp_layer("user-skip-bundled-user");
-        std::fs::write(user_dir.join("init.lua"), r#"package.loaded.alpha = true"#)
-            .expect("write user init.lua");
 
-        // The user-init path is resolved via `directories::ProjectDirs`
-        // which we can't easily redirect in a test without env-var
-        // injection, so we exercise only the in-process pieces:
-        // install API + plugin searcher pointed at the bundled
-        // layer, then `lua.load(bundled_init).exec()` after
-        // overriding `ttymap.load_user_config` to dofile the user
-        // init.lua we just wrote.
         let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
-        let user_init_path = user_dir.join("init.lua");
-        let p = user_init_path.clone();
-        let lua_for_user = lua.clone();
-        let load = lua
-            .create_function(move |_, _: ()| -> mlua::Result<()> {
-                let src = std::fs::read_to_string(&p).expect("read user init");
-                lua_for_user.load(&src).set_name("user").exec()
-            })
-            .expect("create user-config fn");
-        lua.globals()
-            .get::<mlua::Table>("ttymap")
-            .expect("ttymap")
-            .set("load_user_config", load)
-            .expect("install load_user_config");
+
+        // Stub `ttymap.user_config`: its `load()` simulates a user
+        // init.lua that pre-marks the bundled plugin as loaded.
+        lua.load(
+            r#"
+            package.preload["ttymap.user_config"] = function()
+                return {
+                    load = function()
+                        package.loaded.alpha = true
+                    end,
+                }
+            end
+            "#,
+        )
+        .exec()
+        .expect("install user_config stub");
 
         let bundled_init = std::fs::read_to_string(layer.join("init.lua")).unwrap();
         lua.load(&bundled_init)

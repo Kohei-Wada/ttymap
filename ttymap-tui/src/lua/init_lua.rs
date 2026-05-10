@@ -44,12 +44,11 @@ use crate::input::keymap::KeybindingOverrides;
 
 /// Snapshot config from the user init.lua only — no system init.lua,
 /// no API surface, no plugin requires. Used by the `snap` subcommand
-/// which is headless. The bundled `runtime/init.lua` would try to
-/// `require` plugins (which need the API surface), so we skip it
-/// here; `ttymap.opt.*` defaults already match Rust seeds, so the
-/// user-only flow loses nothing.
+/// which is headless. Reuses the same `ttymap.user_config` Lua lib
+/// the bundled `runtime/init.lua` calls in production, so user
+/// config path resolution lives in exactly one place (Lua).
 ///
-/// On any error (missing file, IO, Lua syntax), logs a warning and
+/// On any error (missing lib, IO, Lua syntax), logs a warning and
 /// returns the seeded defaults. The app keeps booting.
 pub fn read_init_lua_config_only(defaults: Config) -> Config {
     let lua = crate::lua::new_lua();
@@ -60,7 +59,13 @@ pub fn read_init_lua_config_only(defaults: Config) -> Config {
             return defaults;
         }
     };
-    run_user_init_lua(&lua);
+    if let Err(e) = lua
+        .load(r#"require("ttymap.user_config").load()"#)
+        .set_name("read_init_lua_config_only")
+        .exec()
+    {
+        log::warn!("init.lua: ttymap.user_config.load() failed: {}", e);
+    }
     read_back(&lua, &defaults).unwrap_or_else(|e| {
         log::warn!("init.lua: read_back failed: {}", e);
         defaults
@@ -68,10 +73,10 @@ pub fn read_init_lua_config_only(defaults: Config) -> Config {
 }
 
 /// Load and execute the bundled `<layer>/init.lua` (system tier) in
-/// `lua`. The user `~/.config/ttymap/init.lua` is **not** loaded here
-/// — system init.lua loads it itself by calling the Lua-callable
-/// `ttymap.load_user_config()` (see `api::install`) at the point of
-/// its choosing. That puts ordering policy (defaults vs. user opts vs.
+/// `lua`. The user `~/.config/ttymap/init.lua` is **not** loaded
+/// here — system init.lua pulls it in itself via
+/// `require("ttymap.user_config").load()` at the point of its
+/// choosing. That puts ordering policy (defaults vs. user opts vs.
 /// bundled plugin requires) on the Lua side, where it's editable
 /// without touching Rust.
 ///
@@ -80,29 +85,6 @@ pub fn read_init_lua_config_only(defaults: Config) -> Config {
 pub(crate) fn run_system_init_lua(lua: &Lua) {
     let Some(path) = bundled_init_path() else {
         log::info!("init.lua: no bundled init found in runtime path");
-        return;
-    };
-    let Some(source) = read_init_file(&path) else {
-        return;
-    };
-    if let Err(e) = lua
-        .load(&source)
-        .set_name(path.to_string_lossy().as_ref())
-        .exec()
-    {
-        log::warn!("init.lua: {} failed: {}", path.display(), e);
-    }
-}
-
-/// Load and execute `~/.config/ttymap/init.lua` in `lua`. Called from
-/// the Lua-side `ttymap.load_user_config()` (which the bundled
-/// `runtime/init.lua` invokes), and directly by
-/// [`read_init_lua_config_only`] for the snap subcommand.
-///
-/// Missing file = no-op (debug-logged). IO / Lua errors are
-/// warn-logged and recovered.
-pub(crate) fn run_user_init_lua(lua: &Lua) {
-    let Some(path) = user_init_path() else {
         return;
     };
     let Some(source) = read_init_file(&path) else {
@@ -138,10 +120,10 @@ fn read_init_file(path: &Path) -> Option<String> {
 }
 
 /// Walk the runtime path looking for the bundled init.lua. Skips
-/// the user tier (xdg_config) — that's loaded separately by
-/// [`user_init_path`] so user init runs LAST in the chain. Returns
-/// the first hit so dev manifest beats stale install (matches the
-/// runtime_path priority order).
+/// the user tier (xdg_config) — that file is the *user's* init.lua
+/// and is loaded by the `ttymap.user_config` Lua lib, not by Rust.
+/// Returns the first hit so dev manifest beats stale install
+/// (matches the runtime_path priority order).
 fn bundled_init_path() -> Option<PathBuf> {
     use directories::ProjectDirs;
     let user = ProjectDirs::from("", "", "ttymap").map(|d| d.config_dir().to_path_buf());
@@ -155,15 +137,6 @@ fn bundled_init_path() -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Resolve `~/.config/ttymap/init.lua` (or the platform-specific
-/// equivalent). `None` only when the host doesn't expose a config
-/// dir at all.
-fn user_init_path() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    Some(dirs.config_dir().join("init.lua"))
 }
 
 /// Build the `ttymap` global with `opt` (pre-populated table tree)

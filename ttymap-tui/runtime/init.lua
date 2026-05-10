@@ -1,7 +1,8 @@
--- Bundled defaults for ttymap. Runs first; calls into the user's
--- `~/.config/ttymap/init.lua` partway through (via the Rust-provided
--- `ttymap.load_user_config()`) so user mutations land BEFORE bundled
--- plugins are required. Both files share one Lua VM.
+-- Bundled defaults for ttymap. Runs first; pulls in the user's
+-- `~/.config/ttymap/init.lua` partway through via the
+-- `ttymap.user_config` Lua lib (no Rust support — Lua handles the
+-- path resolution and dofile) so user mutations land BEFORE
+-- bundled plugins are required. Both files share one Lua VM.
 --
 -- Every option value is the Rust-side default. Source of truth:
 -- `src/config.rs`. Edit a line to change the shipping default
@@ -60,7 +61,7 @@ ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driv
 -- Missing / broken user file = logged-and-skipped, this file
 -- continues normally.
 ------------------------------------------------------------
-ttymap.load_user_config()
+require("ttymap.user_config").load()
 
 ------------------------------------------------------------
 -- Bundled plugins — chrome first, then everything else

@@ -392,22 +392,25 @@ Runs `cargo install --path .`, then copies `runtime/plugin/`,
 ## Config (`init.lua` chain) — also the plugin entry point
 
 Rust runs **only** the bundled `<bundled-tier>/init.lua`. That file
-is in charge of when (and whether) to load the user's
-`~/.config/ttymap/init.lua` — Lua-side ordering policy, no Rust
-involvement. By the time it runs, the API surface is fully
+is in charge of when (and whether) to load the user's init.lua
+— Lua-side ordering policy, no Rust involvement. Rust does not
+even name the user-config path: that's owned by a Lua lib,
+`ttymap.user_config`, at `runtime/lua/ttymap/user_config.lua`.
+
+By the time bundled init.lua runs, the API surface is fully
 installed: `build_subsystem` does `ttymap.opt` / `ttymap.keymap`
 pre-pass, then `api::install` adds `http` / `map` / `api` /
 `register_*` / `notify` / `on_event`, then the plugin-aware
-`package.searchers` entry is inserted, then a Rust-provided
-`ttymap.load_user_config()` function is exposed. Then the
-bundled init.lua runs and drives the rest.
+`package.searchers` entry is inserted. Then the bundled init.lua
+runs and drives the rest.
 
 The bundled init.lua's job (`ttymap-tui/runtime/init.lua`):
 
 1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with
    Rust seeds; serves as the documented schema).
-2. Call `ttymap.load_user_config()` — runs
-   `~/.config/ttymap/init.lua` in the shared VM.
+2. Call `require("ttymap.user_config").load()` — resolves the user
+   init.lua path (`$XDG_CONFIG_HOME/ttymap/init.lua` or
+   `$HOME/.config/ttymap/init.lua`) and `dofile`s it.
 3. `require` the bundled plugin set.
 
 User init.lua can then:
