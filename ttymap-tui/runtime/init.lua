@@ -16,6 +16,17 @@
 -- override per-leaf in their own init.lua.
 
 ------------------------------------------------------------
+-- 0. Install the plugin-aware `package.searchers` entry. The
+-- host (Rust) does not know about the `<layer>/plugin/...`
+-- convention; `ttymap.plugin_searcher` (a Lua lib) owns that
+-- resolution, using only the `ttymap.runtime_path` primitive
+-- Rust exposes — the chunk runs as a plain `load(source)()`,
+-- with `register_*` calls inside pushing directly into the
+-- live host registry.
+------------------------------------------------------------
+require("ttymap.plugin_searcher").install()
+
+------------------------------------------------------------
 -- 1. ttymap.opt.map — initial viewport + zoom envelope.
 ------------------------------------------------------------
 ttymap.opt.map.lat       = 52.51298   -- Berlin

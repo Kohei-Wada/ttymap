@@ -225,7 +225,6 @@ impl LuaPaletteProvider {
 mod tests {
     use super::*;
     use crate::lua::api::install;
-    use crate::lua::capture::new_capture_slot;
     use crate::lua::host::LuaHostShared;
     use crate::theme::ThemeId;
 
@@ -242,12 +241,10 @@ mod tests {
     /// receives a spec from a Lua callback at runtime.
     fn build_provider(script: &str) -> LuaPaletteProvider {
         let lua = Lua::new();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            slot,
             crate::compositor::op::new_ops_buffer(),
             bus,
             crate::lua::new_plugin_registry(),

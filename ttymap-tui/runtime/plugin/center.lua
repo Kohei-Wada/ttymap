@@ -21,6 +21,7 @@ end
 
 ttymap.register_palette_command({
     label = "Toggle center marker",
+    hint = "c",
     invoke = toggle,
 })
 

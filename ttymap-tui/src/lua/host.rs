@@ -49,13 +49,14 @@ pub struct LuaHostShared {
     /// Help reads lazily at render time, so the brief register-time
     /// emptiness is invisible.
     pub keymap_entries: Mutex<Vec<(String, String)>>,
-    /// Per-plugin metadata snapshot, appended during plugin
-    /// registration. Held behind a `Mutex` so `LuaHostShared` can be
-    /// Arc'd into each plugin's host namespaces at register time and
-    /// populated later. Help reads this lazily (at render time, not
-    /// register time) so it sees every plugin regardless of load
-    /// order.
-    pub palette_entries: Mutex<Vec<PluginEntry>>,
+    /// Help-cheatsheet rows, appended during plugin registration
+    /// (one per `register_palette_command` call that supplied a
+    /// non-empty `hint`). Held behind a `Mutex` so `LuaHostShared`
+    /// can be Arc'd into each plugin's host namespaces at register
+    /// time and populated later. Help reads this lazily (at render
+    /// time, not register time) so it sees every entry regardless of
+    /// load order.
+    pub help_entries: Mutex<Vec<HelpEntry>>,
     /// Latest [`MapFrame`] drained from the render thread, mirrored
     /// here for Lua's read side (`ttymap.api.frame.to_ansi()`).
     /// `None` until the first frame arrives. App refreshes this on
@@ -66,14 +67,13 @@ pub struct LuaHostShared {
     pub current_frame: Mutex<Option<MapFrame>>,
 }
 
-/// One plugin's help-relevant metadata. Surfaced to Lua via
+/// One help-cheatsheet row. Surfaced to Lua via
 /// `ttymap.help:palette_entries()` so help.lua can render it without
-/// caring about how the data was harvested. Only plugins with a
-/// top-level keybinding land here; keyless plugins are filtered at
-/// push time (matching the prior harvest's `!hint.is_empty()` rule).
+/// caring about how the data was harvested. Only `register_palette_command`
+/// calls with a non-empty `hint` (the keybind char) land here; keyless
+/// palette-only entries are filtered at push time.
 #[derive(Clone)]
-pub struct PluginEntry {
-    pub name: String,
+pub struct HelpEntry {
     pub key: String,
     pub label: String,
 }
@@ -84,7 +84,7 @@ impl LuaHostShared {
             attribution: Mutex::new(None),
             geoip_endpoint,
             keymap_entries: Mutex::new(Vec::new()),
-            palette_entries: Mutex::new(Vec::new()),
+            help_entries: Mutex::new(Vec::new()),
             current_frame: Mutex::new(None),
         }
     }
@@ -98,11 +98,12 @@ impl LuaHostShared {
         }
     }
 
-    /// Append one plugin's metadata to the snapshot. Called once per
-    /// plugin during registration. A poisoned mutex is silently
-    /// skipped — losing a help row is preferable to crashing the host.
-    pub fn push_palette_entry(&self, entry: PluginEntry) {
-        if let Ok(mut slot) = self.palette_entries.lock() {
+    /// Append one help-cheatsheet row. Called from
+    /// `register_palette_command` when the spec has a non-empty
+    /// `hint`. A poisoned mutex is silently skipped — losing a help
+    /// row is preferable to crashing the host.
+    pub fn push_help_entry(&self, entry: HelpEntry) {
+        if let Ok(mut slot) = self.help_entries.lock() {
             slot.push(entry);
         }
     }

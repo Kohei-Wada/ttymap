@@ -9,15 +9,12 @@
 //!    call it if present, log + recover if absent or erroring.
 //!
 //! [`LuaBridgeHandle`] owns the registry handle + log tag and provides
-//! [`LuaBridgeHandle::try_call`] for the dispatch shape. [`load_chunk`]
-//! is the per-plugin loader the registrar walks call.
+//! [`LuaBridgeHandle::try_call`] for the dispatch shape.
 //!
 //! [`LuaCardComponent`]: super::card_component::LuaCardComponent
 //! [`LuaPaletteProvider`]: super::palette_provider::LuaPaletteProvider
 
 use mlua::{Lua, RegistryKey, Table};
-
-use crate::lua::capture::{CaptureSlot, CapturedRegistration};
 
 /// Per-adapter Lua state + the registry handle for the dispatch
 /// table. Both adapters (Component, PaletteProvider) compose this
@@ -105,70 +102,4 @@ pub enum CallOutcome<R> {
     /// The call errored; a `log::warn!` has been emitted with the
     /// handle's log tag and method name as context.
     Errored,
-}
-
-/// Run `source` in the shared `lua` VM and return the registrations
-/// the script made via `ttymap.register_*` / `ttymap.on_event` /
-/// `ttymap.api.frame.on_tick`.
-///
-/// nvim-style: the script's existence in `<runtime>/plugin/` is the
-/// registration. Identity = file stem (passed as `chunk_name`). The
-/// script participates in the host loop by calling some combination of:
-///
-/// - `ttymap.api.frame.on_tick(fn)` — per-frame work (paint markers,
-///   drain async fetches, etc.)
-/// - `ttymap.register_palette_command({label, invoke})` — palette row
-/// - `ttymap.register_keybind(key, callback)` — top-level keybind
-/// - `ttymap.on_event(name, fn)` — generic event subscription
-///
-/// At least one of those calls is required; a script that subscribes
-/// to nothing surfaces as an `mlua::Error` here.
-///
-/// `slot` is the per-VM capture buffer the `ttymap.register_*`
-/// closures write into. Caller is responsible for draining it before
-/// each call (the function clears stale captures defensively).
-///
-/// `chunk_name` is reported in Lua error messages — pass the plugin's
-/// file stem so a stack trace pinpoints the script. The same value
-/// is set as `slot.current_plugin` for the duration of `exec` so
-/// `on_tick` / `on_event` capturers can attribute their bus
-/// subscriptions to this plugin.
-pub fn load_chunk(
-    lua: &Lua,
-    source: &str,
-    chunk_name: &'static str,
-    slot: &CaptureSlot,
-) -> mlua::Result<CapturedRegistration> {
-    // Stack-style save: a plugin may recursively `require` another
-    // plugin, in which case we re-enter `load_chunk` while an outer
-    // load is mid-execution. Take the outer state aside, run the
-    // inner load with a fresh slot, then restore the outer state so
-    // the outer load's `register_*` capture continues correctly.
-    // Production today never recurses (plugins only require libs),
-    // but the cost of the extra `mem::take` pair is negligible and
-    // the safety it buys is worth it.
-    let outer = std::mem::take(&mut *slot.borrow_mut());
-    slot.borrow_mut().current_plugin = Some(chunk_name);
-
-    let exec_result = lua.load(source).set_name(chunk_name).exec();
-
-    // Drain whatever the inner load captured, regardless of success
-    // — we still want to restore `outer` even if exec errored, so
-    // an outer plugin's pcall can recover.
-    let inner = std::mem::take(&mut *slot.borrow_mut());
-    *slot.borrow_mut() = outer;
-
-    exec_result?;
-
-    let has_surface = !inner.palette_commands.is_empty()
-        || !inner.keybinds.is_empty()
-        || inner.events_registered > 0;
-    if !has_surface {
-        return Err(mlua::Error::external(
-            "script did not call any ttymap registration API \
-             (ttymap.on_event, ttymap.api.frame.on_tick, \
-             ttymap.register_palette_command, or ttymap.register_keybind)",
-        ));
-    }
-    Ok(inner)
 }

@@ -62,15 +62,10 @@ pub enum Subscriber {
     /// callback to call `subscribe_*` / `remove` (both need
     /// `borrow_mut`) on the bus.
     Rust(Rc<dyn Fn(&Event)>),
-    /// Lua plugin callback. The mlua state is the plugin's setup
-    /// state (cloned from `register_one`); the registry key points
-    /// at the function the script handed to `ttymap.on_event` or
-    /// `ttymap.api.frame.on_tick`.
-    Lua {
-        plugin: &'static str,
-        lua: Lua,
-        callback: RegistryKey,
-    },
+    /// Lua callback. The mlua state is the shared subsystem VM; the
+    /// registry key points at the function the script handed to
+    /// `ttymap.on_event` or `ttymap.api.frame.on_tick`.
+    Lua { lua: Lua, callback: RegistryKey },
 }
 
 /// Pub/sub registry. Keyed by event name (the same string Lua
@@ -99,29 +94,15 @@ impl EventBus {
         id
     }
 
-    /// Register a Lua subscriber for `event_name`. The plugin string
-    /// is purely diagnostic (logged when the callback errors).
-    /// Returns a monotonic ID that can be passed to [`Self::remove`].
-    pub fn subscribe_lua(
-        &self,
-        event_name: &'static str,
-        plugin: &'static str,
-        lua: Lua,
-        callback: RegistryKey,
-    ) -> u64 {
+    /// Register a Lua subscriber for `event_name`. Returns a
+    /// monotonic ID that can be passed to [`Self::remove`].
+    pub fn subscribe_lua(&self, event_name: &'static str, lua: Lua, callback: RegistryKey) -> u64 {
         let id = self.allocate_id();
         self.subscribers
             .borrow_mut()
             .entry(event_name)
             .or_default()
-            .push((
-                id,
-                Subscriber::Lua {
-                    plugin,
-                    lua,
-                    callback,
-                },
-            ));
+            .push((id, Subscriber::Lua { lua, callback }));
         id
     }
 
@@ -189,7 +170,7 @@ impl EventBus {
         enum Action {
             Skip,
             Rust(Rc<dyn Fn(&Event)>),
-            Lua(&'static str, Lua, mlua::Function),
+            Lua(Lua, mlua::Function),
         }
 
         for id in ids {
@@ -203,30 +184,27 @@ impl EventBus {
                 };
                 match sub {
                     Subscriber::Rust(f) => Action::Rust(Rc::clone(f)),
-                    Subscriber::Lua {
-                        plugin,
-                        lua,
-                        callback,
-                    } => match lua.registry_value::<mlua::Function>(callback) {
-                        Ok(func) => Action::Lua(plugin, lua.clone(), func),
-                        Err(e) => {
-                            log::warn!(
-                                "lua[{}]: {} subscriber registry lookup failed: {}",
-                                plugin,
-                                name,
-                                e
-                            );
-                            Action::Skip
+                    Subscriber::Lua { lua, callback } => {
+                        match lua.registry_value::<mlua::Function>(callback) {
+                            Ok(func) => Action::Lua(lua.clone(), func),
+                            Err(e) => {
+                                log::warn!(
+                                    "lua: {} subscriber registry lookup failed: {}",
+                                    name,
+                                    e
+                                );
+                                Action::Skip
+                            }
                         }
-                    },
+                    }
                 }
             };
             match action {
                 Action::Skip => {}
                 Action::Rust(f) => f(&event),
-                Action::Lua(plugin, lua, func) => {
+                Action::Lua(lua, func) => {
                     if let Err(e) = call_lua_with_event(&func, &lua, &event) {
-                        log::warn!("lua[{}]: {} subscriber failed: {}", plugin, name, e);
+                        log::warn!("lua: {} subscriber failed: {}", name, e);
                     }
                 }
             }
@@ -248,7 +226,7 @@ impl EventBus {
     /// calling — a callback may therefore `remove` itself.
     pub fn for_each_lua_subscriber<F>(&self, event_name: &str, mut f: F)
     where
-        F: FnMut(&str, &Lua, &mlua::Function),
+        F: FnMut(&Lua, &mlua::Function),
     {
         let ids = self.snapshot_ids(event_name);
         for id in ids {
@@ -261,27 +239,24 @@ impl EventBus {
                     continue;
                 };
                 match sub {
-                    Subscriber::Lua {
-                        plugin,
-                        lua,
-                        callback,
-                    } => match lua.registry_value::<mlua::Function>(callback) {
-                        Ok(func) => Some((*plugin, lua.clone(), func)),
-                        Err(e) => {
-                            log::warn!(
-                                "lua[{}]: {} subscriber registry lookup failed: {}",
-                                plugin,
-                                event_name,
-                                e
-                            );
-                            None
+                    Subscriber::Lua { lua, callback } => {
+                        match lua.registry_value::<mlua::Function>(callback) {
+                            Ok(func) => Some((lua.clone(), func)),
+                            Err(e) => {
+                                log::warn!(
+                                    "lua: {} subscriber registry lookup failed: {}",
+                                    event_name,
+                                    e
+                                );
+                                None
+                            }
                         }
-                    },
+                    }
                     Subscriber::Rust(_) => None,
                 }
             };
-            if let Some((plugin, lua, func)) = extracted {
-                f(plugin, &lua, &func);
+            if let Some((lua, func)) = extracted {
+                f(&lua, &func);
             }
         }
     }
@@ -335,7 +310,7 @@ mod tests {
         let key = lua.create_registry_value(f).unwrap();
 
         let bus = EventBus::default();
-        bus.subscribe_lua("frame_ready", "test", lua.clone(), key);
+        bus.subscribe_lua("frame_ready", lua.clone(), key);
         bus.publish(Event::MapJumped(LonLat { lon: 1.0, lat: 2.0 }));
 
         let n: i64 = lua.globals().get("other_count").unwrap();
@@ -361,7 +336,7 @@ mod tests {
         let key = lua.create_registry_value(f).unwrap();
 
         let bus = EventBus::default();
-        bus.subscribe_lua("map_jumped", "test", lua.clone(), key);
+        bus.subscribe_lua("map_jumped", lua.clone(), key);
         bus.publish(Event::MapJumped(LonLat {
             lon: 139.7595,
             lat: 35.6828,
@@ -392,7 +367,7 @@ mod tests {
         let key = lua.create_registry_value(f).unwrap();
 
         let bus = EventBus::default();
-        bus.subscribe_lua("notify", "test", lua.clone(), key);
+        bus.subscribe_lua("notify", lua.clone(), key);
         bus.publish(Event::Notify {
             message: "hello".to_string(),
             level: super::super::Level::Warn,
@@ -445,8 +420,8 @@ mod tests {
         let good_key = lua_good.create_registry_value(good_fn).unwrap();
 
         let bus = EventBus::default();
-        bus.subscribe_lua("frame_ready", "bad", lua_bad, bad_key);
-        bus.subscribe_lua("frame_ready", "good", lua_good.clone(), good_key);
+        bus.subscribe_lua("frame_ready", lua_bad, bad_key);
+        bus.subscribe_lua("frame_ready", lua_good.clone(), good_key);
 
         bus.publish(Event::FrameReady);
 
@@ -463,12 +438,12 @@ mod tests {
         };
 
         let bus = EventBus::default();
-        bus.subscribe_lua("tick", "p", lua.clone(), make_noop());
+        bus.subscribe_lua("tick", lua.clone(), make_noop());
         bus.subscribe_rust("tick", |_| {});
-        bus.subscribe_lua("frame_ready", "q", lua.clone(), make_noop());
+        bus.subscribe_lua("frame_ready", lua.clone(), make_noop());
 
         let mut count = 0;
-        bus.for_each_lua_subscriber("tick", |_, _, _| count += 1);
+        bus.for_each_lua_subscriber("tick", |_, _| count += 1);
         assert_eq!(count, 1, "must skip the Rust sub and the other bucket");
     }
 
@@ -537,7 +512,7 @@ mod tests {
         let key = lua.create_registry_value(f).unwrap();
 
         let bus = std::rc::Rc::new(EventBus::default());
-        let id = bus.subscribe_lua("frame_ready", "self_remove", lua.clone(), key);
+        let id = bus.subscribe_lua("frame_ready", lua.clone(), key);
 
         // A Rust sub that, when dispatched, removes the Lua sub from
         // the same bucket. This is the in-dispatch removal path.

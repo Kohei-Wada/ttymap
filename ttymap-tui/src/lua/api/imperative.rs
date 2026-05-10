@@ -31,7 +31,6 @@ use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
 use crate::event::EventBus;
-use crate::lua::capture::CaptureSlot;
 use crate::lua::host::LuaHostShared;
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
@@ -39,7 +38,6 @@ use crate::lua::host::LuaHostShared;
 pub(super) fn install(
     lua: &Lua,
     ttymap: &Table,
-    slot: CaptureSlot,
     ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
     bus: Rc<EventBus>,
@@ -48,7 +46,7 @@ pub(super) fn install(
 
     api.set("card", build_card_table(lua, ops.clone())?)?;
     api.set("palette", build_palette_table(lua, ops.clone())?)?;
-    api.set("frame", build_frame_table(lua, slot, ops, shared, bus)?)?;
+    api.set("frame", build_frame_table(lua, ops, shared, bus)?)?;
 
     ttymap.set("api", api)?;
     Ok(())
@@ -122,7 +120,6 @@ fn build_palette_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
 
 fn build_frame_table(
     lua: &Lua,
-    slot: CaptureSlot,
     _ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
     bus: Rc<EventBus>,
@@ -150,12 +147,8 @@ fn build_frame_table(
     // event surfaces should use `ttymap.on_event` directly.
     //
     // Subscribes directly against the [`EventBus`] at call time and
-    // returns an [`EventHandle`] so plugins can `:remove()` later.
-    // The slot's `current_plugin` provides the log attribution; the
-    // counter bump keeps the `load_chunk` "must subscribe to
-    // something" gate happy for tick-only plugins.
+    // returns an [`EventHandle`] so the caller can `:remove()` later.
     let bus_for_on_tick = bus;
-    let slot_for_on_tick = slot;
     frame_api.set(
         "on_tick",
         lua.create_function(
@@ -163,13 +156,8 @@ fn build_frame_table(
                   callback: mlua::Function|
                   -> mlua::Result<crate::lua::bridge::event_handle::EventHandle> {
                 use crate::lua::bridge::event_handle::EventHandle;
-                let plugin = slot_for_on_tick
-                    .borrow()
-                    .current_plugin
-                    .unwrap_or("(unknown)");
                 let key = lua.create_registry_value(callback)?;
-                let id = bus_for_on_tick.subscribe_lua("tick", plugin, lua.clone(), key);
-                slot_for_on_tick.borrow_mut().events_registered += 1;
+                let id = bus_for_on_tick.subscribe_lua("tick", lua.clone(), key);
                 Ok(EventHandle::new(bus_for_on_tick.clone(), "tick", id))
             },
         )?,

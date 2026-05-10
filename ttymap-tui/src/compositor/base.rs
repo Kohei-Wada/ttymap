@@ -49,7 +49,7 @@ pub struct BaseLayer {
     /// Plugin-supplied footer hints harvested at startup. Static
     /// for the program lifetime — adding / removing entries does
     /// not refresh this list.
-    plugin_hints: Vec<(&'static str, &'static str)>,
+    footer_hints: Vec<(&'static str, &'static str)>,
     /// First-`g` flag of the `gg` sequence. Lives here (not in
     /// `KeyMap`) because multi-key sequencing is a base-layer
     /// concern; the keymap itself is a stateless lookup table.
@@ -61,13 +61,13 @@ impl BaseLayer {
         keymap: KeyMap,
         builtin_activations: Vec<Activation>,
         registry: PluginRegistryHandle,
-        plugin_hints: Vec<(&'static str, &'static str)>,
+        footer_hints: Vec<(&'static str, &'static str)>,
     ) -> Self {
         Self {
             keymap,
             builtin_activations,
             registry,
-            plugin_hints,
+            footer_hints,
             pending_g: false,
         }
     }
@@ -156,7 +156,7 @@ impl Component for BaseLayer {
         // the footer for free.
         let mut hints: Vec<(&'static str, &'static str)> =
             vec![("hjkl", "pan"), ("a/z", "zoom"), (":", "cmd")];
-        hints.extend(self.plugin_hints.iter().copied());
+        hints.extend(self.footer_hints.iter().copied());
         hints.push(("q", "quit"));
         hints
     }

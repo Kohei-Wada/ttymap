@@ -99,7 +99,6 @@ mod tests {
         PaletteEntry {
             label: "Test".to_string(),
             hint: String::new(),
-            name: "test",
             spawn: std::rc::Rc::new(|_| -> Option<Box<dyn Component>> { None }),
         }
     }

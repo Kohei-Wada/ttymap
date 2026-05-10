@@ -109,5 +109,5 @@ local function toggle()
     if w then close() else open() end
 end
 
-ttymap.register_palette_command({ label = "Toggle help", invoke = toggle })
+ttymap.register_palette_command({ label = "Toggle help", hint = "?", invoke = toggle })
 ttymap.register_keybind("?", toggle)
