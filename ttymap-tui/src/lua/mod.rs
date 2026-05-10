@@ -766,46 +766,59 @@ mod tests {
         }
     }
 
-    /// Driver test for the Lua-driven user-config flow: a user
-    /// init.lua marking `package.loaded.<bundled>` truthy must skip
-    /// that bundled plugin's `require`. Proves the bundled
-    /// `runtime/init.lua` runs `require("ttymap.user_config").load()`
-    /// BEFORE requiring plugins, and that `package.loaded` is the
-    /// right hook for users to disable bundled plugins.
+    /// Driver test for the Lua-driven user-config flow: bundled
+    /// `runtime/init.lua` runs the bundled plugin set FIRST, then
+    /// pulls in user config LAST via
+    /// `require("ttymap.user_config").load()`. User init.lua should
+    /// activate user plugins via `require` (same path as bundled —
+    /// the searcher wrapper drains the slot per plugin); calling
+    /// `register_*` directly from init.lua isn't supported because
+    /// nothing drains the slot for the bare init chunk.
     ///
     /// Stubs `ttymap.user_config` via `package.preload` so the test
     /// doesn't have to mutate the real `~/.config/ttymap/init.lua`
     /// (or the user's HOME).
     #[test]
-    fn user_init_lua_can_skip_a_bundled_plugin_via_package_loaded() {
-        let layer = temp_layer("user-skip-bundled");
-        // Bundled plugin set: one plugin to keep the test tight.
+    fn user_init_lua_runs_after_bundled_plugin_set() {
+        let layer = temp_layer("user-after-bundled");
+        // Bundled plugin.
         write_plugin(
             &layer,
             "alpha.lua",
             r#"ttymap.register_palette_command({ label = "alpha", invoke = function() return true end })"#,
         );
-        // Bundled init.lua: pulls in user config (stubbed below),
-        // then requires the bundled plugin.
+        // "User" plugin (lives in the same layer for the test;
+        // production would put this under `~/.config/ttymap/plugin/`).
+        write_plugin(
+            &layer,
+            "user_beta.lua",
+            r#"ttymap.register_palette_command({ label = "user-beta", invoke = function() return true end })"#,
+        );
+        // Bundled init.lua: standard order — bundled plugin first,
+        // user config last.
         std::fs::write(
             layer.join("init.lua"),
             r#"
-            require("ttymap.user_config").load()
             require "alpha"
+            require("ttymap.user_config").load()
             "#,
         )
         .expect("write bundled init.lua");
 
         let (lua, registry, _shared, _bus) = fresh_pluginsearcher_state(&layer);
 
-        // Stub `ttymap.user_config`: its `load()` simulates a user
-        // init.lua that pre-marks the bundled plugin as loaded.
+        // Stub `ttymap.user_config.load()`: simulates a user
+        // init.lua. At the point it runs, the bundled plugin's
+        // palette entry must already exist — proving user runs
+        // AFTER bundled. Then it requires a user plugin.
         lua.load(
             r#"
             package.preload["ttymap.user_config"] = function()
                 return {
                     load = function()
-                        package.loaded.alpha = true
+                        _G.bundled_loaded_at_user_time =
+                            package.loaded.alpha and 1 or 0
+                        require "user_beta"
                     end,
                 }
             end
@@ -820,12 +833,24 @@ mod tests {
             .exec()
             .expect("run bundled init");
 
-        // alpha was skipped → registry empty.
+        // Bundled was already loaded by the time user_config.load ran.
+        let count: i64 = lua
+            .globals()
+            .get("bundled_loaded_at_user_time")
+            .expect("global");
         assert_eq!(
-            registry.borrow().palette_entry_count(),
-            0,
-            "bundled require should be a no-op when user pre-marked package.loaded"
+            count, 1,
+            "bundled plugin should have loaded BEFORE user config"
         );
+        // Both entries land in registration order: bundled first,
+        // then user.
+        let labels: Vec<String> = registry
+            .borrow()
+            .palette_entries()
+            .iter()
+            .map(|(_, e)| e.label.clone())
+            .collect();
+        assert_eq!(labels, vec!["alpha", "user-beta"]);
     }
 
     use std::path::Path;

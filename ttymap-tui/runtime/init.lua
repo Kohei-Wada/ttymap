@@ -1,26 +1,22 @@
--- Bundled defaults for ttymap. Runs first; pulls in the user's
--- `~/.config/ttymap/init.lua` partway through via the
--- `ttymap.user_config` Lua lib (no Rust support — Lua handles the
--- path resolution and dofile) so user mutations land BEFORE
--- bundled plugins are required. Both files share one Lua VM.
+-- Bundled defaults for ttymap. The order is the standard layered
+-- one (system → bundled → user):
 --
--- Every option value is the Rust-side default. Source of truth:
--- `src/config.rs`. Edit a line to change the shipping default
--- (lands via PR); users override per-leaf in their own init.lua.
+--   1. seed `ttymap.opt.*` defaults (bundled — shipping values)
+--   2. activate the bundled plugin set via `require`
+--   3. pull in the user's `~/.config/ttymap/init.lua` LAST, so
+--      user mutations / handle :remove() / user `require`s win
 --
--- Disable a bundled plugin from your user init.lua by pre-marking it
--- as already-loaded — Lua's module cache makes the subsequent
--- `require` a no-op:
+-- The user-config loader is a Lua lib (`ttymap.user_config`); Rust
+-- never names the user-config path. To replace the bundled set
+-- entirely, point `$TTYMAP_RUNTIME` at your own runtime layer with
+-- its own `init.lua`.
 --
---     -- ~/.config/ttymap/init.lua
---     package.loaded.quake = true
---     package.loaded.aircraft = true
---
--- Or replace `runtime/init.lua` entirely via `$TTYMAP_RUNTIME` for
--- a fully custom plugin set.
+-- Source of truth for the option defaults below: `src/config.rs`.
+-- Editing a line here changes the shipping default (via PR); users
+-- override per-leaf in their own init.lua.
 
 ------------------------------------------------------------
--- ttymap.opt.map — initial viewport + zoom envelope.
+-- 1. ttymap.opt.map — initial viewport + zoom envelope.
 ------------------------------------------------------------
 ttymap.opt.map.lat       = 52.51298   -- Berlin
 ttymap.opt.map.lon       = 13.42012
@@ -54,17 +50,7 @@ ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
 
 ------------------------------------------------------------
--- User init.lua — runs HERE so the user can:
---   * override any `ttymap.opt.*` set above
---   * pre-mark `package.loaded.X = true` to skip a bundled plugin
---   * `require` user plugins in any order (before or after bundled)
--- Missing / broken user file = logged-and-skipped, this file
--- continues normally.
-------------------------------------------------------------
-require("ttymap.user_config").load()
-
-------------------------------------------------------------
--- Bundled plugins — chrome first, then everything else
+-- 2. Bundled plugins — chrome first, then everything else
 -- (alphabetical). Adjust per file to taste.
 ------------------------------------------------------------
 require "info"
@@ -85,3 +71,20 @@ require "search"
 require "terminator"
 require "travel"
 require "wiki"
+
+------------------------------------------------------------
+-- 3. User init.lua — runs LAST so the user wins:
+--   * override any `ttymap.opt.*` set above
+--   * `ttymap.keymap.set/del`
+--   * `require` user plugins (their registrations stack on top of
+--     bundled; the registry scans in registration order, so for a
+--     keybind conflict the user must `:remove()` the bundled handle
+--     first — bundled plugins don't expose their handles by default,
+--     so this is mostly a "use a different keybind" situation)
+--   * use the handle returned by your own `register_palette_command`
+--     / `register_keybind` / `on_event` and call `:remove()` on it
+--     to drop a registration later
+-- Missing / broken user file = logged-and-skipped, the host keeps
+-- booting.
+------------------------------------------------------------
+require("ttymap.user_config").load()

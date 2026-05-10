@@ -404,25 +404,32 @@ pre-pass, then `api::install` adds `http` / `map` / `api` /
 `package.searchers` entry is inserted. Then the bundled init.lua
 runs and drives the rest.
 
-The bundled init.lua's job (`ttymap-tui/runtime/init.lua`):
+The bundled init.lua's job (`ttymap-tui/runtime/init.lua`) — standard
+layered order (system → bundled → user):
 
 1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with
    Rust seeds; serves as the documented schema).
-2. Call `require("ttymap.user_config").load()` — resolves the user
+2. `require` the bundled plugin set — they register before user
+   config sees the registry.
+3. `require("ttymap.user_config").load()` — resolves the user
    init.lua path (`$XDG_CONFIG_HOME/ttymap/init.lua` or
    `$HOME/.config/ttymap/init.lua`) and `dofile`s it.
-3. `require` the bundled plugin set.
 
 User init.lua can then:
 
-- mutate `ttymap.opt.*` (host-owned settings — last-wins)
+- mutate `ttymap.opt.*` (last-wins on the shared table)
 - call `ttymap.keymap.set/del`
-- pre-mark `package.loaded.<plugin> = true` to skip a bundled plugin
-  (the bundled `require` becomes a no-op via Lua's module cache)
-- `require "<plugin>"` to eagerly load any plugin (bundled or user)
-  before bundled defaults
-- `require "ttymap.<lib>"` and mutate it to seed a bundled plugin's
-  config holder before that plugin loads
+- `require "<plugin>"` to activate user plugins (their
+  registrations stack on top of bundled in the registry)
+- call `:remove()` on handles returned by their own
+  `register_palette_command` / `register_keybind` / `on_event` to
+  drop registrations later
+
+Disabling a bundled plugin from user init.lua is intentionally
+not part of this flow (bundled has already registered by the time
+user runs). To opt out of the bundled set wholesale, point
+`$TTYMAP_RUNTIME` at a custom runtime layer with your own
+`init.lua`.
 
 `ttymap.opt.*` exposes:
 
