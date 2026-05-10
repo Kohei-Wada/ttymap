@@ -354,29 +354,33 @@ user machine it doesn't exist and is filtered out, so user > bundled
 in production.
 
 The plugin-aware `package.searchers` entry installed by
-`vm::install_plugin_searcher` walks the runtime path on every
-top-level `require "<name>"` — first hit (`<layer>/plugin/<name>.lua`
-or `<layer>/plugin/<name>/init.lua`) wins. So if both bundled and
-user layers ship a `wiki`, the user's wins via runtime-path priority.
-The `package.path` extension also walks every layer for sub-module
-requires (`travel.routes.italy` resolves to
-`<layer>/plugin/travel/routes/italy.lua` as a plain chunk).
+`vm::install_plugin_searcher` owns **all** `<layer>/plugin/...`
+resolution. It walks the runtime path on every require:
+
+- **Top-level** (`require "wiki"`) → `<layer>/plugin/wiki.lua` or
+  `<layer>/plugin/wiki/init.lua`, first hit wins. User > bundled by
+  runtime-path priority. Runs through the wrapper, attribution lands
+  under `wiki`.
+- **Dotted** (`require "travel.routes.italy"` from inside
+  `plugin/travel/init.lua`) → `<layer>/plugin/travel/routes/italy.lua`.
+  Plain chunk, no attribution wrap.
+
+`package.path` carries `<layer>/lua/` only — `plugin/` is exclusively
+the plugin searcher's domain. Each searcher has one job: lib
+searcher + `package.path` for `<layer>/lua/...`, plugin searcher
+for everything under `<layer>/plugin/...`.
 
 ### `plugin/` vs `lua/`
 
 - `<layer>/plugin/<name>.lua` or `<layer>/plugin/<name>/init.lua` —
-  require-able plugin modules. Top-level `require "<name>"` from
-  init.lua routes through the plugin searcher's wrapper, which calls
-  `register_one` so `ttymap.register_*` calls inside the chunk
-  attribute under `<name>`.
+  the plugin entry. Top-level `require "<name>"` from init.lua hits
+  the plugin searcher's wrapper, which calls `register_one` so
+  `ttymap.register_*` calls inside the chunk attribute under
+  `<name>`. Internal sub-modules under `<layer>/plugin/<name>/...`
+  are resolved by the same searcher as plain chunks (no wrap).
 - `<layer>/lua/<dot.path>.lua` — `require`'d shared libs only
-  (e.g. `ttymap.fmt`). The lib searcher (also at the runtime-path
-  walker) returns plain chunks; no attribution.
-
-Discrimination rule: top-level requires (no `.` in the name) are
-candidate plugin entries — the plugin searcher fires before
-`package.path`. Dotted requires (sub-modules, libs) skip the plugin
-searcher and fall through to the lib searcher / `package.path`.
+  (e.g. `ttymap.fmt`). Resolved via `package.path` (and the lib
+  searcher fallback); plain chunks, no attribution.
 
 ### `make install`
 
@@ -517,9 +521,9 @@ a one-shot warning to point that out.
 
 The directory layout lets a large plugin spread its source across
 `<plugin>/init.lua` + sibling files (`<plugin>/state.lua`, etc.)
-reachable via `require "<plugin>.state"` through the extended
-`package.path` (sub-module requires skip the plugin wrapper and
-load as plain chunks).
+reachable via `require "<plugin>.state"`. The plugin searcher
+resolves both top-level and dotted names against `<layer>/plugin/`;
+top-level wraps with attribution, dotted is a plain chunk.
 
 ## Footer hints
 

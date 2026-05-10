@@ -337,11 +337,11 @@ mod tests {
         std::rc::Rc<crate::event::EventBus>,
     ) {
         let lua = new_lua();
-        // Extend package.path so plugin sub-modules and lib requires
-        // resolve from the custom layer, mirroring the production
-        // setup `vm::new_lua` does for the global runtime path.
+        // Extend package.path so lib requires resolve from the custom
+        // layer, mirroring the production setup `vm::new_lua` does for
+        // the global runtime path. `plugin/` is NOT added here — the
+        // plugin searcher (installed below) owns that tree.
         vm::prepend_package_path(&lua, &layer.join("lua"));
-        vm::prepend_package_path(&lua, &layer.join("plugin"));
         let shared = host::LuaHostShared::empty();
         let slot = capture::new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
