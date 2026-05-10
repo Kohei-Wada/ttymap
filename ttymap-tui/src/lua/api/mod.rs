@@ -54,6 +54,17 @@
 //! ttymap.log    :info(msg) / :warn(msg) / :error(msg)
 //!                                            forward to host log at
 //!                                            target `lua`
+//! ttymap.storage:open(ns) -> Store           per-namespace persistent KV
+//!                                            under XDG data dir; values
+//!                                            are JSON-encoded via the same
+//!                                            `lua_to_json` rules as
+//!                                            `ttymap.json:stringify`.
+//!                                            Store: :get(k, default) -> v,
+//!                                            :set(k, v), :delete(k).
+//!                                            Atomic write (temp + rename);
+//!                                            corrupt / missing files
+//!                                            return `default`. Namespace
+//!                                            and key match `[A-Za-z0-9_-]+`.
 //! ttymap.api.card.open(spec) -> Handle    push a focused window
 //!                                            (LuaCardComponent) onto
 //!                                            the stack; handle:close()
@@ -105,12 +116,14 @@ mod help;
 mod imperative;
 mod log;
 mod register;
+mod storage;
 mod tile;
 
 use config::HostConfig;
 use help::HostHelp;
 use log::HostLog;
 use map::HostMap;
+use storage::HostStorage;
 use tile::HostTile;
 
 use std::sync::{Arc, Mutex};
@@ -184,6 +197,16 @@ pub fn install(
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp::new(shared.clone()))?)?;
     ttymap.set("log", lua.create_userdata(HostLog::new("lua".to_string()))?)?;
+    if let Some(host_storage) = HostStorage::new() {
+        ttymap.set("storage", lua.create_userdata(host_storage)?)?;
+    } else {
+        // No per-user data dir resolved — `:open` would have nowhere
+        // to write. Skip wiring rather than expose a userdata that
+        // errors on every call; plugins probing `ttymap.storage` for
+        // nil will see "feature unavailable" instead of cryptic
+        // ProjectDirs failures.
+        ::log::warn!("lua-host: ttymap.storage not installed (no data dir resolved)");
+    }
 
     // Activation surfaces (`register_palette_command` /
     // `register_keybind` / `on_event`) — every call pushes directly
@@ -267,7 +290,7 @@ mod tests {
         // Each namespace lookup must return a userdata; the shape
         // confirms the install wired all namespaces in.
         for ns in [
-            "http", "map", "json", "sgp4", "tile", "config", "help", "log",
+            "http", "map", "json", "sgp4", "tile", "config", "help", "log", "storage",
         ] {
             let ud: mlua::AnyUserData = lua
                 .load(format!("return ttymap.{ns}"))
