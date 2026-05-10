@@ -39,6 +39,10 @@
 //!                                            new-centre / old-zoom frame)
 //! ttymap.map    :center() -> lon, lat       latest centre, refreshed per dispatch
 //! ttymap.json   :parse(s) -> value|nil      JSON → Lua tables (errors → nil)
+//! ttymap.json   :stringify(value) -> string Lua → JSON (mixed-key tables /
+//!                                            function / userdata → error;
+//!                                            NaN / Infinity → null;
+//!                                            empty `{}` → empty object)
 //! ttymap.sgp4   :parse_tle(text) -> handle  parse a TLE for SGP4 propagation
 //! ttymap.sgp4   :parse_tles(text) -> array  parse a multi-TLE block (groups)
 //! ttymap.sgp4   :propagate(h[, t]) -> table propagate a handle to unix time t
