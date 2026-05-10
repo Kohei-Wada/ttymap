@@ -48,8 +48,9 @@ end
 
 local function build_lines()
     local lines = {
-        text_line(" A terminal-based map viewer — Mapbox vector tiles"),
-        text_line(" rendered as Unicode Braille."),
+        text_line(" Terminal-native scriptable globe — Mapbox vector"),
+        text_line(" tiles as Unicode Braille, with a Lua plugin"),
+        text_line(" runtime for live data overlays and camera tours."),
         text_line(" Inspired by and built on ideas from mapscii:"),
         url_line(URL_MAPSCII),
         blank_line(),
