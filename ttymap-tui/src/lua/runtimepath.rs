@@ -120,14 +120,14 @@ pub fn ensure_runtime_path_for_tests() {
     let _ = RUNTIME_PATH.set(vec![dev]);
 }
 
-/// `true` iff `dir` exists and looks like a ttymap runtime layer —
-/// it contains a `plugin/` subdir (auto-discovered plugins) or a
-/// `lua/` subdir (require'd libs). nvim convention: a layer can
-/// host either tier independently. A bare dir without either is
-/// rejected so the manifest path baked at compile time (which
-/// doesn't exist on user machines) and stale dirs filter out.
+/// `true` iff `dir` exists. The layer's internal layout
+/// (`plugin/` vs `lua/` etc.) is not Rust's concern — Lua-side
+/// libs (`ttymap.plugin_searcher`, `ttymap.user_config`) decide
+/// what to look for under each layer. The manifest path baked at
+/// compile time naturally filters out on user machines because
+/// it doesn't exist there.
 fn is_valid(dir: &Path) -> bool {
-    dir.is_dir() && (dir.join("plugin").is_dir() || dir.join("lua").is_dir())
+    dir.is_dir()
 }
 
 /// `$XDG_CONFIG_HOME/ttymap` (default `~/.config/ttymap`). Holds
@@ -152,21 +152,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_valid_requires_plugin_or_lua_subdir() {
+    fn is_valid_accepts_any_existing_directory() {
+        // The layer's internal layout is Lua-side concern (the
+        // plugin searcher decides what `<layer>/<sub>` to look at).
+        // Rust just confirms the path exists and is a directory.
         let dir = std::env::temp_dir().join("ttymap-runtimepath-test-empty");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(!is_valid(&dir), "empty dir should not validate");
-
-        std::fs::create_dir(dir.join("lua")).unwrap();
-        assert!(is_valid(&dir), "dir with lua/ subdir validates");
-
-        // Either tier alone is enough — a layer hosting only auto-
-        // discovered plugins (no libs) is legitimate.
-        let dir2 = std::env::temp_dir().join("ttymap-runtimepath-test-plugin-only");
-        let _ = std::fs::remove_dir_all(&dir2);
-        std::fs::create_dir_all(dir2.join("plugin")).unwrap();
-        assert!(is_valid(&dir2), "dir with plugin/ subdir validates");
+        assert!(is_valid(&dir), "any existing dir validates");
     }
 
     #[test]

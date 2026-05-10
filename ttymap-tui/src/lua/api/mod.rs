@@ -115,7 +115,6 @@ use mlua::{Lua, Table};
 
 use crate::compositor::op::Op;
 use crate::event::{Event, Level};
-use crate::lua::capture::CaptureSlot;
 use crate::lua::host::{LuaHostHandles, LuaHostShared};
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::shared::http::HttpClient;
@@ -131,15 +130,14 @@ use ttymap_engine::shared::http::HttpClient;
 /// before this runs. We add fields to the same table rather than
 /// replace it, so `ttymap.opt.*` mutations from `init.lua` survive.
 ///
-/// `slot` receives any `register_palette_command` / `register_keybind`
-/// declarations and any `ttymap.api.frame.on_tick` subscriptions the
-/// script makes. Rust never inspects the script's return value or
-/// table layout — the script is a plugin by virtue of existing in
-/// `<runtime>/plugin/`, identity = file stem.
+/// "Plugin" is purely a Lua-side concept — a `.lua` file's worth of
+/// `register_palette_command` / `register_keybind` / `on_event`
+/// calls. The host has no notion of plugin identity, no per-script
+/// slot, no attribution. Each `register_*` call pushes directly into
+/// `registry` and returns a handle to Lua.
 pub fn install(
     lua: &Lua,
     shared: Arc<LuaHostShared>,
-    slot: CaptureSlot,
     ops: crate::compositor::op::OpsBuffer,
     bus: std::rc::Rc<crate::event::EventBus>,
     registry: crate::lua::registrar::PluginRegistryHandle,
@@ -184,18 +182,16 @@ pub fn install(
     ttymap.set("log", lua.create_userdata(HostLog::new("lua".to_string()))?)?;
 
     // Activation surfaces (`register_palette_command` /
-    // `register_keybind` / `on_event`) — `register_*` capturers
-    // push into the shared [`CaptureSlot`]; `on_event` subscribes
-    // directly against the bus and returns a handle. The host
-    // inspects the slot after the script finishes loading. Each is
-    // opt-in and explicit; the host never auto-adds a palette row
-    // or keybind from the plugin's `name` / `label` fields.
-    register::install(lua, &ttymap, slot.clone(), bus.clone(), registry)?;
+    // `register_keybind` / `on_event`) — every call pushes directly
+    // into the live `PluginRegistry` (or, for `on_event`, subscribes
+    // directly against the bus) and returns a Lua-facing handle.
+    // No deferred capture, no per-script slot.
+    register::install(lua, &ttymap, bus.clone(), registry, shared.clone())?;
 
     // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
     // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
     // makes from inside its callbacks.
-    imperative::install(lua, &ttymap, slot, ops.clone(), shared.clone(), bus)?;
+    imperative::install(lua, &ttymap, ops.clone(), shared.clone(), bus)?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
@@ -222,6 +218,19 @@ pub fn install(
         })?,
     )?;
 
+    // ── ttymap.runtime_path ──────────────────────────────────────────
+    //
+    // The resolved runtime layer list as a 1-indexed Lua array. The
+    // bundled `ttymap.plugin_searcher` Lua lib reads this to walk
+    // `<layer>/plugin/...` for plugin require resolution. Rust never
+    // names the `plugin/` subdirectory itself — that string lives
+    // entirely in the Lua searcher.
+    let layers: Vec<String> = crate::lua::runtime_path()
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    ttymap.set("runtime_path", lua.create_sequence_from(layers)?)?;
+
     Ok(LuaHostHandles { center, zoom })
 }
 
@@ -231,29 +240,19 @@ pub fn install(
 mod tests {
     use super::*;
     use crate::UserCommand;
-    use crate::lua::capture::new_capture_slot;
     use ttymap_engine::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors
-    /// the production install path; the capture slot and bus are
-    /// dropped since these tests don't exercise registration or
-    /// dispatch.
+    /// the production install path; the bus is dropped since these
+    /// tests don't exercise registration or dispatch.
     fn install_for_test() -> (mlua::Lua, LuaHostHandles, crate::compositor::op::OpsBuffer) {
         let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
         let ops = crate::compositor::op::new_ops_buffer();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let registry = crate::lua::new_plugin_registry();
-        let handles = install(
-            &lua,
-            LuaHostShared::empty(),
-            slot,
-            ops.clone(),
-            bus,
-            registry,
-        )
-        .expect("install ttymap table");
+        let handles = install(&lua, LuaHostShared::empty(), ops.clone(), bus, registry)
+            .expect("install ttymap table");
         (lua, handles, ops)
     }
 
@@ -379,12 +378,10 @@ mod tests {
 
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             shared.clone(),
-            slot,
             crate::compositor::op::new_ops_buffer(),
             bus,
             crate::lua::new_plugin_registry(),
@@ -414,16 +411,12 @@ mod tests {
     #[test]
     fn api_frame_on_tick_subscribes_each_callback_against_the_bus() {
         // Each `ttymap.api.frame.on_tick(fn)` call subscribes
-        // directly to the bus (one entry per call) and bumps the
-        // slot's events_registered counter so the load gate sees
-        // tick-only plugins.
+        // directly to the bus (one entry per call).
         let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            slot.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
             crate::lua::new_plugin_registry(),
@@ -442,7 +435,6 @@ mod tests {
             2,
             "two on_tick calls -> two bus subscribers"
         );
-        assert_eq!(slot.borrow().events_registered, 2);
     }
 
     #[test]
@@ -451,12 +443,10 @@ mod tests {
         // subscribes directly under its event name on the shared
         // bus; multiple distinct names land in distinct buckets.
         let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            slot.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
             crate::lua::new_plugin_registry(),
@@ -471,7 +461,6 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        assert_eq!(slot.borrow().events_registered, 3);
         assert_eq!(bus.count("tick"), 1);
         assert_eq!(bus.count("frame_ready"), 2);
     }
@@ -482,12 +471,10 @@ mod tests {
         // method; calling it must remove that exact subscriber from
         // the bus. Idempotent: a second call is a no-op.
         let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            slot,
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
             crate::lua::new_plugin_registry(),
@@ -517,12 +504,10 @@ mod tests {
         // unreachable from any sensible dispatch call — surface an
         // error at register time so the plugin author finds it.
         let lua = mlua::Lua::new();
-        let slot = new_capture_slot();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            slot,
             crate::compositor::op::new_ops_buffer(),
             bus,
             crate::lua::new_plugin_registry(),

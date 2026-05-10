@@ -82,7 +82,7 @@ impl App {
         let LuaSubsystem {
             handle: lua,
             registry,
-            plugin_hints,
+            footer_hints,
         } = lua;
 
         // Compositor bootstraps with the BaseLayer (keymap +
@@ -97,7 +97,7 @@ impl App {
             keymap,
             builtin_activations,
             registry,
-            plugin_hints,
+            footer_hints,
         )));
 
         App {

@@ -1,13 +1,13 @@
 //! `PluginRegistry` — live home for plugin-declared activations and
 //! palette entries.
 //!
-//! Each `.lua` file under any runtime layer's `plugin/` directory
-//! registers via `register_keybind` / `register_palette_command`.
-//! The captured [`KeybindSpec`](crate::lua::capture::KeybindSpec) /
-//! [`PaletteCommandSpec`](crate::lua::capture::PaletteCommandSpec)
-//! are converted to [`Activation`] / [`PaletteEntry`] by
-//! [`crate::lua::loader::register_one`] and added to a single shared
-//! [`PluginRegistry`] paired with the handle ID Lua received.
+//! Lua scripts call `ttymap.register_keybind(key, fn)` /
+//! `ttymap.register_palette_command(spec)` and each call pushes
+//! directly into [`PluginRegistry`] paired with a monotonic handle
+//! ID. The Lua-facing handle (`KeybindHandle` / `PaletteCommandHandle`)
+//! exposes `:remove()` which finds and drops the entry by that ID.
+//! The host has no notion of "plugin" — that's purely a Lua-side
+//! organisational unit (a `.lua` file's worth of `register_*` calls).
 //!
 //! The registry lives behind an `Rc<RefCell<...>>` so:
 //!
@@ -18,9 +18,6 @@
 //! - `PaletteCommandHandle:remove()` / `KeybindHandle:remove()` from
 //!   Lua mutably borrow it to drop the matching entry by ID
 //!
-//! This module replaces the previous transient `Registrar` struct
-//! whose fields were moved out into `BaseLayer` / palette installer
-//! at startup — leaving Lua handles with nothing to remove from.
 //! `PluginRegistry` stays alive for the program's lifetime, owned
 //! jointly through `Rc` clones by every consumer.
 //!
@@ -137,7 +134,6 @@ mod tests {
         PaletteEntry {
             label: label.to_string(),
             hint: String::new(),
-            name: "test",
             spawn: std::rc::Rc::new(|_| -> Option<Box<dyn Component>> { None }),
         }
     }

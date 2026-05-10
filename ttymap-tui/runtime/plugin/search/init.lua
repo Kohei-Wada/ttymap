@@ -112,4 +112,4 @@ local function open()
 end
 
 ttymap.register_keybind("/", open)
-ttymap.register_palette_command({ label = "Search location", invoke = open })
+ttymap.register_palette_command({ label = "Search location", hint = "/", invoke = open })

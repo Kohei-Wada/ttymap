@@ -1,11 +1,12 @@
-//! Plugin activation primitives — what an [`crate::lua::Registrar`]
-//! collects from each plugin's `register_keybind` /
-//! `register_palette_command` calls and hands to the compositor at
-//! startup.
+//! Activation primitives — what `register_keybind` /
+//! `register_palette_command` produce at registration time.
 //!
 //! Pure data + factory closures; no behaviour. The compositor's
 //! [`super::base::BaseLayer`] consumes [`Activation`]s; the palette
-//! installer consumes [`PaletteEntry`]s.
+//! installer consumes [`PaletteEntry`]s. Each entry is just a row in
+//! a flat registry; the host has no notion of "plugin" — that's a
+//! Lua-side conventional grouping (one .lua file's worth of
+//! `register_*` calls).
 
 use std::rc::Rc;
 
@@ -44,13 +45,15 @@ pub struct Activation {
 
 /// Palette entry description. Selection always pushes a fresh
 /// component on the stack — there's no toggle/spawn distinction now
-/// that the compositor doesn't dedup. A plugin that wants "close on
+/// that the compositor doesn't dedup. A caller that wants "close on
 /// re-select" closes itself in its own `handle_key`.
+///
+/// `hint` is the keybind string the entry is also bound to (e.g.
+/// `"w"`); empty string when the entry is palette-only. Used by the
+/// help cheatsheet and the footer-hint slot to surface the binding
+/// alongside the label.
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
-    /// Plugin's canonical short name (`module.name`). Used as the
-    /// footer slug paired with `hint` (`[<hint> <name>]`).
-    pub name: &'static str,
     pub spawn: SpawnComponent,
 }

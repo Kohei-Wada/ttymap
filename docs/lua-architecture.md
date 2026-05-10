@@ -39,12 +39,9 @@ ttymap-tui/src/lua/
                    the VM, installs API surface, runs the init.lua
                    chain — single entry point, no separate walker)
   vm.rs            new_lua + install_builtin_searcher (libs in
-                   `lua/`) + install_plugin_searcher (top-level
-                   plugin requires from `plugin/`, wraps with
-                   register_one for attribution)
-  plugin_loader.rs register_one — per-plugin chunk runner; called
-                   from the plugin searcher's wrapper closure to
-                   drain the capture slot into the registry
+                   `lua/`); `<layer>/plugin/...` resolution lives
+                   in the Lua-side `ttymap.plugin_searcher` lib,
+                   not in Rust
   tick.rs          dispatch_tick(bus, map) — per-frame fan-out of
                    the "tick" bucket on the host EventBus
   runtimepath.rs   runtime path resolution (env / manifest / xdg)
@@ -53,17 +50,14 @@ ttymap-tui/src/lua/
                    the snap-only thin path
   handle.rs        LuaHandle — shared host plumbing (drain_ops, tick,
                    notify_*) the App calls into
-  registrar.rs     Registrar — collects activations / palette entries
-                   / event subscribers harvested from each plugin
+  registrar.rs     PluginRegistry — live registry of activations +
+                   palette entries; `register_*` calls push directly
+                   here, Lua handles `:remove()` drop entries by ID
   map_api.rs       host-side MapApi struct (per-frame draw surface,
                    ratatui buffer + projection + theme; no mlua)
   host.rs          host-side Lua-runtime state (LuaHostShared,
-                   LuaHostHandles, NotifyEntry, PluginEntry) — Rust
+                   LuaHostHandles, NotifyEntry, HelpEntry) — Rust
                    structs the api/ namespaces read/write
-  capture.rs       receptacle types for plugin → host registration
-                   (PaletteCommandSpec, KeybindSpec,
-                   CapturedRegistration, CaptureSlot — events
-                   bypass capture and subscribe directly to the bus)
   api/             Rust→Lua API binding (the `ttymap` global).
                    File ↔ Lua-namespace 1:1 (file name = `ttymap.<X>`).
     mod.rs         install() — assembles the namespace userdatas;
@@ -78,7 +72,9 @@ ttymap-tui/src/lua/
     help.rs        ttymap.help   :keymap_entries / :palette_entries
     log.rs         ttymap.log    :info / :warn / :error
     tile.rs        ttymap.tile   :attribution
-    register.rs    setup-time `ttymap.register_*` / `on_event` capture
+    register.rs    `ttymap.register_*` / `on_event` — every call pushes
+                   directly into the live PluginRegistry / EventBus and
+                   returns a Lua-facing handle (no deferred capture)
     imperative.rs  `ttymap.api.{card,palette,frame}` runtime cluster
   bridge/          Lua→Rust trait adapters
     handle.rs           shared dispatch plumbing
@@ -124,8 +120,14 @@ frame; `EventBus::publish(Event::*)` drives every other event.
   callback are logged + swallowed so a single broken plugin can't
   freeze the host. The bus is shared with non-Lua subscribers.
 - **`LuaHostShared`** (`lua/host.rs`) — runtime-data carrier
-  (attribution, geoip endpoint, keymap entries, palette entries),
-  Arc-cloned into each namespace userdata.
+  (attribution, geoip endpoint, keymap entries, help-cheatsheet
+  entries), Arc-cloned into each namespace userdata.
+- **`PluginRegistry`** (`lua/registrar.rs`) — live `Rc<RefCell<...>>`
+  registry of activations + palette entries that `ttymap.register_*`
+  push directly into. `BaseLayer` borrows it on each keypress; the
+  `:` palette-installer borrows it on each open; Lua-side
+  `KeybindHandle:remove()` / `PaletteCommandHandle:remove()`
+  mutably borrow it to drop entries by ID.
 
 ## Plugin runtime API (`ttymap` global)
 
@@ -353,34 +355,35 @@ Layer 2 path is the maintainer's home dir baked at compile time; on a
 user machine it doesn't exist and is filtered out, so user > bundled
 in production.
 
-The plugin-aware `package.searchers` entry installed by
-`vm::install_plugin_searcher` owns **all** `<layer>/plugin/...`
-resolution. It walks the runtime path on every require:
+The plugin-aware `package.searchers` entry is installed by the
+Lua lib `ttymap.plugin_searcher`
+(`runtime/lua/ttymap/plugin_searcher.lua`); the bundled
+`runtime/init.lua` calls `.install()` once before any plugin
+`require`. The searcher walks `ttymap.runtime_path` (a list Rust
+populates with the resolved layers) on every require, finds the
+file at `<layer>/plugin/<rel>.lua` or `<layer>/plugin/<rel>/init.lua`
+(first hit wins, user > bundled by runtime-path priority), and runs
+it as a plain `load(source)()` chunk. Whatever `register_*` calls
+the chunk makes push directly into the live registry — there is no
+Rust-side attribution wrap, no per-plugin slot, no notion of
+plugin identity on the host side.
 
-- **Top-level** (`require "wiki"`) → `<layer>/plugin/wiki.lua` or
-  `<layer>/plugin/wiki/init.lua`, first hit wins. User > bundled by
-  runtime-path priority. Runs through the wrapper, attribution lands
-  under `wiki`.
-- **Dotted** (`require "travel.routes.italy"` from inside
-  `plugin/travel/init.lua`) → `<layer>/plugin/travel/routes/italy.lua`.
-  Plain chunk, no attribution wrap.
-
-`package.path` carries `<layer>/lua/` only — `plugin/` is exclusively
-the plugin searcher's domain. Each searcher has one job: lib
-searcher + `package.path` for `<layer>/lua/...`, plugin searcher
-for everything under `<layer>/plugin/...`.
+The Rust side knows neither the `plugin/` directory layout nor the
+searcher logic — it only owns the `ttymap.runtime_path` primitive.
+`package.path` carries `<layer>/lua/` only.
 
 ### `plugin/` vs `lua/`
 
 - `<layer>/plugin/<name>.lua` or `<layer>/plugin/<name>/init.lua` —
-  the plugin entry. Top-level `require "<name>"` from init.lua hits
-  the plugin searcher's wrapper, which calls `register_one` so
-  `ttymap.register_*` calls inside the chunk attribute under
-  `<name>`. Internal sub-modules under `<layer>/plugin/<name>/...`
-  are resolved by the same searcher as plain chunks (no wrap).
+  a plugin entry. `require "<name>"` from init.lua hits the
+  plugin searcher and runs the chunk; `ttymap.register_*` calls
+  inside push directly into the live registry. Internal sub-modules
+  under `<layer>/plugin/<name>/...` are resolved by the same
+  searcher; the `name.lua` / `name/init.lua` precedence is identical
+  for both top-level and sub-module requires.
 - `<layer>/lua/<dot.path>.lua` — `require`'d shared libs only
   (e.g. `ttymap.fmt`). Resolved via `package.path` (and the lib
-  searcher fallback); plain chunks, no attribution.
+  searcher fallback).
 
 ### `make install`
 

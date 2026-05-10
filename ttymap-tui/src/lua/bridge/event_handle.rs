@@ -68,7 +68,7 @@ mod tests {
         .unwrap();
         let f: mlua::Function = lua.globals().get("bump").unwrap();
         let key = lua.create_registry_value(f).unwrap();
-        let id = bus.subscribe_lua("frame_ready", "test", lua.clone(), key);
+        let id = bus.subscribe_lua("frame_ready", lua.clone(), key);
 
         bus.publish(Event::FrameReady);
         let n: i64 = lua.globals().get("fired").unwrap();

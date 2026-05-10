@@ -25,13 +25,13 @@ use crate::lua::api::map;
 /// plugin can't freeze the loop.
 pub fn dispatch_tick(bus: &EventBus, map: &mut MapApi<'_>) {
     let cell = RefCell::new(map);
-    bus.for_each_lua_subscriber("tick", |plugin, lua, f| {
+    bus.for_each_lua_subscriber("tick", |lua, f| {
         let result: mlua::Result<()> = lua.scope(|scope| {
             let map_table = map::make_map_table(lua, scope, &cell)?;
             f.call::<()>(map_table)
         });
         if let Err(e) = result {
-            log::warn!("lua[{}]: tick subscriber failed: {}", plugin, e);
+            log::warn!("lua: tick subscriber failed: {}", e);
         }
     });
 }
@@ -84,8 +84,8 @@ mod tests {
         let (lua_b, key_b) = lua_with_counter("b");
 
         let bus = EventBus::default();
-        bus.subscribe_lua("tick", "a", lua_a.clone(), key_a);
-        bus.subscribe_lua("tick", "b", lua_b.clone(), key_b);
+        bus.subscribe_lua("tick", lua_a.clone(), key_a);
+        bus.subscribe_lua("tick", lua_b.clone(), key_b);
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
         let mut sink: Vec<UserPolyline> = Vec::new();
@@ -111,8 +111,8 @@ mod tests {
         let (lua_good, good_key) = lua_with_counter("good");
 
         let bus = EventBus::default();
-        bus.subscribe_lua("tick", "bad", lua_bad, bad_key);
-        bus.subscribe_lua("tick", "good", lua_good.clone(), good_key);
+        bus.subscribe_lua("tick", lua_bad, bad_key);
+        bus.subscribe_lua("tick", lua_good.clone(), good_key);
 
         let (mut buf, area, frame, theme) = fixture(20, 5);
         let mut sink: Vec<UserPolyline> = Vec::new();
