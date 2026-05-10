@@ -391,39 +391,48 @@ Runs `cargo install --path .`, then copies `runtime/plugin/`,
 
 ## Config (`init.lua` chain) — also the plugin entry point
 
-Two `init.lua` files run in the shared Lua state, in order:
-
-1. `<bundled-tier>/init.lua` (first hit among env / manifest / xdg_data)
-2. `~/.config/ttymap/init.lua`
-
-By the time these run, the API surface is fully installed —
-`build_subsystem` installs `ttymap.opt` / `ttymap.keymap` first, then
-`api::install` extends the same global with `http` / `map` / `api` /
+Rust runs **only** the bundled `<bundled-tier>/init.lua`. That file
+is in charge of when (and whether) to load the user's
+`~/.config/ttymap/init.lua` — Lua-side ordering policy, no Rust
+involvement. By the time it runs, the API surface is fully
+installed: `build_subsystem` does `ttymap.opt` / `ttymap.keymap`
+pre-pass, then `api::install` adds `http` / `map` / `api` /
 `register_*` / `notify` / `on_event`, then the plugin-aware
-`package.searchers` entry is inserted. So `init.lua` can:
+`package.searchers` entry is inserted, then a Rust-provided
+`ttymap.load_user_config()` function is exposed. Then the
+bundled init.lua runs and drives the rest.
 
-- mutate `ttymap.opt.*` (host-owned settings — last-wins across the
-  chain)
-- call `ttymap.keymap.set(...)` / `ttymap.keymap.del(...)`
-- `require "<plugin_name>"` to activate a bundled plugin
-  (registrations attribute under the require name)
-- `require "ttymap.<lib>"` to mutate a config-holder lib that a
-  later plugin's require will read (Lua's module cache makes the
-  plugin's `require "ttymap.<lib>"` return the same table)
+The bundled init.lua's job (`ttymap-tui/runtime/init.lua`):
 
-`opt.*` exposes:
+1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with
+   Rust seeds; serves as the documented schema).
+2. Call `ttymap.load_user_config()` — runs
+   `~/.config/ttymap/init.lua` in the shared VM.
+3. `require` the bundled plugin set.
+
+User init.lua can then:
+
+- mutate `ttymap.opt.*` (host-owned settings — last-wins)
+- call `ttymap.keymap.set/del`
+- pre-mark `package.loaded.<plugin> = true` to skip a bundled plugin
+  (the bundled `require` becomes a no-op via Lua's module cache)
+- `require "<plugin>"` to eagerly load any plugin (bundled or user)
+  before bundled defaults
+- `require "ttymap.<lib>"` and mutate it to seed a bundled plugin's
+  config holder before that plugin loads
+
+`ttymap.opt.*` exposes:
 
 - **`opt.*` leaves** — pre-populated table tree seeded from Rust
   defaults. User mutates leaves.
 - **`keymap.set(...)`** / **`keymap.del(...)`** — backed by a shared
   `KeybindingOverrides` map.
 
-There is no `opt.disable` list. To disable a bundled plugin, write
-your own `~/.config/ttymap/init.lua` that requires only the plugins
-you want. Lua's `package.loaded` cache makes a duplicate require
-from your init.lua a no-op (registrations don't double-fire).
+To replace the bundled defaults wholesale (e.g. fork the plugin set),
+set `$TTYMAP_RUNTIME` to your own runtime layer with its own
+`init.lua`.
 
-Errors at any layer are logged + recovered; the chain keeps walking.
+Errors at any layer are logged + recovered; the host keeps booting.
 
 ## Bundled plugins (`runtime/plugin/`)
 

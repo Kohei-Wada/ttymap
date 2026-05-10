@@ -1,19 +1,22 @@
--- Bundled defaults for ttymap. Runs first in the init.lua chain;
--- the user's `~/.config/ttymap/init.lua` runs after this in the
--- same Lua state and can override anything set here (last-wins on
--- the shared `ttymap.opt.*` table) and skip / replace the bundled
--- plugin set below.
+-- Bundled defaults for ttymap. Runs first; calls into the user's
+-- `~/.config/ttymap/init.lua` partway through (via the Rust-provided
+-- `ttymap.load_user_config()`) so user mutations land BEFORE bundled
+-- plugins are required. Both files share one Lua VM.
 --
 -- Every option value is the Rust-side default. Source of truth:
 -- `src/config.rs`. Edit a line to change the shipping default
 -- (lands via PR); users override per-leaf in their own init.lua.
 --
--- Bundled plugin set: each `require` activates the plugin in the
--- shared VM. To disable a bundled plugin, write your own init.lua
--- that lists only the plugins you want — copy this file as a
--- starting point. Lua's `package.loaded` cache makes a duplicate
--- `require` from your init.lua a no-op, so re-listing one here
--- is harmless.
+-- Disable a bundled plugin from your user init.lua by pre-marking it
+-- as already-loaded — Lua's module cache makes the subsequent
+-- `require` a no-op:
+--
+--     -- ~/.config/ttymap/init.lua
+--     package.loaded.quake = true
+--     package.loaded.aircraft = true
+--
+-- Or replace `runtime/init.lua` entirely via `$TTYMAP_RUNTIME` for
+-- a fully custom plugin set.
 
 ------------------------------------------------------------
 -- ttymap.opt.map — initial viewport + zoom envelope.
@@ -48,6 +51,16 @@ ttymap.opt.geoip.timeout_ms = 2000
 ------------------------------------------------------------
 ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
+
+------------------------------------------------------------
+-- User init.lua — runs HERE so the user can:
+--   * override any `ttymap.opt.*` set above
+--   * pre-mark `package.loaded.X = true` to skip a bundled plugin
+--   * `require` user plugins in any order (before or after bundled)
+-- Missing / broken user file = logged-and-skipped, this file
+-- continues normally.
+------------------------------------------------------------
+ttymap.load_user_config()
 
 ------------------------------------------------------------
 -- Bundled plugins — chrome first, then everything else
