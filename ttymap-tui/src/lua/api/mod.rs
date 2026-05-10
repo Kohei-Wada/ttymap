@@ -48,7 +48,8 @@
 //! ttymap.sgp4   :propagate(h[, t]) -> table propagate a handle to unix time t
 //! ttymap.sgp4   :propagate_batch(hs[, t])   batch propagate (Starlink-scale)
 //! ttymap.tile   :attribution() -> string?   active tile provider's attribution
-//! ttymap.config :geoip_endpoint() -> string `[geoip].endpoint` value
+//! ttymap.config (currently empty — endpoint config lives in plugin
+//!                Lua libs at runtime/lua/ttymap/<name>.lua, not here)
 //! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
 //! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
 //! ttymap.log    :info(msg) / :warn(msg) / :error(msg)

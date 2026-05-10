@@ -105,7 +105,7 @@ pub struct LuaSubsystem {
 /// into a default `:`-palette provider.
 pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
     let registry = new_lua_registry();
-    let shared = Arc::new(LuaHostShared::new(defaults.geoip.endpoint.clone()));
+    let shared = Arc::new(LuaHostShared::new());
     let bus = std::rc::Rc::new(crate::event::EventBus::default());
     let ops = op::new_ops_buffer();
 

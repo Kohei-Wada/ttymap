@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::config;
-use crate::shared::geoip;
 use crate::theme::ThemeId;
 use ttymap_engine::map::Viewport;
 use ttymap_engine::map::render::frame::MapFrame;
@@ -32,12 +31,12 @@ const POLL_STEP: Duration = Duration::from_millis(50);
 
 #[derive(Args)]
 pub struct SnapArgs {
-    /// Center latitude. Required unless `--here` is given.
-    #[arg(long, conflicts_with = "here")]
+    /// Center latitude.
+    #[arg(long)]
     pub lat: Option<f64>,
 
-    /// Center longitude. Required unless `--here` is given.
-    #[arg(long, conflicts_with = "here")]
+    /// Center longitude.
+    #[arg(long)]
     pub lon: Option<f64>,
 
     /// Zoom level (1–18, roughly). If omitted, uses the config /
@@ -63,11 +62,6 @@ pub struct SnapArgs {
     #[arg(long)]
     pub language: Option<String>,
 
-    /// Resolve the center from the GeoIP service (same as the
-    /// interactive `--here` flag).
-    #[arg(long)]
-    pub here: bool,
-
     /// Write the ANSI output to this file instead of stdout.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
@@ -81,30 +75,15 @@ pub struct SnapArgs {
 pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
     // snap is headless and doesn't activate plugins, so we use the
     // config-only init.lua entry (no API install, no plugin requires).
-    // `Config` carries every init.lua-tunable knob (geoip / cache /
-    // render); plugins would just slow snap down.
+    // `Config` carries every init.lua-tunable knob (cache / render);
+    // plugins would just slow snap down.
     let mut config = crate::lua::read_init_lua_config_only(config::Config::default());
 
-    // Resolve center: --here wins, then --lat/--lon, then config default.
-    if args.here {
-        match geoip::lookup(&config.geoip.endpoint, config.geoip.timeout_ms) {
-            Some((lat, lon)) => {
-                config.engine.map.lat = lat;
-                config.engine.map.lon = lon;
-            }
-            None => {
-                return Err(Box::new(io::Error::other(
-                    "geoip lookup failed; pass --lat/--lon explicitly or check network",
-                )));
-            }
-        }
-    } else {
-        if let Some(lat) = args.lat {
-            config.engine.map.lat = lat;
-        }
-        if let Some(lon) = args.lon {
-            config.engine.map.lon = lon;
-        }
+    if let Some(lat) = args.lat {
+        config.engine.map.lat = lat;
+    }
+    if let Some(lon) = args.lon {
+        config.engine.map.lon = lon;
     }
     if let Some(z) = args.zoom {
         config.engine.map.zoom = Some(z);

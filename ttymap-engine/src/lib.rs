@@ -19,7 +19,7 @@
 //!   the tile fetcher and (via re-import) by the binary's Lua bridge
 //! - **[`Config`]** — engine-side settings (cache, map initial view,
 //!   render style/language). The binary wraps this with its own
-//!   runtime/geoip fields.
+//!   runtime fields.
 
 pub mod config;
 pub mod error;

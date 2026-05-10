@@ -8,9 +8,11 @@
 -- so the view glides over instead of teleporting (avoids the brief
 -- black-tile gap from landing on un-prefetched coordinates).
 --
--- The endpoint comes from `ttymap.config:geoip_endpoint()`.
+-- Endpoint comes from `ttymap.here.endpoint` (defaults to ipapi.co;
+-- override in init.lua via `require("ttymap.here").endpoint = "..."`).
 
 local anim = require "ttymap.animation"
+local config = require "ttymap.here"
 
 local state = { job = nil }
 local tick_handle = nil  -- on_tick subscription while a fetch is in flight
@@ -46,7 +48,7 @@ ttymap.register_palette_command({
     label = "Jump to here (current location)",
     invoke = function()
         if not state.job then
-            state.job = ttymap.http:fetch(ttymap.config:geoip_endpoint())
+            state.job = ttymap.http:fetch(config.endpoint)
             if not tick_handle then
                 tick_handle = ttymap.api.frame.on_tick(drain)
             end

@@ -12,10 +12,10 @@ ttymap.opt.map.zoom           = 10
 ttymap.opt.render.style       = "bright"   -- "dark" | "bright"
 ttymap.opt.render.language    = "ja"
 
--- IP-based geolocation (shared by `--here` flag and the `here` plugin)
-ttymap.opt.geoip.on_startup   = false
-ttymap.opt.geoip.endpoint     = "https://ipapi.co/json/"
-ttymap.opt.geoip.timeout_ms   = 2000
+-- Per-plugin endpoint overrides live in their own Lua libs, not on
+-- `ttymap.opt.*`. e.g. point the bundled `here` plugin at a private
+-- IP-geolocation service:
+require("ttymap.here").endpoint = "https://my-geoip.example.com/json"
 
 ttymap.keymap.set("zoom_in", { "i", "+" })
 ttymap.keymap.set("quit",    { "q", "C-q" })
@@ -57,8 +57,8 @@ Top-level namespaces:
 | `ttymap.opt.map` | initial lat/lon/zoom + zoom envelope |
 | `ttymap.opt.render` | style preset, label language |
 | `ttymap.opt.cache` | LRU size, on-disk persist toggle |
-| `ttymap.opt.geoip` | endpoint, timeout, on-startup behavior |
 | `ttymap.opt.runtime` | poll/redraw cadence, sidebar width |
+| `require("ttymap.<plugin>")` | per-plugin config holder libs (e.g. `ttymap.here.endpoint`) |
 | `ttymap.keymap.set(action, keys)` | rebind a built-in action |
 | `ttymap.keymap.del(action)` | drop a built-in binding |
 | `require "<name>"` | activate a bundled or user plugin |

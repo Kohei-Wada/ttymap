@@ -5,10 +5,9 @@
 //! Lives at `lua/` (not `lua/api/`) so the `api/` directory stays
 //! pure 1:1 with Lua namespaces.
 //!
-//! - [`LuaHostShared`] — read-mostly snapshot (attribution, geoip
-//!   endpoint, keymap rows, palette entries). Built once in
-//!   [`crate::app::App::new`] and Arc-cloned into each namespace
-//!   userdata.
+//! - [`LuaHostShared`] — read-mostly snapshot (attribution, keymap
+//!   rows, palette entries). Built once in [`crate::app::App::new`]
+//!   and Arc-cloned into each namespace userdata.
 //! - [`LuaHostHandles`] — per-plugin handle pair returned by
 //!   [`crate::lua::api::install`]; the host refreshes `center` /
 //!   `zoom` from any dispatch path that carries a `Window`.
@@ -36,10 +35,6 @@ pub struct LuaHostShared {
     /// produces); the binary calls [`Self::set_attribution`] once
     /// the cache is up.
     pub attribution: Mutex<Option<String>>,
-    /// IP-geolocation endpoint URL (`ttymap.opt.geoip.endpoint` in
-    /// `init.lua`). The here plugin GETs this to resolve the
-    /// user's coordinates.
-    pub geoip_endpoint: String,
     /// `(key-binding, action-label)` pairs for built-in map actions.
     /// Help renders this as the keymap section of its cheatsheet.
     /// Held behind a `Mutex` because plugins may load (via the init.lua
@@ -78,11 +73,16 @@ pub struct HelpEntry {
     pub label: String,
 }
 
+impl Default for LuaHostShared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LuaHostShared {
-    pub fn new(geoip_endpoint: String) -> Self {
+    pub fn new() -> Self {
         Self {
             attribution: Mutex::new(None),
-            geoip_endpoint,
             keymap_entries: Mutex::new(Vec::new()),
             help_entries: Mutex::new(Vec::new()),
             current_frame: Mutex::new(None),
@@ -123,7 +123,7 @@ impl LuaHostShared {
     /// still installs in a Lua state used only to capture the
     /// script's `register_*` call.
     pub fn empty() -> Arc<Self> {
-        Arc::new(Self::new(String::new()))
+        Arc::new(Self::new())
     }
 }
 
