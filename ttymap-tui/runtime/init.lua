@@ -1,11 +1,19 @@
 -- Bundled defaults for ttymap. Runs first in the init.lua chain;
 -- the user's `~/.config/ttymap/init.lua` runs after this in the
 -- same Lua state and can override anything set here (last-wins on
--- the shared `ttymap.opt.*` table).
+-- the shared `ttymap.opt.*` table) and skip / replace the bundled
+-- plugin set below.
 --
--- Every value below is the Rust-side default. Source of truth:
+-- Every option value is the Rust-side default. Source of truth:
 -- `src/config.rs`. Edit a line to change the shipping default
 -- (lands via PR); users override per-leaf in their own init.lua.
+--
+-- Bundled plugin set: each `require` activates the plugin in the
+-- shared VM. To disable a bundled plugin, write your own init.lua
+-- that lists only the plugins you want — copy this file as a
+-- starting point. Lua's `package.loaded` cache makes a duplicate
+-- `require` from your init.lua a no-op, so re-listing one here
+-- is harmless.
 
 ------------------------------------------------------------
 -- ttymap.opt.map — initial viewport + zoom envelope.
@@ -36,15 +44,30 @@ ttymap.opt.geoip.endpoint   = "https://ipapi.co/json/"    -- Must return ipapi.c
 ttymap.opt.geoip.timeout_ms = 2000
 
 ------------------------------------------------------------
--- ttymap.opt.disable — opt-out plugin list. Stems are file
--- names under any `<runtime>/plugin/` minus `.lua`. Users
--- should `table.insert(ttymap.opt.disable, "X")` rather than
--- reassign, otherwise bundled entries get clobbered.
-------------------------------------------------------------
-ttymap.opt.disable = {}
-
-------------------------------------------------------------
 -- ttymap.opt.runtime — event-loop / overlay redraw rates.
 ------------------------------------------------------------
 ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
+
+------------------------------------------------------------
+-- Bundled plugins — chrome first, then everything else
+-- (alphabetical). Adjust per file to taste.
+------------------------------------------------------------
+require "info"
+require "scalebar"
+require "attribution"
+require "notify"
+require "help"
+
+require "aircraft"
+require "center"
+require "export"
+require "geo_quiz"
+require "here"
+require "ping_simulation"
+require "quake"
+require "satellite"
+require "search"
+require "terminator"
+require "travel"
+require "wiki"

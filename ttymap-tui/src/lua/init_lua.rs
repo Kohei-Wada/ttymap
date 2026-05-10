@@ -1,8 +1,8 @@
 //! `~/.config/ttymap/init.lua` loader — Neovim-style declarative
-//! config in Lua.
+//! config in Lua, and the **only** entry point for plugin activation.
 //!
-//! Replaces the old `config.toml` parse path. The Lua side exposes
-//! a `ttymap` global with two namespaces:
+//! ttymap's runtime is a single Lua VM. The `ttymap` global exposes
+//! three layers of surface:
 //!
 //! ```lua
 //! -- ~/.config/ttymap/init.lua
@@ -11,18 +11,23 @@
 //! ttymap.opt.cache.memory_tiles        = 1024
 //! ttymap.opt.geoip.on_startup          = true
 //! ttymap.opt.runtime.poll_timeout_ms   = 33   -- ~30 Hz
-//! ttymap.opt.runtime.overlay_redraw_ms = 50   -- smoother overlays
 //!
 //! ttymap.keymap.set("zoom_in", { "i", "+" })
 //! ttymap.keymap.del("pan_left")
+//!
+//! require "travel"   -- activate a bundled plugin
+//! require "myplug"   -- a user lib at ~/.config/ttymap/lua/myplug.lua
 //! ```
 //!
-//! - `ttymap.opt.*` is a pre-populated table tree seeded from Rust
+//! - `ttymap.opt.*` — pre-populated table tree seeded from Rust
 //!   defaults. The user mutates leaves (`opt.cache.memory_tiles = N`)
 //!   and we read the table back after the chunk runs.
-//! - `ttymap.keymap.set(action, keys)` / `ttymap.keymap.del(action)`
-//!   are real Lua functions that mutate a shared
-//!   [`KeybindingOverrides`] map in Rust.
+//! - `ttymap.keymap.set/del` — real Lua functions that mutate a
+//!   shared [`KeybindingOverrides`] map in Rust.
+//! - `require "<name>"` — top-level requires resolve via the
+//!   plugin-aware searcher (see [`crate::lua::vm::install_plugin_searcher`]).
+//!   On hit, the plugin runs in the shared VM and its `register_*`
+//!   calls attribute to `<name>` in the [`PluginRegistry`].
 //!
 //! Recovery posture matches the rest of the bridge: a missing,
 //! unreadable, or throwing `init.lua` logs a warning and the loader
@@ -37,49 +42,52 @@ use mlua::{Lua, Table};
 use crate::config::Config;
 use crate::input::keymap::KeybindingOverrides;
 
-/// Run the init.lua chain against `defaults` in the **shared** Lua
-/// VM and return the resulting `(Config, KeybindingOverrides)` plus
-/// the same VM (so `build_subsystem` can load every plugin in it
-/// next, nvim-style). Sysinit chain:
+/// Snapshot config from the init.lua chain WITHOUT installing the
+/// plugin runtime API or running plugin requires. Used by the
+/// `snap` subcommand which is headless and doesn't need plugins.
 ///
-/// 1. Bundled defaults at `<bundled-tier>/init.lua` (first hit
-///    among env / manifest / xdg_data) — ships with ttymap, edits
-///    here would land via PR.
-/// 2. User overrides at `<xdg_config>/init.lua` (e.g.
-///    `~/.config/ttymap/init.lua`).
-///
-/// Both files run in the same Lua state, in that order, so the
-/// user's mutations override the bundled side via simple last-wins
-/// on the shared `ttymap.opt.*` table and `ttymap.keymap` map.
-///
-/// Failure modes (missing file, IO error, Lua syntax/runtime error)
-/// all log + leave the prior state intact. A broken bundled init
-/// still lets the user's init.lua run; a broken user init still
-/// lets the bundled defaults take effect.
-pub fn load_init_lua(defaults: Config) -> (Lua, Config, KeybindingOverrides) {
+/// On any error (missing file, IO, Lua syntax), logs a warning and
+/// returns the seeded defaults. The app keeps booting.
+pub fn read_init_lua_config_only(defaults: Config) -> Config {
     let lua = crate::lua::new_lua();
+    let _keymap_state = match install_ttymap_global(&lua, &defaults) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("init.lua: install_ttymap_global failed: {}", e);
+            return defaults;
+        }
+    };
+    run_init_lua_chain(&lua);
+    read_back(&lua, &defaults).unwrap_or_else(|e| {
+        log::warn!("init.lua: read_back failed: {}", e);
+        defaults
+    })
+}
 
+/// Load and execute the bundled + user init.lua sources in `lua`,
+/// in that order. Sources that don't exist are skipped silently
+/// (debug-logged); IO / Lua errors are warn-logged and the chain
+/// keeps going, so a broken bundled init still lets user init run
+/// and vice versa.
+pub(crate) fn run_init_lua_chain(lua: &Lua) {
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     if let Some(p) = bundled_init_path()
         && let Some(src) = read_init_file(&p)
     {
         sources.push((src, p));
     }
-    if let Some(p) = init_lua_path()
+    if let Some(p) = user_init_path()
         && let Some(src) = read_init_file(&p)
     {
         sources.push((src, p));
     }
-
-    if sources.is_empty() {
-        return (lua, defaults, KeybindingOverrides::new());
-    }
-
-    match exec_in(&lua, &sources, &defaults) {
-        Ok((cfg, km)) => (lua, cfg, km),
-        Err(e) => {
-            log::warn!("init.lua: chain failed: {}", e);
-            (lua, defaults, KeybindingOverrides::new())
+    for (source, path) in &sources {
+        if let Err(e) = lua
+            .load(source)
+            .set_name(path.to_string_lossy().as_ref())
+            .exec()
+        {
+            log::warn!("init.lua: {} failed: {}", path.display(), e);
         }
     }
 }
@@ -106,7 +114,7 @@ fn read_init_file(path: &Path) -> Option<String> {
 
 /// Walk the runtime path looking for the bundled init.lua. Skips
 /// the user tier (xdg_config) — that's loaded separately by
-/// `init_lua_path` so user init runs LAST in the chain. Returns
+/// [`user_init_path`] so user init runs LAST in the chain. Returns
 /// the first hit so dev manifest beats stale install (matches the
 /// runtime_path priority order).
 fn bundled_init_path() -> Option<PathBuf> {
@@ -124,52 +132,30 @@ fn bundled_init_path() -> Option<PathBuf> {
     None
 }
 
-/// Inner half of [`load_init_lua`] — pure logic split out so unit
-/// tests can drive Lua source directly without faking the XDG path.
-/// Each source in `sources` runs in turn against the supplied Lua
-/// state; `ttymap.opt.*` mutations and `ttymap.keymap.set/del` calls
-/// accumulate, with the last source winning on conflicts.
-///
-/// Does **not** drop the Lua state — the same VM is used by
-/// [`crate::lua::build_subsystem`] for plugin loading. The
-/// `KeybindingOverrides` are cloned out from the shared
-/// `Rc<RefCell<…>>` (the closures stored on the `ttymap.keymap`
-/// table still hold a reference but become no-ops once we move past
-/// init.lua).
-pub(crate) fn exec_in(
-    lua: &Lua,
-    sources: &[(String, PathBuf)],
-    defaults: &Config,
-) -> mlua::Result<(Config, KeybindingOverrides)> {
-    let keymap_state: Rc<RefCell<KeybindingOverrides>> =
-        Rc::new(RefCell::new(KeybindingOverrides::new()));
-    install_ttymap_global(lua, defaults, keymap_state.clone())?;
-    for (source, path) in sources {
-        if let Err(e) = lua
-            .load(source)
-            .set_name(path.to_string_lossy().as_ref())
-            .exec()
-        {
-            log::warn!("init.lua: {} failed: {}", path.display(), e);
-        }
-    }
-    let cfg = read_back(lua, defaults)?;
-    let keymap = keymap_state.borrow().clone();
-    Ok((cfg, keymap))
+/// Resolve `~/.config/ttymap/init.lua` (or the platform-specific
+/// equivalent). `None` only when the host doesn't expose a config
+/// dir at all.
+fn user_init_path() -> Option<PathBuf> {
+    use directories::ProjectDirs;
+    let dirs = ProjectDirs::from("", "", "ttymap")?;
+    Some(dirs.config_dir().join("init.lua"))
 }
 
 /// Build the `ttymap` global with `opt` (pre-populated table tree)
-/// and `keymap` (functions backed by `keymap_state`).
-fn install_ttymap_global(
+/// and `keymap` (functions backed by the returned state cell).
+/// Caller harvests `keymap_state.borrow().clone()` after the init.lua
+/// chain runs to fold mutations into a live `KeyMap`.
+pub(crate) fn install_ttymap_global(
     lua: &Lua,
     defaults: &Config,
-    keymap_state: Rc<RefCell<KeybindingOverrides>>,
-) -> mlua::Result<()> {
+) -> mlua::Result<Rc<RefCell<KeybindingOverrides>>> {
+    let keymap_state: Rc<RefCell<KeybindingOverrides>> =
+        Rc::new(RefCell::new(KeybindingOverrides::new()));
     let ttymap = lua.create_table()?;
     ttymap.set("opt", build_opt_table(lua, defaults)?)?;
-    ttymap.set("keymap", build_keymap_table(lua, keymap_state)?)?;
+    ttymap.set("keymap", build_keymap_table(lua, keymap_state.clone())?)?;
     lua.globals().set("ttymap", ttymap)?;
-    Ok(())
+    Ok(keymap_state)
 }
 
 /// Pre-populate every `Config` field as a Lua table leaf so users
@@ -204,12 +190,6 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     geoip.set("endpoint", d.geoip.endpoint.clone())?;
     geoip.set("timeout_ms", d.geoip.timeout_ms)?;
     opt.set("geoip", geoip)?;
-
-    let disable = lua.create_table()?;
-    for (i, name) in d.plugins.disable.iter().enumerate() {
-        disable.set(i + 1, name.as_str())?;
-    }
-    opt.set("disable", disable)?;
 
     let runtime = lua.create_table()?;
     runtime.set("poll_timeout_ms", d.runtime.poll_timeout_ms)?;
@@ -268,7 +248,7 @@ fn keys_to_vec(keys: mlua::Value) -> mlua::Result<Vec<String>> {
 /// back to the seeded value (the field stays at its default). The
 /// loader's recovery posture: ttymap doesn't crash because of a
 /// `ttymap.opt.cache.memory_tiles = "lots"` typo.
-fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
+pub(crate) fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
     let ttymap: Table = lua.globals().get("ttymap")?;
     let opt: Table = ttymap.get("opt")?;
 
@@ -318,12 +298,6 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
             cfg.geoip.timeout_ms = v;
         }
     }
-    if let Ok(disable) = opt.get::<Table>("disable") {
-        cfg.plugins.disable = disable
-            .sequence_values::<String>()
-            .filter_map(Result::ok)
-            .collect();
-    }
     if let Ok(t) = opt.get::<Table>("runtime") {
         if let Ok(v) = t.get::<u64>("poll_timeout_ms") {
             cfg.runtime.poll_timeout_ms = v;
@@ -339,24 +313,24 @@ fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
     Ok(cfg)
 }
 
-/// Resolve `~/.config/ttymap/init.lua` (or the platform-specific
-/// equivalent). `None` only when the host doesn't expose a config
-/// dir at all.
-fn init_lua_path() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    Some(dirs.config_dir().join("init.lua"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Run an init.lua-style source against a fresh VM with `ttymap`
+    /// pre-pass installed (no plugin API), then read config back.
+    /// Mirrors what the tests exercised before the unified bootstrap.
     fn run(source: &str) -> (Config, KeybindingOverrides) {
         crate::lua::runtimepath::ensure_runtime_path_for_tests();
         let lua = crate::lua::new_lua();
-        let sources = vec![(source.to_string(), PathBuf::from("test"))];
-        exec_in(&lua, &sources, &Config::default()).expect("exec init.lua")
+        let defaults = Config::default();
+        let keymap_state = install_ttymap_global(&lua, &defaults).expect("install ttymap");
+        if let Err(e) = lua.load(source).set_name("test").exec() {
+            log::warn!("init.lua test source failed: {}", e);
+        }
+        let cfg = read_back(&lua, &defaults).expect("read_back");
+        let km = keymap_state.borrow().clone();
+        (cfg, km)
     }
 
     #[test]
@@ -460,31 +434,5 @@ mod tests {
     fn opt_runtime_overlay_redraw_overrides_default() {
         let (cfg, _) = run(r#"ttymap.opt.runtime.overlay_redraw_ms = 200"#);
         assert_eq!(cfg.runtime.overlay_redraw_ms, 200);
-    }
-
-    #[test]
-    fn syntax_error_in_one_source_does_not_break_the_chain() {
-        // Bad syntax in a layer is caught + logged; the rest of the
-        // chain still runs and the surviving Config reflects the
-        // valid mutations from the other layers. Mirrors how
-        // load_init_lua handles a broken bundled init while letting
-        // the user's init.lua take effect.
-        crate::lua::runtimepath::ensure_runtime_path_for_tests();
-        let lua = crate::lua::new_lua();
-        let sources = vec![
-            (
-                "this is not lua syntax !!!".to_string(),
-                PathBuf::from("bad"),
-            ),
-            (
-                r#"ttymap.opt.render.style = "bright""#.to_string(),
-                PathBuf::from("good"),
-            ),
-        ];
-        let (cfg, _km) = exec_in(&lua, &sources, &Config::default()).expect("exec");
-        assert_eq!(
-            cfg.engine.render.style, "bright",
-            "a broken layer must not stop a later layer's mutations"
-        );
     }
 }

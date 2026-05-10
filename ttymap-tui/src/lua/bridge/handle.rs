@@ -139,29 +139,30 @@ pub fn load_chunk(
     chunk_name: &'static str,
     slot: &CaptureSlot,
 ) -> mlua::Result<CapturedRegistration> {
-    // Reset slot state for this load — single shared slot, single
-    // drained-and-attributed bucket per plugin.
-    {
-        let mut s = slot.borrow_mut();
-        s.palette_commands.clear();
-        s.keybinds.clear();
-        s.events_registered = 0;
-        s.current_plugin = Some(chunk_name);
-    }
+    // Stack-style save: a plugin may recursively `require` another
+    // plugin, in which case we re-enter `load_chunk` while an outer
+    // load is mid-execution. Take the outer state aside, run the
+    // inner load with a fresh slot, then restore the outer state so
+    // the outer load's `register_*` capture continues correctly.
+    // Production today never recurses (plugins only require libs),
+    // but the cost of the extra `mem::take` pair is negligible and
+    // the safety it buys is worth it.
+    let outer = std::mem::take(&mut *slot.borrow_mut());
+    slot.borrow_mut().current_plugin = Some(chunk_name);
 
     let exec_result = lua.load(source).set_name(chunk_name).exec();
 
-    // Always clear `current_plugin` after exec so a stray API call
-    // outside a load (shouldn't happen in production, but tests may
-    // poke at things) can't accidentally attribute to the last
-    // loaded plugin.
-    slot.borrow_mut().current_plugin = None;
+    // Drain whatever the inner load captured, regardless of success
+    // — we still want to restore `outer` even if exec errored, so
+    // an outer plugin's pcall can recover.
+    let inner = std::mem::take(&mut *slot.borrow_mut());
+    *slot.borrow_mut() = outer;
+
     exec_result?;
 
-    let captured = std::mem::take(&mut *slot.borrow_mut());
-    let has_surface = !captured.palette_commands.is_empty()
-        || !captured.keybinds.is_empty()
-        || captured.events_registered > 0;
+    let has_surface = !inner.palette_commands.is_empty()
+        || !inner.keybinds.is_empty()
+        || inner.events_registered > 0;
     if !has_surface {
         return Err(mlua::Error::external(
             "script did not call any ttymap registration API \
@@ -169,5 +170,5 @@ pub fn load_chunk(
              ttymap.register_palette_command, or ttymap.register_keybind)",
         ));
     }
-    Ok(captured)
+    Ok(inner)
 }

@@ -1,6 +1,6 @@
 use clap::Parser;
+use ttymap_tui::app::App;
 use ttymap_tui::app::frame_timer::FrameTimer;
-use ttymap_tui::app::{App, KeybindingOverrides};
 use ttymap_tui::cli::Command as Subcommand;
 use ttymap_tui::config::Config;
 use ttymap_tui::input::thread::InputHandle;
@@ -14,7 +14,7 @@ use ttymap_tui::input::thread::InputHandle;
         with ANSI 256-color in your terminal.\n\n\
         Inspired by and based on mapscii (https://github.com/rastapasta/mapscii).\n\n\
         Config file:    ~/.config/ttymap/init.lua\n\
-        User plugins:   ~/.config/ttymap/plugins/\n\
+        User plugins:   ~/.config/ttymap/plugin/  (activate via `require \"<name>\"` in init.lua)\n\
         Bundled runtime: ~/.local/share/ttymap/lua/\n\
         Log file:       ~/.local/state/ttymap/ttymap.log\n\
         Tile cache:     ~/.cache/ttymap/",
@@ -92,12 +92,24 @@ fn main() {
         return;
     }
 
-    // Run init.lua first in a fresh Lua VM, then override with CLI
-    // args. `keymap_overrides` travels to App::new alongside Config
-    // because the keymap is scripted at the same place but lives in
-    // its own data shape. The Lua VM lives on — `build_subsystem`
-    // loads every plugin in this same VM (nvim-style single state).
-    let (lua_vm, mut config, keymap_overrides) = ttymap_tui::lua::load_init_lua(Config::default());
+    if let Err(e) = run_event_loop(cli) {
+        eprintln!("Error: {e}");
+    }
+}
+
+/// Composition root: builds the event channel, every subsystem
+/// (map / Lua), spawns the off-thread input / frame-timer peers,
+/// then hands control to `App::run`. Every thread handle joins
+/// in its `Drop` impl, so teardown is just RAII at end of scope.
+fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    // Lua bootstrap runs first — `build_subsystem` creates the VM,
+    // installs the API, and runs the init.lua chain (which `require`s
+    // every bundled plugin). The tile cache spins up next; its
+    // attribution string is fed back into the Lua-side shared cell
+    // via `set_attribution` so `ttymap.tile:attribution()` returns
+    // the live value.
+    let (lua_subsystem, mut config, _keymap_overrides, keymap) =
+        ttymap_tui::lua::build_subsystem(Config::default());
 
     if let Some(v) = cli.lat {
         config.engine.map.lat = v;
@@ -137,20 +149,6 @@ fn main() {
         config.engine.map.lon
     );
 
-    if let Err(e) = run_event_loop(lua_vm, config, keymap_overrides) {
-        eprintln!("Error: {e}");
-    }
-}
-
-/// Composition root: builds the event channel, every subsystem
-/// (map / Lua), spawns the off-thread input / frame-timer peers,
-/// then hands control to `App::run`. Every thread handle joins
-/// in its `Drop` impl, so teardown is just RAII at end of scope.
-fn run_event_loop(
-    lua_vm: mlua::Lua,
-    config: Config,
-    keymap_overrides: KeybindingOverrides,
-) -> Result<(), Box<dyn std::error::Error>> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
 
     // Active theme — owned by App, consumed by the map only at
@@ -178,16 +176,8 @@ fn run_event_loop(
     let (_render_handle, map) =
         ttymap_engine::map::build(&config.engine, cols, rows, frame_sink, theme_id)?;
 
-    // Keymap is shared input by both the Lua subsystem (help plugin
-    // displays it; palette uses it for prefix matching) and the
-    // compositor's BaseLayer at runtime — build it once here.
-    let keymap = ttymap_tui::input::KeyMap::with_overrides(&keymap_overrides);
-
-    // Lua subsystem: load every plugin, register activations / palette
-    // entries / event-bus subscriptions, return the populated bundle.
-    // All Lua → App traffic rides the shared `OpsBuffer` built
-    // inside `build_subsystem`; no separate intent sender needed.
-    let lua = ttymap_tui::lua::build_subsystem(lua_vm, &config, map.attribution.clone(), &keymap);
+    let lua = lua_subsystem;
+    lua.handle.set_attribution(map.attribution.clone());
 
     // Palette is a built-in (not a plugin): build a CommandSeed
     // around the live PluginRegistry and append the `:` activation

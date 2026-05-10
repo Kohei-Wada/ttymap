@@ -30,17 +30,25 @@ use ttymap_engine::map::render::frame::MapFrame;
 pub struct LuaHostShared {
     /// Tile provider's attribution string. `None` when the active
     /// `TileClient` has no attribution to display (custom backends
-    /// without OSM data, mostly).
-    pub attribution: Option<String>,
+    /// without OSM data, mostly). Held behind a `Mutex` because the
+    /// host builds the tile cache *after* `build_subsystem` (the
+    /// engine needs the parsed `Config`, which the Lua bootstrap
+    /// produces); the binary calls [`Self::set_attribution`] once
+    /// the cache is up.
+    pub attribution: Mutex<Option<String>>,
     /// IP-geolocation endpoint URL (`ttymap.opt.geoip.endpoint` in
     /// `init.lua`). The here plugin GETs this to resolve the
     /// user's coordinates.
     pub geoip_endpoint: String,
-    /// Pre-baked `(key-binding, action-label)` pairs for built-in
-    /// map actions. Help renders this as the keymap section of its
-    /// cheatsheet. Built once at startup from the live `KeyMap` so
-    /// runtime overrides surface correctly.
-    pub keymap_entries: Vec<(String, String)>,
+    /// `(key-binding, action-label)` pairs for built-in map actions.
+    /// Help renders this as the keymap section of its cheatsheet.
+    /// Held behind a `Mutex` because plugins may load (via the init.lua
+    /// `require` chain) before the host has parsed the user's
+    /// `ttymap.keymap.set/del` mutations and built the live `KeyMap` —
+    /// the entries are populated post-init.lua via [`Self::set_keymap_entries`].
+    /// Help reads lazily at render time, so the brief register-time
+    /// emptiness is invisible.
+    pub keymap_entries: Mutex<Vec<(String, String)>>,
     /// Per-plugin metadata snapshot, appended during plugin
     /// registration. Held behind a `Mutex` so `LuaHostShared` can be
     /// Arc'd into each plugin's host namespaces at register time and
@@ -71,17 +79,22 @@ pub struct PluginEntry {
 }
 
 impl LuaHostShared {
-    pub fn new(
-        attribution: Option<String>,
-        geoip_endpoint: String,
-        keymap_entries: Vec<(String, String)>,
-    ) -> Self {
+    pub fn new(geoip_endpoint: String) -> Self {
         Self {
-            attribution,
+            attribution: Mutex::new(None),
             geoip_endpoint,
-            keymap_entries,
+            keymap_entries: Mutex::new(Vec::new()),
             palette_entries: Mutex::new(Vec::new()),
             current_frame: Mutex::new(None),
+        }
+    }
+
+    /// Set the tile provider's attribution string. Called once by
+    /// the binary after the tile cache spins up; reads from
+    /// `ttymap.tile:attribution()` see the new value next call.
+    pub fn set_attribution(&self, attribution: Option<String>) {
+        if let Ok(mut slot) = self.attribution.lock() {
+            *slot = attribution;
         }
     }
 
@@ -94,12 +107,22 @@ impl LuaHostShared {
         }
     }
 
+    /// Replace the keymap-entries snapshot. Called once during
+    /// bootstrap, after init.lua has run (its `ttymap.keymap.set/del`
+    /// mutations land in `KeybindingOverrides`, which the binary
+    /// folds into a live `KeyMap` and serialises to entries here).
+    pub fn set_keymap_entries(&self, entries: Vec<(String, String)>) {
+        if let Ok(mut slot) = self.keymap_entries.lock() {
+            *slot = entries;
+        }
+    }
+
     /// All-empty default for tests and registration-time loads that
     /// don't need real runtime data. The `ttymap.*` host surface
     /// still installs in a Lua state used only to capture the
     /// script's `register_*` call.
     pub fn empty() -> Arc<Self> {
-        Arc::new(Self::new(None, String::new(), Vec::new()))
+        Arc::new(Self::new(String::new()))
     }
 }
 
