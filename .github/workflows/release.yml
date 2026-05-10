@@ -1,0 +1,57 @@
+name: Release
+
+# Tag-triggered: push `vX.Y.Z` and a GitHub Release with auto-generated
+# notes is created. Notes come from git-cliff reading Conventional
+# Commit subjects between the previous tag and this one (config in
+# cliff.toml at repo root).
+on:
+  push:
+    tags: ["v*.*.*"]
+  # Manual run for re-generating notes against an existing tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-cliff needs the full history + all tags to compute the
+          # range between the previous tag and HEAD.
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          # `--latest` = only commits between the previous tag and this
+          # one, so each release's notes stand alone (no full-history
+          # repeat).
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          body_path: ${{ steps.cliff.outputs.changelog }}
