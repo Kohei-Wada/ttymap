@@ -1,10 +1,11 @@
 //! Lua runtime scaffold for scripted plugins.
 //!
 //! Owns the shared [`mlua::Lua`] state. The bridge surface (Component
-//! adapter, MapApi, widget descriptors, etc.) lands in submodules as
-//! it gets built out per the audit in `docs/lua-bridge-surface.md`.
+//! adapter, MapApi, widget descriptors, etc.) lives in the submodules
+//! below — see `docs/lua-architecture.md` for the full per-namespace
+//! tour.
 //!
-//! Defaults that are deliberate and not provisional (see audit §13):
+//! Defaults that are deliberate and not provisional:
 //! - **Lua 5.4** via the `vendored` mlua feature: portable, no
 //!   system Lua dep, ~1 MB binary growth.
 //! - **No sandbox**: ttymap is single-user; trust the plugin author
