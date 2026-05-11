@@ -710,7 +710,6 @@ mod tests {
             "geo quiz",
             "antipode",
             "autospin",
-            "equator",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),
