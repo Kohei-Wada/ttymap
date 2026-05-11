@@ -35,11 +35,16 @@ end
 local function start()
     state.active = true
     state.expected_lon = nil
-    state.tick_handle = ttymap.api.frame.on_tick(function(map)
+    state.tick_handle = ttymap.api.frame.on_tick(function(_map)
         if not state.active then return end
-        local lon, lat = map:center()
-        -- Manual-pan detector — if the live lon doesn't match what
-        -- we dispatched last tick, someone else moved the map.
+        -- IMPORTANT: read via the global `ttymap.map:center()`, not the
+        -- per-frame `map:center()`. The per-frame value comes from the
+        -- MapFrame currently being painted, which lags behind the most
+        -- recent `:jump` by however long the render queue is — so our
+        -- own jumps would trip the detector on the next tick. The
+        -- global cell is updated synchronously on dispatch, matching
+        -- the pattern in `ttymap.animation`.
+        local lon, lat = ttymap.map:center()
         if state.expected_lon
             and math.abs(lon - state.expected_lon) > TOL_LON then
             stop("yielded to manual pan")
