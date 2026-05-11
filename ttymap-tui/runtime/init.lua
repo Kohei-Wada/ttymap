@@ -66,6 +66,7 @@ require "plugin.help"
 
 require "plugin.aircraft"
 require "plugin.antipode"
+require "plugin.autospin"
 require "plugin.center"
 require "plugin.export"
 require "plugin.geo_quiz"
