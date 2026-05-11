@@ -27,10 +27,11 @@
 pub mod command;
 pub use command::UserCommand;
 
-/// Application event loop, dispatch, and ratatui draw entry.
-/// `App` owns [`app::dispatcher::Dispatcher`] (the GoF Receiver),
-/// drains the unified [`app::AppEvent`] bus each iteration, and is
-/// the only place `terminal.draw(...)` is called.
+/// Application — central state hub + event loop driver. Holds every
+/// piece of mutable app-level state (map handle, lua handle,
+/// compositor, theme, sidebar, …), drains the unified
+/// [`app::AppEvent`] bus each iteration, and is the only place
+/// `terminal.draw(...)` is called.
 pub mod app;
 
 /// Compositor — stack-based focus / modal system (helix-inspired).

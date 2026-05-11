@@ -48,12 +48,12 @@ ttymap-tui/src/lua/
   init_lua.rs      run_init_lua_chain (system → user init.lua in
                    the shared VM); read_init_lua_config_only is
                    the snap-only thin path
-  handle.rs        LuaHandle — host plumbing held by Dispatcher
+  handle.rs        LuaHandle — host plumbing held by App
                    (drain_ops, tick, sync_view, set_current_frame,
                    set_attribution). Event publishing is not on
-                   this surface — Dispatcher accumulates events
-                   into a buffer App drains and publishes through
-                   the single bus.publish call site in App::run.
+                   this surface — App accumulates events into a
+                   buffer and publishes through the single
+                   bus.publish call site in App::run.
   registrar.rs     LuaRegistry — live registry of activations +
                    palette entries; `register_*` calls push directly
                    here, Lua handles `:remove()` drop entries by ID
@@ -337,8 +337,8 @@ with each api/ namespace — carrying `Op::Push`, `Op::Close`,
 - `ttymap.notify(msg, opts)` → `Op::Publish(Event::Notify { ... })`
 
 `LuaHandle::drain_ops` (`lua/handle.rs`) hands the App the queued
-`Op`s once per loop iteration; the App applies them through the
-compositor and dispatcher.
+`Op`s once per loop iteration; `App::apply_ops` applies them
+through the compositor and the dispatch entry point.
 
 `map:polyline` overlays use a separate sink: `App.overlay.sink:
 Vec<UserPolyline>` (`app/overlay.rs`) is borrowed by the per-frame
