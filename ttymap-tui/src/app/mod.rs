@@ -1,19 +1,21 @@
 //! App layer — the loop driver above [`Dispatcher`].
 //!
-//! `App` drains [`AppEvent`]s off the unified `mpsc` bus, forwards
-//! them to [`Dispatcher`] (the GoF Receiver — see
-//! [`dispatcher`](mod@dispatcher)), and asks ratatui to paint each
-//! iteration. State that mutates in response to commands lives on
-//! `Dispatcher`; only the rendered `MapFrame` and the input
-//! [`MouseAdapter`] live here, plus the bus poll-timeout.
+//! `App` drains [`AppEvent`]s off the unified `mpsc` queue, forwards
+//! each to `Dispatcher` (which owns every piece of mutable state),
+//! then drains the events Dispatcher accumulated and publishes them
+//! on the bus. That's the entire shape — there is no state on App
+//! beyond the bus handle and the loop's wake interval.
 //!
-//! `App` doesn't own subsystems. Threads (render / input / frame
-//! timer), the bus, and the channel are constructed by `main` at the
-//! composition root and handed in. The App just runs the
-//! per-iteration handler the loop calls into.
+//! The two invariants:
+//! - **Single publish site.** Only `App::publish_pending` calls
+//!   `bus.publish`. Handlers never touch the bus; Dispatcher accumulates
+//!   events into a buffer App drains.
+//! - **State lives on Dispatcher.** App is a router. `MouseAdapter`,
+//!   `MapFrame`, `LuaHandle` etc. all sit on Dispatcher; App reaches
+//!   them only through method calls.
 //!
-//! Focus/modal state lives on [`Compositor`] — owned by `Dispatcher`,
-//! borrowed by `App::render_into` for paint.
+//! `main` is the composition root: it builds the bus, the channel,
+//! and the off-thread subsystems, then hands them in.
 
 pub mod dispatcher;
 pub mod event;
@@ -29,43 +31,23 @@ pub use event::AppEvent;
 use std::io;
 use std::rc::Rc;
 
-use crossterm::event::{Event, KeyCode, KeyModifiers};
-use log::{debug, info};
-
-use crate::UserCommand;
 use crate::compositor::{BaseLayer, Compositor};
 use crate::config::Config;
 use crate::event::EventBus;
+use crate::input::KeyMap;
 pub use crate::input::KeybindingOverrides;
-use crate::input::{KeyMap, MouseAdapter};
-use crate::lua::{LuaHandle, LuaSubsystem};
+use crate::lua::LuaSubsystem;
 use crate::theme::ThemeId;
 use ttymap_engine::map::MapHandle;
-use ttymap_engine::map::render::frame::MapFrame;
 
 pub struct App {
-    /// GoF Receiver for `UserCommand`. Owns the state that mutates
-    /// in response to commands; `App` is the loop driver above it.
-    /// See [`Dispatcher`].
+    /// Sole owner of mutable App state and the event accumulator
+    /// `publish_pending` drains. See [`Dispatcher`].
     dispatcher: Dispatcher,
-    /// Latest rendered map snapshot drained from the render thread.
-    /// `None` until the first frame arrives. Lives on App (not
-    /// Dispatcher) because it is the *rendered product* that App
-    /// displays — Dispatcher reads it as `Option<&MapFrame>` only on
-    /// the `ExportFrame` arm.
-    map_frame: Option<MapFrame>,
-    /// Mouse-event translator. App owns this because `handle_input`
-    /// is the only consumer.
-    mouse: MouseAdapter,
-    /// Shared with Dispatcher + the Lua subsystem. App publishes
-    /// directly on `AppEvent::FrameReady` / `AppEvent::Bus` so the
-    /// dispatch path stays purely UserCommand-driven (#334).
+    /// The Lua-agnostic pub/sub primitive. Only [`Self::publish_pending`]
+    /// calls `publish` on it — the single fan-out site for the
+    /// program.
     bus: Rc<EventBus>,
-    /// Cheap-to-clone handle into the Lua subsystem. App holds its
-    /// own clone so it can mirror the latest [`MapFrame`] into the
-    /// shared cell `ttymap.api.frame.to_ansi()` reads from without
-    /// routing through Dispatcher.
-    lua: LuaHandle,
     /// Main event-loop wake interval. Derived from
     /// `ttymap.opt.runtime.poll_timeout_ms` at startup. `pub` getter
     /// because `main` reads it to align the input thread / frame
@@ -116,16 +98,12 @@ impl App {
             dispatcher: Dispatcher::new(
                 theme_id,
                 map,
-                lua.clone(),
-                bus.clone(),
+                lua,
                 compositor,
                 config.runtime.sidebar_width,
                 std::time::Duration::from_millis(config.runtime.overlay_redraw_ms),
             ),
-            map_frame: None,
-            mouse: MouseAdapter::default(),
             bus,
-            lua,
             poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
         }
     }
@@ -140,12 +118,11 @@ impl App {
     /// Drive the per-iteration event loop until `Dispatcher` flips
     /// `running` off.
     ///
-    /// The app owns the iteration shape (housekeeping → drain
-    /// queue → poll components → render → throttle overlay redraw)
-    /// because the ordering between those steps is an app-level
-    /// concern, not a wiring concern. `main` stays the composition
-    /// root: it builds the bus, the channel, and the off-thread
-    /// subsystems, then hands them in here as borrows.
+    /// Shape: drain queue → poll components → apply Lua ops →
+    /// publish pending → render → throttle overlay redraw. `main`
+    /// stays the composition root: it builds the bus, the channel,
+    /// and the off-thread subsystems, then hands them in here as
+    /// borrows.
     pub fn run(
         &mut self,
         terminal: &mut ratatui::DefaultTerminal,
@@ -153,9 +130,10 @@ impl App {
         event_tx: &std::sync::mpsc::Sender<AppEvent>,
     ) -> io::Result<()> {
         self.dispatcher.dispatch_initial_redraw();
+        self.publish_pending();
 
         while self.dispatcher.is_running() {
-            // Park on the unified bus until any source produces an
+            // Park on the unified queue until any source produces an
             // event; drain any further buffered events non-blockingly
             // so a burst doesn't push the paint behind.
             match event_rx.recv() {
@@ -166,10 +144,9 @@ impl App {
                 self.handle_event(event, event_tx);
             }
 
-            // Component poll: any `win.emit(msg)` inside fires onto
-            // the bus directly. Same-iteration `try_recv` ran above
-            // already; an emission here will be picked up next
-            // iteration.
+            // Component poll: any handler-returned `Op`s apply through
+            // Dispatcher's accumulator; any `Op::Publish` lands in
+            // `pending_events` and ships out at the next drain.
             self.dispatcher.poll_compositor();
 
             // Drain Lua-enqueued ops *before* render so that ops
@@ -180,6 +157,12 @@ impl App {
             // `poll_compositor`, with the same one-frame visibility
             // lag as the prior CloseFlag-via-poll design.
             self.dispatcher.apply_lua_ops();
+
+            // Single bus-publish site for the entire program. Every
+            // `pending_events` push from Dispatcher (dispatch arms,
+            // accept_frame, forward_external_event, Op::Publish in
+            // apply_ops) ships out here.
+            self.publish_pending();
 
             // Render a frame. Inside `ui::draw`, the per-frame Lua
             // `tick` event fires against the live MapApi.
@@ -195,66 +178,32 @@ impl App {
         Ok(())
     }
 
-    /// Apply one event drained off the unified queue. Each variant
-    /// has a small fixed handler and the work is bounded — long Lua
-    /// callbacks notwithstanding, the loop never sits inside this
-    /// for more than the time a single dispatch needs.
+    /// Route one event into the right Dispatcher method. App does no
+    /// state mutation itself — every arm is a one-line forward.
     fn handle_event(&mut self, event: AppEvent, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
         match event {
             AppEvent::Command(msg) => self.dispatcher.dispatch(msg),
-            AppEvent::FrameReady(frame) => {
-                // Mirror the frame into the shared cell Lua reads via
-                // `ttymap.api.frame.to_ansi()` *before* publishing
-                // `FrameReady` — a subscriber that immediately calls
-                // `to_ansi()` should see this frame, not the previous
-                // one.
-                self.lua.set_current_frame(frame.clone());
-                self.map_frame = Some(frame);
-                self.bus.publish(crate::event::Event::FrameReady);
-            }
-            AppEvent::Input(input) => self.handle_input(input, event_tx),
+            AppEvent::FrameReady(frame) => self.dispatcher.accept_frame(frame),
+            AppEvent::Input(input) => self.dispatcher.handle_input(input, event_tx),
             // `Wake` exists purely to unblock `event_rx.recv()`. The
             // per-iteration draw + overlay-redraw rate-check below
             // already does whatever per-frame work is needed; no
             // extra handler logic belongs here. Distinct from the
             // Lua-side `"tick"` event which fires from inside draw.
             AppEvent::Wake => {}
-            // Cross-thread bus publish. The main loop hands the event
-            // straight to the bus, which fans out to every registered
-            // subscriber. Main-thread producers publish inline at
-            // their handler site instead — this branch exists only so
-            // off-thread code can reach Lua subscribers without
-            // owning an mlua state.
-            AppEvent::Bus(bus_event) => self.bus.publish(bus_event),
+            // Cross-thread producers route through here so their
+            // publish lands in the same accumulator App drains for
+            // dispatch-produced events — preserving the
+            // single-publish-site invariant.
+            AppEvent::Bus(bus_event) => self.dispatcher.forward_external_event(bus_event),
         }
     }
 
-    /// Classify a raw terminal event and dispatch downstream messages.
-    /// Same logic as the prior inline `crossterm::event::poll` block —
-    /// just relocated so it can run from the unified-queue drain.
-    fn handle_input(&mut self, event: Event, event_tx: &std::sync::mpsc::Sender<AppEvent>) {
-        match event {
-            Event::Key(key_event) => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL)
-                    && key_event.code == KeyCode::Char('c')
-                {
-                    info!("Ctrl-C received, quitting");
-                    let _ = event_tx.send(AppEvent::Command(UserCommand::Quit));
-                } else {
-                    debug!("key event: {:?}", key_event.code);
-                    self.dispatcher.handle_key_event(key_event);
-                }
-            }
-            Event::Resize(cols, rows) => {
-                info!("resize: {}x{}", cols, rows);
-                let _ = event_tx.send(AppEvent::Command(UserCommand::Resize(cols, rows)));
-            }
-            Event::Mouse(mouse) => {
-                for msg in self.mouse.translate(mouse) {
-                    let _ = event_tx.send(AppEvent::Command(msg));
-                }
-            }
-            _ => {}
+    /// Drain every [`crate::event::Event`] Dispatcher accumulated
+    /// and publish each onto the bus. The single fan-out point.
+    fn publish_pending(&mut self) {
+        for ev in self.dispatcher.drain_events() {
+            self.bus.publish(ev);
         }
     }
 
@@ -262,8 +211,7 @@ impl App {
     /// inside `ui::draw` against the live `MapApi` (see `ui::draw`).
     fn render_into(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         let ctx = self.dispatcher.context();
-        let map_frame = self.map_frame.as_ref();
-        let inputs = self.dispatcher.draw_inputs(map_frame, &ctx);
+        let inputs = self.dispatcher.draw_inputs(&ctx);
         terminal.draw(|f| crate::app::ui::draw(f, inputs))?;
         Ok(())
     }

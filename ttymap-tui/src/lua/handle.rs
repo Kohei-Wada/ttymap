@@ -1,16 +1,14 @@
 //! Runtime handle to the Lua subsystem.
 //!
-//! Cheap-to-clone Rc/Arc bundle that App + Dispatcher both hold so
-//! each can reach the Lua-side state they need (drain ops, sync
-//! per-plugin view mirrors, tick on draw, mirror the latest frame,
-//! set the tile attribution string) without routing through the
-//! other half.
+//! Bundle of Rc/Arc fields Dispatcher holds so it can reach the
+//! Lua-side state it needs (drain ops, sync per-plugin view
+//! mirrors, tick on draw, mirror the latest frame, set the tile
+//! attribution string).
 //!
-//! Event publishing is **not** part of this surface. The [`EventBus`]
+//! Event publishing is not part of this surface. The [`EventBus`]
 //! lives next to LuaHandle in [`crate::lua::LuaSubsystem`] and is
-//! held directly by App / Dispatcher — publishes happen inline
-//! alongside the state mutation that produced them, not through a
-//! `notify_*` wrapper layer here. See #334.
+//! held directly by App; Dispatcher accumulates events into a
+//! buffer App drains and publishes (#334).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,14 +22,11 @@ use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::frame::MapFrame;
 
 /// Runtime-held part of the Lua subsystem (built by
-/// [`crate::lua::build_subsystem`]). Clone is free — every field is
-/// already an `Rc` / `Arc` / cheap newtype, so App and Dispatcher
-/// share one logical instance through their clones.
+/// [`crate::lua::build_subsystem`]).
 ///
 /// The bus is held here only because [`Self::tick`] needs it to
-/// fan out the per-frame `"tick"` event. App / Dispatcher reach the
-/// bus directly via the clone stored on [`crate::lua::LuaSubsystem`].
-#[derive(Clone)]
+/// fan out the per-frame `"tick"` event. App reaches the bus
+/// directly via the clone stored on [`crate::lua::LuaSubsystem`].
 pub struct LuaHandle {
     bus: Rc<EventBus>,
     host_handles: Vec<LuaHostHandles>,

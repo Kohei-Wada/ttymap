@@ -1,35 +1,36 @@
-//! `Dispatcher` — the GoF Receiver for [`crate::UserCommand`].
+//! `Dispatcher` — sole owner of mutable App state.
 //!
-//! Owns the state that mutates in response to commands (map, lua,
-//! compositor, theme, sidebar, overlay sink, cursor) and every
-//! handler that touches that state. [`crate::app::App`] is the loop
-//! driver above this layer: it drains the
-//! [`crate::app::AppEvent`] bus, ratatui-draws each frame, and
-//! forwards events here.
+//! Receives every [`crate::app::AppEvent`] variant App drains off
+//! the unified queue, mutates the state it owns (map, lua, compositor,
+//! theme, sidebar, overlay, cursor, mouse adapter, latest map frame),
+//! and **accumulates** the observable [`Event`]s each mutation
+//! produces into `pending_events`. App drains the buffer and
+//! publishes once per loop iteration — a single bus.publish call
+//! site for the entire program.
 //!
-//! `Dispatcher` is **ratatui-free** — only `App::render_into`
-//! touches ratatui. App reaches into Dispatcher state exclusively
-//! through methods (`is_running`, `context`, `dispatch`,
-//! `draw_inputs`, …); fields are private. The engine ↔ shell
-//! relationship is one binary's two halves.
+//! No event publishing happens inside this module: Dispatcher does
+//! not hold an `EventBus` reference. That keeps state mutation
+//! (Dispatcher's job) and event fan-out (App's job, via the bus it
+//! owns) in distinct hands.
 //!
-//! Phase 1 of GitHub issue #212 (Dispatcher extraction). The
-//! struct lives next to `App` (its sole consumer); the previous
-//! core/front directory experiment (Phase 4) was reverted in
-//! favour of a flat layout — see `src/lib.rs` header.
+//! `Dispatcher` is **ratatui-free** — only `App::render_into` touches
+//! ratatui. App reaches Dispatcher state through methods only;
+//! fields are private. The engine ↔ shell relationship is one
+//! binary's two halves.
 
-use std::rc::Rc;
 use std::time::Duration;
 
-use crossterm::event::KeyEvent;
-use log::debug;
+use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use log::{debug, info};
 
+use super::AppEvent;
 use super::overlay::OverlayThrottle;
 use super::sidebar::SidebarPolicy;
 use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{Compositor, Context};
-use crate::event::{Event, EventBus};
+use crate::event::Event;
+use crate::input::MouseAdapter;
 use crate::lua::LuaHandle;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
@@ -43,15 +44,21 @@ pub(super) struct Dispatcher {
     theme_id: ThemeId,
     ui_theme: UiTheme,
     lua: LuaHandle,
-    /// Shared with App + the Lua subsystem. Dispatcher handlers
-    /// publish observable events on this directly, alongside the
-    /// state mutation that produced them — no wrapper layer, no
-    /// second match on `UserCommand` (see #334).
-    bus: Rc<EventBus>,
     compositor: Compositor,
     sidebar: SidebarPolicy,
     cursor: Option<(u16, u16)>,
     overlay: OverlayThrottle,
+    mouse: MouseAdapter,
+    /// Latest rendered map snapshot drained from the render thread.
+    /// `None` until the first frame arrives. Updated by
+    /// [`Self::accept_frame`] on every `AppEvent::FrameReady` and
+    /// borrowed back by `App::render_into` through [`Self::draw_inputs`].
+    map_frame: Option<MapFrame>,
+    /// Events accumulated since the last drain. Handlers `push` here
+    /// rather than calling `bus.publish` directly so all fan-out
+    /// happens at one place in `App::run`'s loop (single canonical
+    /// publish site — see crate doc).
+    pending_events: Vec<Event>,
 }
 
 impl Dispatcher {
@@ -59,7 +66,6 @@ impl Dispatcher {
         theme_id: ThemeId,
         map: MapHandle,
         lua: LuaHandle,
-        bus: Rc<EventBus>,
         compositor: Compositor,
         sidebar_width: u16,
         overlay_redraw_interval: Duration,
@@ -71,11 +77,13 @@ impl Dispatcher {
             theme_id,
             ui_theme,
             lua,
-            bus,
             compositor,
             sidebar: SidebarPolicy::new(sidebar_width),
             cursor: None,
             overlay: OverlayThrottle::new(overlay_redraw_interval),
+            mouse: MouseAdapter::default(),
+            map_frame: None,
+            pending_events: Vec::new(),
         }
     }
 
@@ -93,6 +101,13 @@ impl Dispatcher {
         self.dispatch(UserCommand::Map(MapAction::Redraw));
     }
 
+    /// Take every [`Event`] accumulated since the last drain. App
+    /// calls this after each dispatcher invocation and publishes
+    /// the batch onto its bus.
+    pub(super) fn drain_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.pending_events)
+    }
+
     /// Build the [`Context`] snapshot read by component hooks.
     pub(super) fn context(&self) -> Context {
         Context {
@@ -106,13 +121,9 @@ impl Dispatcher {
     /// stays a one-liner. Field-disjoint borrows (immut compositor /
     /// lua / theme + mut overlay sink) live behind this method
     /// instead of leaking the dispatcher's internals to App.
-    pub(super) fn draw_inputs<'a>(
-        &'a mut self,
-        map_frame: Option<&'a MapFrame>,
-        ctx: &'a Context,
-    ) -> super::ui::DrawInputs<'a> {
+    pub(super) fn draw_inputs<'a>(&'a mut self, ctx: &'a Context) -> super::ui::DrawInputs<'a> {
         super::ui::DrawInputs {
-            map_frame,
+            map_frame: self.map_frame.as_ref(),
             compositor: &self.compositor,
             lua: &self.lua,
             theme: &self.ui_theme,
@@ -141,14 +152,13 @@ impl Dispatcher {
                 }
                 Op::Close(id) => self.compositor.close_by_id(id),
                 Op::Command(cmd) => self.dispatch(cmd),
-                Op::Publish(event) => self.bus.publish(event),
+                Op::Publish(event) => self.pending_events.push(event),
             }
         }
     }
 
     /// Deliver a key event to the compositor and apply any resulting
-    /// ops. Called from `App::handle_input` for non-Ctrl-C key
-    /// events.
+    /// ops. Called from [`Self::handle_input`] for non-Ctrl-C keys.
     pub(super) fn handle_key_event(&mut self, key: KeyEvent) {
         let ctx = self.context();
         let ops = self.compositor.handle_key(key, &ctx);
@@ -177,17 +187,69 @@ impl Dispatcher {
         self.overlay.should_redraw()
     }
 
+    /// Mirror the latest [`MapFrame`] into the Lua-readable cell,
+    /// update the App-visible cache used by `render_into`, and queue
+    /// `Event::FrameReady`. The Lua mirror is written before the
+    /// event is enqueued so a `frame_ready` subscriber that
+    /// immediately calls `ttymap.api.frame.to_ansi()` sees the new
+    /// frame, not the previous one.
+    pub(super) fn accept_frame(&mut self, frame: MapFrame) {
+        self.lua.set_current_frame(frame.clone());
+        self.map_frame = Some(frame);
+        self.pending_events.push(Event::FrameReady);
+    }
+
+    /// Forward a bus event published by an off-thread producer. The
+    /// cross-thread `AppEvent::Bus` branch routes through here so
+    /// the publish lands in the same accumulator App drains for
+    /// dispatch-produced events.
+    pub(super) fn forward_external_event(&mut self, event: Event) {
+        self.pending_events.push(event);
+    }
+
+    /// Translate a raw [`crossterm::event::Event`] into the right
+    /// downstream action. Key events route through the focus stack
+    /// directly (`handle_key_event`); resize / mouse become
+    /// [`UserCommand`]s pushed back on the App-level queue so the
+    /// same handler path applies whether the trigger was the terminal
+    /// or a Lua palette command. Ctrl-C is the single hard-coded
+    /// host shortcut; everything else is keymap-defined.
+    pub(super) fn handle_input(
+        &mut self,
+        event: CrosstermEvent,
+        event_tx: &std::sync::mpsc::Sender<AppEvent>,
+    ) {
+        match event {
+            CrosstermEvent::Key(key_event) => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                    && key_event.code == KeyCode::Char('c')
+                {
+                    info!("Ctrl-C received, quitting");
+                    let _ = event_tx.send(AppEvent::Command(UserCommand::Quit));
+                } else {
+                    debug!("key event: {:?}", key_event.code);
+                    self.handle_key_event(key_event);
+                }
+            }
+            CrosstermEvent::Resize(cols, rows) => {
+                info!("resize: {}x{}", cols, rows);
+                let _ = event_tx.send(AppEvent::Command(UserCommand::Resize(cols, rows)));
+            }
+            CrosstermEvent::Mouse(mouse) => {
+                for msg in self.mouse.translate(mouse) {
+                    let _ = event_tx.send(AppEvent::Command(msg));
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Execute a [`UserCommand`]. Each arm mutates the state it owns
-    /// and, on the same beat, publishes the observable [`Event`]
-    /// (if any) that corresponds to "this just happened". No separate
-    /// notify pass, no per-arm helper that only one arm calls — the
-    /// full behaviour of each command is readable in one place.
-    ///
-    /// `handle_resize` stays a private helper because three call
-    /// sites share it (`Resize` arm here, `ToggleSidebar` arm here,
-    /// `poll_compositor` auto-resize after a sidebar count change).
-    /// `request_map_redraw` likewise — it's invoked from every arm
-    /// that wants the next frame.
+    /// and `push`es the observable [`Event`] (if any) into
+    /// `pending_events`. No `bus.publish` call lives inside this
+    /// module — App drains the buffer and publishes once per
+    /// iteration. `handle_resize` stays a private helper because
+    /// three call sites share it.
     ///
     /// `PanCells`, `ZoomAt`, `CursorMoved`, `CycleFocus`, the discrete
     /// `Pan*` keymap actions, and `Quit` are deliberately not
@@ -199,10 +261,10 @@ impl Dispatcher {
                     self.request_map_redraw();
                 }
                 match &action {
-                    MapAction::Jump(ll) => self.bus.publish(Event::MapJumped(*ll)),
-                    MapAction::SetZoom(z) => self.bus.publish(Event::MapZoomSet(*z)),
+                    MapAction::Jump(ll) => self.pending_events.push(Event::MapJumped(*ll)),
+                    MapAction::SetZoom(z) => self.pending_events.push(Event::MapZoomSet(*z)),
                     MapAction::FlyTo { center, zoom } => {
-                        self.bus.publish(Event::MapFlewTo(*center, *zoom));
+                        self.pending_events.push(Event::MapFlewTo(*center, *zoom));
                     }
                     _ => {}
                 }
@@ -215,8 +277,8 @@ impl Dispatcher {
                 self.theme_id = new_id;
                 self.ui_theme = UiTheme::from_palette(new_id.palette());
                 self.map.set_theme(new_id);
-                self.bus
-                    .publish(Event::ThemeChanged(new_id.name().to_string()));
+                self.pending_events
+                    .push(Event::ThemeChanged(new_id.name().to_string()));
                 self.request_map_redraw();
             }
             UserCommand::CursorMoved(col, row) => {
@@ -244,7 +306,7 @@ impl Dispatcher {
     fn handle_resize(&mut self, cols: u16, rows: u16) {
         let map_cols = self.sidebar.effective_map_cols(cols);
         self.map.handle_resize(map_cols, rows);
-        self.bus.publish(Event::Resized(cols, rows));
+        self.pending_events.push(Event::Resized(cols, rows));
         self.request_map_redraw();
     }
 
