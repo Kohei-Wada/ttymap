@@ -18,12 +18,11 @@
 -- sky at this longitude.
 
 local fmt = require "ttymap.fmt"
+local geo = require "ttymap.geo"
 local loc = require "ttymap.location"
 
 local NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 local INTERVAL_SEC = 5
-local EARTH_RADIUS_M = 6378137.0   -- WGS-84 equatorial radius, same as scalebar.lua
-local COMPASS = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }
 
 local state = {
     place_name = nil,
@@ -72,46 +71,10 @@ local function format_place(payload)
     return nil
 end
 
--- Great-circle distance in metres, with antimeridian-aware longitude
--- wrapping so a 179 → -179 pan reads as ~250 km (the short way round)
--- rather than 40 000 km (the long way round).
-local function haversine_m(lat1, lon1, lat2, lon2)
-    local rlat1 = lat1 * math.pi / 180
-    local rlat2 = lat2 * math.pi / 180
-    local dlat = rlat2 - rlat1
-    local dlon = lon2 - lon1
-    if dlon > 180 then dlon = dlon - 360
-    elseif dlon < -180 then dlon = dlon + 360 end
-    dlon = dlon * math.pi / 180
-    local a = math.sin(dlat / 2) ^ 2
-        + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ^ 2
-    return 2 * EARTH_RADIUS_M * math.asin(math.min(1, math.sqrt(a)))
-end
-
 local function format_speed(mps)
     if mps < 1 then return "idle" end
     if mps < 1000 then return string.format("%d m/s", math.floor(mps + 0.5)) end
     return string.format("%.1f km/s", mps / 1000)
-end
-
--- Initial great-circle bearing from (lat1, lon1) to (lat2, lon2),
--- quantised to one of 8 compass labels. Returns nil when the two
--- points are effectively coincident — speeds below the idle threshold
--- have no meaningful direction.
-local function bearing_label(lat1, lon1, lat2, lon2)
-    local rlat1 = lat1 * math.pi / 180
-    local rlat2 = lat2 * math.pi / 180
-    local dlon = lon2 - lon1
-    if dlon > 180 then dlon = dlon - 360
-    elseif dlon < -180 then dlon = dlon + 360 end
-    dlon = dlon * math.pi / 180
-    local y = math.sin(dlon) * math.cos(rlat2)
-    local x = math.cos(rlat1) * math.sin(rlat2)
-        - math.sin(rlat1) * math.cos(rlat2) * math.cos(dlon)
-    if math.abs(x) < 1e-12 and math.abs(y) < 1e-12 then return nil end
-    local deg = (math.atan(y, x) * 180 / math.pi + 360) % 360
-    local idx = math.floor((deg + 22.5) / 45) % 8
-    return COMPASS[idx + 1]
 end
 
 -- Mean solar time at `lon` derived from the system UTC clock —
@@ -144,11 +107,11 @@ local function tick_speed(lat, lon)
     end
     local dt = now - state.speed_anchor_sec
     if dt <= 0 then return end
-    local d = haversine_m(state.speed_anchor_lat, state.speed_anchor_lon, lat, lon)
+    local d = geo.haversine_m(state.speed_anchor_lat, state.speed_anchor_lon, lat, lon)
     state.speed_mps = d / dt
     -- Bearing only meaningful when there's a real displacement.
     if d >= 1 then
-        state.bearing = bearing_label(
+        state.bearing = geo.bearing_label(
             state.speed_anchor_lat, state.speed_anchor_lon, lat, lon)
     else
         state.bearing = nil
@@ -229,7 +192,7 @@ ttymap.api.frame.on_tick(function(map)
     local hlat, hlon = loc.cached()
     local from_here_line
     if hlat and hlon then
-        local d = haversine_m(hlat, hlon, lat, lon)
+        local d = geo.haversine_m(hlat, hlon, lat, lon)
         from_here_line = " from here: " .. fmt.distance(d) .. " "
     else
         from_here_line = " from here: unknown "

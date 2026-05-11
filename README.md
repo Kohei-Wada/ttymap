@@ -37,20 +37,22 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-16 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
+18 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
 
 | Plugin | What it does |
 | --- | --- |
 | `aircraft` | Live aircraft markers from the OpenSky public ADS-B feed; sidebar list with altitude / speed; Enter centers the map. |
+| `antipode` | `:` palette → fly to the diametrically opposite point on the sphere. "What's directly below me through Earth?" |
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
 | `center` | Crosshair at the map center — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
 | `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map center lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
 | `help` | `?` opens a live keymap cheatsheet derived from the active keymap + plugin palette entries. |
 | `here` | `:` palette → IP-geolocate then animate the camera home. |
-| `info` | Top-right readouts: center, cursor, zoom, reverse-geocoded place name (Nominatim). |
+| `info` | Top-right readouts: center / cursor / zoom / pan speed + bearing / solar time / distance from your geoip home / reverse-geocoded place name. |
 | `ping_simulation` | "Cyber-attack visualisation"-style growing lines pinging between cities — reference for animated polyline overlays. |
 | `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; colored markers + sidebar list, auto-jumps to the highest-magnitude event. |
+| `ruler` | `m` toggles a great-circle measure tape anchored at the cursor; live distance + bearing read out in the bottom-left as you move the mouse. |
 | `satellite` | Multi-sat tracker (ISS, Hubble, …) with TLE fetch from CelesTrak and SGP4 propagation in Lua. |
 | `scalebar` | Bottom-right scale ruler that adapts to current zoom. |
 | `search` | Forward geocoding via Nominatim, palette-provider style with debounced input. |
@@ -140,7 +142,7 @@ Rust 2024 edition. The build uses `protox` so no system `protoc` is needed.
 
 - **[docs/architecture.md](docs/architecture.md)** — system layout, threads, message + render flow, focus model, concurrency.
 - **[docs/configuration.md](docs/configuration.md)** — `init.lua` reference, runtime path resolution, file locations.
-- **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director` / `.location`), plugin shapes, dispatcher semantics.
+- **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director` / `.location` / `.geo`), plugin shapes, dispatcher semantics.
 - **[docs/design.md](docs/design.md)** — load-bearing design decisions (UserCommand vs direct call, controller split, Drop-based cleanup).
 
 ## Origin
