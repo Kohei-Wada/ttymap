@@ -708,6 +708,7 @@ mod tests {
             "travel",
             "terminator",
             "geo quiz",
+            "antipode",
         ] {
             assert!(
                 palette.iter().any(|l| l.contains(stem)),
