@@ -518,6 +518,7 @@ here.
 | `ttymap.animation`      | `.fly_to(lon, lat, zoom, opts?)` — frame-based pan animation  |
 | `ttymap.director`       | `.run(fn, opts?)` / `.fly` / `.wait` / `.tween` — coroutine-based scheduler |
 | `ttymap.cities`         | array of `{lon, lat, name, country}` — ~170 worldwide cities  |
+| `ttymap.location`       | `.get(cb)` / `.refresh(cb)` / `.cached()` — shared IP-geoip user-location cache |
 
 `ttymap.animation.fly_to` interpolates `ttymap.map:fly_to` over ~30
 frames (default), with optional `on_done` / `on_cancel` callbacks
@@ -553,6 +554,18 @@ explicit `handle:cancel()`. A natural function return ends the
 script without firing `on_cancel`. The travel plugin's pre /
 stop / post tour is one such script — the whole choreography is
 top-to-bottom procedural Lua, no hand-written state machine.
+
+`ttymap.location` resolves "where is the user, in lon/lat" once
+via IP geoip and serves the answer to every plugin that asks.
+Three layers: in-memory (this session), `ttymap.storage` (across
+sessions, TTL-bounded — default 24h), and an HTTP fetch against
+`require("ttymap.here").endpoint` (the canonical source, shared
+with the `here` plugin). Concurrent `loc.get` calls coalesce onto
+a single in-flight job; the cb fires sync on cache hit or once the
+shared response lands. Errors surface as `cb(nil, nil, "error")`
+plus a `ttymap.notify` warning. `loc.refresh(cb)` skips the TTL
+and always re-fetches; `loc.cached()` is a sync read that returns
+`nil, nil` on miss / stale and never starts a fetch.
 
 ## User plugins
 
