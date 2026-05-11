@@ -54,8 +54,8 @@ pub struct LuaSubsystem {
     pub handle: LuaHandle,
     /// Lua-agnostic pub/sub primitive. Shared with every
     /// `EventHandle` userdata returned to Lua (for `:remove()`) and
-    /// with the App + Dispatcher (who publish directly inline beside
-    /// the state mutation that produced each event — see #334).
+    /// with [`crate::app::App`], which drains its accumulated event
+    /// buffer once per loop iteration onto this bus (#334, #336).
     pub bus: std::rc::Rc<crate::event::EventBus>,
     /// Live registry of Lua-registered activations + palette
     /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
