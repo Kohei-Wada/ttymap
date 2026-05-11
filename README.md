@@ -37,7 +37,7 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-18 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
+17 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
 
 | Plugin | What it does |
 | --- | --- |
@@ -52,7 +52,6 @@ Tokyo zoomed in with the wiki panel open:
 | `info` | Top-right readouts: center / cursor / zoom / pan speed + bearing / solar time / distance from your geoip home / reverse-geocoded place name. |
 | `ping_simulation` | "Cyber-attack visualisation"-style growing lines pinging between cities — reference for animated polyline overlays. |
 | `quake` | USGS magnitude-2.5+ earthquakes from the past 24 hours; colored markers + sidebar list, auto-jumps to the highest-magnitude event. |
-| `ruler` | `m` toggles a great-circle measure tape anchored at the cursor; live distance + bearing read out in the bottom-left as you move the mouse. |
 | `satellite` | Multi-sat tracker (ISS, Hubble, …) with TLE fetch from CelesTrak and SGP4 propagation in Lua. |
 | `scalebar` | Bottom-right scale ruler that adapts to current zoom. |
 | `search` | Forward geocoding via Nominatim, palette-provider style with debounced input. |
