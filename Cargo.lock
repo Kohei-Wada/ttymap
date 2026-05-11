@@ -3018,7 +3018,6 @@ dependencies = [
  "log",
  "mlua",
  "ratatui",
- "reqwest",
  "serde",
  "serde_json",
  "sgp4",
