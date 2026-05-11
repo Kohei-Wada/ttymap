@@ -151,6 +151,7 @@ impl LuaHostShared {
 /// shared [`OpsBuffer`](crate::compositor::op::OpsBuffer) as
 /// [`Op::Push`](crate::compositor::op::Op::Push) and the App drains them
 /// alongside [`Op::Close`](crate::compositor::op::Op::Close).
+#[derive(Clone)]
 pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
     /// Latest zoom level mirrored from the host so

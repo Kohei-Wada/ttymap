@@ -1,17 +1,22 @@
 //! Runtime handle to the Lua subsystem.
 //!
-//! App stores one of these as a private field. It exposes
-//! **semantic** methods (`notify_*`, `tick`, `sync_view`,
-//! `drain_ops`) so App never names the [`EventBus`], the event
-//! variants, or the per-plugin host channels. The "App doesn't know
-//! how Lua is wired internally" boundary — all bus dispatch and
-//! host-state plumbing lives behind this type.
+//! Cheap-to-clone Rc/Arc bundle that App + Dispatcher both hold so
+//! each can reach the Lua-side state they need (drain ops, sync
+//! per-plugin view mirrors, tick on draw, mirror the latest frame,
+//! set the tile attribution string) without routing through the
+//! other half.
+//!
+//! Event publishing is **not** part of this surface. The [`EventBus`]
+//! lives next to LuaHandle in [`crate::lua::LuaSubsystem`] and is
+//! held directly by App / Dispatcher — publishes happen inline
+//! alongside the state mutation that produced them, not through a
+//! `notify_*` wrapper layer here. See #334.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
-use crate::event::{Event, EventBus, Level};
+use crate::event::EventBus;
 use crate::lua::MapApi;
 use crate::lua::host::{LuaHostHandles, LuaHostShared};
 use crate::lua::tick;
@@ -19,15 +24,14 @@ use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::frame::MapFrame;
 
 /// Runtime-held part of the Lua subsystem (built by
-/// [`crate::lua::build_subsystem`]). Wraps the event bus and
-/// per-plugin host-state channels so callers (App) interact through
-/// semantic methods rather than touching the bus or channels
-/// directly.
+/// [`crate::lua::build_subsystem`]). Clone is free — every field is
+/// already an `Rc` / `Arc` / cheap newtype, so App and Dispatcher
+/// share one logical instance through their clones.
 ///
-/// The bus is wrapped in [`Rc`] because the same instance is
-/// referenced by every `EventHandle` userdata returned to Lua
-/// (`ttymap.on_event` / `ttymap.api.frame.on_tick`) — they keep a
-/// `Rc<EventBus>` to call `remove(...)` on `:remove()`.
+/// The bus is held here only because [`Self::tick`] needs it to
+/// fan out the per-frame `"tick"` event. App / Dispatcher reach the
+/// bus directly via the clone stored on [`crate::lua::LuaSubsystem`].
+#[derive(Clone)]
 pub struct LuaHandle {
     bus: Rc<EventBus>,
     host_handles: Vec<LuaHostHandles>,
@@ -57,15 +61,6 @@ impl LuaHandle {
         }
     }
 
-    /// Borrow the underlying [`EventBus`] for direct publishes (e.g.
-    /// the App-mpsc drain branch that handles
-    /// [`crate::app::AppEvent::Bus`] hands the event straight to
-    /// `bus.publish`). Most callers should prefer the `notify_*`
-    /// semantic methods below.
-    pub fn bus(&self) -> &EventBus {
-        &self.bus
-    }
-
     /// Take every [`Op`] enqueued by Lua callbacks since the last
     /// drain. App calls this once per loop iteration and applies
     /// each op to the compositor / dispatch path.
@@ -79,15 +74,9 @@ impl LuaHandle {
         tick::dispatch_tick(&self.bus, map);
     }
 
-    /// Notify observers that a fresh frame was drained from the
-    /// render thread.
-    pub fn notify_frame_ready(&self) {
-        self.bus.publish(Event::FrameReady);
-    }
-
     /// Mirror the latest [`MapFrame`] into the shared cell that
-    /// `ttymap.api.frame.to_ansi()` reads from. Called by App on
-    /// every `AppEvent::FrameReady` before [`Self::notify_frame_ready`]
+    /// `ttymap.api.frame.to_ansi()` reads from. App calls this on
+    /// every `AppEvent::FrameReady` before publishing `Event::FrameReady`
     /// so subscribers that immediately query `to_ansi()` see the
     /// fresh frame.
     pub fn set_current_frame(&self, frame: MapFrame) {
@@ -104,45 +93,6 @@ impl LuaHandle {
     /// populated post-`build_subsystem`).
     pub fn set_attribution(&self, attribution: Option<String>) {
         self.shared.set_attribution(attribution);
-    }
-
-    /// Notify observers that the map centred on a new location.
-    pub fn notify_map_jumped(&self, ll: LonLat) {
-        self.bus.publish(Event::MapJumped(ll));
-    }
-
-    /// Notify observers that the zoom level was set explicitly
-    /// (via `:zoom` or `MapAction::SetZoom`).
-    pub fn notify_map_zoom_set(&self, zoom: f64) {
-        self.bus.publish(Event::MapZoomSet(zoom));
-    }
-
-    /// Notify observers that the map flew to a (centre, zoom) pair
-    /// in one combined dispatch.
-    pub fn notify_map_flew_to(&self, center: LonLat, zoom: f64) {
-        self.bus.publish(Event::MapFlewTo(center, zoom));
-    }
-
-    /// Notify observers that the active theme switched.
-    pub fn notify_theme_changed(&self, theme_name: &str) {
-        self.bus
-            .publish(Event::ThemeChanged(theme_name.to_string()));
-    }
-
-    /// Notify observers that the terminal resized.
-    pub fn notify_resized(&self, cols: u16, rows: u16) {
-        self.bus.publish(Event::Resized(cols, rows));
-    }
-
-    /// Push a transient toast onto the bus. The bundled `notify.lua`
-    /// renderer subscribes and paints recent ones top-left for ~3s.
-    /// Callable from any main-thread Rust path; cross-thread
-    /// producers route through `AppEvent::Bus` instead.
-    pub fn notify(&self, message: impl Into<String>, level: Level) {
-        self.bus.publish(Event::Notify {
-            message: message.into(),
-            level,
-        });
     }
 
     /// Refresh the per-plugin `center` / `zoom` mirror cells that

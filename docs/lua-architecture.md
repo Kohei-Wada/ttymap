@@ -48,8 +48,12 @@ ttymap-tui/src/lua/
   init_lua.rs      run_init_lua_chain (system → user init.lua in
                    the shared VM); read_init_lua_config_only is
                    the snap-only thin path
-  handle.rs        LuaHandle — shared host plumbing (drain_ops, tick,
-                   notify_*) the App calls into
+  handle.rs        LuaHandle — cheap-to-clone host plumbing
+                   (drain_ops, tick, sync_view, set_current_frame,
+                   set_attribution) shared by App + Dispatcher.
+                   Event publishing is not on this surface — App
+                   and Dispatcher hold `Rc<EventBus>` directly and
+                   publish inline at each handler site (#334).
   registrar.rs     LuaRegistry — live registry of activations +
                    palette entries; `register_*` calls push directly
                    here, Lua handles `:remove()` drop entries by ID
