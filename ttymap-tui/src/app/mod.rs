@@ -27,6 +27,7 @@ use dispatcher::Dispatcher;
 pub use event::AppEvent;
 
 use std::io;
+use std::rc::Rc;
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use log::{debug, info};
@@ -34,9 +35,10 @@ use log::{debug, info};
 use crate::UserCommand;
 use crate::compositor::{BaseLayer, Compositor};
 use crate::config::Config;
+use crate::event::EventBus;
 pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
-use crate::lua::LuaSubsystem;
+use crate::lua::{LuaHandle, LuaSubsystem};
 use crate::theme::ThemeId;
 use ttymap_engine::map::MapHandle;
 use ttymap_engine::map::render::frame::MapFrame;
@@ -55,6 +57,15 @@ pub struct App {
     /// Mouse-event translator. App owns this because `handle_input`
     /// is the only consumer.
     mouse: MouseAdapter,
+    /// Shared with Dispatcher + the Lua subsystem. App publishes
+    /// directly on `AppEvent::FrameReady` / `AppEvent::Bus` so the
+    /// dispatch path stays purely UserCommand-driven (#334).
+    bus: Rc<EventBus>,
+    /// Cheap-to-clone handle into the Lua subsystem. App holds its
+    /// own clone so it can mirror the latest [`MapFrame`] into the
+    /// shared cell `ttymap.api.frame.to_ansi()` reads from without
+    /// routing through Dispatcher.
+    lua: LuaHandle,
     /// Main event-loop wake interval. Derived from
     /// `ttymap.opt.runtime.poll_timeout_ms` at startup. `pub` getter
     /// because `main` reads it to align the input thread / frame
@@ -81,6 +92,7 @@ impl App {
     ) -> Self {
         let LuaSubsystem {
             handle: lua,
+            bus,
             registry,
             footer_hints,
         } = lua;
@@ -104,13 +116,16 @@ impl App {
             dispatcher: Dispatcher::new(
                 theme_id,
                 map,
-                lua,
+                lua.clone(),
+                bus.clone(),
                 compositor,
                 config.runtime.sidebar_width,
                 std::time::Duration::from_millis(config.runtime.overlay_redraw_ms),
             ),
             map_frame: None,
             mouse: MouseAdapter::default(),
+            bus,
+            lua,
             poll_timeout: std::time::Duration::from_millis(config.runtime.poll_timeout_ms),
         }
     }
@@ -189,13 +204,13 @@ impl App {
             AppEvent::Command(msg) => self.dispatcher.dispatch(msg),
             AppEvent::FrameReady(frame) => {
                 // Mirror the frame into the shared cell Lua reads via
-                // `ttymap.api.frame.to_ansi()` *before* notifying
-                // subscribers — a `frame_ready` listener that
-                // immediately calls `to_ansi()` should see this frame,
-                // not the previous one.
-                self.dispatcher.set_current_frame_for_lua(frame.clone());
+                // `ttymap.api.frame.to_ansi()` *before* publishing
+                // `FrameReady` — a subscriber that immediately calls
+                // `to_ansi()` should see this frame, not the previous
+                // one.
+                self.lua.set_current_frame(frame.clone());
                 self.map_frame = Some(frame);
-                self.dispatcher.notify_frame_ready();
+                self.bus.publish(crate::event::Event::FrameReady);
             }
             AppEvent::Input(input) => self.handle_input(input, event_tx),
             // `Wake` exists purely to unblock `event_rx.recv()`. The
@@ -206,11 +221,11 @@ impl App {
             AppEvent::Wake => {}
             // Cross-thread bus publish. The main loop hands the event
             // straight to the bus, which fans out to every registered
-            // subscriber. Main-thread producers go via
-            // `Dispatcher`/`LuaHandle` instead — this branch exists
-            // only so off-thread code can reach Lua subscribers
-            // without owning an mlua state.
-            AppEvent::Bus(bus_event) => self.dispatcher.publish_bus_event(bus_event),
+            // subscriber. Main-thread producers publish inline at
+            // their handler site instead — this branch exists only so
+            // off-thread code can reach Lua subscribers without
+            // owning an mlua state.
+            AppEvent::Bus(bus_event) => self.bus.publish(bus_event),
         }
     }
 

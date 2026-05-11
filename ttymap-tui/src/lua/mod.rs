@@ -52,6 +52,11 @@ pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface
     /// App uses to observe state changes and tick plugins.
     pub handle: LuaHandle,
+    /// Lua-agnostic pub/sub primitive. Shared with every
+    /// `EventHandle` userdata returned to Lua (for `:remove()`) and
+    /// with the App + Dispatcher (who publish directly inline beside
+    /// the state mutation that produced each event — see #334).
+    pub bus: std::rc::Rc<crate::event::EventBus>,
     /// Live registry of Lua-registered activations + palette
     /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
     /// the palette installer (for the `:` activation's per-open
@@ -121,7 +126,8 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
             let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
             return (
                 LuaSubsystem {
-                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                    handle: LuaHandle::new(bus.clone(), Vec::new(), ops, shared),
+                    bus,
                     registry,
                     footer_hints: Vec::new(),
                 },
@@ -148,7 +154,8 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
             let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
             return (
                 LuaSubsystem {
-                    handle: LuaHandle::new(bus, Vec::new(), ops, shared),
+                    handle: LuaHandle::new(bus.clone(), Vec::new(), ops, shared),
+                    bus,
                     registry,
                     footer_hints: Vec::new(),
                 },
@@ -199,11 +206,12 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         })
         .collect();
 
-    let handle = LuaHandle::new(bus, vec![host_handles], ops, shared);
+    let handle = LuaHandle::new(bus.clone(), vec![host_handles], ops, shared);
 
     (
         LuaSubsystem {
             handle,
+            bus,
             registry,
             footer_hints,
         },

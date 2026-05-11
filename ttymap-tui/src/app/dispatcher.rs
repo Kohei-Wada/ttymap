@@ -18,6 +18,7 @@
 //! core/front directory experiment (Phase 4) was reverted in
 //! favour of a flat layout — see `src/lib.rs` header.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use crossterm::event::KeyEvent;
@@ -28,6 +29,7 @@ use super::sidebar::SidebarPolicy;
 use crate::UserCommand;
 use crate::compositor::op::Op;
 use crate::compositor::{Compositor, Context};
+use crate::event::{Event, EventBus};
 use crate::lua::LuaHandle;
 use crate::theme::ThemeId;
 use crate::theme::UiTheme;
@@ -41,6 +43,11 @@ pub(super) struct Dispatcher {
     theme_id: ThemeId,
     ui_theme: UiTheme,
     lua: LuaHandle,
+    /// Shared with App + the Lua subsystem. Dispatcher handlers
+    /// publish observable events on this directly, alongside the
+    /// state mutation that produced them — no wrapper layer, no
+    /// second match on `UserCommand` (see #334).
+    bus: Rc<EventBus>,
     compositor: Compositor,
     sidebar: SidebarPolicy,
     cursor: Option<(u16, u16)>,
@@ -52,6 +59,7 @@ impl Dispatcher {
         theme_id: ThemeId,
         map: MapHandle,
         lua: LuaHandle,
+        bus: Rc<EventBus>,
         compositor: Compositor,
         sidebar_width: u16,
         overlay_redraw_interval: Duration,
@@ -63,6 +71,7 @@ impl Dispatcher {
             theme_id,
             ui_theme,
             lua,
+            bus,
             compositor,
             sidebar: SidebarPolicy::new(sidebar_width),
             cursor: None,
@@ -114,27 +123,6 @@ impl Dispatcher {
         }
     }
 
-    /// Forward a frame-ready signal to subscribers. Called from
-    /// `App::handle_event` when a fresh `MapFrame` arrives off the
-    /// render thread.
-    pub(super) fn notify_frame_ready(&self) {
-        self.lua.notify_frame_ready();
-    }
-
-    /// Hand a [`crate::event::Event`] to the bus for fan-out. Used by
-    /// `App::handle_event` to forward cross-thread `AppEvent::Bus`
-    /// publishes onto the main-thread bus.
-    pub(super) fn publish_bus_event(&self, event: crate::event::Event) {
-        self.lua.bus().publish(event);
-    }
-
-    /// Mirror the latest [`MapFrame`] into the shared cell Lua reads
-    /// via `ttymap.api.frame.to_ansi()`. Called by `App::handle_event`
-    /// on every `AppEvent::FrameReady`.
-    pub(super) fn set_current_frame_for_lua(&self, frame: MapFrame) {
-        self.lua.set_current_frame(frame);
-    }
-
     /// Drain queued Lua-side ops and apply them. App calls this once
     /// per loop iteration after event handling, before render.
     pub(super) fn apply_lua_ops(&mut self) {
@@ -153,7 +141,7 @@ impl Dispatcher {
                 }
                 Op::Close(id) => self.compositor.close_by_id(id),
                 Op::Command(cmd) => self.dispatch(cmd),
-                Op::Publish(event) => self.lua.bus().publish(event),
+                Op::Publish(event) => self.bus.publish(event),
             }
         }
     }
@@ -189,22 +177,48 @@ impl Dispatcher {
         self.overlay.should_redraw()
     }
 
-    /// Execute a [`UserCommand`] and broadcast the post-effect
-    /// notification on the bus. Single side-effect boundary for
-    /// app-level state changes.
+    /// Execute a [`UserCommand`]. Each arm mutates the state it owns
+    /// and, on the same beat, publishes the observable [`Event`]
+    /// (if any) that corresponds to "this just happened". No separate
+    /// notify pass, no per-arm helper that only one arm calls — the
+    /// full behaviour of each command is readable in one place.
+    ///
+    /// `handle_resize` stays a private helper because three call
+    /// sites share it (`Resize` arm here, `ToggleSidebar` arm here,
+    /// `poll_compositor` auto-resize after a sidebar count change).
+    /// `request_map_redraw` likewise — it's invoked from every arm
+    /// that wants the next frame.
+    ///
+    /// `PanCells`, `ZoomAt`, `CursorMoved`, `CycleFocus`, the discrete
+    /// `Pan*` keymap actions, and `Quit` are deliberately not
+    /// broadcast — they're either noisy or internal.
     pub(super) fn dispatch(&mut self, msg: UserCommand) {
-        let snapshot = msg.clone();
         match msg {
             UserCommand::Map(action) => {
                 if self.map.apply_action(&action) {
                     self.request_map_redraw();
+                }
+                match &action {
+                    MapAction::Jump(ll) => self.bus.publish(Event::MapJumped(*ll)),
+                    MapAction::SetZoom(z) => self.bus.publish(Event::MapZoomSet(*z)),
+                    MapAction::FlyTo { center, zoom } => {
+                        self.bus.publish(Event::MapFlewTo(*center, *zoom));
+                    }
+                    _ => {}
                 }
             }
             UserCommand::Quit => {
                 debug!("UserCommand::Quit — stopping event loop");
                 self.running = false;
             }
-            UserCommand::SetTheme(new_id) => self.switch_theme(new_id),
+            UserCommand::SetTheme(new_id) => {
+                self.theme_id = new_id;
+                self.ui_theme = UiTheme::from_palette(new_id.palette());
+                self.map.set_theme(new_id);
+                self.bus
+                    .publish(Event::ThemeChanged(new_id.name().to_string()));
+                self.request_map_redraw();
+            }
             UserCommand::CursorMoved(col, row) => {
                 self.cursor = Some((col, row));
             }
@@ -212,55 +226,26 @@ impl Dispatcher {
                 self.compositor.cycle(forward);
             }
             UserCommand::Resize(cols, rows) => self.handle_resize(cols, rows),
-            UserCommand::ToggleSidebar => self.toggle_sidebar(),
+            UserCommand::ToggleSidebar => {
+                self.sidebar.toggle();
+                // The visible map area shrinks/expands — re-run the
+                // resize path so the render thread allocates the right
+                // canvas size.
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                self.handle_resize(cols, rows);
+            }
             UserCommand::SetLabelsVisible(visible) => {
                 self.map.set_labels_visible(visible);
                 self.request_map_redraw();
             }
         }
-        self.notify_post_command(&snapshot);
-    }
-
-    /// Broadcast post-effect notifications for the variants that
-    /// plugins want to observe. Skips noisy / internal commands so
-    /// the bus surface stays meaningful — bus events are "something
-    /// observable happened to the app", not "every state mutation".
-    fn notify_post_command(&self, msg: &UserCommand) {
-        match msg {
-            UserCommand::Map(MapAction::Jump(ll)) => self.lua.notify_map_jumped(*ll),
-            UserCommand::Map(MapAction::SetZoom(z)) => self.lua.notify_map_zoom_set(*z),
-            UserCommand::Map(MapAction::FlyTo { center, zoom }) => {
-                self.lua.notify_map_flew_to(*center, *zoom);
-            }
-            UserCommand::SetTheme(new_id) => self.lua.notify_theme_changed(new_id.name()),
-            UserCommand::Resize(cols, rows) => self.lua.notify_resized(*cols, *rows),
-            // Noisy or internal — `PanCells`, `ZoomAt`, `CursorMoved`,
-            // `CycleFocus`, the discrete `Pan*` keymap actions, and
-            // `Quit` (the App is tearing down anyway) are deliberately
-            // not broadcast. Adding them later is one match arm.
-            _ => {}
-        }
-    }
-
-    fn switch_theme(&mut self, new_id: ThemeId) {
-        self.theme_id = new_id;
-        self.ui_theme = UiTheme::from_palette(new_id.palette());
-        self.map.set_theme(new_id);
-        self.request_map_redraw();
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
         let map_cols = self.sidebar.effective_map_cols(cols);
         self.map.handle_resize(map_cols, rows);
+        self.bus.publish(Event::Resized(cols, rows));
         self.request_map_redraw();
-    }
-
-    fn toggle_sidebar(&mut self) {
-        self.sidebar.toggle();
-        // The visible map area shrinks/expands — re-run the resize
-        // path so the render thread allocates the right canvas size.
-        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        self.handle_resize(cols, rows);
     }
 
     pub(super) fn request_map_redraw(&mut self) {
