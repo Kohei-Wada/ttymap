@@ -140,7 +140,7 @@ Rust 2024 edition. The build uses `protox` so no system `protoc` is needed.
 
 - **[docs/architecture.md](docs/architecture.md)** — system layout, threads, message + render flow, focus model, concurrency.
 - **[docs/configuration.md](docs/configuration.md)** — `init.lua` reference, runtime path resolution, file locations.
-- **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director`), plugin shapes, dispatcher semantics.
+- **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director` / `.location`), plugin shapes, dispatcher semantics.
 - **[docs/design.md](docs/design.md)** — load-bearing design decisions (UserCommand vs direct call, controller split, Drop-based cleanup).
 
 ## Origin
