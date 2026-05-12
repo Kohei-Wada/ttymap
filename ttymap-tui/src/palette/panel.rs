@@ -108,4 +108,19 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
         .column_spacing(1);
 
     win.table(table, chunks[2], &mut state);
+
+    // Match the rail to the table chunk (not the full popup) so it
+    // doesn't bleed alongside the prompt/blank rows above. The helper
+    // shrinks by 1 row each side internally, so pad by 1 here.
+    let table_chunk = chunks[2];
+    let scrollbar_rect = Rect::new(
+        popup_area.x,
+        table_chunk.y.saturating_sub(1),
+        popup_area.width,
+        table_chunk.height + 2,
+    );
+    let position = (widget.selected as u16)
+        .saturating_add(1)
+        .saturating_sub(rows);
+    win.scrollbar(scrollbar_rect, items.len() as u16, position, rows);
 }
