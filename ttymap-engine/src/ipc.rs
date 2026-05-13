@@ -143,10 +143,22 @@ pub fn run_as_subprocess() -> ! {
 
     let (event_tx, event_rx) = mpsc::channel::<EngineEvent>();
 
-    let writer_handle = std::thread::Builder::new()
+    // Writer-thread spawn failure (resource exhaustion / ulimit) is
+    // unrecoverable from inside the worker — we can't send an
+    // `EngineEvent::Error` back to the parent without a working
+    // writer. Bail to stderr (inherited by the parent so the user
+    // sees it) and exit non-zero. The parent's `EngineHandle::spawn`
+    // will surface this as `UnexpectedEof` from its read loop.
+    let writer_handle = match std::thread::Builder::new()
         .name("ttymap-engine-writer".into())
         .spawn(move || writer_loop(event_rx))
-        .expect("spawn writer thread");
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("ttymap engine-worker: failed to spawn writer thread: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let exit_code = command_loop(&mut reader, event_tx);
 
