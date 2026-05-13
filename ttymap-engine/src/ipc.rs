@@ -6,7 +6,7 @@
 //! engine that talks to its parent over stdin/stdout.
 //!
 //! Wire format: each message is a u32 little-endian length followed by
-//! bincode-encoded payload. Parent → child carries [`EngineCommand`];
+//! a bincode-encoded payload. Parent → child carries [`EngineCommand`];
 //! child → parent carries [`EngineEvent`]. Both directions are
 //! independent — the parent need not block on a reply after sending a
 //! command, and the child emits frames / state events whenever the

@@ -7,7 +7,17 @@ all-features = false
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+ignore = [
+    # RUSTSEC-2025-0141 — "bincode is unmaintained".
+    # The bincode team stopped development after a harassment incident;
+    # they consider 1.3.3 a complete release and 2.x is API-stable. Used
+    # here only for in-process IPC framing (engine subprocess, #348)
+    # where both ends ship from the same workspace, so version drift
+    # isn't a risk. Re-evaluate when a like-for-like replacement
+    # (postcard 2.x, wincode, …) becomes drop-in without pulling its
+    # own unmaintained tail.
+    "RUSTSEC-2025-0141",
+]
 
 [licenses]
 version = 2
