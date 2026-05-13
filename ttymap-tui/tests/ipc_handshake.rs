@@ -57,7 +57,7 @@ fn engine_worker_init_ready_shutdown_round_trip() {
     let mut saw_ready = false;
     while !saw_ready && Instant::now() < deadline {
         let ev: EngineEvent = read_message(&mut stdout).expect("read EngineEvent");
-        if matches!(ev, EngineEvent::Ready) {
+        if matches!(ev, EngineEvent::Ready { .. }) {
             saw_ready = true;
         }
     }

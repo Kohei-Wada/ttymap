@@ -62,7 +62,10 @@ pub enum EngineCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineEvent {
     /// Handshake reply: engine has built and is ready for commands.
-    Ready,
+    /// Carries the tile backend's attribution string so the parent
+    /// doesn't need an extra round-trip to read it (TileCache builds
+    /// it during `crate::map::build`, IPC has no reason to lose it).
+    Ready { attribution: Option<String> },
     /// A completed frame. ~430 KB at 240×80 (bincode-encoded).
     FrameReady(MapFrame),
     /// State mirror update. Emitted after any [`EngineCommand`] that
@@ -210,7 +213,12 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
         }
     };
 
-    if event_tx.send(EngineEvent::Ready).is_err() {
+    if event_tx
+        .send(EngineEvent::Ready {
+            attribution: map.attribution.clone(),
+        })
+        .is_err()
+    {
         return 1;
     }
     // Emit the initial viewport so the parent's mirror starts in sync.
@@ -397,10 +405,21 @@ mod tests {
     #[test]
     fn event_ready_round_trips() {
         let mut buf = Vec::new();
-        write_message(&mut buf, &EngineEvent::Ready).unwrap();
+        write_message(
+            &mut buf,
+            &EngineEvent::Ready {
+                attribution: Some("© OpenStreetMap".into()),
+            },
+        )
+        .unwrap();
         let mut cursor = io::Cursor::new(buf);
         let decoded: EngineEvent = read_message(&mut cursor).unwrap();
-        assert!(matches!(decoded, EngineEvent::Ready));
+        match decoded {
+            EngineEvent::Ready { attribution } => {
+                assert_eq!(attribution.as_deref(), Some("© OpenStreetMap"));
+            }
+            _ => panic!("expected Ready"),
+        }
     }
 
     #[test]

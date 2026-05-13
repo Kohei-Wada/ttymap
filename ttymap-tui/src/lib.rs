@@ -34,6 +34,12 @@ pub use command::UserCommand;
 /// `terminal.draw(...)` is called.
 pub mod app;
 
+/// `EngineHandle` — TUI-side handle to the `ttymap engine-worker`
+/// subprocess. Wraps the parent end of the bincode-framed IPC stream
+/// and presents the same surface as the in-process `MapHandle` so
+/// [`app::App`] stays oblivious to the subprocess split.
+pub mod engine_handle;
+
 /// Compositor — stack-based focus / modal system (helix-inspired).
 /// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
 /// events to the focused component, and exposes the `Component` /
