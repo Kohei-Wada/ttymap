@@ -16,12 +16,19 @@ pub enum Command {
     /// Render a single map snapshot as ANSI text (headless).
     #[command(alias = "snapshot")]
     Snap(snap::SnapArgs),
+
+    /// Run as the headless engine subprocess. Spawned by the TUI
+    /// parent over a stdin/stdout IPC pipe; rarely useful from a
+    /// shell directly (the worker expects bincode-framed
+    /// `EngineCommand`s on stdin). See #348.
+    EngineWorker,
 }
 
 impl Command {
     pub fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::Snap(args) => snap::run(args),
+            Self::EngineWorker => ttymap_engine::run_as_subprocess(),
         }
     }
 }

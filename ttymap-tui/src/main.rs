@@ -50,16 +50,6 @@ struct Cli {
 }
 
 fn main() {
-    // Chrome ContentMain-style role dispatch: when invoked as
-    // `ttymap engine-worker` we become a headless engine subprocess
-    // talking to the parent over stdin/stdout. Done before `Cli::parse`
-    // so the worker process never parses CLI flags (which would `exit`
-    // on the unknown subcommand otherwise — clap doesn't know about
-    // engine-worker; it's deliberately invisible in `--help`).
-    if std::env::args().nth(1).as_deref() == Some("engine-worker") {
-        ttymap_engine::run_as_subprocess();
-    }
-
     let cli = Cli::parse();
 
     // Logging is opt-in via `--log [LEVEL]`. Without the flag no
@@ -74,6 +64,14 @@ fn main() {
         && let Err(e) = ttymap_tui::logging::init(level)
     {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
+    }
+
+    // Engine-worker is the headless subprocess role. It owns tile
+    // cache + render thread + MapState; it doesn't load Lua and
+    // doesn't need the runtime path. Dispatch early so a missing /
+    // unresolvable runtime never blocks the worker from booting.
+    if matches!(cli.command, Some(Subcommand::EngineWorker)) {
+        ttymap_engine::run_as_subprocess();
     }
 
     // Resolve runtime path before any Lua state spins up. Both the

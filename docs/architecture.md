@@ -113,13 +113,16 @@ re-implement close-and-toggle on top, so we removed them.
 
 ### Process model
 
-`ttymap` is **one binary with two roles**, dispatched at the very top
-of `main` before clap parses (#348 Phase 1–2):
+`ttymap` is **one binary with two roles** — the default `ttymap`
+invocation is the TUI parent; `ttymap engine-worker` is the
+headless engine subprocess (a clap subcommand dispatched before the
+Lua runtime path is resolved, so a missing runtime never blocks
+the worker from booting). See #348.
 
 ```
 $ ps aux | grep ttymap
 ... ttymap                  ← UI parent (default role)
-... ttymap engine-worker    ← engine child (argv-dispatched)
+... ttymap engine-worker    ← engine child (clap subcommand)
 ```
 
 The TUI parent owns input, ratatui draw, Lua runtime, compositor,
