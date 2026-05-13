@@ -24,9 +24,11 @@
 pub mod config;
 pub mod error;
 pub mod geo;
+pub mod ipc;
 pub mod map;
 pub mod shared;
 pub mod theme;
 
 pub use config::Config;
 pub use error::EngineError;
+pub use ipc::run_as_subprocess;

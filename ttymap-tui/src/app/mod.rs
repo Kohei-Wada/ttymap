@@ -53,11 +53,13 @@ pub use crate::input::KeybindingOverrides;
 use crate::input::{KeyMap, MouseAdapter};
 use crate::lua::{LuaHandle, LuaSubsystem};
 use crate::theme::{ThemeId, UiTheme};
+use ttymap_engine::map::MapAction;
 use ttymap_engine::map::render::frame::MapFrame;
-use ttymap_engine::map::{MapAction, MapHandle};
+
+use crate::engine_handle::EngineHandle;
 
 pub struct App {
-    map: MapHandle,
+    map: EngineHandle,
     running: bool,
     theme_id: ThemeId,
     ui_theme: UiTheme,
@@ -90,15 +92,16 @@ impl App {
     /// Build the App.
     ///
     /// Composition root (`main`) builds every subsystem upstream and
-    /// hands them in: the map subsystem as [`MapHandle`], the Lua
-    /// plugin subsystem as [`LuaSubsystem`] (already with the palette
-    /// installed). App just consumes them — its only own work is
-    /// wiring the compositor base layer and assembling its own fields.
+    /// hands them in: the map subsystem as [`EngineHandle`] (running
+    /// in a sibling subprocess — see #348), the Lua plugin subsystem
+    /// as [`LuaSubsystem`] (already with the palette installed). App
+    /// just consumes them — its only own work is wiring the compositor
+    /// base layer and assembling its own fields.
     pub fn new(
         config: Config,
         keymap: KeyMap,
         theme_id: ThemeId,
-        map: MapHandle,
+        map: EngineHandle,
         builtin_activations: Vec<crate::compositor::Activation>,
         lua: LuaSubsystem,
     ) -> Self {

@@ -66,6 +66,14 @@ fn main() {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
     }
 
+    // Engine-worker is the headless subprocess role. It owns tile
+    // cache + render thread + MapState; it doesn't load Lua and
+    // doesn't need the runtime path. Dispatch early so a missing /
+    // unresolvable runtime never blocks the worker from booting.
+    if matches!(cli.command, Some(Subcommand::EngineWorker)) {
+        ttymap_engine::run_as_subprocess();
+    }
+
     // Resolve runtime path before any Lua state spins up. Both the
     // interactive app and the `snap` subcommand reach for it; doing
     // this once at the top means we fail fast with a single error
@@ -136,25 +144,23 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let theme_id = ttymap_tui::theme::ThemeId::from_name(&config.engine.render.style);
 
     // Engine doesn't depend on crossterm; the binary owns the
-    // terminal-size probe and hands cols/rows to `engine::map::build`.
+    // terminal-size probe and hands cols/rows to the engine
+    // subprocess via the Init handshake.
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
 
-    // Frame sink — the engine doesn't know about `AppEvent`. We hand
-    // it a closure that wraps each completed `MapFrame` into the
-    // binary's bus protocol. Returning `false` tells the engine the
-    // bus is closed and the render thread should exit.
-    let frame_tx = event_tx.clone();
-    let frame_sink: ttymap_engine::map::render::thread::FrameSink = Box::new(move |frame| {
-        frame_tx
-            .send(ttymap_tui::app::AppEvent::FrameReady(frame))
-            .is_ok()
-    });
-
-    // Map subsystem: tile cache + render pipeline + render thread.
-    // `_render_handle` is a peer to `_input` / `_frame_timer` — held
-    // here for `Drop`-driven shutdown, not used otherwise.
-    let (_render_handle, map) =
-        ttymap_engine::map::build(&config.engine, cols, rows, frame_sink, theme_id)?;
+    // Spawn the engine as a `ttymap engine-worker` child. The same
+    // binary becomes a headless engine in that role (argv-dispatched
+    // at the top of `main`), talks to us over stdin/stdout, and
+    // streams MapFrames back onto the AppEvent channel via
+    // EngineHandle's reader thread. `EngineHandle::Drop` does the
+    // cooperative shutdown + child reap at end of scope.
+    let map = ttymap_tui::engine_handle::EngineHandle::spawn(
+        &config.engine,
+        cols,
+        rows,
+        theme_id,
+        event_tx.clone(),
+    )?;
 
     let lua = lua_subsystem;
     lua.handle.set_attribution(map.attribution.clone());

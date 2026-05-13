@@ -69,6 +69,8 @@ ttymap-engine/                (ttymap-engine — ratatui-free)
   src/
     config.rs                 engine-side settings (cache / map / render)
     geo.rs                    Web Mercator projection math
+    ipc.rs                    EngineCommand / EngineEvent + bincode codec
+                              + run_as_subprocess (engine-worker entry)
     map/                      tile + render + styler + viewport state
     shared/http/              User-Agent-tagged reqwest wrapper
     theme/                    palette data (ColorPalette + DARK/BRIGHT + ThemeId)
@@ -80,6 +82,8 @@ ttymap-tui/                   (ttymap-tui — ratatui + crossterm shell)
   src/
     command.rs                UserCommand vocabulary
     config.rs                 wraps ttymap_engine::Config (+ geoip/runtime/plugins)
+    engine_handle.rs          TUI-side handle to the `ttymap engine-worker`
+                              subprocess (mirror MapState + IPC pipes)
     logging.rs                XDG state log
     app/                      App (state hub + event loop) + ratatui draw entry
       mod.rs / event.rs / frame_timer.rs / frame_widget.rs / overlay.rs /
@@ -94,6 +98,8 @@ ttymap-tui/                   (ttymap-tui — ratatui + crossterm shell)
     lua/                      plugin runtime — bridges binary (Component,
                               palette) and engine (MapApi, http)
     shared/geoip.rs           IP → lon/lat resolution (binary-only)
+  tests/ipc_handshake.rs      spawn `ttymap engine-worker` child + drive
+                              Init → Ready → Shutdown round-trip
   runtime/                    bundled Lua plugins + init.lua scaffolding
 ```
 
@@ -103,13 +109,31 @@ adapters; the engine produces `MapFrame`s and is driven by a
 `FrameSink` callback. Inside the binary, modules are flat peers
 named for what they do.
 
-### Three-thread model
+### Two-process model
 
-1. **Main thread** (`ttymap-tui/src/app/`): Runs the event loop — drains completed frames from the render thread (delivered via the `FrameSink` callback the binary hands the engine at startup), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `App::dispatch` (the single state-mutation entry point), which speaks the `UserCommand` vocabulary defined at the crate root in `ttymap-tui/src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
+`ttymap` is one binary with two roles. The default `ttymap`
+invocation is the TUI parent; `ttymap engine-worker` (a clap
+subcommand, early-dispatched before the Lua runtime path is
+resolved) is the headless engine subprocess. The TUI parent
+spawns a child of itself via `EngineHandle::spawn`
+(`ttymap-tui/src/engine_handle.rs`). They talk over the child's
+stdin/stdout with a bincode-framed `EngineCommand` / `EngineEvent`
+protocol (`ttymap-engine/src/ipc.rs`). The same `MapState` is
+mirrored on both sides so Lua's synchronous getters
+(`ttymap.map:center()`) read the parent's mirror without round-
+tripping IPC — engine and UI run the identical state transitions
+on the same inputs, staying coherent by construction. See #348 for
+the full design; `docs/architecture.md` for the threads-per-process
+breakdown. `snap` is the exception — that short-lived subcommand
+keeps using `ttymap_engine::map::build` in-process.
 
-2. **Render thread** (`ttymap-engine/src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw { viewport, overlays }` / `Resize` / `SetStyler` / `Shutdown`) via crossbeam-channel, and sends completed `MapFrame`s back. `Draw` carries a `Vec<UserPolyline>` overlay batch drained from the App after each `ui::draw` so Lua-plugin polylines render in the same pass as tile features. The loop is **purely event-driven**: a `crossbeam::select!` parks on the task channel and on a wake channel pinged by the decoder thread on each tile arrival — no timeout-based polling.
+1. **Parent main thread** (`ttymap-tui/src/app/`): Runs the event loop — drains completed frames from the engine-reader thread (which reads them from the child's stdout), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `App::dispatch` (the single state-mutation entry point), which speaks the `UserCommand` vocabulary defined at the crate root in `ttymap-tui/src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
 
-3. **Tile fetch + decode pipeline** (`ttymap-engine/src/map/tile/`): Three-layer flow `FetchLane → decoder → TileCache`. The fetch lane runs a fixed worker pool over a priority queue (`fetch/lane.rs`) and delegates per-tile bytes acquisition to a `TileFetcher` impl. Disk cache is a decorator (`fetch/disk_cached.rs`) that wraps the slow inner (today `HttpFetcher`) with read-through / write-through. A dedicated decoder thread (`decoder.rs`) parses MVT bytes off the render thread and forwards `DecodedTile`s to the cache via `mpsc`. The cache also keeps a synchronous **render-thread disk fast path** (`tile::disk` + `cache::DiskFastPath`) that bypasses the worker queue for already-on-disk tiles, which is the hot case during fast pan / zoom.
+2. **Engine-writer / engine-reader threads** (`ttymap-tui/src/engine_handle.rs`): Per-`EngineHandle` thread pair bridging the App's `EngineCommand` mpsc to child stdin and the child's `EngineEvent` stdout stream to `AppEvent::FrameReady` etc. The reader thread is the only place that translates `EngineEvent` into App-bus events.
+
+3. **Child render thread** (`ttymap-engine/src/map/render/thread.rs`): Owns a `RenderPipeline` (tile cache + renderer). Receives `RenderTask` messages (`Draw { viewport, overlays }` / `Resize` / `SetStyler` / `Shutdown`) via crossbeam-channel from the child's command-loop, and sends completed `MapFrame`s back. `Draw` carries a `Vec<UserPolyline>` overlay batch drained from the App after each `ui::draw` so Lua-plugin polylines render in the same pass as tile features. The loop is **purely event-driven**: a `crossbeam::select!` parks on the task channel and on a wake channel pinged by the decoder thread on each tile arrival — no timeout-based polling.
+
+4. **Child tile fetch + decode pipeline** (`ttymap-engine/src/map/tile/`): Three-layer flow `FetchLane → decoder → TileCache`. The fetch lane runs a fixed worker pool over a priority queue (`fetch/lane.rs`) and delegates per-tile bytes acquisition to a `TileFetcher` impl. Disk cache is a decorator (`fetch/disk_cached.rs`) that wraps the slow inner (today `HttpFetcher`) with read-through / write-through. A dedicated decoder thread (`decoder.rs`) parses MVT bytes off the render thread and forwards `DecodedTile`s to the cache via `mpsc`. The cache also keeps a synchronous **render-thread disk fast path** (`tile::disk` + `cache::DiskFastPath`) that bypasses the worker queue for already-on-disk tiles, which is the hot case during fast pan / zoom.
 
 ### Rendering pipeline
 
@@ -127,7 +151,9 @@ Key modules:
 - **`ttymap-engine/src/map/tile/disk.rs`**: Free-function disk read/write helpers used by both `fetch::DiskCachedFetcher` (worker-side, read+write through) and `cache::TileCache` (render-thread fast path, read-only). Layout: `{cache_dir}/{z}/{x}-{y}.pbf`.
 - **`ttymap-engine/src/map/tile/fetch/`**: `TileFetcher` (per-backend trait — "key → bytes"), the generic `FetchLane<F>` (queue / workers / dedup / priority), and the `DiskCachedFetcher<F>` decorator that adds a disk read-through / write-through layer to any inner fetcher. `http.rs` is the only inner backend today; new backends (mbtiles, pmtiles, …) add a `TileFetcher` impl + a branch in `app::build_tile_cache`.
 - **`ttymap-engine/src/map/tile/decoder.rs`**: Single-thread relay that reads bytes from the fetch lane, calls `decode::decode`, and forwards `DecodedTile`s to the cache. Empty bytes (negative cache from failed fetches) bypass `decode()` and surface as `DecodedTile::empty()`.
-- **`ttymap-tui/src/app/mod.rs`**: `App` — central state hub + event loop driver. Owns every piece of mutable app-level state (map handle, lua handle, compositor, theme, sidebar, cursor, overlay sink, mouse adapter, latest `MapFrame`, `Rc<EventBus>`) and the four entry points that mutate it: `dispatch` (`UserCommand`), `accept_frame` (`FrameReady`), `handle_input` (raw crossterm), `forward_external_event` (cross-thread bus). Handlers never call `bus.publish` themselves — they `push` into `pending_events`, and `App::publish_pending` drains that buffer onto the bus in one place per loop iteration (the single fan-out site for the program). `App::run` is the loop. `ttymap-tui/src/app/event.rs` holds `AppEvent` (`Command` / `FrameReady` / `Input` / `Wake` / `Bus`); `ttymap-tui/src/app/ui.rs` is the ratatui draw entry; `ttymap-tui/src/app/frame_timer.rs` is the per-iteration wake source; `ttymap-tui/src/app/frame_widget.rs` is the binary-side `Widget` newtype that adapts engine `MapFrame`s to ratatui's draw protocol (orphan rules force the wrapper); `ttymap-tui/src/app/overlay.rs` is the overlay sink + redraw throttle; `ttymap-tui/src/app/sidebar.rs` is the sidebar visibility / auto-open policy. See [docs/design.md](docs/design.md) for the UserCommand-vs-direct-API judgment rules.
+- **`ttymap-engine/src/ipc.rs`**: IPC scaffolding for the `ttymap engine-worker` subprocess role. Defines `EngineCommand` (parent → child: Init / Resize / SetTheme / SetLabelsVisible / ApplyAction / Redraw / Shutdown), `EngineEvent` (child → parent: Ready { attribution } / FrameReady / ViewportChanged / Error), and the bincode codec (u32-LE length prefix + payload, capped at 16 MB). `run_as_subprocess` is the child entry point — reached via `ttymap engine-worker` (clap `cli::Command::EngineWorker`), early-dispatched in `ttymap-tui/src/main.rs` before the Lua runtime path is resolved. Three threads inside the child: command loop on stdin, single-writer fan-in mpsc → stdout, render thread (same as in-process).
+- **`ttymap-tui/src/engine_handle.rs`**: Parent end of the IPC pipe. `EngineHandle::spawn` does `Command::new(current_exe).arg("engine-worker")`, runs the Init → Ready handshake (synchronously, so spawn returns with `attribution` populated), then spins up `engine-writer` (drains an `mpsc::Sender<EngineCommand>` → child stdin) and `engine-reader` (child stdout → `AppEvent::FrameReady` etc.). Holds a **UI-side mirror `MapState`** that's mutated synchronously on `apply_action` / `handle_resize` so Lua's same-tick getters never block. The same code runs in the child against the same inputs → state stays coherent. `Drop` is the cooperative shutdown: send `Shutdown`, drop the command tx (writer exits → child stdin EOF → child exits), join the two threads, reap the child with a 1 s deadline.
+- **`ttymap-tui/src/app/mod.rs`**: `App` — central state hub + event loop driver. Owns every piece of mutable app-level state (engine handle, lua handle, compositor, theme, sidebar, cursor, overlay sink, mouse adapter, latest `MapFrame`, `Rc<EventBus>`) and the four entry points that mutate it: `dispatch` (`UserCommand`), `accept_frame` (`FrameReady`), `handle_input` (raw crossterm), `forward_external_event` (cross-thread bus). Handlers never call `bus.publish` themselves — they `push` into `pending_events`, and `App::publish_pending` drains that buffer onto the bus in one place per loop iteration (the single fan-out site for the program). `App::run` is the loop. `ttymap-tui/src/app/event.rs` holds `AppEvent` (`Command` / `FrameReady` / `Input` / `Wake` / `Bus`); `ttymap-tui/src/app/ui.rs` is the ratatui draw entry; `ttymap-tui/src/app/frame_timer.rs` is the per-iteration wake source; `ttymap-tui/src/app/frame_widget.rs` is the binary-side `Widget` newtype that adapts engine `MapFrame`s to ratatui's draw protocol (orphan rules force the wrapper); `ttymap-tui/src/app/overlay.rs` is the overlay sink + redraw throttle; `ttymap-tui/src/app/sidebar.rs` is the sidebar visibility / auto-open policy. See [docs/design.md](docs/design.md) for the UserCommand-vs-direct-API judgment rules.
 - **`ttymap-tui/src/compositor/`**: Stack-based focus/modal system (helix-inspired). One primitive: a stack of `Component`s, where the top owns key focus. Components render side panels through `Component::render` and can emit ops via `Window` (`close` / `open` / `emit` / `ignore`); the compositor drains the queue after each hook and applies them via the single `Op` enum (`Push` / `Close` / `Command` — see `compositor/op.rs`). World-space overlays (markers etc.) are *not* a Component concern — every Lua plugin's per-frame map paint runs through `lua::tick::dispatch_tick` (called from `ui::draw`) which hands the plugin a `MapApi` it draws into directly. Render orchestration lives in `compositor/render.rs` (a free function `paint(...)`); the focus stack itself is ratatui-free. `Placement` has two variants: `Floating` (palette-only, drawn over the map) and `Sidebar` (left rail, equal-vertical-split among up to 3 visible cards). Lua plugins always land in `Sidebar`. **No framework-side dedup**: re-pressing an activation key stacks a fresh instance — toggle behavior is plugin-side policy.
 - **`ttymap-tui/src/palette/`**: `:`-triggered command palette as an ephemeral `Component` (state per-open, discarded on pop). Provider sub-modes (theme picker, forward-geocode search) swap in place via `PaletteAction::SwitchProvider` or are pushed pre-loaded by their key activation. Providers can be sync (`OnEachKey` filter — command, theme) or async (`Debounced` filter, `poll()` to drain results, `is_loading()` for the spinner — search).
 - **`ttymap-tui/src/cli/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `ttymap-tui/src/command.rs`) — doesn't share a name with the CLI subcommand bucket.

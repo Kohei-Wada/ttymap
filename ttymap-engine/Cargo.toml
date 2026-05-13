@@ -14,6 +14,7 @@ prost = "0.14"
 rstar = "0.12"
 earcut = "0.4"
 serde = { version = "1", features = ["derive"] }
+bincode = { version = "2", features = ["serde"] }
 log = { version = "0.4", features = ["std"] }
 lru = "0.16"
 indexmap = "2.14.0"

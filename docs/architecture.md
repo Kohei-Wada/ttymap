@@ -111,14 +111,69 @@ re-implement close-and-toggle on top, so we removed them.
 
 ## Concurrency
 
-| Thread | Responsibility |
-|--------|----------------|
-| main | event loop, compositor, Lua dispatch, UI state, terminal draw |
-| render | MapFrame generation (tile fetch + draw) |
-| tile fetch | HTTP workers with priority queue |
-| Lua `ttymap.http:fetch` | one short-lived OS thread per request (Nominatim / Wikipedia / geoip / ADS-B / TLE / USGS) — Lua side polls `job:try_take()` |
+### Process model
 
-crossbeam channels connect the threads; the main thread never blocks
-on I/O. The render thread parks on a `crossbeam::select!` over its
-task channel and a wake channel pinged by the decoder thread on each
-tile arrival — no timeout-based polling.
+`ttymap` is **one binary with two roles** — the default `ttymap`
+invocation is the TUI parent; `ttymap engine-worker` is the
+headless engine subprocess (a clap subcommand dispatched before the
+Lua runtime path is resolved, so a missing runtime never blocks
+the worker from booting). See #348.
+
+```
+$ ps aux | grep ttymap
+... ttymap                  ← UI parent (default role)
+... ttymap engine-worker    ← engine child (clap subcommand)
+```
+
+The TUI parent owns input, ratatui draw, Lua runtime, compositor,
+palette, and the UI-side `MapState` mirror. The engine child owns
+the tile cache, fetch / decode pipeline, render thread, and
+authoritative `MapState`. They talk over the child's stdin/stdout
+with a bincode-framed `EngineCommand` / `EngineEvent` protocol
+(`ttymap-engine/src/ipc.rs`). The parent end lives in
+`ttymap-tui/src/engine_handle.rs` (`EngineHandle::spawn`); the child
+entry is `ttymap_engine::run_as_subprocess`.
+
+Both sides keep their own `MapState`. The UI mirror is mutated
+synchronously on `EngineHandle::apply_action` / `handle_resize` so
+Lua's same-tick `ttymap.map:center()` getter never round-trips IPC.
+The engine runs the identical `MapState` transitions on its side,
+so the two stay coherent by construction (same code, same inputs).
+`EngineEvent::ViewportChanged` is informational today; Phase 3 will
+use it as a divergence detector for engine-restart logic.
+
+`snap` is the exception: that subcommand is short-lived and uses
+`ttymap_engine::map::build` in-process, skipping the spawn overhead.
+
+### Threads (per process)
+
+| Process | Thread | Responsibility |
+|---------|--------|----------------|
+| parent (UI) | main | event loop, compositor, Lua dispatch, UI state, terminal draw |
+| parent (UI) | engine-writer | drain `EngineCommand` mpsc → child stdin |
+| parent (UI) | engine-reader | child stdout → `AppEvent::FrameReady` etc. |
+| parent (UI) | input | block on `crossterm::event::read()` |
+| parent (UI) | frame-timer | per-iteration wake source |
+| parent (UI) | Lua `ttymap.http:fetch` | one short-lived OS thread per request (Nominatim / Wikipedia / geoip / ADS-B / TLE / USGS) — Lua side polls `job:try_take()` |
+| child (engine) | main | stdin → `EngineCommand` dispatch |
+| child (engine) | writer | mpsc → child stdout (single-writer fan-in for engine events) |
+| child (engine) | render | MapFrame generation (tile fetch + draw) |
+| child (engine) | tile fetch | HTTP workers with priority queue |
+| child (engine) | tile decoder | MVT decode off the render path |
+
+crossbeam channels connect the in-process threads; the main thread
+never blocks on I/O. The render thread parks on a `crossbeam::select!`
+over its task channel and a wake channel pinged by the decoder thread
+on each tile arrival — no timeout-based polling. Inter-process
+delivery is a plain `std::sync::mpsc` between App and the engine-
+writer / engine-reader thread peers.
+
+### Known: earcut polygon hang leaks a thread per pathology
+
+Pathological MVT polygons can hang inside earcut. The render path
+guards against this with a 200 ms timeout that abandons the worker
+on miss (`ttymap-engine/src/map/render/earcut_worker.rs`). Abandoned
+threads cannot be cancelled in safe Rust, so each pathology leaks one
+zombie OS thread (#305). Accepted as a known issue against the
+multi-process engine work in #348 — Phase 3 makes the whole engine
+restartable, which cleans up accumulated zombies in one move.

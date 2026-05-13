@@ -14,12 +14,14 @@
 
 pub mod palette;
 
+use serde::{Deserialize, Serialize};
+
 pub use palette::{BRIGHT, ColorPalette, DARK};
 
 /// Identifies which theme the app is running with. Derives the concrete
 /// [`ColorPalette`] and, separately, the set of styling rules consumed by
 /// `styler::Styler`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ThemeId {
     #[default]
     Dark,
