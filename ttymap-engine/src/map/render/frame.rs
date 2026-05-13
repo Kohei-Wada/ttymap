@@ -2,10 +2,12 @@
 
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
+
 use crate::geo::LonLat;
 
 /// A single terminal cell in the rendered map.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapCell {
     pub ch: char,
     pub fg: u8,
@@ -16,7 +18,7 @@ pub struct MapCell {
 /// `zoom` record the view the frame was rendered at so overlays (wiki
 /// markers, etc.) can project points to the same coordinates regardless
 /// of how stale the frame is relative to the current app state.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapFrame {
     pub cells: Vec<MapCell>,
     pub cols: u16,

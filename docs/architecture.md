@@ -122,3 +122,13 @@ crossbeam channels connect the threads; the main thread never blocks
 on I/O. The render thread parks on a `crossbeam::select!` over its
 task channel and a wake channel pinged by the decoder thread on each
 tile arrival — no timeout-based polling.
+
+### Known: earcut polygon hang leaks a thread per pathology
+
+Pathological MVT polygons can hang inside earcut. The render path
+guards against this with a 200 ms timeout that abandons the worker
+on miss (`ttymap-engine/src/map/render/earcut_worker.rs`). Abandoned
+threads cannot be cancelled in safe Rust, so each pathology leaks one
+zombie OS thread (#305). Accepted as a known issue against the
+multi-process engine work in #348 — Phase 3 makes the whole engine
+restartable, which cleans up accumulated zombies in one move.

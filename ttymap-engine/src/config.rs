@@ -8,14 +8,16 @@
 //! No I/O lives here — `Default` is the seed; the binary populates
 //! the live values from `init.lua` via `crate::lua::load_init_lua`.
 
-#[derive(Default, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub cache: CacheConfig,
     pub map: MapConfig,
     pub render: RenderConfig,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MapConfig {
     pub lat: f64,
     pub lon: f64,
@@ -36,7 +38,7 @@ impl Default for MapConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RenderConfig {
     /// Visual theme name ("dark" / "bright"). Unknown values fall
     /// back to a default at styler-initialisation time.
@@ -53,7 +55,7 @@ impl Default for RenderConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CacheConfig {
     /// Write decoded tiles to `~/.cache/ttymap/` so they survive restarts.
     pub tiles: bool,

@@ -14,13 +14,15 @@
 //! the polyline path needs raw `i32` subpixel coords (Bresenham handles
 //! out-of-canvas writes via `BrailleBuffer::set_pixel`'s bounds check).
 
+use serde::{Deserialize, Serialize};
+
 use crate::geo::{LonLat, base_zoom, ll2tile, tile_size_at_zoom};
 
 /// One polyline submitted by a Lua plugin during a frame's `on_tick`
 /// pass. Re-pushed every frame ("ephemeral re-submit"); the App-side
 /// sink is drained into a `Vec<UserPolyline>` before each
 /// `RenderTask::Draw` send.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPolyline {
     /// World-space coordinates. Length-1 polylines are silently dropped
     /// at the Lua bridge before reaching this type.

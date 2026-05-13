@@ -1,12 +1,14 @@
 use std::f64::consts::PI;
 
+use serde::{Deserialize, Serialize};
+
 /// Maximum latitude for Web Mercator projection.
 pub const MAX_LAT: f64 = 85.051_129_0;
 /// Earth radius in metres (WGS84 mean).
 pub const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
 /// A geographic coordinate in WGS84.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LonLat {
     pub lon: f64,
     pub lat: f64,

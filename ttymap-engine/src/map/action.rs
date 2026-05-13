@@ -6,9 +6,11 @@
 //! and are invoked directly by the keyboard handler, so `MapAction`
 //! never carries UI-widget names.
 
+use serde::{Deserialize, Serialize};
+
 use crate::geo::LonLat;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MapAction {
     None,
     PanUp,
