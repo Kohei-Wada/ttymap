@@ -50,6 +50,16 @@ struct Cli {
 }
 
 fn main() {
+    // Chrome ContentMain-style role dispatch: when invoked as
+    // `ttymap engine-worker` we become a headless engine subprocess
+    // talking to the parent over stdin/stdout. Done before `Cli::parse`
+    // so the worker process never parses CLI flags (which would `exit`
+    // on the unknown subcommand otherwise — clap doesn't know about
+    // engine-worker; it's deliberately invisible in `--help`).
+    if std::env::args().nth(1).as_deref() == Some("engine-worker") {
+        ttymap_engine::run_as_subprocess();
+    }
+
     let cli = Cli::parse();
 
     // Logging is opt-in via `--log [LEVEL]`. Without the flag no
