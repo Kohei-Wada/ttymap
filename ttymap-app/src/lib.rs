@@ -47,10 +47,10 @@ pub mod engine_handle;
 // every consumer migrates to direct `ttymap_tui::*` use.
 pub use ttymap_tui::{AppEvent, compositor, input, palette, theme};
 
-/// CLI subcommand implementations. Each subcommand lives in its own
-/// submodule; `main.rs` parses the top-level enum and calls
-/// [`cli::Command::run`].
-pub mod cli;
+// CLI subcommands live in `ttymap-cli` (`snap` + the
+// `engine-worker` subprocess entry). Re-exported as `crate::cli`
+// so `main.rs` keeps using `ttymap_app::cli::Command::run`.
+pub use ttymap_cli as cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
 /// Lives in `ttymap-core` for use by `ttymap-lua` (Lua bootstrap

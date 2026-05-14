@@ -1,5 +1,5 @@
 [workspace]
-members = ["ttymap-engine", "ttymap-core", "ttymap-tui", "ttymap-lua", "ttymap-app"]
+members = ["ttymap-engine", "ttymap-core", "ttymap-tui", "ttymap-lua", "ttymap-cli", "ttymap-app"]
 resolver = "2"
 default-members = ["ttymap-app"]
 

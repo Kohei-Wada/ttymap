@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 
 use clap::Args;
 
-use crate::config;
-use crate::theme::ThemeId;
+use ttymap_core::config;
 use ttymap_engine::map::Viewport;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::pipeline::RenderPipeline;
 use ttymap_engine::map::styler::Styler;
 use ttymap_engine::map::{MapState, MapStateOptions};
+use ttymap_engine::theme::ThemeId;
 
 /// Polling step between tile checks. Short enough to feel responsive,
 /// long enough to avoid busy-waiting the CPU while HTTP fetches run
@@ -77,7 +77,7 @@ pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
     // config-only init.lua entry (no API install, no plugin requires).
     // `Config` carries every init.lua-tunable knob (cache / render);
     // plugins would just slow snap down.
-    let mut config = crate::lua::read_init_lua_config_only(config::Config::default());
+    let mut config = ttymap_lua::read_init_lua_config_only(config::Config::default());
 
     if let Some(lat) = args.lat {
         config.engine.map.lat = lat;

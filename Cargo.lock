@@ -3014,10 +3014,22 @@ dependencies = [
  "directories",
  "log",
  "ratatui",
+ "ttymap-cli",
  "ttymap-core",
  "ttymap-engine",
  "ttymap-lua",
  "ttymap-tui",
+]
+
+[[package]]
+name = "ttymap-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "ttymap-core",
+ "ttymap-engine",
+ "ttymap-lua",
 ]
 
 [[package]]
