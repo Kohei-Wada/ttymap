@@ -3013,15 +3013,11 @@ dependencies = [
  "crossterm",
  "directories",
  "log",
- "mlua",
  "ratatui",
- "serde",
- "serde_json",
- "sgp4",
  "ttymap-core",
  "ttymap-engine",
+ "ttymap-lua",
  "ttymap-tui",
- "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -3054,6 +3050,25 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ttymap-lua"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "directories",
+ "log",
+ "mlua",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "sgp4",
+ "ttymap-core",
+ "ttymap-engine",
+ "ttymap-tui",
  "unicode-width 0.2.2",
 ]
 

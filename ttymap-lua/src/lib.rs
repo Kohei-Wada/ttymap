@@ -36,11 +36,11 @@ pub use vm::new_lua;
 
 use std::sync::Arc;
 
-use crate::UserCommand;
-use crate::compositor::op;
-use crate::config::Config;
-use crate::input::KeyMap;
-use crate::input::keymap::KeybindingOverrides;
+use ttymap_core::UserCommand;
+use ttymap_core::config::Config;
+use ttymap_tui::compositor::op;
+use ttymap_tui::input::KeyMap;
+use ttymap_tui::input::keymap::KeybindingOverrides;
 
 /// Result of [`build_subsystem`].
 ///
@@ -57,14 +57,14 @@ pub struct LuaSubsystem {
     /// callbacks) and with [`crate::app::App`], which drains its
     /// accumulated event buffer once per loop iteration onto this
     /// bus (#334, #336).
-    pub bus: std::rc::Rc<crate::event::EventBus>,
+    pub bus: std::rc::Rc<ttymap_core::event::EventBus>,
     /// Per-frame `tick` subscriber registry. Distinct from `bus`
     /// because the tick payload is a borrowed `MapApi` (live
     /// ratatui buffer + cursor + frame) that can't fit `&Event`;
-    /// see [`crate::lua::tick`]. Shared with `on_tick` / `on_event
+    /// see [`crate::tick`]. Shared with `on_tick` / `on_event
     /// "tick"` install sites for [`Self::handle`]'s
-    /// [`crate::lua::LuaHandle::tick`] to walk per draw.
-    pub ticks: std::rc::Rc<crate::lua::tick::TickRegistry>,
+    /// [`crate::LuaHandle::tick`] to walk per draw.
+    pub ticks: std::rc::Rc<crate::tick::TickRegistry>,
     /// Live registry of Lua-registered activations + palette
     /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
     /// the palette installer (for the `:` activation's per-open
@@ -119,8 +119,8 @@ pub struct LuaSubsystem {
 pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
     let registry = new_lua_registry();
     let shared = Arc::new(LuaHostShared::new());
-    let bus = std::rc::Rc::new(crate::event::EventBus::default());
-    let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+    let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+    let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
     let ops = op::new_ops_buffer();
 
     let lua = vm::new_lua();
@@ -281,12 +281,12 @@ mod tests {
     ) -> (
         mlua::Lua,
         LuaRegistryHandle,
-        std::rc::Rc<crate::event::EventBus>,
-        std::rc::Rc<crate::lua::tick::TickRegistry>,
+        std::rc::Rc<ttymap_core::event::EventBus>,
+        std::rc::Rc<crate::tick::TickRegistry>,
     ) {
         let lua = new_lua();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(
             &lua,
@@ -316,8 +316,8 @@ mod tests {
         mlua::Lua,
         LuaRegistryHandle,
         Arc<host::LuaHostShared>,
-        std::rc::Rc<crate::event::EventBus>,
-        std::rc::Rc<crate::lua::tick::TickRegistry>,
+        std::rc::Rc<ttymap_core::event::EventBus>,
+        std::rc::Rc<crate::tick::TickRegistry>,
     ) {
         runtimepath::ensure_runtime_path_for_tests();
         let lua = new_lua();
@@ -326,8 +326,8 @@ mod tests {
         // the temp dir before the global runtime layers.
         vm::prepend_package_path(&lua, &layer.join("lua"));
         let shared = host::LuaHostShared::empty();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(
             &lua,

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use mlua::UserData;
 
-use crate::lua::host::LuaHostShared;
+use crate::host::LuaHostShared;
 
 pub(super) struct HostConfig {
     #[allow(dead_code)]

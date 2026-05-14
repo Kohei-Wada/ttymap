@@ -6,7 +6,7 @@
 //!   in the global. Mutators (`jump`, `zoom(level)`, `fly_to`) are
 //!   fire-and-forget; each enqueues an
 //!   [`Op::Command(UserCommand::Map(...))`] onto the shared
-//!   [`OpsBuffer`](crate::compositor::op::OpsBuffer). Read methods
+//!   [`OpsBuffer`](ttymap_tui::compositor::op::OpsBuffer). Read methods
 //!   (`center`, no-arg `zoom`) consult shared `Arc<Mutex<...>>` cells
 //!   the host refreshes on every dispatch path that carries a
 //!   `Window` / `MapApi`.
@@ -31,12 +31,12 @@ use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, Scope, Table, UserData};
 
-use crate::UserCommand;
-use crate::compositor::op::{Op, OpsBuffer};
-use crate::lua::MapApi;
-use crate::lua::map_api::Anchor;
+use crate::MapApi;
+use crate::map_api::Anchor;
+use ttymap_core::UserCommand;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::MapAction;
+use ttymap_tui::compositor::op::{Op, OpsBuffer};
 
 // ── ttymap.map (persistent userdata) ────────────────────────────────
 
@@ -347,14 +347,14 @@ fn polyline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lua::MapApi;
-    use crate::theme::DARK;
-    use crate::theme::UiTheme;
+    use crate::MapApi;
     use mlua::Lua;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ttymap_engine::map::render::frame::MapFrame;
     use ttymap_engine::map::render::overlay::UserPolyline;
+    use ttymap_tui::theme::DARK;
+    use ttymap_tui::theme::UiTheme;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
         let area = Rect::new(0, 0, area_w, area_h);

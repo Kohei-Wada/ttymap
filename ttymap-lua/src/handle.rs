@@ -6,30 +6,30 @@
 //! attribution string).
 //!
 //! Event publishing is not part of this surface. The [`EventBus`]
-//! lives next to LuaHandle in [`crate::lua::LuaSubsystem`] and is
+//! lives next to LuaHandle in [`crate::LuaSubsystem`] and is
 //! held directly by App; Dispatcher accumulates events into a
 //! buffer App drains and publishes (#334).
 //!
-//! [`EventBus`]: crate::event::EventBus
+//! [`EventBus`]: ttymap_core::event::EventBus
 
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::compositor::op::{Op, OpsBuffer};
-use crate::lua::MapApi;
-use crate::lua::host::{LuaHostHandles, LuaHostShared};
-use crate::lua::tick::TickRegistry;
+use crate::MapApi;
+use crate::host::{LuaHostHandles, LuaHostShared};
+use crate::tick::TickRegistry;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::frame::MapFrame;
+use ttymap_tui::compositor::op::{Op, OpsBuffer};
 
 /// Runtime-held part of the Lua subsystem (built by
-/// [`crate::lua::build_subsystem`]).
+/// [`crate::build_subsystem`]).
 ///
 /// Holds the per-frame [`TickRegistry`] (so [`Self::tick`] can fan
 /// out the `tick` hook) plus the read-mostly snapshot
 /// [`LuaHostShared`] that the bridge namespaces expose. App reaches
 /// the typed-event bus directly via the clone stored on
-/// [`crate::lua::LuaSubsystem`].
+/// [`crate::LuaSubsystem`].
 pub struct LuaHandle {
     ticks: Rc<TickRegistry>,
     host_handles: Vec<LuaHostHandles>,

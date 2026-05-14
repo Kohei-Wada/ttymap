@@ -14,9 +14,9 @@ use std::time::Duration;
 use mlua::{Lua, Table};
 
 use super::handle::{CallOutcome, LuaBridgeHandle};
-use crate::compositor::Context;
-use crate::palette::PaletteAction;
-use crate::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
+use ttymap_tui::compositor::Context;
+use ttymap_tui::palette::PaletteAction;
+use ttymap_tui::palette::provider::{PaletteItem, PaletteProvider, SubmitMode};
 
 /// Boxed PaletteProvider that dispatches to a Lua module.
 pub struct LuaPaletteProvider {
@@ -46,7 +46,7 @@ impl LuaPaletteProvider {
     /// inline inside an activation callback rather than at top level.
     ///
     /// Host services (`ttymap.map`, `ttymap.api`, …) are already
-    /// installed on `lua` by the prior [`crate::lua::api::install`]
+    /// installed on `lua` by the prior [`crate::api::install`]
     /// call that produced the shared Lua state. `ttymap.map:jump` inside
     /// this provider's `execute` callback hits the shared Lua state's
     /// shared `intent_tx` — drained centrally by [`crate::app::App`]
@@ -224,9 +224,9 @@ impl LuaPaletteProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lua::api::install;
-    use crate::lua::host::LuaHostShared;
-    use crate::theme::ThemeId;
+    use crate::api::install;
+    use crate::host::LuaHostShared;
+    use ttymap_tui::theme::ThemeId;
 
     fn ctx() -> Context {
         Context {
@@ -241,15 +241,15 @@ mod tests {
     /// receives a spec from a Lua callback at runtime.
     fn build_provider(script: &str) -> LuaPaletteProvider {
         let lua = Lua::new();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus,
             ticks,
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");

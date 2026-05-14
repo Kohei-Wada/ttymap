@@ -22,8 +22,8 @@
 //! intentionally different identity so `:remove()` vs `:close()`
 //! reads naturally to plugin authors.
 //!
-//! [`EventBus`]: crate::event::EventBus
-//! [`TickRegistry`]: crate::lua::tick::TickRegistry
+//! [`EventBus`]: ttymap_core::event::EventBus
+//! [`TickRegistry`]: crate::tick::TickRegistry
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -62,7 +62,7 @@ impl UserData for EventHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Event, EventBus};
+    use ttymap_core::event::{Event, EventBus};
 
     #[test]
     fn remove_drops_the_subscriber_and_is_idempotent() {

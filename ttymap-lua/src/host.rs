@@ -1,7 +1,7 @@
 //! Host-side runtime state surfaced to every Lua plugin.
 //!
 //! Not a Lua namespace — these are Rust structs that the
-//! [`crate::lua::api`] namespace userdatas read from / write to.
+//! [`crate::api`] namespace userdatas read from / write to.
 //! Lives at `lua/` (not `lua/api/`) so the `api/` directory stays
 //! pure 1:1 with Lua namespaces.
 //!
@@ -9,7 +9,7 @@
 //!   rows, palette entries). Built once in [`crate::app::App::new`]
 //!   and Arc-cloned into each namespace userdata.
 //! - [`LuaHostHandles`] — per-plugin handle pair returned by
-//!   [`crate::lua::api::install`]; the host refreshes `center` /
+//!   [`crate::api::install`]; the host refreshes `center` /
 //!   `zoom` from any dispatch path that carries a `Window`.
 
 use std::sync::{Arc, Mutex};
@@ -55,7 +55,7 @@ pub struct LuaHostShared {
     /// Latest [`MapFrame`] drained from the render thread, mirrored
     /// here for Lua's read side (`ttymap.api.frame.to_ansi()`).
     /// `None` until the first frame arrives. App refreshes this on
-    /// every `AppEvent::FrameReady` via [`crate::lua::LuaHandle::set_current_frame`];
+    /// every `AppEvent::FrameReady` via [`crate::LuaHandle::set_current_frame`];
     /// it never crosses threads (single main-thread accessor) but
     /// uses `Mutex` for shape-uniformity with the other shared
     /// fields and to keep `LuaHostShared` Sync.
@@ -130,14 +130,14 @@ impl LuaHostShared {
 /// Channels + shared state owned by the **shared Lua VM** (the
 /// single Lua state that runs `init.lua`, every plugin's top-level
 /// `register_*` calls, and every plugin callback for the program
-/// lifetime). [`crate::lua::api::install`] returns this **once** for
+/// lifetime). [`crate::api::install`] returns this **once** for
 /// the whole subsystem; every plugin reads the same `center` /
 /// `zoom` cells.
 ///
 /// - **UserCommand sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
 ///   `:fly_to` / `ttymap.api.frame.export`) is pre-built into an
-///   [`crate::UserCommand`] on the Lua side and pushed through a
+///   [`ttymap_core::UserCommand`] on the Lua side and pushed through a
 ///   `Sender<UserCommand>` that every plugin clones from the **single**
 ///   App-level channel. The receiver lives directly on `App`; a single
 ///   drain per frame covers every plugin's intents.
@@ -148,9 +148,9 @@ impl LuaHostShared {
 ///
 /// Component pushes from `ttymap.api.card.open` /
 /// `ttymap.api.palette.open` no longer live here — they ride the
-/// shared [`OpsBuffer`](crate::compositor::op::OpsBuffer) as
-/// [`Op::Push`](crate::compositor::op::Op::Push) and the App drains them
-/// alongside [`Op::Close`](crate::compositor::op::Op::Close).
+/// shared [`OpsBuffer`](ttymap_tui::compositor::op::OpsBuffer) as
+/// [`Op::Push`](ttymap_tui::compositor::op::Op::Push) and the App drains them
+/// alongside [`Op::Close`](ttymap_tui::compositor::op::Op::Close).
 pub struct LuaHostHandles {
     pub center: Arc<Mutex<LonLat>>,
     /// Latest zoom level mirrored from the host so

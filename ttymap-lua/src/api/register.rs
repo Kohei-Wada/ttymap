@@ -10,7 +10,7 @@
 //! whose `:remove()` drops the registration.
 //!
 //! `on_event` likewise subscribes directly against the
-//! [`EventBus`](crate::event::EventBus) and returns an
+//! [`EventBus`](ttymap_core::event::EventBus) and returns an
 //! [`EventHandle`].
 
 use std::collections::HashSet;
@@ -20,15 +20,13 @@ use std::sync::{Arc, LazyLock, Mutex};
 use crossterm::event::{KeyCode, KeyModifiers};
 use mlua::{Lua, Table};
 
-use crate::compositor::{Activation, PaletteEntry, SpawnComponent};
-use crate::event::{Event, EventBus, Level};
-use crate::lua::bridge::event_handle::EventHandle;
-use crate::lua::bridge::registrar_handle::{
-    KeybindHandle, PaletteCommandHandle, allocate_handle_id,
-};
-use crate::lua::host::{HelpEntry, LuaHostShared};
-use crate::lua::registrar::LuaRegistryHandle;
-use crate::lua::tick::TickRegistry;
+use crate::bridge::event_handle::EventHandle;
+use crate::bridge::registrar_handle::{KeybindHandle, PaletteCommandHandle, allocate_handle_id};
+use crate::host::{HelpEntry, LuaHostShared};
+use crate::registrar::LuaRegistryHandle;
+use crate::tick::TickRegistry;
+use ttymap_core::event::{Event, EventBus, Level};
+use ttymap_tui::compositor::{Activation, PaletteEntry, SpawnComponent};
 
 pub(super) fn install(
     lua: &Lua,

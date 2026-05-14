@@ -69,8 +69,7 @@ pub mod logging;
 /// `crate::event::*` imports.
 pub use ttymap_core::event;
 
-/// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored). The
-/// bridge lives here: api/ exposes the `ttymap` global to scripts,
-/// bridge/ adapts Lua specs to Rust traits (`Component`,
-/// `PaletteProvider`).
-pub mod lua;
+// Lua runtime + bundled `runtime/` tree live in `ttymap-lua`.
+// Re-exported as `crate::lua` so existing `crate::lua::*` call sites
+// in `app/`, `main.rs`, and `cli/` keep resolving.
+pub use ttymap_lua as lua;

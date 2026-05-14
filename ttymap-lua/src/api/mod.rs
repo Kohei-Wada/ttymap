@@ -12,7 +12,7 @@
 //! - [`http`], [`json`], [`sgp4`] — top-level userdata namespaces
 //! - [`map`] — `ttymap.map` userdata (`HostMap`) **and** the per-frame
 //!   `map` table handed to `on_tick` callbacks (`make_map_table`,
-//!   wrapping the host-side [`crate::lua::MapApi`])
+//!   wrapping the host-side [`crate::MapApi`])
 //! - `config`, `help`, `log`, `tile` — host-state namespaces
 //! - `imperative` — `ttymap.api.{card,palette,frame}` cluster
 //! - `register` — setup-time `ttymap.register_*` / `on_event` capture
@@ -131,11 +131,11 @@ use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, Table};
 
-use crate::compositor::op::Op;
-use crate::event::{Event, Level};
-use crate::lua::host::{LuaHostHandles, LuaHostShared};
+use crate::host::{LuaHostHandles, LuaHostShared};
+use ttymap_core::event::{Event, Level};
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::shared::http::HttpClient;
+use ttymap_tui::compositor::op::Op;
 
 // ── Install entry point ─────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ use ttymap_engine::shared::http::HttpClient;
 /// and return the host handles plugins read view state through.
 ///
 /// The `ttymap` global must already exist — `init.lua`'s pre-pass
-/// (see [`crate::lua::init_lua`]) creates it with `opt` / `keymap`
+/// (see [`crate::init_lua`]) creates it with `opt` / `keymap`
 /// before this runs. We add fields to the same table rather than
 /// replace it, so `ttymap.opt.*` mutations from `init.lua` survive.
 ///
@@ -156,10 +156,10 @@ use ttymap_engine::shared::http::HttpClient;
 pub fn install(
     lua: &Lua,
     shared: Arc<LuaHostShared>,
-    ops: crate::compositor::op::OpsBuffer,
-    bus: std::rc::Rc<crate::event::EventBus>,
-    ticks: std::rc::Rc<crate::lua::tick::TickRegistry>,
-    registry: crate::lua::registrar::LuaRegistryHandle,
+    ops: ttymap_tui::compositor::op::OpsBuffer,
+    bus: std::rc::Rc<ttymap_core::event::EventBus>,
+    ticks: std::rc::Rc<crate::tick::TickRegistry>,
+    registry: crate::registrar::LuaRegistryHandle,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -255,7 +255,7 @@ pub fn install(
     // layer); kept exposed so future Lua libs that need to walk
     // the layer list (alternate searchers, lazy-loaders, etc.)
     // have it available without a Rust round-trip.
-    let layers: Vec<String> = crate::lua::runtime_path()
+    let layers: Vec<String> = crate::runtime_path()
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
@@ -269,19 +269,23 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UserCommand;
+    use ttymap_core::UserCommand;
     use ttymap_engine::map::MapAction;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors
     /// the production install path; the bus is dropped since these
     /// tests don't exercise registration or dispatch.
-    fn install_for_test() -> (mlua::Lua, LuaHostHandles, crate::compositor::op::OpsBuffer) {
+    fn install_for_test() -> (
+        mlua::Lua,
+        LuaHostHandles,
+        ttymap_tui::compositor::op::OpsBuffer,
+    ) {
         let lua = mlua::Lua::new();
-        let ops = crate::compositor::op::new_ops_buffer();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
-        let registry = crate::lua::new_lua_registry();
+        let ops = ttymap_tui::compositor::op::new_ops_buffer();
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
+        let registry = crate::new_lua_registry();
         let handles = install(
             &lua,
             LuaHostShared::empty(),
@@ -323,10 +327,10 @@ mod tests {
             .exec()
             .expect("exec");
 
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::Jump(ll))) => {
+            ttymap_tui::compositor::op::Op::Command(UserCommand::Map(MapAction::Jump(ll))) => {
                 assert!((ll.lon - 139.7595).abs() < 1e-9);
                 assert!((ll.lat - 35.6828).abs() < 1e-9);
             }
@@ -341,10 +345,10 @@ mod tests {
         // `Op::Command(UserCommand::Map(MapAction::SetZoom(level)))`.
         let (lua, _handles, ops) = install_for_test();
         lua.load("ttymap.map:zoom(7.5)").exec().expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::SetZoom(z))) => {
+            ttymap_tui::compositor::op::Op::Command(UserCommand::Map(MapAction::SetZoom(z))) => {
                 assert!((z - 7.5).abs() < 1e-9)
             }
             other => panic!("expected Op::Command(Map(SetZoom)), got {other:?}"),
@@ -378,10 +382,10 @@ mod tests {
         lua.load("ttymap.map:fly_to(139.7595, 35.6828, 12.0)")
             .exec()
             .expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1);
         match &drained[0] {
-            crate::compositor::op::Op::Command(UserCommand::Map(MapAction::FlyTo {
+            ttymap_tui::compositor::op::Op::Command(UserCommand::Map(MapAction::FlyTo {
                 center,
                 zoom,
             })) => {
@@ -416,15 +420,15 @@ mod tests {
 
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             shared.clone(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus,
             ticks,
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap table");
 
@@ -455,15 +459,15 @@ mod tests {
         // typed-event bus — the tick payload is a borrowed
         // `MapApi` that can't ride `&Event`).
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus,
             ticks.clone(),
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -487,15 +491,15 @@ mod tests {
         // `"tick"` goes to the per-frame `TickRegistry`, everything
         // else subscribes against the typed-event bus.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus.clone(),
             ticks.clone(),
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -522,15 +526,15 @@ mod tests {
         // method; calling it must remove that exact subscriber from
         // the bus. Idempotent: a second call is a no-op.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus.clone(),
             ticks,
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap table");
         lua.load(
@@ -557,15 +561,15 @@ mod tests {
         // unreachable from any sensible dispatch call — surface an
         // error at register time so the plugin author finds it.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(crate::event::EventBus::default());
-        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
+        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
-            crate::compositor::op::new_ops_buffer(),
+            ttymap_tui::compositor::op::new_ops_buffer(),
             bus,
             ticks,
-            crate::lua::new_lua_registry(),
+            crate::new_lua_registry(),
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();
@@ -771,10 +775,10 @@ mod tests {
         .expect("exec");
         // Exactly one Op::Push must be enqueued — `card.open` pushes
         // per call, no implicit dedup.
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one card.open -> one Op");
         let push_id = match &drained[0] {
-            crate::compositor::op::Op::Push { id, .. } => *id,
+            ttymap_tui::compositor::op::Op::Push { id, .. } => *id,
             other => panic!("expected Op::Push, got {:?}", other),
         };
         // Close the handle from Lua — must enqueue Op::Close keyed by
@@ -782,10 +786,10 @@ mod tests {
         lua.load("ttymap_test_handle:close()")
             .exec()
             .expect("close");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one close() -> one Op");
         match &drained[0] {
-            crate::compositor::op::Op::Close(id) => assert_eq!(*id, push_id),
+            ttymap_tui::compositor::op::Op::Close(id) => assert_eq!(*id, push_id),
             other => panic!("expected Op::Close, got {:?}", other),
         }
     }
@@ -812,10 +816,10 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 1, "one palette.open -> one Op");
         let push_id = match &drained[0] {
-            crate::compositor::op::Op::Push { id, .. } => *id,
+            ttymap_tui::compositor::op::Op::Push { id, .. } => *id,
             other => panic!("expected Op::Push, got {:?}", other),
         };
         // `:close()` is idempotent: each call enqueues an Op::Close —
@@ -824,11 +828,11 @@ mod tests {
         lua.load("ttymap_test_palette:close(); ttymap_test_palette:close()")
             .exec()
             .expect("close");
-        let drained: Vec<crate::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
+        let drained: Vec<ttymap_tui::compositor::op::Op> = std::mem::take(&mut *ops.borrow_mut());
         assert_eq!(drained.len(), 2, "two close() -> two Op::Close");
         for op in drained {
             match op {
-                crate::compositor::op::Op::Close(id) => assert_eq!(id, push_id),
+                ttymap_tui::compositor::op::Op::Close(id) => assert_eq!(id, push_id),
                 other => panic!("expected Op::Close, got {:?}", other),
             }
         }

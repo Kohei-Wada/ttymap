@@ -5,11 +5,11 @@
 //! Sub-tables installed here:
 //!
 //! - `ttymap.api.card.open(spec) -> CardHandle` — push a focused
-//!   [`LuaCardComponent`](crate::lua::bridge::card_component::LuaCardComponent)
+//!   [`LuaCardComponent`](crate::bridge::card_component::LuaCardComponent)
 //!   onto the compositor stack.
 //! - `ttymap.api.palette.open(spec) -> PaletteHandle` — push a
 //!   palette provider (a `PaletteComponent` wrapping a
-//!   [`LuaPaletteProvider`](crate::lua::bridge::palette_provider::LuaPaletteProvider))
+//!   [`LuaPaletteProvider`](crate::bridge::palette_provider::LuaPaletteProvider))
 //!   onto the stack. Returning `{ switch = sub_spec }` from the
 //!   provider's `execute` swaps the provider in place (sub-mode
 //!   transition, no stacking).
@@ -29,9 +29,9 @@ use mlua::{Lua, Table};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::compositor::op::{Op, OpsBuffer};
-use crate::lua::host::LuaHostShared;
-use crate::lua::tick::TickRegistry;
+use crate::host::LuaHostShared;
+use crate::tick::TickRegistry;
+use ttymap_tui::compositor::op::{Op, OpsBuffer};
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
 /// [`super::install`] after activation surfaces are registered.
@@ -57,10 +57,10 @@ fn build_card_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
     card_api.set(
         "open",
         lua.create_function(
-            move |lua, spec: Table| -> mlua::Result<crate::lua::bridge::card_handle::CardHandle> {
-                use crate::compositor::CardId;
-                use crate::lua::bridge::card_component::LuaCardComponent;
-                use crate::lua::bridge::card_handle::CardHandle;
+            move |lua, spec: Table| -> mlua::Result<crate::bridge::card_handle::CardHandle> {
+                use crate::bridge::card_component::LuaCardComponent;
+                use crate::bridge::card_handle::CardHandle;
+                use ttymap_tui::compositor::CardId;
                 // Reserve the [`CardId`] at the call site so the
                 // handle returned to Lua can target this exact
                 // component for close, even though the actual push
@@ -77,7 +77,7 @@ fn build_card_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
                 let component = LuaCardComponent::from_spec(lua.clone(), spec, "lua")?;
                 ops.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(component) as Box<dyn crate::compositor::Component>,
+                    component: Box::new(component) as Box<dyn ttymap_tui::compositor::Component>,
                 });
                 Ok(CardHandle::new(id, ops.clone()))
             },
@@ -91,12 +91,10 @@ fn build_palette_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
     palette_api.set(
         "open",
         lua.create_function(
-            move |lua,
-                  spec: Table|
-                  -> mlua::Result<crate::lua::bridge::palette_handle::PaletteHandle> {
-                use crate::compositor::CardId;
-                use crate::lua::bridge::palette_handle::PaletteHandle;
-                use crate::lua::bridge::palette_provider::LuaPaletteProvider;
+            move |lua, spec: Table| -> mlua::Result<crate::bridge::palette_handle::PaletteHandle> {
+                use crate::bridge::palette_handle::PaletteHandle;
+                use crate::bridge::palette_provider::LuaPaletteProvider;
+                use ttymap_tui::compositor::CardId;
                 // Reserve the id up-front so the returned [`PaletteHandle`]
                 // can target this exact PaletteComponent for close.
                 let id = CardId::next();
@@ -106,10 +104,11 @@ fn build_palette_table(lua: &Lua, ops: OpsBuffer) -> mlua::Result<Table> {
                 // upvalues there, so the per-provider Lua handle must
                 // be a clone of it (cheap Arc bump).
                 let provider = LuaPaletteProvider::from_spec(lua.clone(), spec, "lua")?;
-                let palette = crate::palette::PaletteComponent::with_provider(Box::new(provider));
+                let palette =
+                    ttymap_tui::palette::PaletteComponent::with_provider(Box::new(provider));
                 ops.borrow_mut().push(Op::Push {
                     id,
-                    component: Box::new(palette) as Box<dyn crate::compositor::Component>,
+                    component: Box::new(palette) as Box<dyn ttymap_tui::compositor::Component>,
                 });
                 Ok(PaletteHandle::new(id, ops.clone()))
             },
@@ -155,8 +154,8 @@ fn build_frame_table(
         lua.create_function(
             move |lua,
                   callback: mlua::Function|
-                  -> mlua::Result<crate::lua::bridge::event_handle::EventHandle> {
-                use crate::lua::bridge::event_handle::EventHandle;
+                  -> mlua::Result<crate::bridge::event_handle::EventHandle> {
+                use crate::bridge::event_handle::EventHandle;
                 let key = lua.create_registry_value(callback)?;
                 let id = ticks_for_on_tick.subscribe(lua.clone(), key);
                 let ticks_for_remove = Rc::clone(&ticks_for_on_tick);

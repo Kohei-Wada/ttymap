@@ -1,7 +1,7 @@
 //! Per-frame `tick` dispatcher.
 //!
 //! `tick` is the only "event" whose payload (a borrowed `MapApi`)
-//! can't be expressed as an [`Event`](crate::event::Event) variant —
+//! can't be expressed as an [`Event`](ttymap_core::event::Event) variant —
 //! the Lua-facing `map` table has to be built inside `Lua::scope`
 //! against the live ratatui buffer for that frame. That shape needs
 //! `mlua` + `MapApi` from `lua/`, so the tick subscribers live in a
@@ -20,15 +20,15 @@
 //! [`Self::remove`] (or `subscribe` a new entry) from inside without
 //! disturbing the in-flight dispatch.
 //!
-//! [`EventBus`]: crate::event::EventBus
+//! [`EventBus`]: ttymap_core::event::EventBus
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use mlua::{Lua, RegistryKey};
 
-use crate::lua::MapApi;
-use crate::lua::api::map;
+use crate::MapApi;
+use crate::api::map;
 
 /// One subscriber to the per-frame `tick` — a Lua callback paired
 /// with the Lua VM it was registered from.
@@ -40,7 +40,7 @@ struct TickSubscriber {
 
 /// Lua-only registry of per-frame `tick` callbacks.
 ///
-/// Held by [`crate::lua::LuaHandle`] (which calls [`Self::dispatch`]
+/// Held by [`crate::LuaHandle`] (which calls [`Self::dispatch`]
 /// once per draw) and by the `ttymap.api.frame.on_tick` /
 /// `ttymap.on_event("tick", …)` install sites (which call
 /// [`Self::subscribe`]). The Lua-facing handle returned to plugins
@@ -124,13 +124,13 @@ impl TickRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::DARK;
-    use crate::theme::UiTheme;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ttymap_engine::geo::LonLat;
     use ttymap_engine::map::render::frame::MapFrame;
     use ttymap_engine::map::render::overlay::UserPolyline;
+    use ttymap_tui::theme::DARK;
+    use ttymap_tui::theme::UiTheme;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
         let area = Rect::new(0, 0, area_w, area_h);

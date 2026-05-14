@@ -20,19 +20,19 @@
 //!
 //! Lifetime: the matching [`CardHandle`](super::card_handle::CardHandle)
 //! (returned to Lua by `card.open`) holds the same
-//! [`CardId`](crate::compositor::CardId) reserved at the
+//! [`CardId`](ttymap_tui::compositor::CardId) reserved at the
 //! call site. Lua-side `handle:close()` enqueues an
-//! [`Op::Close`](crate::compositor::op::Op::Close) onto the shared
-//! [`OpsBuffer`](crate::compositor::op::OpsBuffer); the App applies it per
+//! [`Op::Close`](ttymap_tui::compositor::op::Op::Close) onto the shared
+//! [`OpsBuffer`](ttymap_tui::compositor::op::OpsBuffer); the App applies it per
 //! iteration via
-//! [`crate::compositor::Compositor::close_by_id`].
+//! [`ttymap_tui::compositor::Compositor::close_by_id`].
 //! Idempotent — repeated `close()` calls just enqueue duplicate
 //! `Op::Close` entries that are no-ops once the component is gone.
 //!
 //! Drain plumbing (`ttymap.map:jump`, `ttymap.api.frame.export`)
 //! lives in the **shared Lua state** — *not* on this per-window
 //! component. The shared cells are returned by
-//! [`crate::lua::api::install`] inside [`LuaHostHandles`] (one set
+//! [`crate::api::install`] inside [`LuaHostHandles`] (one set
 //! for the whole subsystem) and drained centrally by `App` per
 //! frame. `card.open` runs in the shared Lua VM, so its callbacks'
 //! `ttymap.map:jump(...)` calls hit the same shared senders every
@@ -51,17 +51,17 @@ use super::card_parse::{
     KeyAction, key_code_to_lua, parse_footer_hints, parse_item_value, parse_line_value,
 };
 use super::handle::{CallOutcome, LuaBridgeHandle};
-use crate::compositor::Component;
-use crate::compositor::window::{RenderWindow, Window};
-use crate::theme::StyleKind;
+use ttymap_tui::compositor::Component;
+use ttymap_tui::compositor::window::{RenderWindow, Window};
+use ttymap_tui::theme::StyleKind;
 
 // ── Component ──────────────────────────────────────────────────────
 
 /// A [`Component`] backed by a Lua spec table. Pushed onto the
 /// compositor stack by `ttymap.api.card.open(spec)`; popped when
 /// the matching [`CardHandle`](super::card_handle::CardHandle)
-/// enqueues an [`Op::Close`](crate::compositor::op::Op::Close) keyed by the
-/// reserved [`CardId`](crate::compositor::CardId), or when
+/// enqueues an [`Op::Close`](ttymap_tui::compositor::op::Op::Close) keyed by the
+/// reserved [`CardId`](ttymap_tui::compositor::CardId), or when
 /// the spec's `handle_key` returns `{ close = true }`.
 pub struct LuaCardComponent {
     /// Bridge plumbing — fresh `Lua` VM, registered spec table,
@@ -466,8 +466,8 @@ impl Component for LuaCardComponent {
         self.footer_hints.clone()
     }
 
-    fn placement(&self) -> crate::compositor::Placement {
-        crate::compositor::Placement::Sidebar
+    fn placement(&self) -> ttymap_tui::compositor::Placement {
+        ttymap_tui::compositor::Placement::Sidebar
     }
 }
 

@@ -28,7 +28,7 @@ use std::path::Path;
 
 use mlua::{Lua, Table};
 
-use crate::lua::runtime_path;
+use crate::runtime_path;
 
 /// Build a fresh Lua state. Sandboxing / standard-library trimming
 /// would happen here; for now we hand back the unmodified VM with

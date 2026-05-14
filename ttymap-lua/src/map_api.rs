@@ -21,10 +21,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::theme::UiTheme;
 use ttymap_engine::geo::{LonLat, MapProjection};
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::overlay::UserPolyline;
+use ttymap_tui::theme::UiTheme;
 
 /// Corner-anchor for screen-space primitives like
 /// [`MapApi::text_anchored`].
@@ -285,7 +285,7 @@ impl<'a> MapApi<'a> {
     }
 
     /// Project an absolute terminal cursor position (as surfaced via
-    /// [`Context::cursor`](crate::compositor::Context::cursor)) into
+    /// [`Context::cursor`](ttymap_tui::compositor::Context::cursor)) into
     /// world coordinates. Returns `None` when the cursor is outside
     /// the visible map area.
     #[allow(dead_code)] // plugin-author API; in-tree consumer (info plugin) lands later
@@ -320,10 +320,10 @@ impl<'a> MapApi<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::DARK;
-    use crate::theme::UiTheme;
     use ttymap_engine::map::render::frame::MapFrame;
     use ttymap_engine::map::render::overlay::UserPolyline;
+    use ttymap_tui::theme::DARK;
+    use ttymap_tui::theme::UiTheme;
 
     fn fixture(area_w: u16, area_h: u16) -> (Buffer, Rect, MapFrame, UiTheme) {
         let area = Rect::new(0, 0, area_w, area_h);

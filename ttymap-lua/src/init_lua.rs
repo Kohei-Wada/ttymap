@@ -38,8 +38,8 @@ use std::rc::Rc;
 
 use mlua::{Lua, Table};
 
-use crate::config::Config;
-use crate::input::keymap::KeybindingOverrides;
+use ttymap_core::config::Config;
+use ttymap_tui::input::keymap::KeybindingOverrides;
 
 /// Snapshot config from the user init.lua only — no system init.lua,
 /// no API surface, no plugin requires. Used by the `snap` subcommand
@@ -50,7 +50,7 @@ use crate::input::keymap::KeybindingOverrides;
 /// On any error (missing lib, IO, Lua syntax), logs a warning and
 /// returns the seeded defaults. The app keeps booting.
 pub fn read_init_lua_config_only(defaults: Config) -> Config {
-    let lua = crate::lua::new_lua();
+    let lua = crate::new_lua();
     let _keymap_state = match install_ttymap_global(&lua, &defaults) {
         Ok(s) => s,
         Err(e) => {
@@ -126,7 +126,7 @@ fn read_init_file(path: &Path) -> Option<String> {
 fn bundled_init_path() -> Option<PathBuf> {
     use directories::ProjectDirs;
     let user = ProjectDirs::from("", "", "ttymap").map(|d| d.config_dir().to_path_buf());
-    for layer in crate::lua::runtime_path() {
+    for layer in crate::runtime_path() {
         if user.as_ref() == Some(layer) {
             continue;
         }
@@ -301,8 +301,8 @@ mod tests {
     /// pre-pass installed (no plugin API), then read config back.
     /// Mirrors what the tests exercised before the unified bootstrap.
     fn run(source: &str) -> (Config, KeybindingOverrides) {
-        crate::lua::runtimepath::ensure_runtime_path_for_tests();
-        let lua = crate::lua::new_lua();
+        crate::runtimepath::ensure_runtime_path_for_tests();
+        let lua = crate::new_lua();
         let defaults = Config::default();
         let keymap_state = install_ttymap_global(&lua, &defaults).expect("install ttymap");
         if let Err(e) = lua.load(source).set_name("test").exec() {

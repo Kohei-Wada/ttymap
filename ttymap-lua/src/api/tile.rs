@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use mlua::UserData;
 
-use crate::lua::host::LuaHostShared;
+use crate::host::LuaHostShared;
 
 pub(super) struct HostTile {
     shared: Arc<LuaHostShared>,

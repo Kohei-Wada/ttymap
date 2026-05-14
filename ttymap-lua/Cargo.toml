@@ -1,0 +1,30 @@
+[package]
+name = "ttymap-lua"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Lua plugin runtime for ttymap — mlua VM, the `ttymap.*` Lua-facing API surface, bridge adapters, and the bundled runtime tree (`init.lua` + bundled plugins)."
+license.workspace = true
+repository.workspace = true
+# `runtime/` ships in the crate's sdist so `cargo install` users can
+# `cp -r` from a crate-extracted source tree via `make install-runtime`.
+include = [
+    "src/**/*",
+    "runtime/**/*",
+    "Cargo.toml",
+]
+
+[dependencies]
+ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
+ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+ttymap-tui = { path = "../ttymap-tui", version = "0.1.0" }
+crossterm = "0.29"
+ratatui = "0.30"
+mlua = { version = "0.11", features = ["lua54", "vendored"] }
+log = { version = "0.4", features = ["std"] }
+serde = "1"
+serde_json = "1"
+directories = "6"
+unicode-width = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sgp4 = { version = "2.4.0", default-features = false, features = ["std"] }

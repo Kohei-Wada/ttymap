@@ -11,7 +11,7 @@
 //!
 //! The registry lives behind an `Rc<RefCell<...>>` so:
 //!
-//! - [`crate::compositor::BaseLayer`] borrows it on each keypress to
+//! - [`ttymap_tui::compositor::BaseLayer`] borrows it on each keypress to
 //!   dispatch
 //! - The `:` palette installer borrows it on each open to build a
 //!   fresh `CommandSeed` snapshot
@@ -29,7 +29,9 @@ use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::compositor::{Activation, ActivationIndex, PaletteEntry, PaletteIndex, SpawnComponent};
+use ttymap_tui::compositor::{
+    Activation, ActivationIndex, PaletteEntry, PaletteIndex, SpawnComponent,
+};
 
 /// Live registry of Lua-registered activations + palette entries.
 /// Each entry is paired with the handle ID Lua holds, so a
@@ -118,7 +120,7 @@ impl LuaRegistry {
 }
 
 /// Read-only view of a [`LuaRegistryHandle`] that implements both
-/// UI-facing index traits. Lets [`crate::compositor::BaseLayer`] and
+/// UI-facing index traits. Lets [`ttymap_tui::compositor::BaseLayer`] and
 /// `palette::CommandProvider` consume the registry through
 /// `Rc<dyn ActivationIndex>` / `Rc<dyn PaletteIndex>` without
 /// knowing it's Lua-backed — every layer outside `lua/` sees just
@@ -163,7 +165,7 @@ impl PaletteIndex for LuaActivationIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compositor::Component;
+    use ttymap_tui::compositor::Component;
 
     fn fake_activation(c: char) -> Activation {
         Activation {
