@@ -86,7 +86,6 @@ impl MapState {
         let max_zoom = self.max_zoom;
 
         match action {
-            MapAction::None => false,
             MapAction::PanLeft => self.pan(step, -1.0, 0.0),
             MapAction::PanRight => self.pan(step, 1.0, 0.0),
             MapAction::PanUp => self.pan(step, 0.0, 0.75),
