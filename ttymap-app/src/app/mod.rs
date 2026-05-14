@@ -115,16 +115,22 @@ impl App {
 
         // Compositor bootstraps with the BaseLayer (keymap +
         // activation dispatch) at index 0. Every subsequent modal is
-        // pushed on top. BaseLayer borrows the live `LuaRegistry`
-        // so plugin `KeybindHandle:remove()` updates are visible on
-        // the next keypress; built-in activations (today: just `:`
+        // pushed on top. BaseLayer takes an `ActivationIndex` trait
+        // object — today backed by the Lua-side registry through
+        // `LuaActivationIndex`, but the compositor itself stays
+        // unaware that Lua is the source. Plugin
+        // `KeybindHandle:remove()` updates are visible on the next
+        // keypress because the wrapper holds a clone of the same
+        // `LuaRegistryHandle`. Built-in activations (today: just `:`
         // for the palette) are kept in their own Vec so plugins
         // can't accidentally shadow host shortcuts.
+        let activation_index: std::rc::Rc<dyn crate::compositor::ActivationIndex> =
+            std::rc::Rc::new(crate::lua::LuaActivationIndex::new(registry));
         let mut compositor = Compositor::new();
         compositor.push(Box::new(BaseLayer::new(
             keymap,
             builtin_activations,
-            registry,
+            activation_index,
             footer_hints,
         )));
 

@@ -30,7 +30,7 @@ pub use handle::LuaHandle;
 pub use host::LuaHostShared;
 pub use init_lua::read_init_lua_config_only;
 pub use map_api::MapApi;
-pub use registrar::{LuaRegistry, LuaRegistryHandle, new_lua_registry};
+pub use registrar::{LuaActivationIndex, LuaRegistry, LuaRegistryHandle, new_lua_registry};
 pub use runtimepath::{resolve_runtime_path, runtime_path, set_runtime_path};
 pub use vm::new_lua;
 
