@@ -26,14 +26,17 @@
 //! `main` is the composition root: it builds the bus, the channel,
 //! and the off-thread subsystems, then hands them in.
 
-pub mod event;
+// `AppEvent` lives in `ttymap-tui` (it's drained by `App::run` here
+// but produced by the TUI-side input thread and consumed by the
+// compositor's render path). Re-exported for existing call sites in
+// this module.
+pub use ttymap_tui::AppEvent;
+
 pub mod frame_timer;
 mod frame_widget;
 mod overlay;
 mod sidebar;
 pub mod ui;
-
-pub use event::AppEvent;
 
 use std::io;
 use std::rc::Rc;

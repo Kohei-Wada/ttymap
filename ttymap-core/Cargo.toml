@@ -1,0 +1,13 @@
+[package]
+name = "ttymap-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared types — UserCommand vocabulary, event bus, configuration, keymap — consumed by the TUI / Lua / CLI / App crates."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
+crossterm = "0.29"
+log = { version = "0.4", features = ["std"] }
