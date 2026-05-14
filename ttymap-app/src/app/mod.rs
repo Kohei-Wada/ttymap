@@ -47,17 +47,17 @@ use log::{debug, info};
 
 use self::overlay::OverlayThrottle;
 use self::sidebar::SidebarPolicy;
-use crate::UserCommand;
-use crate::compositor::op::Op;
-use crate::compositor::{BaseLayer, Compositor, Context};
-use crate::config::Config;
-use crate::event::{Event, EventBus};
-pub use crate::input::KeybindingOverrides;
-use crate::input::{KeyMap, MouseAdapter};
-use crate::lua::{LuaHandle, LuaSubsystem};
-use crate::theme::{ThemeId, UiTheme};
+use ttymap_config::Config;
+use ttymap_core::UserCommand;
+use ttymap_core::event::{Event, EventBus};
+pub use ttymap_core::keymap::KeybindingOverrides;
 use ttymap_engine::map::MapAction;
 use ttymap_engine::map::render::frame::MapFrame;
+use ttymap_lua::{LuaHandle, LuaSubsystem};
+use ttymap_tui::compositor::op::Op;
+use ttymap_tui::compositor::{BaseLayer, Compositor, Context};
+use ttymap_tui::input::{KeyMap, MouseAdapter};
+use ttymap_tui::theme::{ThemeId, UiTheme};
 
 use crate::engine_handle::EngineHandle;
 
@@ -105,7 +105,7 @@ impl App {
         keymap: KeyMap,
         theme_id: ThemeId,
         map: EngineHandle,
-        builtin_activations: Vec<crate::compositor::Activation>,
+        builtin_activations: Vec<ttymap_tui::compositor::Activation>,
         lua: LuaSubsystem,
     ) -> Self {
         let LuaSubsystem {
@@ -127,8 +127,8 @@ impl App {
         // `LuaRegistryHandle`. Built-in activations (today: just `:`
         // for the palette) are kept in their own Vec so plugins
         // can't accidentally shadow host shortcuts.
-        let activation_index: std::rc::Rc<dyn crate::compositor::ActivationIndex> =
-            std::rc::Rc::new(crate::lua::LuaActivationIndex::new(registry));
+        let activation_index: std::rc::Rc<dyn ttymap_tui::compositor::ActivationIndex> =
+            std::rc::Rc::new(ttymap_lua::LuaActivationIndex::new(registry));
         let mut compositor = Compositor::new();
         compositor.push(Box::new(BaseLayer::new(
             keymap,
