@@ -39,18 +39,13 @@ pub mod app;
 /// [`app::App`] stays oblivious to the subprocess split.
 pub mod engine_handle;
 
-/// Compositor — stack-based focus / modal system (helix-inspired).
-/// Owns the `Vec<(CardId, Box<dyn Component>)>` stack, routes key
-/// events to the focused component, and exposes the `Component` /
-/// `Window` framework that plugin-side wrappers (`LuaCardComponent`)
-/// implement.
-pub mod compositor;
-
-/// Palette — `:`-triggered universal picker. Itself a [`Component`]
-/// pushed onto the compositor stack; provider sub-modes (theme
-/// picker, search, plugin commands) swap in place via
-/// `PaletteAction::SwitchProvider`.
-pub mod palette;
+// Compositor, palette, theme, and input subsystems live in
+// `ttymap-tui` so the Lua runtime and the future `ttymap-cli` crate
+// can consume them without depending on `ttymap-app`. Re-exported
+// here so existing `crate::compositor::*` / `crate::palette::*` /
+// `crate::input::*` / `crate::theme::*` imports keep resolving until
+// every consumer migrates to direct `ttymap_tui::*` use.
+pub use ttymap_tui::{AppEvent, compositor, input, palette, theme};
 
 /// CLI subcommand implementations. Each subcommand lives in its own
 /// submodule; `main.rs` parses the top-level enum and calls
@@ -63,18 +58,7 @@ pub mod cli;
 /// existing `crate::config::*` imports.
 pub use ttymap_core::config;
 
-/// Theme — binary-side ratatui adapter (`UiTheme`) and semantic-tag
-/// resolver (`StyleKind`). The colour data (`ColorPalette`,
-/// `ThemeId`, `DARK`/`BRIGHT`) lives in [`ttymap_engine::theme`] and
-/// is re-exported from this module for ergonomic `crate::theme::*`
-/// imports.
-#[doc(hidden)]
-pub mod theme;
-
-/// Input subsystem — raw-terminal-event ingest and translation
-/// (input thread, keymap table, mouse adapter). [`app::App`] pulls
-/// translated [`UserCommand`]s out of it for each `AppEvent::Input`.
-pub mod input;
+// theme + input now live in `ttymap-tui` (re-exported above).
 
 /// File-based logging to XDG state directory.
 pub mod logging;

@@ -32,6 +32,7 @@ path = "src/main.rs"
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
 ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+ttymap-tui = { path = "../ttymap-tui", version = "0.1.0" }
 crossterm = "0.29"
 ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }

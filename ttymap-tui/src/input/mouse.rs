@@ -31,7 +31,7 @@
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::UserCommand;
+use ttymap_core::UserCommand;
 use ttymap_engine::map::MapAction;
 
 #[derive(Default)]

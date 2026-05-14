@@ -9,8 +9,8 @@
 //!
 //! [`PaletteProvider`]: super::provider::PaletteProvider
 
-use crate::UserCommand;
 use crate::compositor::Component;
+use ttymap_core::UserCommand;
 
 use super::provider::PaletteProvider;
 

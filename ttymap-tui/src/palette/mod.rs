@@ -242,8 +242,8 @@ pub fn install(
 mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
-    use crate::UserCommand;
     use crate::theme::ThemeId;
+    use ttymap_core::UserCommand;
     use ttymap_engine::map::MapAction;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;

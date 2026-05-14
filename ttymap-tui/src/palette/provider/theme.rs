@@ -3,9 +3,9 @@
 //! Reached from [`CommandProvider`](super::CommandProvider) via the
 //! "Theme" entry.
 
-use crate::UserCommand;
 use crate::compositor::Context;
 use crate::theme::ThemeId;
+use ttymap_core::UserCommand;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
 

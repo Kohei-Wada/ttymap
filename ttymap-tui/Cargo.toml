@@ -1,0 +1,16 @@
+[package]
+name = "ttymap-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "TUI primitives — compositor / palette / theme adapter / input subsystem / AppEvent for the ttymap binary."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
+ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+crossterm = "0.29"
+ratatui = "0.30"
+unicode-width = "0.2"
+log = { version = "0.4", features = ["std"] }

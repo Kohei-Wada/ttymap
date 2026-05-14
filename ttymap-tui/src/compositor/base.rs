@@ -31,8 +31,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
 use super::{Activation, ActivationIndex, Component, SpawnComponent};
-use crate::UserCommand;
 use crate::input::keymap::KeyMap;
+use ttymap_core::UserCommand;
 use ttymap_engine::map::MapAction;
 
 pub struct BaseLayer {
