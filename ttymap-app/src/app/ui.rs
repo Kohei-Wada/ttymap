@@ -12,11 +12,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::compositor::{Compositor, Context};
-use crate::lua::{LuaHandle, MapApi};
-use crate::theme::UiTheme;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::overlay::UserPolyline;
+use ttymap_lua::{LuaHandle, MapApi};
+use ttymap_tui::compositor::{Compositor, Context};
+use ttymap_tui::theme::UiTheme;
 
 /// Draw the full screen. Caller passes the latest map snapshot
 /// (or `None` if the render thread hasn't produced one yet) plus
@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
 
     // Modal panels on top of the map (bottom-up) + sidebar sections
     // laid out vertically in the side panel when it's open.
-    crate::compositor::render::paint(compositor, f, map_inner, sidebar_inner, theme, ctx);
+    ttymap_tui::compositor::render::paint(compositor, f, map_inner, sidebar_inner, theme, ctx);
 
     // Empty-sidebar placeholder so toggling on with no sections shows
     // SOMETHING — otherwise the user would just see an empty box and
