@@ -12,7 +12,6 @@ use crate::geo::LonLat;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MapAction {
-    None,
     PanUp,
     PanDown,
     PanLeft,
@@ -58,13 +57,12 @@ pub enum MapAction {
 
 impl MapAction {
     /// Human-readable label used by the command palette and the help
-    /// overlay. Mouse-only variants (`PanCells`, `ZoomAt`) and the
-    /// no-op `None` return `""` since they are not exposed in UI
-    /// listings. `label()` is the single source of truth; keep
-    /// exhaustive so adding a variant triggers a compile error here.
+    /// overlay. Mouse-only variants (`PanCells`, `ZoomAt`) return
+    /// `""` since they are not exposed in UI listings. `label()` is
+    /// the single source of truth; keep exhaustive so adding a
+    /// variant triggers a compile error here.
     pub fn label(&self) -> &'static str {
         match self {
-            MapAction::None => "",
             MapAction::PanUp => "Pan up",
             MapAction::PanDown => "Pan down",
             MapAction::PanLeft => "Pan left",
@@ -87,9 +85,8 @@ impl MapAction {
     }
 
     /// Every `MapAction` variant surfaced in UI listings (command palette,
-    /// help overlay). Excludes mouse-only variants and the no-op
-    /// `None`. Adding a new keymap-bindable variant means adding it
-    /// here.
+    /// help overlay). Excludes mouse-only variants. Adding a new
+    /// keymap-bindable variant means adding it here.
     pub fn all_listed() -> &'static [MapAction] {
         &[
             MapAction::PanLeft,
@@ -110,11 +107,10 @@ impl MapAction {
 
     /// Stable, snake_case name used as the TOML key in `[keymap]`
     /// (e.g. `pan_left = ["h", "Left"]`). Mouse-only variants and
-    /// `None` / `Jump` return `""` since they cannot be rebound from
-    /// config. Exhaustive so adding a variant is a compile error.
+    /// `Jump` return `""` since they cannot be rebound from config.
+    /// Exhaustive so adding a variant is a compile error.
     pub fn config_name(&self) -> &'static str {
         match self {
-            MapAction::None => "",
             MapAction::PanUp => "pan_up",
             MapAction::PanDown => "pan_down",
             MapAction::PanLeft => "pan_left",
