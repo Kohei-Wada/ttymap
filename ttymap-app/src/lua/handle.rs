@@ -9,26 +9,29 @@
 //! lives next to LuaHandle in [`crate::lua::LuaSubsystem`] and is
 //! held directly by App; Dispatcher accumulates events into a
 //! buffer App drains and publishes (#334).
+//!
+//! [`EventBus`]: crate::event::EventBus
 
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
-use crate::event::EventBus;
 use crate::lua::MapApi;
 use crate::lua::host::{LuaHostHandles, LuaHostShared};
-use crate::lua::tick;
+use crate::lua::tick::TickRegistry;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::render::frame::MapFrame;
 
 /// Runtime-held part of the Lua subsystem (built by
 /// [`crate::lua::build_subsystem`]).
 ///
-/// The bus is held here only because [`Self::tick`] needs it to
-/// fan out the per-frame `"tick"` event. App reaches the bus
-/// directly via the clone stored on [`crate::lua::LuaSubsystem`].
+/// Holds the per-frame [`TickRegistry`] (so [`Self::tick`] can fan
+/// out the `tick` hook) plus the read-mostly snapshot
+/// [`LuaHostShared`] that the bridge namespaces expose. App reaches
+/// the typed-event bus directly via the clone stored on
+/// [`crate::lua::LuaSubsystem`].
 pub struct LuaHandle {
-    bus: Rc<EventBus>,
+    ticks: Rc<TickRegistry>,
     host_handles: Vec<LuaHostHandles>,
     /// Shared buffer that Lua callbacks push [`Op`]s into; App
     /// drains via [`Self::drain_ops`] once per loop iteration.
@@ -43,13 +46,13 @@ pub struct LuaHandle {
 
 impl LuaHandle {
     pub fn new(
-        bus: Rc<EventBus>,
+        ticks: Rc<TickRegistry>,
         host_handles: Vec<LuaHostHandles>,
         ops: OpsBuffer,
         shared: Arc<LuaHostShared>,
     ) -> Self {
         Self {
-            bus,
+            ticks,
             host_handles,
             ops,
             shared,
@@ -63,10 +66,10 @@ impl LuaHandle {
         std::mem::take(&mut *self.ops.borrow_mut())
     }
 
-    /// Fire the per-frame `"tick"` event. Called by `ui::draw` once
-    /// per frame against the live [`MapApi`].
+    /// Fire the per-frame `tick` hook against a live [`MapApi`].
+    /// Called by `ui::draw` once per frame after composing the map.
     pub fn tick(&self, map: &mut MapApi<'_>) {
-        tick::dispatch_tick(&self.bus, map);
+        self.ticks.dispatch(map);
     }
 
     /// Mirror the latest [`MapFrame`] into the shared cell that

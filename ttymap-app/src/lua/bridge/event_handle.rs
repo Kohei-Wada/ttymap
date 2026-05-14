@@ -1,41 +1,49 @@
 //! `ttymap.api.frame.on_tick(fn) -> EventHandle` and
 //! `ttymap.on_event(name, fn) -> EventHandle` — Lua-facing handle to
-//! one bus subscription, whose only method is `:remove()`.
+//! one subscription, whose only method is `:remove()`.
 //!
 //! Disposable shape (VS Code-style): the Rust side returns a handle
-//! at registration time; calling `:remove()` removes that exact
-//! subscriber from the [`EventBus`]. Idempotent — a second `:remove()`
-//! is a no-op (the bus's `remove` returns false but doesn't panic).
+//! at registration time; calling `:remove()` invokes the captured
+//! remove closure, which drops the subscriber from whichever
+//! registry it was stored in (the [`EventBus`] for typed events, the
+//! [`TickRegistry`] for `tick`). Idempotent — a second `:remove()`
+//! is a no-op because every registry's `remove` returns `false`
+//! without panicking on an already-dropped ID.
+//!
+//! Held as `Rc<dyn Fn()>` rather than a `Box` so the same handle can
+//! be cloned by Lua's userdata machinery and `:remove()` is callable
+//! from any clone. Cleared to a no-op closure after the first call
+//! to short-circuit follow-up borrows on a stale registry.
 //!
 //! Distinct type from [`super::card_handle::CardHandle`] /
 //! [`super::palette_handle::PaletteHandle`] because the receptacle
 //! and verb differ — the latter close compositor stack entries
-//! (`Op::Close`), this one removes a bus subscription. Same pattern,
+//! (`Op::Close`), this one removes a subscription. Same pattern,
 //! intentionally different identity so `:remove()` vs `:close()`
 //! reads naturally to plugin authors.
+//!
+//! [`EventBus`]: crate::event::EventBus
+//! [`TickRegistry`]: crate::lua::tick::TickRegistry
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use mlua::UserData;
 
-use crate::event::EventBus;
-
 /// Lua-facing handle returned by `ttymap.api.frame.on_tick(...)` and
-/// `ttymap.on_event(name, fn)`. Holds a back-reference to the bus
-/// plus the `(event_name, id)` pair the bus needs to drop the right
-/// subscriber.
+/// `ttymap.on_event(name, fn)`. Holds a one-shot remove closure that
+/// targets the right registry (bus or tick).
 pub struct EventHandle {
-    bus: Rc<EventBus>,
-    event_name: &'static str,
-    id: u64,
+    remove: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl EventHandle {
-    pub fn new(bus: Rc<EventBus>, event_name: &'static str, id: u64) -> Self {
+    /// Wrap a remove closure. The closure should drop the
+    /// subscriber from whichever registry the caller registered
+    /// against; the handle calls it at most once.
+    pub fn new(remove: Rc<dyn Fn()>) -> Self {
         Self {
-            bus,
-            event_name,
-            id,
+            remove: RefCell::new(Some(remove)),
         }
     }
 }
@@ -43,7 +51,9 @@ impl EventHandle {
 impl UserData for EventHandle {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("remove", |_, this, _: ()| {
-            this.bus.remove(this.event_name, this.id);
+            if let Some(f) = this.remove.borrow_mut().take() {
+                f();
+            }
             Ok(())
         });
     }
@@ -52,37 +62,34 @@ impl UserData for EventHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Event;
+    use crate::event::{Event, EventBus};
 
     #[test]
     fn remove_drops_the_subscriber_and_is_idempotent() {
         let bus = Rc::new(EventBus::default());
-        let lua = mlua::Lua::new();
-        lua.load(
-            r#"
-            fired = 0
-            function bump() fired = fired + 1 end
-            "#,
-        )
-        .exec()
-        .unwrap();
-        let f: mlua::Function = lua.globals().get("bump").unwrap();
-        let key = lua.create_registry_value(f).unwrap();
-        let id = bus.subscribe_lua("frame_ready", lua.clone(), key);
+        let fired: Rc<std::cell::Cell<i64>> = Rc::new(std::cell::Cell::new(0));
+        let sink = fired.clone();
+        let id = bus.subscribe("frame_ready", move |_| sink.set(sink.get() + 1));
 
         bus.publish(Event::FrameReady);
-        let n: i64 = lua.globals().get("fired").unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(fired.get(), 1);
 
-        let ud = lua
-            .create_userdata(EventHandle::new(Rc::clone(&bus), "frame_ready", id))
-            .unwrap();
+        let bus_for_remove = Rc::clone(&bus);
+        let handle = EventHandle::new(Rc::new(move || {
+            bus_for_remove.remove("frame_ready", id);
+        }));
+
+        let lua = mlua::Lua::new();
+        let ud = lua.create_userdata(handle).unwrap();
         lua.load("local h = ...; h:remove(); h:remove()")
             .call::<()>(ud)
             .unwrap();
 
         bus.publish(Event::FrameReady);
-        let n: i64 = lua.globals().get("fired").unwrap();
-        assert_eq!(n, 1, "subscriber removed; second publish must not refire");
+        assert_eq!(
+            fired.get(),
+            1,
+            "subscriber removed; second publish must not refire",
+        );
     }
 }

@@ -108,6 +108,7 @@ impl App {
         let LuaSubsystem {
             handle: lua,
             bus,
+            ticks: _,
             registry,
             footer_hints,
         } = lua;
