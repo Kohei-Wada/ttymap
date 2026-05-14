@@ -52,8 +52,42 @@ pub struct Activation {
 /// `"w"`); empty string when the entry is palette-only. Used by the
 /// help cheatsheet and the footer-hint slot to surface the binding
 /// alongside the label.
+///
+/// `Clone` is a cheap `Rc` bump on `spawn` plus two `String` clones,
+/// taken when a [`PaletteIndex`] hands a snapshot to the palette.
+#[derive(Clone)]
 pub struct PaletteEntry {
     pub label: String,
     pub hint: String,
     pub spawn: SpawnComponent,
+}
+
+/// Read-only lookup of keybind activations. Implemented by whatever
+/// store actually owns the activation list (today the Lua-side
+/// registry; trivially extensible to in-Rust built-ins or future
+/// runtime sources). [`super::BaseLayer`] depends only on this
+/// trait, so the compositor stays unaware of the Lua subsystem.
+pub trait ActivationIndex {
+    /// Spawn factory for a `(code, modifiers)` press, if any plugin
+    /// has registered an activation against it. `&self` because
+    /// dispatch is read-only — internal interior mutability (e.g.
+    /// `RefCell`) is the implementor's concern.
+    fn find_spawn(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<SpawnComponent>;
+}
+
+/// Read-only view of the palette command list. Implemented by
+/// whatever store owns the entries; [`super::PaletteEntry`] is the
+/// transfer shape. The palette's `CommandProvider` depends only on
+/// this trait so the palette UI stays unaware of the Lua subsystem.
+pub trait PaletteIndex {
+    /// Snapshot of `(id, entry)` pairs in registration order. Taken
+    /// once per palette open; mutations after the snapshot land in
+    /// later opens.
+    fn entries(&self) -> Vec<(u64, PaletteEntry)>;
+    /// Spawn factory for a palette entry by its handle ID. Returns
+    /// `None` when the entry has been removed since the snapshot was
+    /// built — `CommandProvider::execute` treats that as a silent
+    /// no-op so a stale selection can't dispatch against a phantom
+    /// factory.
+    fn entry_spawn(&self, id: u64) -> Option<SpawnComponent>;
 }

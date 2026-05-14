@@ -32,7 +32,7 @@ pub mod render;
 mod sidebar;
 pub mod window;
 
-pub use activation::{Activation, PaletteEntry, SpawnComponent};
+pub use activation::{Activation, ActivationIndex, PaletteEntry, PaletteIndex, SpawnComponent};
 pub use base::BaseLayer;
 pub use component::{Component, Context, Placement};
 

@@ -25,13 +25,14 @@
 //! thread's `MapFrame`, drawn by `App` separately from the
 //! compositor).
 
+use std::rc::Rc;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::window::{RenderWindow, Window};
-use super::{Activation, Component, SpawnComponent};
+use super::{Activation, ActivationIndex, Component, SpawnComponent};
 use crate::UserCommand;
 use crate::input::keymap::KeyMap;
-use crate::lua::LuaRegistryHandle;
 use ttymap_engine::map::MapAction;
 
 pub struct BaseLayer {
@@ -41,11 +42,11 @@ pub struct BaseLayer {
     /// pushed by [`crate::palette::install`]. Walked first on
     /// keypress, so a plugin can't accidentally shadow `:`.
     builtin_activations: Vec<Activation>,
-    /// Live registry of Lua-registered activations. Cloned from
-    /// `LuaSubsystem` at startup. Keypress dispatch borrows it
-    /// per-event; Lua `:remove()` mutably borrows it from a
-    /// `KeybindHandle` to drop the matching entry.
-    registry: LuaRegistryHandle,
+    /// Read-only view onto whatever store holds plugin activations.
+    /// Today backed by the Lua-side registry through
+    /// [`crate::lua::LuaActivationIndex`]; BaseLayer itself stays
+    /// unaware that Lua is involved.
+    activations: Rc<dyn ActivationIndex>,
     /// Lua-supplied footer hints harvested at startup. Static for
     /// the program lifetime — adding / removing entries does not
     /// refresh this list.
@@ -60,23 +61,23 @@ impl BaseLayer {
     pub fn new(
         keymap: KeyMap,
         builtin_activations: Vec<Activation>,
-        registry: LuaRegistryHandle,
+        activations: Rc<dyn ActivationIndex>,
         footer_hints: Vec<(&'static str, &'static str)>,
     ) -> Self {
         Self {
             keymap,
             builtin_activations,
-            registry,
+            activations,
             footer_hints,
             pending_g: false,
         }
     }
 
-    /// Look up the spawn factory for a key, cloning it out so the
-    /// caller can invoke it without holding a borrow on the
-    /// registry. Built-ins win over plugin entries (so `:` always
-    /// opens the palette regardless of what plugins did). Cloning
-    /// is cheap (Rc reference-count bump).
+    /// Look up the spawn factory for a key. Built-ins win over plugin
+    /// entries (so `:` always opens the palette regardless of what
+    /// plugins did). The trait returns an already-cloned
+    /// `SpawnComponent` (cheap `Rc` bump), so invoking it cannot
+    /// re-enter whatever borrow the index implementation took.
     fn lookup_spawn(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<SpawnComponent> {
         let clean = modifiers & !KeyModifiers::SHIFT;
         for a in &self.builtin_activations {
@@ -84,10 +85,7 @@ impl BaseLayer {
                 return Some(a.spawn.clone());
             }
         }
-        self.registry
-            .borrow()
-            .find_activation(code, clean)
-            .map(|a| a.spawn.clone())
+        self.activations.find_spawn(code, clean)
     }
 
     /// Advance the `gg` state machine and resolve via the keymap.
@@ -168,6 +166,8 @@ impl Component for BaseLayer {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::super::window::WindowOps;
     use super::super::{CardId, Context};
     use super::*;
@@ -179,11 +179,45 @@ mod tests {
         cursor: None,
     };
 
+    /// In-test [`ActivationIndex`] backed by a `Vec`. Keeps the
+    /// compositor's tests free of any Lua dependency — the registry
+    /// remove/round-trip exercise here is structural (does the trait
+    /// surface it?), not Lua-specific.
+    #[derive(Default)]
+    struct MockIndex {
+        activations: RefCell<Vec<(u64, Activation)>>,
+    }
+
+    impl MockIndex {
+        fn add(&self, id: u64, a: Activation) {
+            self.activations.borrow_mut().push((id, a));
+        }
+
+        fn remove(&self, id: u64) -> bool {
+            let mut subs = self.activations.borrow_mut();
+            let before = subs.len();
+            subs.retain(|(i, _)| *i != id);
+            before != subs.len()
+        }
+    }
+
+    impl ActivationIndex for MockIndex {
+        fn find_spawn(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<SpawnComponent> {
+            self.activations.borrow().iter().find_map(|(_, a)| {
+                if a.code == code && a.modifiers == modifiers {
+                    Some(Rc::clone(&a.spawn))
+                } else {
+                    None
+                }
+            })
+        }
+    }
+
     fn bg() -> BaseLayer {
         BaseLayer::new(
             KeyMap::default(),
             Vec::new(),
-            crate::lua::new_lua_registry(),
+            Rc::new(MockIndex::default()),
             Vec::new(),
         )
     }
@@ -227,16 +261,17 @@ mod tests {
     }
 
     #[test]
-    fn keybind_removed_from_registry_no_longer_dispatches() {
-        // Registry-driven dispatch round-trip: register an activation
+    fn keybind_removed_from_index_no_longer_dispatches() {
+        // Index-driven dispatch round-trip: register an activation
         // for `Z`, confirm the dispatch fires (factory returns Some
         // so a component would be pushed), then remove the activation
-        // by id and confirm the next `Z` press is a no-op.
+        // by id and confirm the next `Z` press is a no-op. Uses the
+        // in-test `MockIndex` rather than the Lua-backed wrapper —
+        // the compositor sees only the trait surface.
         use super::super::Component;
         use std::cell::Cell;
-        use std::rc::Rc;
 
-        let registry = crate::lua::new_lua_registry();
+        let index = Rc::new(MockIndex::default());
         let fired = Rc::new(Cell::new(0_u32));
 
         struct DummyComponent;
@@ -250,32 +285,37 @@ mod tests {
 
         let id = 42;
         let fired_for_factory = fired.clone();
-        registry.borrow_mut().add_activation(
+        index.add(
             id,
             Activation {
                 code: KeyCode::Char('Z'),
                 modifiers: KeyModifiers::NONE,
-                spawn: std::rc::Rc::new(move |_| -> Option<Box<dyn Component>> {
+                spawn: Rc::new(move |_| -> Option<Box<dyn Component>> {
                     fired_for_factory.set(fired_for_factory.get() + 1);
                     Some(Box::new(DummyComponent))
                 }),
             },
         );
 
-        let mut bg = BaseLayer::new(KeyMap::default(), Vec::new(), registry.clone(), Vec::new());
+        let mut bg = BaseLayer::new(
+            KeyMap::default(),
+            Vec::new(),
+            index.clone() as Rc<dyn ActivationIndex>,
+            Vec::new(),
+        );
 
         let ops = dispatch(&mut bg, KeyCode::Char('Z'));
         assert!(ops.pushed(), "registered keybind should push a component");
         assert_eq!(fired.get(), 1);
 
         // Drop the activation by id — simulating
-        // KeybindHandle:remove() from Lua.
-        assert!(registry.borrow_mut().remove_activation(id));
+        // KeybindHandle:remove() from Lua via the index trait.
+        assert!(index.remove(id));
 
         let ops = dispatch(&mut bg, KeyCode::Char('Z'));
         assert!(
             !ops.pushed(),
-            "removed keybind must not dispatch (factory must not fire)"
+            "removed keybind must not dispatch (factory must not fire)",
         );
         assert_eq!(fired.get(), 1, "factory must not have fired again");
     }

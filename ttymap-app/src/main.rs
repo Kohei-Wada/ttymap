@@ -165,12 +165,16 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let lua = lua_subsystem;
     lua.handle.set_attribution(map.attribution.clone());
 
-    // Palette is a built-in (not a plugin): build a CommandSeed
-    // around the live LuaRegistry and append the `:` activation
-    // to a fresh built-ins Vec. Must run after every plugin's
-    // register call so the seed sees them.
+    // Palette is a built-in (not a plugin): wrap the live Lua
+    // registry as a `PaletteIndex` and let `palette::install`
+    // build a `CommandSeed` around it, then append the `:`
+    // activation to a fresh built-ins Vec. Must run after every
+    // plugin's register call so the seed sees them.
     let mut builtin_activations: Vec<ttymap_app::compositor::Activation> = Vec::new();
-    ttymap_app::palette::install(&keymap, &mut builtin_activations, lua.registry.clone());
+    let palette_index: std::rc::Rc<dyn ttymap_app::compositor::PaletteIndex> = std::rc::Rc::new(
+        ttymap_app::lua::LuaActivationIndex::new(lua.registry.clone()),
+    );
+    ttymap_app::palette::install(&keymap, &mut builtin_activations, palette_index);
 
     let mut app = App::new(config, keymap, theme_id, map, builtin_activations, lua);
 

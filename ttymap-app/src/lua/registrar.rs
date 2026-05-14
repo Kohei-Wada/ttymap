@@ -29,7 +29,7 @@ use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::compositor::{Activation, PaletteEntry};
+use crate::compositor::{Activation, ActivationIndex, PaletteEntry, PaletteIndex, SpawnComponent};
 
 /// Live registry of Lua-registered activations + palette entries.
 /// Each entry is paired with the handle ID Lua holds, so a
@@ -114,6 +114,49 @@ impl LuaRegistry {
 
     pub fn activation_count(&self) -> usize {
         self.activations.len()
+    }
+}
+
+/// Read-only view of a [`LuaRegistryHandle`] that implements both
+/// UI-facing index traits. Lets [`crate::compositor::BaseLayer`] and
+/// `palette::CommandProvider` consume the registry through
+/// `Rc<dyn ActivationIndex>` / `Rc<dyn PaletteIndex>` without
+/// knowing it's Lua-backed — every layer outside `lua/` sees just
+/// the trait surface.
+///
+/// Holds a clone of the same `Rc<RefCell<LuaRegistry>>` the Lua
+/// `:remove()` handles mutably borrow, so removals on the Lua side
+/// are visible to the UI on the very next dispatch / palette open
+/// (the wrapper's read methods take a short read borrow each call).
+pub struct LuaActivationIndex {
+    inner: LuaRegistryHandle,
+}
+
+impl LuaActivationIndex {
+    pub fn new(inner: LuaRegistryHandle) -> Self {
+        Self { inner }
+    }
+}
+
+impl ActivationIndex for LuaActivationIndex {
+    fn find_spawn(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<SpawnComponent> {
+        self.inner
+            .borrow()
+            .find_activation(code, modifiers)
+            .map(|a| Rc::clone(&a.spawn))
+    }
+}
+
+impl PaletteIndex for LuaActivationIndex {
+    fn entries(&self) -> Vec<(u64, PaletteEntry)> {
+        self.inner.borrow().palette_entries().to_vec()
+    }
+
+    fn entry_spawn(&self, id: u64) -> Option<SpawnComponent> {
+        self.inner
+            .borrow()
+            .palette_entry(id)
+            .map(|e| Rc::clone(&e.spawn))
     }
 }
 

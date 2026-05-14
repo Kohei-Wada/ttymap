@@ -27,7 +27,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::compositor::window::{RenderWindow, Window};
-use crate::compositor::{Activation, Component, Context};
+use crate::compositor::{Activation, Component, Context, PaletteIndex};
 use crate::input::keymap::KeyMap;
 use crate::theme::ThemeId;
 
@@ -213,18 +213,18 @@ impl Component for PaletteComponent {
 
 /// Install the palette as a built-in. Unlike a plugin's `register`,
 /// this is a **sink**: prebuild a [`CommandSeed`] that holds the
-/// static map-action half plus a clone of the live
-/// [`LuaRegistryHandle`](crate::lua::LuaRegistryHandle), and
-/// append a single `:` activation. Each open snapshots the registry
-/// freshly so plugins can `:remove()` (or, in a future PR, register
-/// at runtime) and the next open reflects it. Must be called
-/// **after** every plugin's `register`.
+/// static map-action half plus a clone of the [`PaletteIndex`] view
+/// onto wherever plugin entries are stored, and append a single `:`
+/// activation. Each open snapshots the index freshly so plugins can
+/// `:remove()` (or register more at runtime) and the next open
+/// reflects it. Must be called **after** every plugin's `register`
+/// at startup.
 pub fn install(
     keymap: &KeyMap,
     activations: &mut Vec<Activation>,
-    registry: crate::lua::LuaRegistryHandle,
+    palette_index: Rc<dyn PaletteIndex>,
 ) {
-    let seed = Rc::new(CommandSeed::build(keymap, registry));
+    let seed = Rc::new(CommandSeed::build(keymap, palette_index));
     let seed_for_spawn = seed;
     activations.push(Activation {
         code: KeyCode::Char(':'),
