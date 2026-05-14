@@ -158,6 +158,7 @@ pub fn install(
     shared: Arc<LuaHostShared>,
     ops: crate::compositor::op::OpsBuffer,
     bus: std::rc::Rc<crate::event::EventBus>,
+    ticks: std::rc::Rc<crate::lua::tick::TickRegistry>,
     registry: crate::lua::registrar::LuaRegistryHandle,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
@@ -212,14 +213,14 @@ pub fn install(
     // Activation surfaces (`register_palette_command` /
     // `register_keybind` / `on_event`) — every call pushes directly
     // into the live `LuaRegistry` (or, for `on_event`, subscribes
-    // directly against the bus) and returns a Lua-facing handle.
-    // No deferred capture, no per-script slot.
-    register::install(lua, &ttymap, bus.clone(), registry, shared.clone())?;
+    // directly against the bus / tick registry) and returns a
+    // Lua-facing handle. No deferred capture, no per-script slot.
+    register::install(lua, &ttymap, bus, ticks.clone(), registry, shared.clone())?;
 
     // Imperative primitives (`ttymap.api.{card,palette,frame}`) —
     // runtime-time `open` / `to_ansi` / `on_tick` calls a plugin
     // makes from inside its callbacks.
-    imperative::install(lua, &ttymap, ops.clone(), shared.clone(), bus)?;
+    imperative::install(lua, &ttymap, ops.clone(), shared.clone(), ticks)?;
 
     // ── ttymap.notify ────────────────────────────────────────────────
     //
@@ -279,9 +280,17 @@ mod tests {
         let lua = mlua::Lua::new();
         let ops = crate::compositor::op::new_ops_buffer();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let registry = crate::lua::new_lua_registry();
-        let handles = install(&lua, LuaHostShared::empty(), ops.clone(), bus, registry)
-            .expect("install ttymap table");
+        let handles = install(
+            &lua,
+            LuaHostShared::empty(),
+            ops.clone(),
+            bus,
+            ticks,
+            registry,
+        )
+        .expect("install ttymap table");
         (lua, handles, ops)
     }
 
@@ -408,11 +417,13 @@ mod tests {
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             shared.clone(),
             crate::compositor::op::new_ops_buffer(),
             bus,
+            ticks,
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
@@ -438,16 +449,20 @@ mod tests {
     }
 
     #[test]
-    fn api_frame_on_tick_subscribes_each_callback_against_the_bus() {
+    fn api_frame_on_tick_subscribes_each_callback_against_the_tick_registry() {
         // Each `ttymap.api.frame.on_tick(fn)` call subscribes
-        // directly to the bus (one entry per call).
+        // directly to the per-frame `TickRegistry` (not the
+        // typed-event bus — the tick payload is a borrowed
+        // `MapApi` that can't ride `&Event`).
         let lua = mlua::Lua::new();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
-            bus.clone(),
+            bus,
+            ticks.clone(),
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
@@ -460,24 +475,26 @@ mod tests {
         .exec()
         .expect("exec");
         assert_eq!(
-            bus.count("tick"),
+            ticks.len(),
             2,
-            "two on_tick calls -> two bus subscribers"
+            "two on_tick calls -> two tick-registry subscribers",
         );
     }
 
     #[test]
     fn on_event_subscribes_against_the_named_bucket() {
-        // `ttymap.on_event(name, fn)` — generic surface. Each call
-        // subscribes directly under its event name on the shared
-        // bus; multiple distinct names land in distinct buckets.
+        // `ttymap.on_event(name, fn)` — generic surface. Routing:
+        // `"tick"` goes to the per-frame `TickRegistry`, everything
+        // else subscribes against the typed-event bus.
         let lua = mlua::Lua::new();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
+            ticks.clone(),
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
@@ -490,7 +507,12 @@ mod tests {
         )
         .exec()
         .expect("exec");
-        assert_eq!(bus.count("tick"), 1);
+        assert_eq!(ticks.len(), 1, "tick lands in the tick registry");
+        assert_eq!(
+            bus.count("tick"),
+            0,
+            "tick never lands on the typed-event bus",
+        );
         assert_eq!(bus.count("frame_ready"), 2);
     }
 
@@ -501,11 +523,13 @@ mod tests {
         // the bus. Idempotent: a second call is a no-op.
         let lua = mlua::Lua::new();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus.clone(),
+            ticks,
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");
@@ -523,7 +547,7 @@ mod tests {
         assert_eq!(
             bus.count("frame_ready"),
             0,
-            "handle:remove() must drop the subscriber"
+            "handle:remove() must drop the subscriber",
         );
     }
 
@@ -534,11 +558,13 @@ mod tests {
         // error at register time so the plugin author finds it.
         let lua = mlua::Lua::new();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus,
+            ticks,
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap table");

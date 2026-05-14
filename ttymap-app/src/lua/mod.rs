@@ -52,11 +52,19 @@ pub struct LuaSubsystem {
     /// Runtime handle to the Lua subsystem — semantic surface
     /// App uses to observe state changes and tick plugins.
     pub handle: LuaHandle,
-    /// Lua-agnostic pub/sub primitive. Shared with every
-    /// `EventHandle` userdata returned to Lua (for `:remove()`) and
-    /// with [`crate::app::App`], which drains its accumulated event
-    /// buffer once per loop iteration onto this bus (#334, #336).
+    /// Lua-agnostic pub/sub primitive. Shared with the `on_event`
+    /// install site (which subscribes Rust closures wrapping Lua
+    /// callbacks) and with [`crate::app::App`], which drains its
+    /// accumulated event buffer once per loop iteration onto this
+    /// bus (#334, #336).
     pub bus: std::rc::Rc<crate::event::EventBus>,
+    /// Per-frame `tick` subscriber registry. Distinct from `bus`
+    /// because the tick payload is a borrowed `MapApi` (live
+    /// ratatui buffer + cursor + frame) that can't fit `&Event`;
+    /// see [`crate::lua::tick`]. Shared with `on_tick` / `on_event
+    /// "tick"` install sites for [`Self::handle`]'s
+    /// [`crate::lua::LuaHandle::tick`] to walk per draw.
+    pub ticks: std::rc::Rc<crate::lua::tick::TickRegistry>,
     /// Live registry of Lua-registered activations + palette
     /// entries. Cloned into `BaseLayer` (for keypress dispatch) and
     /// the palette installer (for the `:` activation's per-open
@@ -112,6 +120,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
     let registry = new_lua_registry();
     let shared = Arc::new(LuaHostShared::new());
     let bus = std::rc::Rc::new(crate::event::EventBus::default());
+    let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
     let ops = op::new_ops_buffer();
 
     let lua = vm::new_lua();
@@ -126,8 +135,9 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
             let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
             return (
                 LuaSubsystem {
-                    handle: LuaHandle::new(bus.clone(), Vec::new(), ops, shared),
+                    handle: LuaHandle::new(ticks.clone(), Vec::new(), ops, shared),
                     bus,
+                    ticks,
                     registry,
                     footer_hints: Vec::new(),
                 },
@@ -146,6 +156,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         shared.clone(),
         ops.clone(),
         bus.clone(),
+        ticks.clone(),
         registry.clone(),
     ) {
         Ok(h) => h,
@@ -154,8 +165,9 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
             let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
             return (
                 LuaSubsystem {
-                    handle: LuaHandle::new(bus.clone(), Vec::new(), ops, shared),
+                    handle: LuaHandle::new(ticks.clone(), Vec::new(), ops, shared),
                     bus,
+                    ticks,
                     registry,
                     footer_hints: Vec::new(),
                 },
@@ -206,12 +218,13 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         })
         .collect();
 
-    let handle = LuaHandle::new(bus.clone(), vec![host_handles], ops, shared);
+    let handle = LuaHandle::new(ticks.clone(), vec![host_handles], ops, shared);
 
     (
         LuaSubsystem {
             handle,
             bus,
+            ticks,
             registry,
             footer_hints,
         },
@@ -259,8 +272,8 @@ mod tests {
 
     /// Helper for inspection tests. Drives the host API install (so
     /// `ttymap.register_*` etc. exist), runs the source as a plain
-    /// Lua chunk, and returns the live `(lua, registry, bus)` tuple
-    /// so callers can read what landed in the registry / bus
+    /// Lua chunk, and returns the live `(lua, registry, bus, ticks)`
+    /// tuple so callers can read what landed in the registries
     /// directly. No deferred capture — registrations apply
     /// immediately as the chunk runs.
     fn run_in_fresh_vm(
@@ -269,26 +282,29 @@ mod tests {
         mlua::Lua,
         LuaRegistryHandle,
         std::rc::Rc<crate::event::EventBus>,
+        std::rc::Rc<crate::lua::tick::TickRegistry>,
     ) {
         let lua = new_lua();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(
             &lua,
             host::LuaHostShared::empty(),
             op::new_ops_buffer(),
             bus.clone(),
+            ticks.clone(),
             registry.clone(),
         )
         .expect("install ttymap");
         lua.load(source).exec().expect("exec source");
-        (lua, registry, bus)
+        (lua, registry, bus, ticks)
     }
 
     /// Build a Lua VM with `package.path` extended for a custom
-    /// runtime layer. Returns `(lua, registry, shared, bus)` so tests
-    /// can drive `lua.load(r#"require 'plugin.<name>'"#).exec()` and
-    /// assert what landed in the registry / shared snapshot.
+    /// runtime layer. Returns `(lua, registry, shared, bus, ticks)`
+    /// so tests can drive `lua.load(r#"require 'plugin.<name>'"#).exec()`
+    /// and assert what landed in the registry / shared snapshot.
     ///
     /// Plugins resolve as standard Lua modules under
     /// `<layer>/lua/plugin/<name>.lua` via the prepended
@@ -301,6 +317,7 @@ mod tests {
         LuaRegistryHandle,
         Arc<host::LuaHostShared>,
         std::rc::Rc<crate::event::EventBus>,
+        std::rc::Rc<crate::lua::tick::TickRegistry>,
     ) {
         runtimepath::ensure_runtime_path_for_tests();
         let lua = new_lua();
@@ -310,17 +327,19 @@ mod tests {
         vm::prepend_package_path(&lua, &layer.join("lua"));
         let shared = host::LuaHostShared::empty();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(
             &lua,
             shared.clone(),
             op::new_ops_buffer(),
             bus.clone(),
+            ticks.clone(),
             registry.clone(),
         )
         .expect("install ttymap");
 
-        (lua, registry, shared, bus)
+        (lua, registry, shared, bus, ticks)
     }
 
     /// Build a private temp directory rooted at the OS's temp dir.
@@ -358,7 +377,7 @@ mod tests {
         // push directly into the live `LuaRegistry`. No deferred
         // capture — the entries are visible the moment the chunk
         // returns.
-        let (_lua, registry, _bus) = run_in_fresh_vm(
+        let (_lua, registry, _bus, _ticks) = run_in_fresh_vm(
             r#"
             ttymap.register_palette_command({ label = "Toggle x", invoke = function() return true end })
             ttymap.register_keybind("i", function() return true end)
@@ -383,16 +402,18 @@ mod tests {
     }
 
     #[test]
-    fn on_tick_subscriptions_land_on_the_bus() {
+    fn on_tick_subscriptions_land_in_the_tick_registry() {
         // Each `ttymap.api.frame.on_tick(fn)` call subscribes
-        // directly against the bus.
-        let (_lua, _registry, bus) = run_in_fresh_vm(
+        // directly against the per-frame `TickRegistry` (not the
+        // typed-event bus — the tick payload is a borrowed
+        // `MapApi`, see `lua/tick.rs`).
+        let (_lua, _registry, _bus, ticks) = run_in_fresh_vm(
             r#"
             ttymap.api.frame.on_tick(function(_map) end)
             ttymap.api.frame.on_tick(function(_map) end)
             "#,
         );
-        assert_eq!(bus.count("tick"), 2);
+        assert_eq!(ticks.len(), 2);
     }
 
     #[test]
@@ -412,7 +433,7 @@ mod tests {
             "#,
         );
 
-        let (lua, registry, shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         lua.load(r#"require "plugin.demo""#)
             .exec()
             .expect("require plugin.demo");
@@ -450,7 +471,7 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "biggie", invoke = function() return true end })"#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         lua.load(r#"require "plugin.biggie""#)
             .exec()
             .expect("require plugin.biggie");
@@ -477,7 +498,7 @@ mod tests {
         )
         .expect("write lib");
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         let v: i64 = lua
             .load(r#"return require("ttymap.foo").value"#)
             .eval()
@@ -500,7 +521,7 @@ mod tests {
             r#"ttymap.register_palette_command({ label = "demo", invoke = function() return true end })"#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         lua.load(r#"require "plugin.demo"; require "plugin.demo""#)
             .exec()
             .expect("double require");
@@ -540,7 +561,7 @@ mod tests {
         )
         .expect("write travel/init.lua");
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         lua.load(r#"require "plugin.travel""#)
             .exec()
             .expect("require plugin.travel");
@@ -648,7 +669,7 @@ mod tests {
             "#,
         );
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
         // init.lua-style pre-pass: mutate the lib's table BEFORE the
         // plugin requires it. Lua's module cache makes the plugin's
         // `require "ttymap.myplug"` return the same table.
@@ -756,7 +777,7 @@ mod tests {
         )
         .expect("write bundled init.lua");
 
-        let (lua, registry, _shared, _bus) = fresh_lua_layer_state(&layer);
+        let (lua, registry, _shared, _bus, _ticks) = fresh_lua_layer_state(&layer);
 
         // Stub `ttymap.user_config.load()`: simulates a user
         // init.lua. At the point it runs, the bundled plugin's

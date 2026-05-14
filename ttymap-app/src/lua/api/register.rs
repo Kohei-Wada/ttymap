@@ -21,24 +21,26 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use mlua::{Lua, Table};
 
 use crate::compositor::{Activation, PaletteEntry, SpawnComponent};
-use crate::event::EventBus;
+use crate::event::{Event, EventBus, Level};
 use crate::lua::bridge::event_handle::EventHandle;
 use crate::lua::bridge::registrar_handle::{
     KeybindHandle, PaletteCommandHandle, allocate_handle_id,
 };
 use crate::lua::host::{HelpEntry, LuaHostShared};
 use crate::lua::registrar::LuaRegistryHandle;
+use crate::lua::tick::TickRegistry;
 
 pub(super) fn install(
     lua: &Lua,
     ttymap: &Table,
     bus: Rc<EventBus>,
+    ticks: Rc<TickRegistry>,
     registry: LuaRegistryHandle,
     shared: Arc<LuaHostShared>,
 ) -> mlua::Result<()> {
     install_register_palette_command(lua, ttymap, registry.clone(), shared)?;
     install_register_keybind(lua, ttymap, registry)?;
-    install_on_event(lua, ttymap, bus)?;
+    install_on_event(lua, ttymap, bus, ticks)?;
     Ok(())
 }
 
@@ -181,10 +183,25 @@ fn intern_event_name(name: &str) -> &'static str {
 }
 
 /// `ttymap.on_event(name, fn) -> EventHandle` — generic pub/sub
-/// subscription. Subscribes directly against the
-/// [`EventBus`](crate::event::EventBus) at call time and returns a
-/// handle whose `:remove()` drops the exact subscriber.
-fn install_on_event(lua: &Lua, ttymap: &Table, bus: Rc<EventBus>) -> mlua::Result<()> {
+/// subscription. Routes by name:
+///
+/// - `"tick"` goes to the [`TickRegistry`] (per-frame callback with
+///   a `map` arg) — same path as `ttymap.api.frame.on_tick(fn)`.
+/// - everything else subscribes against the [`EventBus`], with the
+///   Lua callback wrapped in a Rust closure that captures the
+///   `mlua::Lua` + `RegistryKey` and converts each [`Event`] variant
+///   to the typed Lua args historic plugins expect
+///   (`map_jumped` → `(lon, lat)`, `notify` → `{ message, level }`,
+///   etc).
+///
+/// Returns a handle whose `:remove()` drops the exact subscriber
+/// from the registry it landed in.
+fn install_on_event(
+    lua: &Lua,
+    ttymap: &Table,
+    bus: Rc<EventBus>,
+    ticks: Rc<TickRegistry>,
+) -> mlua::Result<()> {
     ttymap.set(
         "on_event",
         lua.create_function(
@@ -196,11 +213,73 @@ fn install_on_event(lua: &Lua, ttymap: &Table, bus: Rc<EventBus>) -> mlua::Resul
                         "ttymap.on_event: event name must be a non-empty string",
                     ));
                 }
+
+                if event_name == "tick" {
+                    // `tick` payload is a per-frame `map` table built
+                    // in `TickRegistry::dispatch` — can't ride the
+                    // typed-Event bus.
+                    let key = lua.create_registry_value(callback)?;
+                    let id = ticks.subscribe(lua.clone(), key);
+                    let ticks_for_remove = Rc::clone(&ticks);
+                    return Ok(EventHandle::new(Rc::new(move || {
+                        ticks_for_remove.remove(id);
+                    })));
+                }
+
                 let interned = intern_event_name(&event_name);
-                let key = lua.create_registry_value(callback)?;
-                let id = bus.subscribe_lua(interned, lua.clone(), key);
-                Ok(EventHandle::new(bus.clone(), interned, id))
+                let key = Rc::new(lua.create_registry_value(callback)?);
+                let lua_for_closure = lua.clone();
+                let key_for_closure = Rc::clone(&key);
+                let id = bus.subscribe(interned, move |event| {
+                    let f: mlua::Function =
+                        match lua_for_closure.registry_value::<mlua::Function>(&key_for_closure) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                log::warn!(
+                                    "lua: {} subscriber registry lookup failed: {}",
+                                    interned,
+                                    e,
+                                );
+                                return;
+                            }
+                        };
+                    if let Err(e) = call_lua_with_event(&f, &lua_for_closure, event) {
+                        log::warn!("lua: {} subscriber failed: {}", interned, e);
+                    }
+                });
+
+                let bus_for_remove = Rc::clone(&bus);
+                Ok(EventHandle::new(Rc::new(move || {
+                    bus_for_remove.remove(interned, id);
+                })))
             },
         )?,
     )
+}
+
+/// Build the Lua arg tuple for `event` and call `f`. Each [`Event`]
+/// variant maps to the same shape Lua plugins have always seen — so
+/// existing scripts (`function on_jump(lon, lat) … end`) keep working.
+fn call_lua_with_event(f: &mlua::Function, lua: &Lua, event: &Event) -> mlua::Result<()> {
+    match event {
+        Event::FrameReady => f.call::<()>(()),
+        Event::MapJumped(ll) => f.call::<()>((ll.lon, ll.lat)),
+        Event::MapZoomSet(z) => f.call::<()>(*z),
+        Event::MapFlewTo(ll, z) => f.call::<()>((ll.lon, ll.lat, *z)),
+        Event::ThemeChanged(name) => f.call::<()>(name.as_str()),
+        Event::Resized(c, r) => f.call::<()>((*c, *r)),
+        Event::Notify { message, level } => {
+            let t = lua.create_table()?;
+            t.set("message", message.as_str())?;
+            t.set(
+                "level",
+                match level {
+                    Level::Info => "info",
+                    Level::Warn => "warn",
+                    Level::Error => "error",
+                },
+            )?;
+            f.call::<()>(t)
+        }
+    }
 }

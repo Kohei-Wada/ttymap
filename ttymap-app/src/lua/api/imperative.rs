@@ -30,8 +30,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::compositor::op::{Op, OpsBuffer};
-use crate::event::EventBus;
 use crate::lua::host::LuaHostShared;
+use crate::lua::tick::TickRegistry;
 
 /// Build the `ttymap.api` sub-table and attach it. Called from
 /// [`super::install`] after activation surfaces are registered.
@@ -40,13 +40,13 @@ pub(super) fn install(
     ttymap: &Table,
     ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
-    bus: Rc<EventBus>,
+    ticks: Rc<TickRegistry>,
 ) -> mlua::Result<()> {
     let api = lua.create_table()?;
 
     api.set("card", build_card_table(lua, ops.clone())?)?;
     api.set("palette", build_palette_table(lua, ops.clone())?)?;
-    api.set("frame", build_frame_table(lua, ops, shared, bus)?)?;
+    api.set("frame", build_frame_table(lua, ops, shared, ticks)?)?;
 
     ttymap.set("api", api)?;
     Ok(())
@@ -122,7 +122,7 @@ fn build_frame_table(
     lua: &Lua,
     _ops: OpsBuffer,
     shared: Arc<LuaHostShared>,
-    bus: Rc<EventBus>,
+    ticks: Rc<TickRegistry>,
 ) -> mlua::Result<Table> {
     let frame_api = lua.create_table()?;
 
@@ -146,9 +146,10 @@ fn build_frame_table(
     // it reads more naturally for the per-frame use case. New
     // event surfaces should use `ttymap.on_event` directly.
     //
-    // Subscribes directly against the [`EventBus`] at call time and
-    // returns an [`EventHandle`] so the caller can `:remove()` later.
-    let bus_for_on_tick = bus;
+    // Subscribes against the [`TickRegistry`] (not the typed-event
+    // bus) at call time and returns an [`EventHandle`] whose
+    // `:remove()` drops the subscriber.
+    let ticks_for_on_tick = ticks;
     frame_api.set(
         "on_tick",
         lua.create_function(
@@ -157,8 +158,11 @@ fn build_frame_table(
                   -> mlua::Result<crate::lua::bridge::event_handle::EventHandle> {
                 use crate::lua::bridge::event_handle::EventHandle;
                 let key = lua.create_registry_value(callback)?;
-                let id = bus_for_on_tick.subscribe_lua("tick", lua.clone(), key);
-                Ok(EventHandle::new(bus_for_on_tick.clone(), "tick", id))
+                let id = ticks_for_on_tick.subscribe(lua.clone(), key);
+                let ticks_for_remove = Rc::clone(&ticks_for_on_tick);
+                Ok(EventHandle::new(Rc::new(move || {
+                    ticks_for_remove.remove(id);
+                })))
             },
         )?,
     )?;

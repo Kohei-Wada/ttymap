@@ -242,11 +242,13 @@ mod tests {
     fn build_provider(script: &str) -> LuaPaletteProvider {
         let lua = Lua::new();
         let bus = std::rc::Rc::new(crate::event::EventBus::default());
+        let ticks = std::rc::Rc::new(crate::lua::tick::TickRegistry::default());
         let _handles = install(
             &lua,
             LuaHostShared::empty(),
             crate::compositor::op::new_ops_buffer(),
             bus,
+            ticks,
             crate::lua::new_lua_registry(),
         )
         .expect("install ttymap");
