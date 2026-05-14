@@ -3018,8 +3018,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sgp4",
+ "ttymap-core",
  "ttymap-engine",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ttymap-core"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "log",
+ "ttymap-engine",
 ]
 
 [[package]]

@@ -17,7 +17,7 @@
 //! definitions and their `Default` impls (which act as the seed
 //! Lua starts from).
 
-pub use crate::input::keymap::KeybindingOverrides;
+pub use crate::keymap::KeybindingOverrides;
 pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
 
 #[derive(Default, Clone)]

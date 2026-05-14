@@ -19,13 +19,12 @@
 // owns it, theme_id leaked into core because every command tracked it,
 // etc. Flat sidesteps all that.
 
-/// Crate-wide command vocabulary — the GoF Command pattern's
-/// **Command** role. The single enum every emission site (palette,
-/// plugins, mouse, future RPC) speaks and that [`app::App::dispatch`]
-/// interprets as the GoF Receiver. Sits at the crate root so every
-/// emission site reaches it via `crate::UserCommand`.
-pub mod command;
-pub use command::UserCommand;
+// Crate-wide command vocabulary, event bus, configuration, and
+// keymap types live in `ttymap-core` so the TUI / Lua / CLI crates
+// can consume them without a circular dependency through `ttymap-app`.
+// Re-exported as `crate::{command, event, config, UserCommand}` so
+// existing call sites in this crate keep resolving.
+pub use ttymap_core::{UserCommand, command};
 
 /// Application — central state hub + event loop driver. Holds every
 /// piece of mutable app-level state (map handle, lua handle,
@@ -59,9 +58,10 @@ pub mod palette;
 pub mod cli;
 
 /// Settings populated from `~/.config/ttymap/init.lua` + CLI overrides.
-/// Wraps [`ttymap_engine::Config`] with binary-only knobs (runtime,
-/// plugin disable list).
-pub mod config;
+/// Lives in `ttymap-core` for use by `ttymap-lua` (Lua bootstrap
+/// reads `ttymap.opt.*` into this shape); re-exported here for
+/// existing `crate::config::*` imports.
+pub use ttymap_core::config;
 
 /// Theme — binary-side ratatui adapter (`UiTheme`) and semantic-tag
 /// resolver (`StyleKind`). The colour data (`ColorPalette`,
@@ -81,11 +81,9 @@ pub mod logging;
 
 /// Pub/sub event subsystem — Lua-agnostic primitive at the
 /// integration point between Rust core and Lua plugin runtime.
-/// Producers (Rust dispatcher, Lua bridge) call
-/// [`event::EventBus::publish`]; subscribers (Rust closures, Lua
-/// callbacks) react. Cross-thread publishes ride the App-level mpsc
-/// via [`app::AppEvent::Bus`](app::AppEvent::Bus).
-pub mod event;
+/// Lives in `ttymap-core`; re-exported here for existing
+/// `crate::event::*` imports.
+pub use ttymap_core::event;
 
 /// Lua runtime for scripted plugins (mlua, Lua 5.4 vendored). The
 /// bridge lives here: api/ exposes the `ttymap` global to scripts,
