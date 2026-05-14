@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use clap::Args;
 
-use ttymap_core::config;
+use ttymap_config as config;
 use ttymap_engine::map::Viewport;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::pipeline::RenderPipeline;

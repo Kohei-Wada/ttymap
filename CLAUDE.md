@@ -22,26 +22,70 @@ The build step compiles `ttymap-engine/proto/vector_tile.proto` using protox (no
 
 ## Workspace layout
 
-The repository is a two-crate Cargo workspace:
+The repository is a seven-crate Cargo workspace, split per issue
+#351 (yazi-style: engine + shared types + config + UI primitives +
+plugin runtime + CLI + composition root):
 
-- `ttymap-engine/` (`ttymap-engine`) — headless rendering engine. Owns the
-  map subsystem (tile fetch + decode + cache, render thread, styler),
+- `ttymap-engine/` — headless rendering engine. Owns the map
+  subsystem (tile fetch + decode + cache, render thread, styler),
   the `MapFrame` produced for display, the color-palette data, the
-  `geo` projection module, and the User-Agent-tagged HTTP client. **No
-  ratatui or crossterm dependency** — the engine is consumable on its
-  own (e.g. by the `snap` subcommand) without bringing in a TUI
-  framework. Communication out is a `FrameSink` callback (`Box<dyn
-  FnMut(MapFrame) -> bool + Send>`) so the engine never names the
-  binary's `AppEvent` bus.
-- `ttymap-app/` (`ttymap-app`) — TUI binary. Owns the App event loop,
-  ratatui draw entry, compositor / palette / input / lua bridge, plus
-  the ratatui-side theme adapter (`UiTheme`, `StyleKind`). Wraps
-  `ttymap_engine::Config` with binary-only knobs (`geoip`, `runtime`,
-  `plugins`, keybinding overrides) — engine-side fields are reached
-  via `config.engine.<sub>.<field>`. The crate is named `ttymap-app`
-  but the produced executable is still `ttymap` (set via
+  `geo` projection module, and the User-Agent-tagged HTTP client.
+  **No ratatui / crossterm / mlua dependency.** Depends on nothing
+  internal.
+- `ttymap-core/` — cross-cutting vocabularies: `UserCommand` (the
+  Command vocabulary), `EventBus` / `Event` (Lua-agnostic pub/sub),
+  `KeyMap` / `KeybindingOverrides` (`key → UserCommand` resolution).
+  Depends only on `ttymap-engine`. No `Config` here — that lives
+  separately so `ttymap-tui` can stay config-free.
+- `ttymap-config/` — runtime `Config` / `RuntimeConfig` shape that
+  wraps `ttymap_engine::Config` with binary-side knobs (poll
+  cadence, sidebar width, …). Mutated by Lua's `ttymap.opt.*` at
+  startup. Depends on `ttymap-engine` (for engine `Config`) +
+  `ttymap-core` (for `KeybindingOverrides`).
+- `ttymap-tui/` — UI primitives: `compositor` (focus stack + Op +
+  Component trait + ActivationIndex / PaletteIndex traits),
+  `palette` (`:`-triggered picker + providers), `theme` (ratatui
+  adapter — `UiTheme` / `StyleKind`), `input` (keymap shim, mouse
+  adapter, input thread), `app_event` (`AppEvent` drained by
+  `App::run`). Depends on `ttymap-engine` + `ttymap-core` — NOT on
+  `ttymap-config`, which makes this crate trivially reusable in
+  config-free contexts.
+- `ttymap-lua/` — Lua plugin runtime (mlua VM, the `ttymap.*` Lua
+  API surface, Component / PaletteProvider adapters, the per-frame
+  TickRegistry) + bundled `runtime/` tree (`init.lua` + `lua/plugin/`).
+  Depends on `ttymap-tui` + `ttymap-config` + `ttymap-core` +
+  `ttymap-engine`.
+- `ttymap-cli/` — CLI subcommands: `snap` (headless single-frame
+  render to ANSI) and `engine-worker` (the IPC subprocess entry).
+  Depends on `ttymap-engine` + `ttymap-core` + `ttymap-config` +
+  `ttymap-lua` (snap reads `ttymap.opt.*` via the init.lua loader).
+- `ttymap-app/` — composition root + binary. Owns App state hub +
+  event loop, `main.rs`, `EngineHandle` (parent end of the IPC
+  pipe), XDG logging, the geoip lookup. Depends on every other
+  crate. The produced executable is still `ttymap` (set via
   `[[bin]] name = "ttymap"`), so `cargo install` and
   `~/.cargo/bin/ttymap` are unchanged.
+
+Forward dependency edges only — Cargo enforces the DAG at compile
+time:
+
+```
+ttymap-engine
+  ↑
+  ├── ttymap-core
+  │     ↑
+  │     ├── ttymap-config
+  │     │     ↑
+  │     ├── ttymap-tui  (no ttymap-config edge)
+  │     │     ↑
+  │     │     └── ttymap-lua  ── depends on ttymap-config too
+  │     │           ↑
+  │     │           └── ttymap-cli  ── depends on ttymap-config too
+  │     │                 ↑
+  │     │                 └── ttymap-app
+  │     └─────────────────────┘
+  └───────────────────────────┘
+```
 
 ## Design philosophy
 

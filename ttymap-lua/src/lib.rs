@@ -36,8 +36,8 @@ pub use vm::new_lua;
 
 use std::sync::Arc;
 
+use ttymap_config::Config;
 use ttymap_core::UserCommand;
-use ttymap_core::config::Config;
 use ttymap_tui::compositor::op;
 use ttymap_tui::input::KeyMap;
 use ttymap_tui::input::keymap::KeybindingOverrides;

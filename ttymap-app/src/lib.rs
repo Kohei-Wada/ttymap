@@ -56,7 +56,7 @@ pub use ttymap_cli as cli;
 /// Lives in `ttymap-core` for use by `ttymap-lua` (Lua bootstrap
 /// reads `ttymap.opt.*` into this shape); re-exported here for
 /// existing `crate::config::*` imports.
-pub use ttymap_core::config;
+pub use ttymap_config as config;
 
 // theme + input now live in `ttymap-tui` (re-exported above).
 

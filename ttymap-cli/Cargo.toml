@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
 ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+ttymap-config = { path = "../ttymap-config", version = "0.1.0" }
 ttymap-lua = { path = "../ttymap-lua", version = "0.1.0" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"

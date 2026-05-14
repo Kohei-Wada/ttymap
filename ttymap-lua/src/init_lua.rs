@@ -38,7 +38,7 @@ use std::rc::Rc;
 
 use mlua::{Lua, Table};
 
-use ttymap_core::config::Config;
+use ttymap_config::Config;
 use ttymap_tui::input::keymap::KeybindingOverrides;
 
 /// Snapshot config from the user init.lua only — no system init.lua,
