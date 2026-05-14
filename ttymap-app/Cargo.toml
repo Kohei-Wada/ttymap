@@ -1,5 +1,5 @@
 [package]
-name = "ttymap-tui"
+name = "ttymap-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ readme = "../README.md"
 keywords = ["map", "tui", "mapbox", "terminal", "braille"]
 categories = ["command-line-utilities", "visualization"]
 # `runtime/` is no longer embedded in the binary (#183), but we still
-# include it in the source distribution so `cargo install -p ttymap-tui`
+# include it in the source distribution so `cargo install -p ttymap-app`
 # users (combined with `make install-runtime`) can `cp -r` from a
 # crate-extracted source tree.
 include = [
@@ -22,9 +22,9 @@ include = [
     "LICENSE-*",
 ]
 
-# The crate name is `ttymap-tui` (workspace prefix), but the installed
-# executable stays `ttymap` so `cargo install` and `~/.cargo/bin/ttymap`
-# don't change.
+# The crate name is `ttymap-app` (composition root — App, event loop,
+# binary entry), but the installed executable stays `ttymap` so
+# `cargo install` and `~/.cargo/bin/ttymap` don't change.
 [[bin]]
 name = "ttymap"
 path = "src/main.rs"

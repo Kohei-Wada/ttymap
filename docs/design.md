@@ -37,8 +37,8 @@ Without the pipeline, that redraw rule would need to be duplicated at
 every call site that mutates the map.
 
 Note on naming: "command" is reserved for user-facing concepts — the
-CLI subcommand under `ttymap-tui/src/cli/` and the palette entries under
-`ttymap-tui/src/palette/`. The internal intent type is `UserCommand` so those three
+CLI subcommand under `ttymap-app/src/cli/` and the palette entries under
+`ttymap-app/src/palette/`. The internal intent type is `UserCommand` so those three
 layers stay unambiguous.
 
 ### When to emit a `UserCommand`
@@ -258,7 +258,7 @@ thread, not to redesign the boundary.
 ## Error boundary policy
 
 The engine has one explicit error boundary: **anything reachable
-from `ttymap-tui` through `pub` items in `ttymap-engine` must
+from `ttymap-app` through `pub` items in `ttymap-engine` must
 return `Result<_, EngineError>` instead of panicking**. Inside
 that boundary, hot paths keep `unwrap` / `expect`.
 

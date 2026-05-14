@@ -29,12 +29,12 @@ At least one of those is required at script load. Everything dynamic
 (panels, palettes) is *imperative*, opened from inside callbacks via
 `ttymap.api.card.open` / `ttymap.api.palette.open`.
 
-## Module layout (`ttymap-tui/src/lua/`)
+## Module layout (`ttymap-app/src/lua/`)
 
 Split by intent, not by domain:
 
 ```
-ttymap-tui/src/lua/
+ttymap-app/src/lua/
   mod.rs           LuaSubsystem + merged build_subsystem (creates
                    the VM, installs API surface, runs the init.lua
                    chain — single entry point, no separate walker)
@@ -101,7 +101,7 @@ ttymap-tui/src/lua/
 ```
 
 The host-side pub/sub registry that Lua subscribers attach to is
-**`crate::event::EventBus`** (`ttymap-tui/src/event/bus.rs`) — it's a
+**`crate::event::EventBus`** (`ttymap-app/src/event/bus.rs`) — it's a
 plain main-thread bus shared with non-Lua subscribers, not a Lua-only
 type. `lua::tick::dispatch_tick` drains the `"tick"` bucket once per
 frame; `EventBus::publish(Event::*)` drives every other event.
@@ -122,7 +122,7 @@ frame; `EventBus::publish(Event::*)` drives every other event.
   component (used for palette providers, which have no `poll`).
 - **`LuaHandle`** (`bridge/handle.rs`) — shared dispatch plumbing for
   both window and palette callback paths.
-- **`EventBus`** (`crate::event::EventBus`, `ttymap-tui/src/event/bus.rs`)
+- **`EventBus`** (`crate::event::EventBus`, `ttymap-app/src/event/bus.rs`)
   — pub/sub registry keyed by event name. Every
   `ttymap.on_event(name, fn)` (and its `on_tick` sugar) call lands as
   a subscriber under that name. `lua::tick::dispatch_tick(bus, map)`
@@ -142,7 +142,7 @@ frame; `EventBus::publish(Event::*)` drives every other event.
 
 ## Plugin runtime API (`ttymap` global)
 
-Built by `ttymap::install` (`ttymap-tui/src/lua/api/mod.rs`). Domain-namespaced
+Built by `ttymap::install` (`ttymap-app/src/lua/api/mod.rs`). Domain-namespaced
 userdatas:
 
 | Namespace        | Methods                                                                                        |
@@ -190,12 +190,12 @@ lookup against the registry returns `None`).
 ### Event bus
 
 `ttymap.on_event(name, fn)` registers a callback against the host
-`EventBus` (`crate::event::EventBus` — `ttymap-tui/src/event/bus.rs`).
+`EventBus` (`crate::event::EventBus` — `ttymap-app/src/event/bus.rs`).
 The per-frame `"tick"` bucket runs through `lua::tick::dispatch_tick`
 (which threads a live `MapApi` through `Lua::scope`); every other
 bucket runs through `EventBus::publish(Event::*)` with a typed
 `Event` payload. The string an emit binds to is `Event::name()`
-(`ttymap-tui/src/event/payload.rs`).
+(`ttymap-app/src/event/payload.rs`).
 
 | Name              | Fired                                                 | Payload              |
 |-------------------|-------------------------------------------------------|----------------------|
@@ -247,8 +247,8 @@ fires for any other subscriber).
 ### MapApi (per-frame drawing)
 
 Bridged via a per-frame Lua table built inside `Lua::scope`
-(`make_map_table` in `ttymap-tui/src/lua/api/map.rs`) over the host-side
-`MapApi` struct (`ttymap-tui/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
+(`make_map_table` in `ttymap-app/src/lua/api/map.rs`) over the host-side
+`MapApi` struct (`ttymap-app/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
 `polyline`, `center`, `zoom`, `area_width`, `cursor`. Each `on_tick`
 callback receives this table. **All drawing for non-window plugins
 happens here.**
@@ -425,7 +425,7 @@ pre-pass, then `api::install` adds `http` / `map` / `api` /
 `package.searchers` entry is inserted. Then the bundled init.lua
 runs and drives the rest.
 
-The bundled init.lua's job (`ttymap-tui/runtime/init.lua`) — standard
+The bundled init.lua's job (`ttymap-app/runtime/init.lua`) — standard
 layered order (system → bundled → user):
 
 1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with

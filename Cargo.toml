@@ -1,7 +1,7 @@
 [workspace]
-members = ["ttymap-engine", "ttymap-tui"]
+members = ["ttymap-engine", "ttymap-app"]
 resolver = "2"
-default-members = ["ttymap-tui"]
+default-members = ["ttymap-app"]
 
 [workspace.package]
 version = "0.1.0"
