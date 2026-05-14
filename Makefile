@@ -63,7 +63,6 @@ uninstall:
 	# Try both the current name and previous names so an upgrade
 	# path that crossed the rename boundary still cleans up.
 	cargo uninstall ttymap-app || true
-	cargo uninstall ttymap-tui || true
 	rm -rf $(DATA_DIR)
 
 clean:
