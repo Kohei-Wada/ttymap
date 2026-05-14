@@ -40,9 +40,9 @@ sed -i.bak -E "s/^version = \"$CUR\"$/version = \"$NEW\"/" Cargo.toml
 
 # `ttymap-engine` dep in the binary crate also pins by version (so
 # `cargo publish` succeeds); keep it in lock-step with the workspace.
-sed -i.bak -E "s/(ttymap-engine = \{ path = \"\.\.\/ttymap-engine\", version = )\"$CUR\"/\1\"$NEW\"/" ttymap-tui/Cargo.toml
+sed -i.bak -E "s/(ttymap-engine = \{ path = \"\.\.\/ttymap-engine\", version = )\"$CUR\"/\1\"$NEW\"/" ttymap-app/Cargo.toml
 
-rm -f Cargo.toml.bak ttymap-tui/Cargo.toml.bak
+rm -f Cargo.toml.bak ttymap-app/Cargo.toml.bak
 
 # `cargo check` is enough to refresh Cargo.lock and prove the bump
 # compiles — full build wastes time pre-tag.

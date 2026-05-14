@@ -42,8 +42,9 @@ install-bin:
 	# --force so re-installing replaces the binary in place. Cargo
 	# also uses --force when the previous install came from a
 	# differently-named source crate (the binary used to ship from
-	# the root `ttymap` crate; it now ships from `ttymap-tui`).
-	cargo install --path ttymap-tui --force
+	# the root `ttymap` crate, then `ttymap-tui`; it now ships from
+	# `ttymap-app` after the #351 Step 0 rename).
+	cargo install --path ttymap-app --force
 
 install-runtime:
 	# Wipe + re-create the lua/ tree so files removed from runtime/
@@ -55,10 +56,13 @@ install-runtime:
 	# layout had `plugin/` as a sibling of `lua/`).
 	rm -rf $(DATA_DIR)/plugin $(DATA_DIR)/lua
 	mkdir -p $(DATA_DIR)/lua
-	cp -r ttymap-tui/runtime/lua/. $(DATA_DIR)/lua/
-	cp ttymap-tui/runtime/init.lua $(DATA_DIR)/init.lua
+	cp -r ttymap-app/runtime/lua/. $(DATA_DIR)/lua/
+	cp ttymap-app/runtime/init.lua $(DATA_DIR)/init.lua
 
 uninstall:
+	# Try both the current name and previous names so an upgrade
+	# path that crossed the rename boundary still cleans up.
+	cargo uninstall ttymap-app || true
 	cargo uninstall ttymap-tui || true
 	rm -rf $(DATA_DIR)
 
