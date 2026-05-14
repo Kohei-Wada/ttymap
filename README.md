@@ -61,7 +61,7 @@ Tokyo zoomed in with the wiki panel open:
 | `travel` | Curated multi-country itineraries (Japan + Italy out of the box) with an animated tour: pre-overview → stop loop → post-overview, driven by `ttymap.director`. |
 | `wiki` | Wikipedia geosearch — markers + side panel of nearby articles; Enter opens an extract paragraph. |
 
-Each lives as a single `*.lua` (or directory with `init.lua`) under [`ttymap-tui/runtime/lua/plugin/`](ttymap-tui/runtime/lua/plugin/) — readable as a tutorial for writing your own.
+Each lives as a single `*.lua` (or directory with `init.lua`) under [`ttymap-app/runtime/lua/plugin/`](ttymap-app/runtime/lua/plugin/) — readable as a tutorial for writing your own.
 
 ## Scriptable scenes
 
@@ -171,7 +171,7 @@ CI runs on Linux, macOS, and Windows for every push (see [`.github/workflows/ci.
 
 ### Troubleshooting
 
-- **Windows: install via `cargo` directly** — `make install` assumes a POSIX shell. Until the Makefile grows a Windows path, build with `cargo build --release` and copy `target/release/ttymap.exe` plus the `ttymap-tui/runtime/` directory to wherever you want them. Set `TTYMAP_RUNTIME=path\to\runtime` if you don't place it under the platform-default data dir (`%APPDATA%\ttymap\runtime`).
+- **Windows: install via `cargo` directly** — `make install` assumes a POSIX shell. Until the Makefile grows a Windows path, build with `cargo build --release` and copy `target/release/ttymap.exe` plus the `ttymap-app/runtime/` directory to wherever you want them. Set `TTYMAP_RUNTIME=path\to\runtime` if you don't place it under the platform-default data dir (`%APPDATA%\ttymap\runtime`).
 - **Windows: use Windows Terminal, not legacy ConHost** — Braille glyphs and xterm-256 colors need a font with full Braille coverage (Cascadia Mono works) and a terminal that respects 256-color ANSI. Legacy ConHost (the default `cmd.exe` window pre-Windows 11) renders Braille as boxes and clamps to 16 colors.
 - **macOS: tile cache & exported frames live under `~/Library/Caches/ttymap` and `~/Library/Application Support/ttymap`** — different from Linux's XDG paths. The `directories` crate handles this transparently; only relevant if you script around the cache.
 - **Mouse drag/scroll on Windows** — works in Windows Terminal; some third-party emulators don't forward mouse events. Toggle off via config if your terminal traps them.

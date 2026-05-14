@@ -40,8 +40,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       # All four steps need --all / --workspace explicitly: the
-      # workspace's `default-members = ["ttymap-tui"]` means a bare
-      # `cargo X` only acts on ttymap-tui and silently skips
+      # workspace's `default-members = ["ttymap-app"]` means a bare
+      # `cargo X` only acts on ttymap-app and silently skips
       # ttymap-engine (216 unit tests, every clippy lint inside the
       # engine, every rustfmt diff). CI must check both crates.
       - name: Format check

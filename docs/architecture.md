@@ -11,7 +11,7 @@ The canonical source-tree layout and layering rule live in
 [../CLAUDE.md → Workspace layout / Source tree](../CLAUDE.md). In short:
 
 - The workspace has two crates: `ttymap-engine/` (headless render
-  pipeline, ratatui- and crossterm-free) and `ttymap-tui/` (TUI
+  pipeline, ratatui- and crossterm-free) and `ttymap-app/` (TUI
   binary; produces the `ttymap` executable).
 - The single layering rule is enforced at the **crate** level: the
   engine doesn't depend on ratatui or crossterm. Inside the binary,
@@ -131,7 +131,7 @@ the tile cache, fetch / decode pipeline, render thread, and
 authoritative `MapState`. They talk over the child's stdin/stdout
 with a bincode-framed `EngineCommand` / `EngineEvent` protocol
 (`ttymap-engine/src/ipc.rs`). The parent end lives in
-`ttymap-tui/src/engine_handle.rs` (`EngineHandle::spawn`); the child
+`ttymap-app/src/engine_handle.rs` (`EngineHandle::spawn`); the child
 entry is `ttymap_engine::run_as_subprocess`.
 
 Both sides keep their own `MapState`. The UI mirror is mutated

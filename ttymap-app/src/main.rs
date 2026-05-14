@@ -1,9 +1,9 @@
 use clap::Parser;
-use ttymap_tui::app::App;
-use ttymap_tui::app::frame_timer::FrameTimer;
-use ttymap_tui::cli::Command as Subcommand;
-use ttymap_tui::config::Config;
-use ttymap_tui::input::thread::InputHandle;
+use ttymap_app::app::App;
+use ttymap_app::app::frame_timer::FrameTimer;
+use ttymap_app::cli::Command as Subcommand;
+use ttymap_app::config::Config;
+use ttymap_app::input::thread::InputHandle;
 
 #[derive(Parser)]
 #[command(
@@ -61,7 +61,7 @@ fn main() {
     // surfaced on stderr — the alternative was silent failure where
     // `--log` had no observable effect and no error to grep for.
     if let Some(level) = cli.log.as_deref()
-        && let Err(e) = ttymap_tui::logging::init(level)
+        && let Err(e) = ttymap_app::logging::init(level)
     {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
     }
@@ -78,14 +78,14 @@ fn main() {
     // interactive app and the `snap` subcommand reach for it; doing
     // this once at the top means we fail fast with a single error
     // message rather than hitting the same wall in two places.
-    let runtime_path = match ttymap_tui::lua::resolve_runtime_path() {
+    let runtime_path = match ttymap_app::lua::resolve_runtime_path() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ttymap: {}", e);
             std::process::exit(1);
         }
     };
-    ttymap_tui::lua::set_runtime_path(runtime_path);
+    ttymap_app::lua::set_runtime_path(runtime_path);
 
     // Subcommands run a single task and exit without booting the full
     // interactive app.
@@ -114,7 +114,7 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // via `set_attribution` so `ttymap.tile:attribution()` returns
     // the live value.
     let (lua_subsystem, mut config, _keymap_overrides, keymap) =
-        ttymap_tui::lua::build_subsystem(Config::default());
+        ttymap_app::lua::build_subsystem(Config::default());
 
     if let Some(v) = cli.lat {
         config.engine.map.lat = v;
@@ -141,7 +141,7 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Active theme — owned by App, consumed by the map only at
     // construction (initial styler) and on theme switch.
-    let theme_id = ttymap_tui::theme::ThemeId::from_name(&config.engine.render.style);
+    let theme_id = ttymap_app::theme::ThemeId::from_name(&config.engine.render.style);
 
     // Engine doesn't depend on crossterm; the binary owns the
     // terminal-size probe and hands cols/rows to the engine
@@ -154,7 +154,7 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // streams MapFrames back onto the AppEvent channel via
     // EngineHandle's reader thread. `EngineHandle::Drop` does the
     // cooperative shutdown + child reap at end of scope.
-    let map = ttymap_tui::engine_handle::EngineHandle::spawn(
+    let map = ttymap_app::engine_handle::EngineHandle::spawn(
         &config.engine,
         cols,
         rows,
@@ -169,8 +169,8 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // around the live LuaRegistry and append the `:` activation
     // to a fresh built-ins Vec. Must run after every plugin's
     // register call so the seed sees them.
-    let mut builtin_activations: Vec<ttymap_tui::compositor::Activation> = Vec::new();
-    ttymap_tui::palette::install(&keymap, &mut builtin_activations, lua.registry.clone());
+    let mut builtin_activations: Vec<ttymap_app::compositor::Activation> = Vec::new();
+    ttymap_app::palette::install(&keymap, &mut builtin_activations, lua.registry.clone());
 
     let mut app = App::new(config, keymap, theme_id, map, builtin_activations, lua);
 

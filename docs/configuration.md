@@ -32,19 +32,19 @@ ttymap.opt.cache.memory_tiles = heavy and 2048 or 512
 Bundled plugins are activated by `runtime/init.lua` (which runs
 *before* your init.lua). To disable a bundled plugin, write your
 own init.lua that lists only the plugins you want — see
-`ttymap-tui/runtime/init.lua` for the default require list. Lua's
+`ttymap-app/runtime/init.lua` for the default require list. Lua's
 `package.loaded` cache makes a duplicate `require` from your
 init.lua a no-op (registrations don't double-fire).
 
 Every option is optional; omitted values stay at their built-in
-defaults (see `ttymap-tui/runtime/init.lua` for the full schema with
+defaults (see `ttymap-app/runtime/init.lua` for the full schema with
 defaults). Errors in `init.lua` (syntax, type mismatch, runtime
 exception) are logged and recovered — the app keeps booting with
 defaults.
 
 ## Options reference
 
-The complete option tree lives in `ttymap-tui/runtime/init.lua` —
+The complete option tree lives in `ttymap-app/runtime/init.lua` —
 that file *is* the bundled defaults, and your
 `~/.config/ttymap/init.lua` runs after it in the same Lua state
 (last-wins on `ttymap.opt.*`). Browse it for the canonical list
