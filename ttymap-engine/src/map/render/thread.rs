@@ -56,50 +56,36 @@ pub struct RenderClient {
 }
 
 impl RenderClient {
+    fn send(&self, task: RenderTask, label: &'static str) {
+        if self.task_tx.send(task).is_err() {
+            log::warn!("render thread channel closed on {}", label);
+        }
+    }
+
     pub fn request_draw(
         &self,
         viewport: Viewport,
         overlays: Vec<crate::map::render::overlay::UserPolyline>,
     ) {
-        if self
-            .task_tx
-            .send(RenderTask::Draw { viewport, overlays })
-            .is_err()
-        {
-            log::warn!("render thread channel closed on draw");
-        }
+        self.send(RenderTask::Draw { viewport, overlays }, "draw");
     }
 
     pub fn request_resize(&self, width: usize, height: usize) {
-        if self
-            .task_tx
-            .send(RenderTask::Resize { width, height })
-            .is_err()
-        {
-            log::warn!("render thread channel closed on resize");
-        }
+        self.send(RenderTask::Resize { width, height }, "resize");
     }
 
     /// Hand a fresh `Styler` to the render thread. Processed in order
     /// with `Draw` / `Resize`, so an in-flight frame at the old theme
     /// never collides with one at the new theme.
     pub fn set_styler(&self, styler: Arc<Styler>) {
-        if self.task_tx.send(RenderTask::SetStyler(styler)).is_err() {
-            log::warn!("render thread channel closed on set_styler");
-        }
+        self.send(RenderTask::SetStyler(styler), "set_styler");
     }
 
     /// Toggle tile text labels on the render thread. Caller must
     /// follow up with a `request_draw` to see the change — this
     /// command alone only flips the flag.
     pub fn set_labels_visible(&self, visible: bool) {
-        if self
-            .task_tx
-            .send(RenderTask::SetLabelsVisible(visible))
-            .is_err()
-        {
-            log::warn!("render thread channel closed on set_labels_visible");
-        }
+        self.send(RenderTask::SetLabelsVisible(visible), "set_labels_visible");
     }
 }
 
