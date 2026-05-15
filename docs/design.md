@@ -56,7 +56,6 @@ Current examples:
 | UserCommand                          | Source                                | Why it is a UserCommand                    |
 | ----------------------------------- | ------------------------------------- | ----------------------------------------- |
 | `Map(MapAction::Pan…)`              | keymap, mouse drag                    | User intent → map state change            |
-| `Map(MapAction::Redraw)`            | initial draw                          | Forces an unconditional fresh frame       |
 | `Map(MapAction::Jump(LonLat))`      | search provider result, geoip plugin  | Plugin async → map state change           |
 | `Quit`                              | keymap `q`, palette `:q`, Ctrl-C      | Same intent from 3 sources                |
 | `Resize(w, h)`                      | crossterm `Resize` event              | Cross-cutting: map state + render canvas  |

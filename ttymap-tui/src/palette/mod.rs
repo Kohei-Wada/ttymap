@@ -244,7 +244,6 @@ mod tests {
     use super::*;
     use crate::theme::ThemeId;
     use ttymap_core::UserCommand;
-    use ttymap_engine::map::MapAction;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {
@@ -303,7 +302,7 @@ mod tests {
             &self.items
         }
         fn execute(&mut self, _idx: usize, _ctx: &Context) -> PaletteAction {
-            PaletteAction::Run(vec![UserCommand::Map(MapAction::Redraw)])
+            PaletteAction::Run(vec![UserCommand::ToggleSidebar])
         }
     }
 
@@ -416,7 +415,7 @@ mod tests {
         expect_consumed(dispatch(&mut p, KeyCode::Down, NONE));
         let ops = dispatch(&mut p, KeyCode::Enter, NONE);
         assert!(ops.closed());
-        assert_eq!(ops.intents(), vec![UserCommand::Map(MapAction::Redraw)]);
+        assert_eq!(ops.intents(), vec![UserCommand::ToggleSidebar]);
         assert!(!ops.pushed());
     }
 

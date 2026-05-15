@@ -493,7 +493,7 @@ mod tests {
         struct SwallowsAll;
         impl Component for SwallowsAll {
             fn handle_key(&mut self, _: KeyEvent, win: &mut Window) {
-                win.emit(UserCommand::Map(ttymap_engine::map::MapAction::Redraw));
+                win.emit(UserCommand::ToggleSidebar);
             }
             fn render(&self, _: &mut window::RenderWindow) {}
         }
