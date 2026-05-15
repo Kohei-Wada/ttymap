@@ -119,7 +119,6 @@ impl MapState {
                 self.zoom = self.initial_zoom.unwrap_or(self.min_zoom);
                 self.center != old_center || self.zoom != old_zoom
             }
-            MapAction::Redraw => true,
             MapAction::PanCells(dx, dy) => {
                 let old = self.center;
                 self.pan_by_cells(*dx, *dy);

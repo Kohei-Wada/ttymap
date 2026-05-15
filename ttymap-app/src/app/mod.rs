@@ -177,7 +177,11 @@ impl App {
         event_rx: &std::sync::mpsc::Receiver<AppEvent>,
         event_tx: &std::sync::mpsc::Sender<AppEvent>,
     ) -> io::Result<()> {
-        self.dispatch_initial_redraw();
+        // Kick off the very first render task so the terminal isn't
+        // blank waiting for input. Goes direct to the render path
+        // rather than through `dispatch` — the engine has no state
+        // change to apply, just needs a frame.
+        self.request_map_redraw();
         self.publish_pending();
 
         while self.running {
@@ -224,13 +228,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    /// Initial dispatch fired right after entering the loop — kicks
-    /// off the very first render task so the terminal isn't blank
-    /// waiting for input.
-    fn dispatch_initial_redraw(&mut self) {
-        self.dispatch(UserCommand::Map(MapAction::Redraw));
     }
 
     /// Route one [`AppEvent`] into the right entry point. Each arm is

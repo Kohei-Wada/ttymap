@@ -24,7 +24,6 @@ pub enum MapAction {
     ZoomOut,
     ZoomToWorld,
     ResetPosition,
-    Redraw,
     /// Continuous pan by terminal-cell deltas — produced by mouse drag.
     /// `Pan*` above are discrete, keybinding-friendly steps; this is
     /// the arbitrary-delta version the mouse needs.
@@ -75,7 +74,6 @@ impl MapAction {
             MapAction::ZoomOut => "Zoom out",
             MapAction::ZoomToWorld => "Zoom to world",
             MapAction::ResetPosition => "Reset position",
-            MapAction::Redraw => "Redraw",
             MapAction::PanCells(..)
             | MapAction::ZoomAt { .. }
             | MapAction::Jump(_)
@@ -101,7 +99,6 @@ impl MapAction {
             MapAction::ZoomOut,
             MapAction::ZoomToWorld,
             MapAction::ResetPosition,
-            MapAction::Redraw,
         ]
     }
 
@@ -123,7 +120,6 @@ impl MapAction {
             MapAction::ZoomOut => "zoom_out",
             MapAction::ZoomToWorld => "zoom_to_world",
             MapAction::ResetPosition => "reset_position",
-            MapAction::Redraw => "redraw",
             MapAction::PanCells(..)
             | MapAction::ZoomAt { .. }
             | MapAction::Jump(_)
