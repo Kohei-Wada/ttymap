@@ -81,12 +81,12 @@ impl MouseAdapter {
             MouseEventKind::ScrollUp => Some(UserCommand::Map(MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
-                zoom_in: true,
+                dir: 1,
             })),
             MouseEventKind::ScrollDown => Some(UserCommand::Map(MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
-                zoom_in: false,
+                dir: -1,
             })),
             _ => None,
         }
