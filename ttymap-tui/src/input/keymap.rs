@@ -168,10 +168,10 @@ impl Default for KeyMap {
                 map("w", PanRightFast),
                 map("C-u", PanUpHalf),
                 map("C-d", PanDownHalf),
-                map("a", ZoomIn),
-                map("+", ZoomIn),
-                map("z", ZoomOut),
-                map("-", ZoomOut),
+                map("a", ZoomBy(1)),
+                map("+", ZoomBy(1)),
+                map("z", ZoomBy(-1)),
+                map("-", ZoomBy(-1)),
                 map("0", ResetPosition),
                 intent("q", UserCommand::Quit),
                 intent("\\", UserCommand::ToggleSidebar),
@@ -285,7 +285,7 @@ mod tests {
 
         assert_eq!(
             km.lookup(KeyCode::Char('i'), KeyModifiers::NONE),
-            Some(&map(MapAction::ZoomIn))
+            Some(&map(MapAction::ZoomBy(1)))
         );
         assert_eq!(
             km.lookup(KeyCode::Char('Q'), KeyModifiers::NONE),
@@ -347,11 +347,11 @@ mod tests {
         let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('a'), NONE),
-            Some(map(MapAction::ZoomIn))
+            Some(map(MapAction::ZoomBy(1)))
         );
         assert_eq!(
             km.resolve(KeyCode::Char('z'), NONE),
-            Some(map(MapAction::ZoomOut))
+            Some(map(MapAction::ZoomBy(-1)))
         );
     }
 

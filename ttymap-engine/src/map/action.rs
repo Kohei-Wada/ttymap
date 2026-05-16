@@ -20,8 +20,11 @@ pub enum MapAction {
     PanRightFast,
     PanUpHalf,
     PanDownHalf,
-    ZoomIn,
-    ZoomOut,
+    /// Zoom by `dir` steps. `+1` = `zoom_in`, `-1` = `zoom_out`; the
+    /// integer is `dir * zoom_step` when applied, so larger magnitudes
+    /// remain a free axis for future fast-zoom bindings without
+    /// adding new variants.
+    ZoomBy(i8),
     ZoomToWorld,
     ResetPosition,
     /// Continuous pan by terminal-cell deltas — produced by mouse drag.
@@ -30,11 +33,12 @@ pub enum MapAction {
     PanCells(i16, i16),
     /// Zoom toward a screen anchor — produced by mouse scroll wheel.
     /// The anchor is expressed in cells relative to screen center;
-    /// `zoom_in == true` zooms in by one step, else out.
+    /// `dir` follows the same convention as [`ZoomBy`] (`+1` zooms
+    /// in, `-1` zooms out).
     ZoomAt {
         anchor_dx: f64,
         anchor_dy: f64,
-        zoom_in: bool,
+        dir: i8,
     },
     /// Re-centre the map on a specific location. Produced by search,
     /// the here-plugin, and `ttymap.map:jump` from any Lua plugin — anything
@@ -70,8 +74,9 @@ impl MapAction {
             MapAction::PanRightFast => "Pan right (fast)",
             MapAction::PanUpHalf => "Pan up (half)",
             MapAction::PanDownHalf => "Pan down (half)",
-            MapAction::ZoomIn => "Zoom in",
-            MapAction::ZoomOut => "Zoom out",
+            MapAction::ZoomBy(1) => "Zoom in",
+            MapAction::ZoomBy(-1) => "Zoom out",
+            MapAction::ZoomBy(_) => "",
             MapAction::ZoomToWorld => "Zoom to world",
             MapAction::ResetPosition => "Reset position",
             MapAction::PanCells(..)
@@ -95,8 +100,8 @@ impl MapAction {
             MapAction::PanRightFast,
             MapAction::PanUpHalf,
             MapAction::PanDownHalf,
-            MapAction::ZoomIn,
-            MapAction::ZoomOut,
+            MapAction::ZoomBy(1),
+            MapAction::ZoomBy(-1),
             MapAction::ZoomToWorld,
             MapAction::ResetPosition,
         ]
@@ -116,8 +121,9 @@ impl MapAction {
             MapAction::PanRightFast => "pan_right_fast",
             MapAction::PanUpHalf => "pan_up_half",
             MapAction::PanDownHalf => "pan_down_half",
-            MapAction::ZoomIn => "zoom_in",
-            MapAction::ZoomOut => "zoom_out",
+            MapAction::ZoomBy(1) => "zoom_in",
+            MapAction::ZoomBy(-1) => "zoom_out",
+            MapAction::ZoomBy(_) => "",
             MapAction::ZoomToWorld => "zoom_to_world",
             MapAction::ResetPosition => "reset_position",
             MapAction::PanCells(..)

@@ -94,14 +94,10 @@ impl MapState {
             MapAction::PanRightFast => self.pan(step, 10.0, 0.0),
             MapAction::PanUpHalf => self.pan(step, 0.0, 7.5),
             MapAction::PanDownHalf => self.pan(step, 0.0, -7.5),
-            MapAction::ZoomIn => {
+            MapAction::ZoomBy(dir) => {
                 let old = self.zoom;
-                self.zoom = (self.zoom + zoom_step).min(max_zoom);
-                self.zoom != old
-            }
-            MapAction::ZoomOut => {
-                let old = self.zoom;
-                self.zoom = (self.zoom - zoom_step).max(self.min_zoom);
+                let delta = f64::from(*dir) * zoom_step;
+                self.zoom = (self.zoom + delta).clamp(self.min_zoom, max_zoom);
                 self.zoom != old
             }
             MapAction::ZoomToWorld => {
@@ -127,9 +123,9 @@ impl MapState {
             MapAction::ZoomAt {
                 anchor_dx,
                 anchor_dy,
-                zoom_in,
+                dir,
             } => {
-                let delta = if *zoom_in { zoom_step } else { -zoom_step };
+                let delta = f64::from(*dir) * zoom_step;
                 let old_zoom = self.zoom;
                 let old_center = self.center;
                 self.zoom_towards(*anchor_dx, *anchor_dy, delta);
@@ -257,10 +253,10 @@ mod tests {
     fn test_zoom_in_out() {
         let mut map = default_core();
         for _ in 0..5 {
-            map.process_action(&MapAction::ZoomIn);
+            map.process_action(&MapAction::ZoomBy(1));
         }
         let after_in = map.zoom;
-        map.process_action(&MapAction::ZoomOut);
+        map.process_action(&MapAction::ZoomBy(-1));
         assert!(map.zoom < after_in);
     }
 
@@ -286,7 +282,7 @@ mod tests {
     #[test]
     fn set_zoom_clamps_into_allowed_range() {
         // SetZoom must obey the same `[min_zoom, max_zoom]` window that
-        // ZoomIn/ZoomOut land in; out-of-range Lua-side requests get
+        // `ZoomBy` lands in; out-of-range Lua-side requests get
         // clamped so a plugin author can pass `1e9` without the host
         // entering an undefined zoom state.
         let mut map = default_core();
