@@ -62,21 +62,28 @@ impl UserData for EventHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ttymap_core::event::{Event, EventBus};
+    use ttymap_core::event::{Event, EventBus, Level};
+
+    fn notify(msg: &str) -> Event {
+        Event::Notify {
+            message: msg.to_string(),
+            level: Level::Info,
+        }
+    }
 
     #[test]
     fn remove_drops_the_subscriber_and_is_idempotent() {
         let bus = Rc::new(EventBus::default());
         let fired: Rc<std::cell::Cell<i64>> = Rc::new(std::cell::Cell::new(0));
         let sink = fired.clone();
-        let id = bus.subscribe("frame_ready", move |_| sink.set(sink.get() + 1));
+        let id = bus.subscribe("notify", move |_| sink.set(sink.get() + 1));
 
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("first"));
         assert_eq!(fired.get(), 1);
 
         let bus_for_remove = Rc::clone(&bus);
         let handle = EventHandle::new(Rc::new(move || {
-            bus_for_remove.remove("frame_ready", id);
+            bus_for_remove.remove("notify", id);
         }));
 
         let lua = mlua::Lua::new();
@@ -85,7 +92,7 @@ mod tests {
             .call::<()>(ud)
             .unwrap();
 
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("second"));
         assert_eq!(
             fired.get(),
             1,

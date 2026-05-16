@@ -7,8 +7,6 @@
 //! The string returned by [`Event::name`] is the key Lua plugins use
 //! in `ttymap.on_event(name, fn)` — keep it stable across releases.
 
-use ttymap_engine::geo::LonLat;
-
 /// User-visible severity for [`Event::Notify`]. Renderers map this
 /// to colour / emphasis; the bus carries no display policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,23 +43,6 @@ impl Level {
 /// react after the state mutation already happened.
 #[derive(Clone, Debug)]
 pub enum Event {
-    /// A freshly rendered [`MapFrame`](ttymap_engine::map::render::frame::MapFrame)
-    /// arrived from the render thread. No payload — the live frame
-    /// is reachable through `ttymap.map` accessors.
-    FrameReady,
-    /// Map recentred via [`MapAction::Jump`](ttymap_engine::map::MapAction::Jump).
-    /// Payload: new centre.
-    MapJumped(LonLat),
-    /// Direct zoom set via [`MapAction::SetZoom`](ttymap_engine::map::MapAction::SetZoom).
-    /// Payload: new zoom level.
-    MapZoomSet(f64),
-    /// Composite recentre+zoom via [`MapAction::FlyTo`](ttymap_engine::map::MapAction::FlyTo).
-    /// Payload: new centre, new zoom.
-    MapFlewTo(LonLat, f64),
-    /// Active theme switched. Payload: theme name (`"dark"` / `"bright"`).
-    ThemeChanged(String),
-    /// Terminal resized. Payload: `(cols, rows)`.
-    Resized(u16, u16),
     /// Transient status message for the user. Producers on either
     /// side of the Lua boundary fire this; the bundled `notify.lua`
     /// renderer subscribes and paints recent ones top-left for ~3s.
@@ -75,12 +56,6 @@ impl Event {
     /// necessity, but everything inside Rust goes through this.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::FrameReady => "frame_ready",
-            Self::MapJumped(_) => "map_jumped",
-            Self::MapZoomSet(_) => "map_zoom_set",
-            Self::MapFlewTo(_, _) => "map_flew_to",
-            Self::ThemeChanged(_) => "theme_changed",
-            Self::Resized(_, _) => "resized",
             Self::Notify { .. } => "notify",
         }
     }

@@ -51,7 +51,6 @@ use ttymap_config::Config;
 use ttymap_core::UserCommand;
 use ttymap_core::event::{Event, EventBus};
 pub use ttymap_core::keymap::KeybindingOverrides;
-use ttymap_engine::map::MapAction;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::state::MapState;
 use ttymap_lua::{LuaHandle, LuaSubsystem};
@@ -273,16 +272,11 @@ impl App {
         }
     }
 
-    /// Mirror the latest [`MapFrame`] into the Lua-readable cell,
-    /// update the App-visible cache used by `render_into`, and queue
-    /// `Event::FrameReady`. The Lua mirror is written before the
-    /// event is enqueued so a `frame_ready` subscriber that
-    /// immediately calls `ttymap.api.frame.to_ansi()` sees the new
-    /// frame, not the previous one.
+    /// Mirror the latest [`MapFrame`] into the Lua-readable cell and
+    /// update the App-visible cache used by `render_into`.
     fn accept_frame(&mut self, frame: MapFrame) {
         self.lua.set_current_frame(frame.clone());
         self.map_frame = Some(frame);
-        self.pending_events.push(Event::FrameReady);
     }
 
     /// Forward a bus event published by an off-thread producer. The
@@ -375,28 +369,15 @@ impl App {
         }
     }
 
-    /// Execute a [`UserCommand`]. Each arm mutates the state it owns
-    /// and `push`es the observable [`Event`] (if any) into
-    /// `pending_events`. `handle_resize` stays a private helper
-    /// because three call sites share it.
-    ///
-    /// `PanCells`, `ZoomAt`, `CursorMoved`, `CycleFocus`, the discrete
-    /// `Pan*` keymap actions, and `Quit` are deliberately not
-    /// broadcast — they're either noisy or internal.
+    /// Execute a [`UserCommand`]. Each arm mutates the state it
+    /// owns. `handle_resize` stays a private helper because three
+    /// call sites share it.
     fn dispatch(&mut self, msg: UserCommand) {
         match msg {
             UserCommand::Map(action) => {
                 if self.map_state.process_action(&action) {
                     self.map.send_action(&action);
                     self.request_map_redraw();
-                }
-                match &action {
-                    MapAction::Jump(ll) => self.pending_events.push(Event::MapJumped(*ll)),
-                    MapAction::SetZoom(z) => self.pending_events.push(Event::MapZoomSet(*z)),
-                    MapAction::FlyTo { center, zoom } => {
-                        self.pending_events.push(Event::MapFlewTo(*center, *zoom));
-                    }
-                    _ => {}
                 }
             }
             UserCommand::Quit => {
@@ -407,8 +388,6 @@ impl App {
                 self.theme_id = new_id;
                 self.ui_theme = UiTheme::from_palette(new_id.palette());
                 self.map.set_theme(new_id);
-                self.pending_events
-                    .push(Event::ThemeChanged(new_id.name().to_string()));
                 self.request_map_redraw();
             }
             UserCommand::CursorMoved(col, row) => {
@@ -437,7 +416,6 @@ impl App {
         let map_cols = self.sidebar.effective_map_cols(cols);
         self.map_state.resize(map_cols, rows);
         self.map.send_resize(map_cols, rows);
-        self.pending_events.push(Event::Resized(cols, rows));
         self.request_map_redraw();
     }
 

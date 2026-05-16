@@ -516,8 +516,8 @@ mod tests {
         lua.load(
             r#"
             ttymap.on_event("tick", function() end)
-            ttymap.on_event("frame_ready", function() end)
-            ttymap.on_event("frame_ready", function() end)
+            ttymap.on_event("notify", function() end)
+            ttymap.on_event("notify", function() end)
             "#,
         )
         .exec()
@@ -528,7 +528,7 @@ mod tests {
             0,
             "tick never lands on the typed-event bus",
         );
-        assert_eq!(bus.count("frame_ready"), 2);
+        assert_eq!(bus.count("notify"), 2);
     }
 
     #[test]
@@ -551,17 +551,17 @@ mod tests {
         .expect("install ttymap table");
         lua.load(
             r#"
-            handle = ttymap.on_event("frame_ready", function() end)
+            handle = ttymap.on_event("notify", function() end)
             "#,
         )
         .exec()
         .expect("subscribe");
-        assert_eq!(bus.count("frame_ready"), 1);
+        assert_eq!(bus.count("notify"), 1);
         lua.load(r#"handle:remove(); handle:remove()"#)
             .exec()
             .expect("remove");
         assert_eq!(
-            bus.count("frame_ready"),
+            bus.count("notify"),
             0,
             "handle:remove() must drop the subscriber",
         );

@@ -74,9 +74,8 @@ impl LuaHandle {
 
     /// Mirror the latest [`MapFrame`] into the shared cell that
     /// `ttymap.api.frame.to_ansi()` reads from. App calls this on
-    /// every `AppEvent::FrameReady` before publishing `Event::FrameReady`
-    /// so subscribers that immediately query `to_ansi()` see the
-    /// fresh frame.
+    /// every `AppEvent::FrameReady` so Lua callers querying
+    /// `to_ansi()` see the fresh frame.
     pub fn set_current_frame(&self, frame: MapFrame) {
         if let Ok(mut slot) = self.shared.current_frame.lock() {
             *slot = Some(frame);

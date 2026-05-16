@@ -187,10 +187,9 @@ fn intern_event_name(name: &str) -> &'static str {
 ///   a `map` arg) — same path as `ttymap.api.frame.on_tick(fn)`.
 /// - everything else subscribes against the [`EventBus`], with the
 ///   Lua callback wrapped in a Rust closure that captures the
-///   `mlua::Lua` + `RegistryKey` and converts each [`Event`] variant
-///   to the typed Lua args historic plugins expect
-///   (`map_jumped` → `(lon, lat)`, `notify` → `{ message, level }`,
-///   etc).
+///   `mlua::Lua` + `RegistryKey` and converts the [`Event`] payload
+///   to the typed Lua arg the plugin expects (today: `notify` →
+///   `{ message, level }`).
 ///
 /// Returns a handle whose `:remove()` drops the exact subscriber
 /// from the registry it landed in.
@@ -255,17 +254,11 @@ fn install_on_event(
     )
 }
 
-/// Build the Lua arg tuple for `event` and call `f`. Each [`Event`]
-/// variant maps to the same shape Lua plugins have always seen — so
-/// existing scripts (`function on_jump(lon, lat) … end`) keep working.
+/// Build the Lua arg tuple for `event` and call `f`. The bus
+/// currently carries one variant (`Notify`); future structured
+/// events get their own arm here when a subscriber needs them.
 fn call_lua_with_event(f: &mlua::Function, lua: &Lua, event: &Event) -> mlua::Result<()> {
     match event {
-        Event::FrameReady => f.call::<()>(()),
-        Event::MapJumped(ll) => f.call::<()>((ll.lon, ll.lat)),
-        Event::MapZoomSet(z) => f.call::<()>(*z),
-        Event::MapFlewTo(ll, z) => f.call::<()>((ll.lon, ll.lat, *z)),
-        Event::ThemeChanged(name) => f.call::<()>(name.as_str()),
-        Event::Resized(c, r) => f.call::<()>((*c, *r)),
         Event::Notify { message, level } => {
             let t = lua.create_table()?;
             t.set("message", message.as_str())?;

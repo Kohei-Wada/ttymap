@@ -148,17 +148,24 @@ impl EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Level;
     use std::cell::Cell;
-    use ttymap_engine::geo::LonLat;
+
+    fn notify(msg: &str) -> Event {
+        Event::Notify {
+            message: msg.to_string(),
+            level: Level::Info,
+        }
+    }
 
     #[test]
     fn publish_only_runs_subscribers_for_the_named_event() {
         let bus = EventBus::default();
         let other_count = Rc::new(Cell::new(0));
         let sink = other_count.clone();
-        bus.subscribe("frame_ready", move |_| sink.set(sink.get() + 1));
+        bus.subscribe("other_name", move |_| sink.set(sink.get() + 1));
 
-        bus.publish(Event::MapJumped(LonLat { lon: 1.0, lat: 2.0 }));
+        bus.publish(notify("hi"));
 
         assert_eq!(
             other_count.get(),
@@ -170,29 +177,27 @@ mod tests {
     #[test]
     fn publish_passes_typed_event_through() {
         let bus = EventBus::default();
-        let captured: Rc<RefCell<Option<LonLat>>> = Rc::new(RefCell::new(None));
+        let captured: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let sink = captured.clone();
-        bus.subscribe("map_jumped", move |e| {
-            if let Event::MapJumped(ll) = e {
-                *sink.borrow_mut() = Some(*ll);
-            }
+        bus.subscribe("notify", move |e| {
+            let Event::Notify { message, .. } = e;
+            *sink.borrow_mut() = Some(message.clone());
         });
-        bus.publish(Event::MapJumped(LonLat {
-            lon: 139.7595,
-            lat: 35.6828,
-        }));
+        bus.publish(notify("hello world"));
 
-        let ll = captured.borrow().expect("subscriber must have captured");
-        assert!((ll.lon - 139.7595).abs() < 1e-9);
-        assert!((ll.lat - 35.6828).abs() < 1e-9);
+        let msg = captured
+            .borrow()
+            .clone()
+            .expect("subscriber must have captured");
+        assert_eq!(msg, "hello world");
     }
 
     #[test]
     fn subscribe_returns_distinct_monotonic_ids() {
         let bus = EventBus::default();
-        let id_a = bus.subscribe("frame_ready", |_| {});
-        let id_b = bus.subscribe("frame_ready", |_| {});
-        let id_c = bus.subscribe("map_jumped", |_| {});
+        let id_a = bus.subscribe("notify", |_| {});
+        let id_b = bus.subscribe("notify", |_| {});
+        let id_c = bus.subscribe("other_name", |_| {});
         assert_ne!(id_a, id_b);
         assert!(id_b > id_a);
         assert!(id_c > id_b, "ids are global, not per-bucket");
@@ -205,22 +210,19 @@ mod tests {
         let bus = EventBus::default();
         let a_sink = a.clone();
         let b_sink = b.clone();
-        let id_a = bus.subscribe("frame_ready", move |_| a_sink.set(a_sink.get() + 1));
-        let _id_b = bus.subscribe("frame_ready", move |_| b_sink.set(b_sink.get() + 1));
+        let id_a = bus.subscribe("notify", move |_| a_sink.set(a_sink.get() + 1));
+        let _id_b = bus.subscribe("notify", move |_| b_sink.set(b_sink.get() + 1));
 
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("first"));
         assert_eq!(a.get(), 1);
         assert_eq!(b.get(), 1);
 
-        assert!(bus.remove("frame_ready", id_a));
-        bus.publish(Event::FrameReady);
+        assert!(bus.remove("notify", id_a));
+        bus.publish(notify("second"));
         assert_eq!(a.get(), 1, "a removed, must not fire again");
         assert_eq!(b.get(), 2);
 
-        assert!(
-            !bus.remove("frame_ready", id_a),
-            "second remove returns false",
-        );
+        assert!(!bus.remove("notify", id_a), "second remove returns false",);
         assert!(
             !bus.remove("nonexistent", 999),
             "missing bucket returns false",
@@ -241,14 +243,14 @@ mod tests {
         let fire_for_a = fire_count.clone();
         let id_holder: Rc<Cell<u64>> = Rc::new(Cell::new(0));
         let id_holder_for_a = id_holder.clone();
-        let id = bus.subscribe("frame_ready", move |_| {
+        let id = bus.subscribe("notify", move |_| {
             fire_for_a.set(fire_for_a.get() + 1);
-            bus_for_a.remove("frame_ready", id_holder_for_a.get());
+            bus_for_a.remove("notify", id_holder_for_a.get());
         });
         id_holder.set(id);
 
-        bus.publish(Event::FrameReady);
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("a"));
+        bus.publish(notify("b"));
 
         assert_eq!(
             fire_count.get(),
@@ -269,15 +271,15 @@ mod tests {
         let bus_for_closure = Rc::clone(&bus);
         let outer_fired = Rc::new(Cell::new(0));
         let outer_fired_clone = outer_fired.clone();
-        bus.subscribe("frame_ready", move |_| {
+        bus.subscribe("notify", move |_| {
             outer_fired_clone.set(outer_fired_clone.get() + 1);
             let inner_sink = inner_fired_clone.clone();
-            bus_for_closure.subscribe("frame_ready", move |_| {
+            bus_for_closure.subscribe("notify", move |_| {
                 inner_sink.set(inner_sink.get() + 1);
             });
         });
 
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("a"));
         assert_eq!(
             inner_fired.get(),
             0,
@@ -285,7 +287,7 @@ mod tests {
         );
         assert_eq!(outer_fired.get(), 1);
 
-        bus.publish(Event::FrameReady);
+        bus.publish(notify("b"));
         assert!(inner_fired.get() >= 1);
     }
 }
