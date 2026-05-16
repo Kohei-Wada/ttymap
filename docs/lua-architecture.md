@@ -29,12 +29,12 @@ At least one of those is required at script load. Everything dynamic
 (panels, palettes) is *imperative*, opened from inside callbacks via
 `ttymap.api.card.open` / `ttymap.api.palette.open`.
 
-## Module layout (`ttymap-app/src/lua/`)
+## Module layout (`ttymap-lua/src/`)
 
 Split by intent, not by domain:
 
 ```
-ttymap-app/src/lua/
+ttymap-lua/src/
   mod.rs           LuaSubsystem + merged build_subsystem (creates
                    the VM, installs API surface, runs the init.lua
                    chain — single entry point, no separate walker)
@@ -142,7 +142,7 @@ frame; `EventBus::publish(Event::*)` drives every other event.
 
 ## Plugin runtime API (`ttymap` global)
 
-Built by `ttymap::install` (`ttymap-app/src/lua/api/mod.rs`). Domain-namespaced
+Built by `ttymap::install` (`ttymap-lua/src/api/mod.rs`). Domain-namespaced
 userdatas:
 
 | Namespace        | Methods                                                                                        |
@@ -247,8 +247,8 @@ fires for any other subscriber).
 ### MapApi (per-frame drawing)
 
 Bridged via a per-frame Lua table built inside `Lua::scope`
-(`make_map_table` in `ttymap-app/src/lua/api/map.rs`) over the host-side
-`MapApi` struct (`ttymap-app/src/lua/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
+(`make_map_table` in `ttymap-lua/src/api/map.rs`) over the host-side
+`MapApi` struct (`ttymap-lua/src/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
 `polyline`, `center`, `zoom`, `area_width`, `cursor`. Each `on_tick`
 callback receives this table. **All drawing for non-window plugins
 happens here.**
