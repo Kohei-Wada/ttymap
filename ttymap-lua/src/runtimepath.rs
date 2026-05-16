@@ -10,9 +10,11 @@
 //!
 //! 1. `$TTYMAP_RUNTIME` — env override, escape hatch for hackers /
 //!    CI / multiple-checkouts.
-//! 2. `$CARGO_MANIFEST_DIR/runtime` — `cargo run` from a git checkout
-//!    finds the in-repo runtime/ automatically. Placed *before* XDG
-//!    so a developer's live-edited source wins over any stale
+//! 2. `$CARGO_MANIFEST_DIR/../runtime` — `cargo run` from a git
+//!    checkout finds the in-repo `runtime/` at the workspace root
+//!    automatically (this crate lives under `ttymap-lua/`, the
+//!    runtime sits one level up). Placed *before* XDG so a
+//!    developer's live-edited source wins over any stale
 //!    `make install` snapshot left in `~/.local/share/ttymap/`. On
 //!    a user machine this path is the maintainer's home dir baked
 //!    in at compile time and naturally doesn't exist, so it gets
@@ -83,7 +85,11 @@ pub fn resolve_runtime_path(dirs: Option<&AppDirs>) -> Result<Vec<PathBuf>, Runt
         visit(PathBuf::from(p));
     }
     if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
-        visit(PathBuf::from(manifest).join("runtime"));
+        // ttymap-lua/ lives under the workspace root; runtime/ sits
+        // at that root, one level up from this crate's manifest.
+        if let Some(workspace) = PathBuf::from(manifest).parent() {
+            visit(workspace.join("runtime"));
+        }
     }
     // The user tier (`$XDG_CONFIG_HOME/ttymap`) holds the user's
     // overrides; the bundled tier (`$XDG_DATA_HOME/ttymap`) is what
@@ -120,7 +126,10 @@ pub fn runtime_path() -> &'static [PathBuf] {
 /// to the in-repo `runtime/` directory if no prior test has set it.
 #[cfg(test)]
 pub fn ensure_runtime_path_for_tests() {
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime");
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("ttymap-lua crate must have a parent (workspace root)")
+        .join("runtime");
     let _ = RUNTIME_PATH.set(vec![dev]);
 }
 
@@ -160,7 +169,10 @@ mod tests {
     fn manifest_dir_resolves_during_dev() {
         // The in-repo runtime/ directory always exists when running
         // tests — proves the dev fallback wires up.
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime");
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("ttymap-lua crate must have a parent (workspace root)")
+            .join("runtime");
         assert!(
             is_valid(&dev),
             "in-repo runtime/ must satisfy the validator"

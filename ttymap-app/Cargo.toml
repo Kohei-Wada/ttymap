@@ -10,13 +10,12 @@ homepage = "https://github.com/Kohei-Wada/ttymap"
 readme = "../README.md"
 keywords = ["map", "tui", "mapbox", "terminal", "braille"]
 categories = ["command-line-utilities", "visualization"]
-# `runtime/` is no longer embedded in the binary (#183), but we still
-# include it in the source distribution so `cargo install -p ttymap-app`
-# users (combined with `make install-runtime`) can `cp -r` from a
-# crate-extracted source tree.
+# `runtime/` lives at the workspace root and is not part of any single
+# crate's sdist — `cargo install` is intentionally unsupported as a
+# standalone install path (see `runtimepath.rs`). Install via
+# `make install` from a git checkout.
 include = [
     "src/**/*",
-    "runtime/**/*",
     "Cargo.toml",
     "README.md",
     "LICENSE-*",

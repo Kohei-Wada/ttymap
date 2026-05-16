@@ -364,7 +364,7 @@ Neovim-style ordered list (`runtimepath.rs`). Every layer with a
 `plugin/` or `lua/` subdir counts:
 
 1. `$TTYMAP_RUNTIME` (env override)
-2. `$CARGO_MANIFEST_DIR/runtime` (dev — wins over stale install)
+2. `<workspace-root>/runtime` (dev — wins over stale install)
 3. `$XDG_CONFIG_HOME/ttymap` (user)
 4. `$XDG_DATA_HOME/ttymap` (bundled — `~/.local/share/ttymap`)
 
@@ -425,7 +425,7 @@ pre-pass, then `api::install` adds `http` / `map` / `api` /
 `package.searchers` entry is inserted. Then the bundled init.lua
 runs and drives the rest.
 
-The bundled init.lua's job (`ttymap-app/runtime/init.lua`) — standard
+The bundled init.lua's job (`runtime/init.lua` at the workspace root) — standard
 layered order (system → bundled → user):
 
 1. Seed `ttymap.opt.*` with bundled defaults (mostly redundant with

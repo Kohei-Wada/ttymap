@@ -56,8 +56,8 @@ install-runtime:
 	# layout had `plugin/` as a sibling of `lua/`).
 	rm -rf $(DATA_DIR)/plugin $(DATA_DIR)/lua
 	mkdir -p $(DATA_DIR)/lua
-	cp -r ttymap-lua/runtime/lua/. $(DATA_DIR)/lua/
-	cp ttymap-lua/runtime/init.lua $(DATA_DIR)/init.lua
+	cp -r runtime/lua/. $(DATA_DIR)/lua/
+	cp runtime/init.lua $(DATA_DIR)/init.lua
 
 uninstall:
 	# Try both the current name and previous names so an upgrade

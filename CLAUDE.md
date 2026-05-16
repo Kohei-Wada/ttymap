@@ -52,9 +52,11 @@ plugin runtime + CLI + composition root):
   config-free contexts.
 - `ttymap-lua/` — Lua plugin runtime (mlua VM, the `ttymap.*` Lua
   API surface, Component / PaletteProvider adapters, the per-frame
-  TickRegistry) + bundled `runtime/` tree (`init.lua` + `lua/plugin/`).
-  Depends on `ttymap-tui` + `ttymap-config` + `ttymap-core` +
-  `ttymap-engine`.
+  TickRegistry). The bundled `runtime/` tree (`init.lua` +
+  `lua/plugin/`) lives at the **workspace root**, not in this
+  crate — it's product data shared with `ttymap-cli`'s snap path,
+  resolved at startup by `runtimepath.rs`. Depends on `ttymap-tui`
+  + `ttymap-config` + `ttymap-core` + `ttymap-engine`.
 - `ttymap-cli/` — CLI subcommands: `snap` (headless single-frame
   render to ANSI) and `engine-worker` (the IPC subprocess entry).
   Depends on `ttymap-engine` + `ttymap-core` + `ttymap-config` +

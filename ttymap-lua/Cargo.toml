@@ -3,16 +3,9 @@ name = "ttymap-lua"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Lua plugin runtime for ttymap — mlua VM, the `ttymap.*` Lua-facing API surface, bridge adapters, and the bundled runtime tree (`init.lua` + bundled plugins)."
+description = "Lua plugin runtime for ttymap — mlua VM, the `ttymap.*` Lua-facing API surface, and bridge adapters. The bundled runtime tree (`init.lua` + plugins) lives at the workspace root in `runtime/`."
 license.workspace = true
 repository.workspace = true
-# `runtime/` ships in the crate's sdist so `cargo install` users can
-# `cp -r` from a crate-extracted source tree via `make install-runtime`.
-include = [
-    "src/**/*",
-    "runtime/**/*",
-    "Cargo.toml",
-]
 
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
