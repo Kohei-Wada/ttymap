@@ -81,8 +81,8 @@ pub fn read_init_lua_config_only(defaults: Config) -> Config {
 ///
 /// IO / Lua errors are warn-logged and recovered — a broken bundled
 /// init.lua still lets the host boot with `Config::default()`.
-pub(crate) fn run_system_init_lua(lua: &Lua) {
-    let Some(path) = bundled_init_path() else {
+pub(crate) fn run_system_init_lua(lua: &Lua, dirs: Option<&ttymap_config::AppDirs>) {
+    let Some(path) = bundled_init_path(dirs) else {
         log::info!("init.lua: no bundled init found in runtime path");
         return;
     };
@@ -119,15 +119,14 @@ fn read_init_file(path: &Path) -> Option<String> {
 }
 
 /// Walk the runtime path looking for the bundled init.lua. Skips
-/// the user tier (xdg_config) — that file is the *user's* init.lua
-/// and is loaded by the `ttymap.user_config` Lua lib, not by Rust.
-/// Returns the first hit so dev manifest beats stale install
-/// (matches the runtime_path priority order).
-fn bundled_init_path() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let user = ProjectDirs::from("", "", "ttymap").map(|d| d.config_dir().to_path_buf());
+/// the user tier (`AppDirs.config`) — that file is the *user's*
+/// init.lua and is loaded by the `ttymap.user_config` Lua lib, not
+/// by Rust. Returns the first hit so dev manifest beats stale
+/// install (matches the runtime_path priority order).
+fn bundled_init_path(dirs: Option<&ttymap_config::AppDirs>) -> Option<PathBuf> {
+    let user = dirs.map(|d| d.config.as_path());
     for layer in crate::runtime_path() {
-        if user.as_ref() == Some(layer) {
+        if user == Some(layer.as_path()) {
             continue;
         }
         let candidate = layer.join("init.lua");

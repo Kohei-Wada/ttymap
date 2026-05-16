@@ -43,6 +43,9 @@ fn engine_worker_init_ready_shutdown_round_trip() {
         &mut stdin,
         &EngineCommand::Init {
             config: workerless_config(),
+            // `config.cache.tiles == false`, so a `None` cache_dir
+            // is semantically correct — engine never touches disk.
+            cache_dir: None,
             cols: 80,
             rows: 24,
             theme: ThemeId::Dark,

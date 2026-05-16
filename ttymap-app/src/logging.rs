@@ -27,8 +27,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use chrono::Local;
-use directories::ProjectDirs;
 use log::{LevelFilter, Log, Metadata, Record};
+use ttymap_config::AppDirs;
 
 struct FileLogger {
     file: Mutex<File>,
@@ -61,15 +61,6 @@ impl Log for FileLogger {
     }
 }
 
-fn log_path() -> Option<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    let state_dir = dirs
-        .state_dir()
-        .unwrap_or_else(|| dirs.data_local_dir())
-        .to_path_buf();
-    Some(state_dir.join("ttymap.log"))
-}
-
 /// Parse a level name (`error` / `warn` / `info` / `debug` /
 /// `trace`) case-insensitively. Unknown strings fall back to
 /// `Debug` rather than erroring — the user is asking for logs,
@@ -86,18 +77,28 @@ fn parse_level(value: &str) -> LevelFilter {
 /// caller passes `"off"`). Truncates the file on startup so each
 /// `--log` invocation starts fresh.
 ///
+/// `dirs` carries the resolved XDG state directory (#362). `None`
+/// surfaces as "could not determine log directory" — the same
+/// failure mode the pre-#362 code had when `ProjectDirs::from`
+/// returned None.
+///
 /// Returns:
 /// - `Ok(Some(path))` when a logger was installed.
 /// - `Ok(None)` when `level == "off"`.
 /// - `Err(_)` for filesystem failures while creating the log dir
 ///   or opening the file.
-pub fn init(level: &str) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+pub fn init(
+    level: &str,
+    dirs: Option<&AppDirs>,
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     let level = parse_level(level);
     if level == LevelFilter::Off {
         return Ok(None);
     }
 
-    let path = log_path().ok_or("could not determine log directory")?;
+    let path = dirs
+        .map(|d| d.state.join("ttymap.log"))
+        .ok_or("could not determine log directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

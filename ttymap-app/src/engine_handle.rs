@@ -91,6 +91,7 @@ impl EngineHandle {
     /// the child emits Ready or exits with an error.
     pub fn spawn(
         config: &EngineConfig,
+        cache_dir: Option<std::path::PathBuf>,
         cols: u16,
         rows: u16,
         theme: ThemeId,
@@ -129,6 +130,7 @@ impl EngineHandle {
             &mut child_stdin,
             &EngineCommand::Init {
                 config: config.clone(),
+                cache_dir,
                 cols,
                 rows,
                 theme,

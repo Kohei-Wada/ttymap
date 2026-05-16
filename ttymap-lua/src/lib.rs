@@ -158,6 +158,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         bus.clone(),
         ticks.clone(),
         registry.clone(),
+        defaults.dirs.as_ref(),
     ) {
         Ok(h) => h,
         Err(e) => {
@@ -183,8 +184,9 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
     // `package.path`), then pulls in user config via
     // `require("ttymap.user_config").load()`. The user-config
     // path lives entirely on the Lua side — Rust never names it.
-    // Errors are logged + recovered.
-    init_lua::run_system_init_lua(&lua);
+    // Errors are logged + recovered. `defaults.dirs.config` is
+    // skipped when walking the runtime path (#362).
+    init_lua::run_system_init_lua(&lua, defaults.dirs.as_ref());
 
     // Read `ttymap.opt.*` mutations back into `Config`. Type errors
     // silently fall back to the seeded value — a typo doesn't crash
@@ -295,6 +297,7 @@ mod tests {
             bus.clone(),
             ticks.clone(),
             registry.clone(),
+            None,
         )
         .expect("install ttymap");
         lua.load(source).exec().expect("exec source");
@@ -336,6 +339,7 @@ mod tests {
             bus.clone(),
             ticks.clone(),
             registry.clone(),
+            None,
         )
         .expect("install ttymap");
 

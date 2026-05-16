@@ -42,7 +42,6 @@ clap = { version = "4", features = ["derive"] }
 log = { version = "0.4", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crossbeam-channel = "0.5"
-directories = "6"
 
 [dev-dependencies.cargo-husky]
 version = "1"

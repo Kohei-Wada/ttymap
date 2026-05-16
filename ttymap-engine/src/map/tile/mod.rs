@@ -57,8 +57,8 @@ use crate::config::Config;
 /// the cache are backend-agnostic.
 pub fn build(
     config: &Config,
+    cache_dir: Option<&std::path::Path>,
 ) -> Result<(TileCache, crossbeam_channel::Receiver<()>), crate::EngineError> {
-    use directories::ProjectDirs;
     use std::fs;
 
     use crate::map::tile::cache::DiskFastPath;
@@ -70,15 +70,19 @@ pub fn build(
     /// without saturating the upstream.
     const HTTP_WORKERS: usize = 6;
 
+    // Engine is IO-policy-free (#362): the caller resolves the XDG
+    // cache root and passes it in. `config.cache.tiles == false`
+    // means the caller passes `None`; we also tolerate
+    // `cache_dir == None` from a caller that couldn't resolve a home
+    // dir at all. Either way, no on-disk caching.
     let cache_dir = if config.cache.tiles {
-        match ProjectDirs::from("", "", "ttymap") {
-            Some(proj_dirs) => {
-                let dir = proj_dirs.cache_dir().to_path_buf();
-                fs::create_dir_all(&dir).map_err(|source| crate::EngineError::CacheDir {
-                    path: dir.clone(),
+        match cache_dir {
+            Some(dir) => {
+                fs::create_dir_all(dir).map_err(|source| crate::EngineError::CacheDir {
+                    path: dir.to_path_buf(),
                     source,
                 })?;
-                Some(dir)
+                Some(dir.to_path_buf())
             }
             None => None,
         }

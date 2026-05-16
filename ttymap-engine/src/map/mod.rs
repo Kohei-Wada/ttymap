@@ -121,6 +121,7 @@ impl MapHandle {
 /// `App` since it crosses both map rendering and UI chrome.
 pub fn build(
     config: &Config,
+    cache_dir: Option<&std::path::Path>,
     cols: u16,
     rows: u16,
     frame_sink: FrameSink,
@@ -136,7 +137,7 @@ pub fn build(
         height
     );
 
-    let (tile_cache, wake_rx) = tile::build(config)?;
+    let (tile_cache, wake_rx) = tile::build(config, cache_dir)?;
     let attribution = tile_cache.attribution();
 
     let styler = Arc::new(Styler::new(theme_id));

@@ -17,6 +17,9 @@
 //! definitions and their `Default` impls (which act as the seed
 //! Lua starts from).
 
+pub mod dirs;
+
+pub use dirs::AppDirs;
 pub use ttymap_core::keymap::KeybindingOverrides;
 pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
 
@@ -25,6 +28,15 @@ pub struct Config {
     /// Engine-side settings consumed by the map / render pipeline.
     pub engine: ttymap_engine::Config,
     pub runtime: RuntimeConfig,
+    /// Resolved XDG directories for the `ttymap` brand. `None` only
+    /// in pathological environments where `directories::ProjectDirs`
+    /// can't find a home (CI sandboxes with `$HOME` unset, mostly).
+    /// The composition root (`ttymap-app/src/main.rs`,
+    /// `ttymap-cli/src/snap.rs`) calls `AppDirs::resolve()` once at
+    /// startup and pre-stamps this field before any subsystem boots,
+    /// so consumers (engine cache, lua http / storage, runtime path
+    /// resolver, log file) read the same paths.
+    pub dirs: Option<AppDirs>,
 }
 
 #[derive(Clone)]
