@@ -2,8 +2,8 @@
 //!
 //! `MapFrame` is defined in `ttymap-engine` (which has no ratatui
 //! dependency), so we can't `impl Widget for &MapFrame` directly —
-//! that violates the orphan rule. The wrapper [`MapFrameWidget`] is
-//! a binary-side newtype that satisfies coherence: callers use it
+//! that violates the orphan rule. The wrapper [`MapFrameWidget`]
+//! is a tui-side newtype that satisfies coherence: callers use it
 //! as `f.render_widget(MapFrameWidget(&frame), area)`.
 
 use ratatui::buffer::Buffer;

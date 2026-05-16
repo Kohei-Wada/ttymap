@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use ttymap_engine::map::render::overlay::UserPolyline;
 
-pub(super) struct OverlayThrottle {
+pub struct OverlayThrottle {
     sink: Vec<UserPolyline>,
     last_redraw: Instant,
     interval: Duration,
@@ -35,7 +35,7 @@ pub(super) struct OverlayThrottle {
 }
 
 impl OverlayThrottle {
-    pub(super) fn new(interval: Duration) -> Self {
+    pub fn new(interval: Duration) -> Self {
         Self {
             sink: Vec::new(),
             last_redraw: Instant::now(),
@@ -47,13 +47,13 @@ impl OverlayThrottle {
     /// Mutable handle to the per-frame overlay sink. `ui::draw`
     /// passes this through to the per-frame `MapApi` so plugin
     /// `on_tick` callbacks can push.
-    pub(super) fn sink_mut(&mut self) -> &mut Vec<UserPolyline> {
+    pub fn sink_mut(&mut self) -> &mut Vec<UserPolyline> {
         &mut self.sink
     }
 
     /// Drain every queued overlay. Resets the buffer so the next
     /// frame starts empty.
-    pub(super) fn drain(&mut self) -> Vec<UserPolyline> {
+    pub fn drain(&mut self) -> Vec<UserPolyline> {
         std::mem::take(&mut self.sink)
     }
 
@@ -67,7 +67,7 @@ impl OverlayThrottle {
     ///
     /// On a `true` return, internal state advances so subsequent
     /// idle frames return `false` until a new push or transition.
-    pub(super) fn should_redraw(&mut self) -> bool {
+    pub fn should_redraw(&mut self) -> bool {
         if self.sink.is_empty() {
             // Just transitioned from "had overlays" to "now empty"
             // — fire one clearing redraw so the render thread
