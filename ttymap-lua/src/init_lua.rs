@@ -162,8 +162,16 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     let opt = lua.create_table()?;
 
     let map = lua.create_table()?;
-    map.set("lat", d.engine.map.lat)?;
-    map.set("lon", d.engine.map.lon)?;
+    // lat / lon mirror the `Option<f64>` shape: a binary that
+    // hasn't seeded a starting view leaves the field absent rather
+    // than guessing — `ttymap.opt.lat` in init.lua is then `nil`,
+    // and the user (or `ttymap.opt.lat = ...`) decides.
+    if let Some(lat) = d.engine.map.lat {
+        map.set("lat", lat)?;
+    }
+    if let Some(lon) = d.engine.map.lon {
+        map.set("lon", lon)?;
+    }
     if let Some(z) = d.engine.map.zoom {
         map.set("zoom", z)?;
     }
@@ -246,10 +254,10 @@ pub(crate) fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
 
     if let Ok(t) = opt.get::<Table>("map") {
         if let Ok(v) = t.get::<f64>("lat") {
-            cfg.engine.map.lat = v;
+            cfg.engine.map.lat = Some(v);
         }
         if let Ok(v) = t.get::<f64>("lon") {
-            cfg.engine.map.lon = v;
+            cfg.engine.map.lon = Some(v);
         }
         if let Ok(v) = t.get::<Option<f64>>("zoom") {
             cfg.engine.map.zoom = v;

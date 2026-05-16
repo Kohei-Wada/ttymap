@@ -119,6 +119,9 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
     // `config.dirs` during `build_subsystem` sees the same values.
     // `read_back` clones `defaults` and overrides only `opt.*`
     // fields, so dirs flows through transparently.
+    //
+    // `Config::default()` is the app-side seed — it ships Berlin
+    // for the initial viewport (engine itself has no opinion).
     let defaults = Config {
         dirs: dirs.clone(),
         ..Default::default()
@@ -134,10 +137,10 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
         ttymap_lua::build_subsystem(defaults);
 
     if let Some(v) = cli.lat {
-        config.engine.map.lat = v;
+        config.engine.map.lat = Some(v);
     }
     if let Some(v) = cli.lon {
-        config.engine.map.lon = v;
+        config.engine.map.lon = Some(v);
     }
     if let Some(v) = cli.zoom {
         config.engine.map.zoom = Some(v);
@@ -149,7 +152,7 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
     }
 
     log::info!(
-        "starting ttymap: lat={}, lon={}",
+        "starting ttymap: lat={:?}, lon={:?}",
         config.engine.map.lat,
         config.engine.map.lon
     );
@@ -194,10 +197,14 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
     // engine subprocess gets via `Init`, so the two sides start in
     // lock-step.
     let (width, height) = ttymap_engine::map::render::canvas_size(cols, rows);
+    // `unwrap_or(0.0)` mirrors the engine's neutral fallback for
+    // the unseeded case — `Config::default()` already fills in
+    // Berlin, so this only matters if a future code path leaves
+    // `lat/lon` as `None`.
     let map_state = ttymap_engine::map::state::MapState::new(
         ttymap_engine::map::state::MapStateOptions {
-            initial_lon: config.engine.map.lon,
-            initial_lat: config.engine.map.lat,
+            initial_lon: config.engine.map.lon.unwrap_or(0.0),
+            initial_lat: config.engine.map.lat.unwrap_or(0.0),
             initial_zoom: config.engine.map.zoom,
             zoom_step: config.engine.map.zoom_step,
             max_zoom: config.engine.map.max_zoom,

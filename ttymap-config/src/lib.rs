@@ -39,7 +39,7 @@ pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
 /// doesn't have to depend on this crate.
 pub type KeybindingOverrides = HashMap<String, Vec<String>>;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Engine-side settings consumed by the map / render pipeline.
     pub engine: ttymap_engine::Config,
@@ -53,6 +53,25 @@ pub struct Config {
     /// so consumers (engine cache, lua http / storage, runtime path
     /// resolver, log file) read the same paths.
     pub dirs: Option<AppDirs>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        // Initial viewport is binary policy, not engine concern —
+        // `ttymap_engine::MapConfig::default()` ships `lat/lon: None`.
+        // We seed Berlin here so both `ttymap-app` and `ttymap-cli`
+        // (snap) inherit it via `Config::default()` without having
+        // to repeat the constant. Users override via `--lat/--lon`,
+        // `--here`, or `ttymap.opt.{lat,lon}` in init.lua.
+        let mut engine = ttymap_engine::Config::default();
+        engine.map.lat = Some(52.51298);
+        engine.map.lon = Some(13.42012);
+        Self {
+            engine,
+            runtime: RuntimeConfig::default(),
+            dirs: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -100,5 +119,17 @@ mod tests {
         assert_eq!(cfg.runtime.poll_timeout_ms, 50);
         assert_eq!(cfg.runtime.overlay_redraw_ms, 100);
         assert_eq!(cfg.runtime.sidebar_width, 56);
+    }
+
+    #[test]
+    fn default_seeds_berlin_viewport_at_config_layer() {
+        // Engine itself has no viewport opinion; the Berlin seed
+        // lives in this crate's `Config::default` so both
+        // `ttymap-app` and `ttymap-cli` (snap) inherit it.
+        let cfg = Config::default();
+        assert_eq!(cfg.engine.map.lat, Some(52.51298));
+        assert_eq!(cfg.engine.map.lon, Some(13.42012));
+        assert_eq!(ttymap_engine::Config::default().map.lat, None);
+        assert_eq!(ttymap_engine::Config::default().map.lon, None);
     }
 }
