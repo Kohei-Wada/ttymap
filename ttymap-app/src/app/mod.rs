@@ -53,6 +53,7 @@ use ttymap_core::event::{Event, EventBus};
 pub use ttymap_core::keymap::KeybindingOverrides;
 use ttymap_engine::map::MapAction;
 use ttymap_engine::map::render::frame::MapFrame;
+use ttymap_engine::map::state::MapState;
 use ttymap_lua::{LuaHandle, LuaSubsystem};
 use ttymap_tui::compositor::op::Op;
 use ttymap_tui::compositor::{BaseLayer, Compositor, Context};
@@ -62,6 +63,17 @@ use ttymap_tui::theme::{ThemeId, UiTheme};
 use crate::engine_handle::EngineHandle;
 
 pub struct App {
+    /// UI-side mirror of the engine's viewport state. `dispatch`
+    /// mutates this synchronously, then forwards the same
+    /// `MapAction` to the engine via `self.map.send_action`. The
+    /// child runs the identical transitions on the same inputs, so
+    /// the two stay coherent by construction — Lua's same-tick
+    /// getters (`ttymap.map:center()` etc.) read this mirror and
+    /// never block on IPC.
+    map_state: MapState,
+    /// Pure IPC transport to the `ttymap engine-worker` subprocess.
+    /// The App owns its own `MapState`; this handle just sends
+    /// commands and pipes back frames.
     map: EngineHandle,
     running: bool,
     theme_id: ThemeId,
@@ -104,6 +116,7 @@ impl App {
         config: Config,
         keymap: KeyMap,
         theme_id: ThemeId,
+        map_state: MapState,
         map: EngineHandle,
         builtin_activations: Vec<ttymap_tui::compositor::Activation>,
         lua: LuaSubsystem,
@@ -139,6 +152,7 @@ impl App {
 
         let ui_theme = UiTheme::from_palette(theme_id.palette());
         App {
+            map_state,
             map,
             running: true,
             theme_id,
@@ -372,7 +386,8 @@ impl App {
     fn dispatch(&mut self, msg: UserCommand) {
         match msg {
             UserCommand::Map(action) => {
-                if self.map.apply_action(&action) {
+                if self.map_state.process_action(&action) {
+                    self.map.send_action(&action);
                     self.request_map_redraw();
                 }
                 match &action {
@@ -420,7 +435,8 @@ impl App {
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
         let map_cols = self.sidebar.effective_map_cols(cols);
-        self.map.handle_resize(map_cols, rows);
+        self.map_state.resize(map_cols, rows);
+        self.map.send_resize(map_cols, rows);
         self.pending_events.push(Event::Resized(cols, rows));
         self.request_map_redraw();
     }
@@ -430,7 +446,8 @@ impl App {
         // queueing the next render task — Lua plugins read
         // `ttymap.map:center()` / `:zoom()` from these mirrors and
         // expect them to reflect the view about to be drawn.
-        self.lua.sync_view(self.map.center(), self.map.zoom());
+        self.lua
+            .sync_view(self.map_state.center(), self.map_state.zoom());
         let overlays = self.overlay.drain();
         self.map.request_redraw(overlays);
     }
