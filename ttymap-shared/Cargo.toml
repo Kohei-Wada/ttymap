@@ -1,9 +1,9 @@
 [package]
-name = "ttymap-core"
+name = "ttymap-shared"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Shared types — UserCommand vocabulary, event bus, configuration, keymap — consumed by the TUI / Lua / CLI / App crates."
+description = "Leaf vocabulary — UserCommand enum + EventBus — consumed by every crate above the engine. UI-runtime-free (no ratatui / crossterm / mlua / tokio)."
 license.workspace = true
 repository.workspace = true
 

@@ -10,7 +10,7 @@
 //! held directly by App; Dispatcher accumulates events into a
 //! buffer App drains and publishes (#334).
 //!
-//! [`EventBus`]: ttymap_core::event::EventBus
+//! [`EventBus`]: ttymap_shared::event::EventBus
 
 use std::rc::Rc;
 use std::sync::Arc;

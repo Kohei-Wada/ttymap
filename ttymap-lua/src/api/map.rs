@@ -33,9 +33,9 @@ use mlua::{Lua, Scope, Table, UserData};
 
 use crate::MapApi;
 use crate::map_api::Anchor;
-use ttymap_core::UserCommand;
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::map::MapAction;
+use ttymap_shared::UserCommand;
 use ttymap_tui::compositor::op::{Op, OpsBuffer};
 
 // ── ttymap.map (persistent userdata) ────────────────────────────────

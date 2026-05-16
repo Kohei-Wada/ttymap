@@ -3015,9 +3015,9 @@ dependencies = [
  "ratatui",
  "ttymap-cli",
  "ttymap-config",
- "ttymap-core",
  "ttymap-engine",
  "ttymap-lua",
+ "ttymap-shared",
  "ttymap-tui",
 ]
 
@@ -3028,9 +3028,9 @@ dependencies = [
  "clap",
  "crossterm",
  "ttymap-config",
- "ttymap-core",
  "ttymap-engine",
  "ttymap-lua",
+ "ttymap-shared",
 ]
 
 [[package]]
@@ -3038,16 +3038,8 @@ name = "ttymap-config"
 version = "0.1.0"
 dependencies = [
  "directories",
- "ttymap-core",
  "ttymap-engine",
-]
-
-[[package]]
-name = "ttymap-core"
-version = "0.1.0"
-dependencies = [
- "log",
- "ttymap-engine",
+ "ttymap-shared",
 ]
 
 [[package]]
@@ -3086,10 +3078,18 @@ dependencies = [
  "serde_json",
  "sgp4",
  "ttymap-config",
- "ttymap-core",
  "ttymap-engine",
+ "ttymap-shared",
  "ttymap-tui",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ttymap-shared"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "ttymap-engine",
 ]
 
 [[package]]
@@ -3100,8 +3100,8 @@ dependencies = [
  "log",
  "ratatui",
  "ttymap-config",
- "ttymap-core",
  "ttymap-engine",
+ "ttymap-shared",
  "unicode-width 0.2.2",
 ]
 

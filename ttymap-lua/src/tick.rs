@@ -1,7 +1,7 @@
 //! Per-frame `tick` dispatcher.
 //!
 //! `tick` is the only "event" whose payload (a borrowed `MapApi`)
-//! can't be expressed as an [`Event`](ttymap_core::event::Event) variant —
+//! can't be expressed as an [`Event`](ttymap_shared::event::Event) variant —
 //! the Lua-facing `map` table has to be built inside `Lua::scope`
 //! against the live ratatui buffer for that frame. That shape needs
 //! `mlua` + `MapApi` from `lua/`, so the tick subscribers live in a
@@ -20,7 +20,7 @@
 //! [`Self::remove`] (or `subscribe` a new entry) from inside without
 //! disturbing the in-flight dispatch.
 //!
-//! [`EventBus`]: ttymap_core::event::EventBus
+//! [`EventBus`]: ttymap_shared::event::EventBus
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};

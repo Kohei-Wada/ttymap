@@ -35,8 +35,8 @@
 
 use ttymap_engine::map::render::frame::MapFrame;
 
-use ttymap_core::UserCommand;
-use ttymap_core::event::Event as BusEvent;
+use ttymap_shared::UserCommand;
+use ttymap_shared::event::Event as BusEvent;
 
 /// Unified event payload drained from the App-level `mpsc` channel.
 ///

@@ -13,7 +13,7 @@
 //!   `KeyMap::with_overrides` folds the override map into a
 //!   live binding table. The binary resolves raw
 //!   `crossterm::event::KeyEvent`s against this table to produce
-//!   a [`UserCommand`](ttymap_core::UserCommand).
+//!   a [`UserCommand`](ttymap_shared::UserCommand).
 //! - [`mouse`] holds the [`MouseAdapter`] that translates raw
 //!   `crossterm::event::MouseEvent`s — drag, scroll, click — into
 //!   `UserCommand`s using the current viewport for screen → world

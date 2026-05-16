@@ -10,7 +10,7 @@
 //! whose `:remove()` drops the registration.
 //!
 //! `on_event` likewise subscribes directly against the
-//! [`EventBus`](ttymap_core::event::EventBus) and returns an
+//! [`EventBus`](ttymap_shared::event::EventBus) and returns an
 //! [`EventHandle`].
 
 use std::collections::HashSet;
@@ -25,7 +25,7 @@ use crate::bridge::registrar_handle::{KeybindHandle, PaletteCommandHandle, alloc
 use crate::host::{HelpEntry, LuaHostShared};
 use crate::registrar::LuaRegistryHandle;
 use crate::tick::TickRegistry;
-use ttymap_core::event::{Event, EventBus, Level};
+use ttymap_shared::event::{Event, EventBus, Level};
 use ttymap_tui::compositor::{Activation, PaletteEntry, SpawnComponent};
 
 pub(super) fn install(

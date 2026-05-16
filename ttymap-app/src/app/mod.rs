@@ -44,11 +44,11 @@ use log::{debug, info};
 
 use ttymap_config::Config;
 pub use ttymap_config::KeybindingOverrides;
-use ttymap_core::UserCommand;
-use ttymap_core::event::{Event, EventBus};
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::state::MapState;
 use ttymap_lua::{LuaHandle, LuaSubsystem};
+use ttymap_shared::UserCommand;
+use ttymap_shared::event::{Event, EventBus};
 use ttymap_tui::compositor::op::Op;
 use ttymap_tui::compositor::{BaseLayer, Compositor, Context};
 use ttymap_tui::input::{KeyMap, MouseAdapter};

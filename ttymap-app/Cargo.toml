@@ -30,7 +30,7 @@ path = "src/main.rs"
 
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
-ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+ttymap-shared = { path = "../ttymap-shared", version = "0.1.0" }
 ttymap-config = { path = "../ttymap-config", version = "0.1.0" }
 ttymap-tui = { path = "../ttymap-tui", version = "0.1.0" }
 ttymap-lua = { path = "../ttymap-lua", version = "0.1.0" }

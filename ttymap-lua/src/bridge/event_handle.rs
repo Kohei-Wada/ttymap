@@ -22,7 +22,7 @@
 //! intentionally different identity so `:remove()` vs `:close()`
 //! reads naturally to plugin authors.
 //!
-//! [`EventBus`]: ttymap_core::event::EventBus
+//! [`EventBus`]: ttymap_shared::event::EventBus
 //! [`TickRegistry`]: crate::tick::TickRegistry
 
 use std::cell::RefCell;
@@ -62,7 +62,7 @@ impl UserData for EventHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ttymap_core::event::{Event, EventBus, Level};
+    use ttymap_shared::event::{Event, EventBus, Level};
 
     fn notify(msg: &str) -> Event {
         Event::Notify {

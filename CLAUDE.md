@@ -32,7 +32,7 @@ plugin runtime + CLI + composition root):
   `geo` projection module, and the User-Agent-tagged HTTP client.
   **No ratatui / crossterm / mlua dependency.** Depends on nothing
   internal.
-- `ttymap-core/` — cross-cutting vocabularies: `UserCommand` (the
+- `ttymap-shared/` — cross-cutting vocabularies: `UserCommand` (the
   Command vocabulary) and `EventBus` / `Event` (Lua-agnostic
   pub/sub). The live `KeyMap` that resolves a keypress to a
   `UserCommand` lives in `ttymap-tui::input::keymap` (where the
@@ -46,13 +46,13 @@ plugin runtime + CLI + composition root):
   cadence, sidebar width, …), plus `KeybindingOverrides` — the
   `name → keys` override map `ttymap.keymap.set/del` populates.
   Mutated by Lua's `ttymap.opt.*` / `ttymap.keymap.*` at startup.
-  Depends on `ttymap-engine` (for engine `Config`) + `ttymap-core`.
+  Depends on `ttymap-engine` (for engine `Config`) + `ttymap-shared`.
 - `ttymap-tui/` — UI primitives: `compositor` (focus stack + Op +
   Component trait + ActivationIndex / PaletteIndex traits),
   `palette` (`:`-triggered picker + providers), `theme` (ratatui
   adapter — `UiTheme` / `StyleKind`), `input` (KeyMap table + mouse
   adapter + input thread), `app_event` (`AppEvent` drained by
-  `App::run`). Depends on `ttymap-engine` + `ttymap-core` +
+  `App::run`). Depends on `ttymap-engine` + `ttymap-shared` +
   `ttymap-config` (`KeyMap::with_overrides` consumes the
   `KeybindingOverrides` settings shape).
 - `ttymap-lua/` — Lua plugin runtime (mlua VM, the `ttymap.*` Lua
@@ -61,10 +61,10 @@ plugin runtime + CLI + composition root):
   `lua/plugin/`) lives at the **workspace root**, not in this
   crate — it's product data shared with `ttymap-cli`'s snap path,
   resolved at startup by `runtimepath.rs`. Depends on `ttymap-tui`
-  + `ttymap-config` + `ttymap-core` + `ttymap-engine`.
+  + `ttymap-config` + `ttymap-shared` + `ttymap-engine`.
 - `ttymap-cli/` — CLI subcommands: `snap` (headless single-frame
   render to ANSI) and `engine-worker` (the IPC subprocess entry).
-  Depends on `ttymap-engine` + `ttymap-core` + `ttymap-config` +
+  Depends on `ttymap-engine` + `ttymap-shared` + `ttymap-config` +
   `ttymap-lua` (snap reads `ttymap.opt.*` via the init.lua loader).
 - `ttymap-app/` — composition root + binary. Owns App state hub +
   event loop, `main.rs`, `EngineHandle` (parent end of the IPC
@@ -78,7 +78,7 @@ time:
 ```
 ttymap-engine
   ↑
-  └── ttymap-core
+  └── ttymap-shared
         ↑
         └── ttymap-config
               ↑
@@ -93,7 +93,7 @@ ttymap-engine
 
 Linear chain — every crate also depends transitively on all crates
 below, but the strict downward edges are what Cargo enforces. Cli /
-app reach into engine / core / config directly (rather than only
+app reach into engine / shared / config directly (rather than only
 through their immediate parent) where it makes sense.
 
 ## Design philosophy
@@ -131,7 +131,7 @@ ttymap-engine/                (ratatui-free; produces MapFrame)
   build.rs                    compiles MVT proto via protox
   benches/                    decode_tile / render_frame / tile_disk_hit
 
-ttymap-core/                  (above-engine vocabulary; ratatui / crossterm-free)
+ttymap-shared/                  (above-engine vocabulary; ratatui / crossterm-free)
   src/
     command.rs                UserCommand vocabulary
     event/                    EventBus + Event payload (Notify)
@@ -140,7 +140,7 @@ ttymap-config/                (wraps engine Config with binary-side knobs)
   src/lib.rs                  Config / RuntimeConfig / AppDirs /
                               KeybindingOverrides override-map type alias
 
-ttymap-tui/                   (UI primitives; depends on engine + core + config)
+ttymap-tui/                   (UI primitives; depends on engine + shared + config)
   src/
     app_event.rs              AppEvent (Command / FrameReady / Input / Wake / Bus)
     compositor/               focus stack + Component trait + Op + render
@@ -211,7 +211,7 @@ the full design; `docs/architecture.md` for the threads-per-process
 breakdown. `snap` is the exception — that short-lived subcommand
 keeps using `ttymap_engine::map::build` in-process.
 
-1. **Parent main thread** (`ttymap-app/src/app/`): Runs the event loop — drains completed frames from the engine-reader thread (which reads them from the child's stdout), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `App::dispatch` (the single state-mutation entry point), which speaks the `UserCommand` vocabulary defined at the crate root in `ttymap-core/src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
+1. **Parent main thread** (`ttymap-app/src/app/`): Runs the event loop — drains completed frames from the engine-reader thread (which reads them from the child's stdout), polls plugins for async work, processes keyboard/mouse/resize events via crossterm, and asks ratatui to paint. State changes flow through `App::dispatch` (the single state-mutation entry point), which speaks the `UserCommand` vocabulary defined at the crate root in `ttymap-shared/src/command.rs` (placed there so every emission site reaches it via `crate::UserCommand` without depending upward on `app/`).
 
 2. **Engine-writer / engine-reader threads** (`ttymap-app/src/engine_handle.rs`): Per-`EngineHandle` thread pair bridging the App's `EngineCommand` mpsc to child stdin and the child's `EngineEvent` stdout stream to `AppEvent::FrameReady` etc. The reader thread is the only place that translates `EngineEvent` into App-bus events.
 
@@ -240,7 +240,7 @@ Key modules:
 - **`ttymap-app/src/app/mod.rs`**: `App` — central state hub + event loop driver. Owns every piece of mutable app-level state (engine handle, lua handle, compositor, theme, sidebar, cursor, overlay sink, mouse adapter, latest `MapFrame`, `Rc<EventBus>`) and the four entry points that mutate it: `dispatch` (`UserCommand`), `accept_frame` (`FrameReady`), `handle_input` (raw crossterm), `forward_external_event` (cross-thread bus). Handlers never call `bus.publish` themselves — they `push` into `pending_events`, and `App::publish_pending` drains that buffer onto the bus in one place per loop iteration (the single fan-out site for the program). `App::run` is the loop. `ttymap-tui/src/app_event.rs` holds `AppEvent` (`Command` / `FrameReady` / `Input` / `Wake` / `Bus`); `ttymap-app/src/app/ui.rs` is the ratatui draw entry (still in `ttymap-app` because it `use`s `ttymap_lua::{LuaHandle, MapApi}` for the per-frame Lua tick — and tui can't depend on lua); `ttymap-app/src/app/frame_timer.rs` is the per-iteration wake source. The supporting UI primitives — `ttymap-tui/src/frame_widget.rs` (Widget newtype for engine `MapFrame`, orphan-rule wrapper), `ttymap-tui/src/overlay.rs` (overlay sink + redraw throttle), `ttymap-tui/src/sidebar.rs` (sidebar visibility / auto-open policy) — live in `ttymap-tui` since none of them need anything App-specific; App just owns one instance of each as a field. See [docs/design.md](docs/design.md) for the UserCommand-vs-direct-API judgment rules.
 - **`ttymap-tui/src/compositor/`**: Stack-based focus/modal system (helix-inspired). One primitive: a stack of `Component`s, where the top owns key focus. Components render side panels through `Component::render` and can emit ops via `Window` (`close` / `open` / `emit` / `ignore`); the compositor drains the queue after each hook and applies them via the single `Op` enum (`Push` / `Close` / `Command` — see `compositor/op.rs`). World-space overlays (markers etc.) are *not* a Component concern — every Lua plugin's per-frame map paint runs through `lua::tick::dispatch_tick` (called from `ui::draw`) which hands the plugin a `MapApi` it draws into directly. Render orchestration lives in `compositor/render.rs` (a free function `paint(...)`); the focus stack itself is ratatui-free. `Placement` has two variants: `Floating` (palette-only, drawn over the map) and `Sidebar` (left rail, equal-vertical-split among up to 3 visible cards). Lua plugins always land in `Sidebar`. **No framework-side dedup**: re-pressing an activation key stacks a fresh instance — toggle behavior is plugin-side policy.
 - **`ttymap-tui/src/palette/`**: `:`-triggered command palette as an ephemeral `Component` (state per-open, discarded on pop). Provider sub-modes (theme picker, forward-geocode search) swap in place via `PaletteAction::SwitchProvider` or are pushed pre-loaded by their key activation. Providers can be sync (`OnEachKey` filter — command, theme) or async (`Debounced` filter, `poll()` to drain results, `is_loading()` for the spinner — search).
-- **`ttymap-cli/src/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `ttymap-core/src/command.rs`) — doesn't share a name with the CLI subcommand bucket.
+- **`ttymap-cli/src/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `ttymap-shared/src/command.rs`) — doesn't share a name with the CLI subcommand bucket.
 - **`ttymap-tui/src/input/`**: Input subsystem. `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input` onto the App bus; `keymap.rs` holds the `KeyMap` table itself, plus `KeyMap::with_overrides` which folds the user-facing `KeybindingOverrides` settings map (defined in `ttymap-config` and populated from Lua `keymap.set/del`) into a live binding table; `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserCommand`. Multi-key sequences are owned by `BaseLayer` (today: `gg` for world view); the keymap itself is stateless. `:` opens the command palette, `/` opens the palette pre-loaded with the search provider. Lives in `ttymap-tui` because crossterm input is a UI-side concern; the engine itself stays IO-free.
 - **`ttymap-engine/src/geo.rs`**: Foundation: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`ttymap-engine/src/map/render/label.rs`**: Collision-free label placement buffer.

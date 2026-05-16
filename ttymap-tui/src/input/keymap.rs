@@ -14,7 +14,7 @@
 //! [`crate::compositor::window::Window`] queue, applied atomically
 //! after the [`crate::compositor::BaseLayer`] hook returns.)
 //!
-//! Lives in `ttymap-tui` (not `ttymap-core`) so the crossterm
+//! Lives in `ttymap-tui` (not `ttymap-shared`) so the crossterm
 //! dependency that backs [`KeyCode`] / [`KeyModifiers`] stays out
 //! of the cross-cutting vocabulary crate. The user-facing
 //! [`KeybindingOverrides`] settings type lives in `ttymap-config`
@@ -24,8 +24,8 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use ttymap_config::KeybindingOverrides;
-use ttymap_core::UserCommand;
 use ttymap_engine::map::MapAction;
+use ttymap_shared::UserCommand;
 
 /// A key binding: a key code + optional modifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

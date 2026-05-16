@@ -22,8 +22,8 @@ use std::rc::Rc;
 use crate::compositor::{Context, PaletteIndex};
 use crate::input::keymap::KeyMap;
 use crate::theme::ThemeId;
-use ttymap_core::UserCommand;
 use ttymap_engine::map::MapAction;
+use ttymap_shared::UserCommand;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider, ThemeProvider};
 
