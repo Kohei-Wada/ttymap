@@ -84,10 +84,10 @@ pub fn run(args: SnapArgs, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::err
     let mut config = ttymap_lua::read_init_lua_config_only(defaults);
 
     if let Some(lat) = args.lat {
-        config.engine.map.lat = lat;
+        config.engine.map.lat = Some(lat);
     }
     if let Some(lon) = args.lon {
-        config.engine.map.lon = lon;
+        config.engine.map.lon = Some(lon);
     }
     if let Some(z) = args.zoom {
         config.engine.map.zoom = Some(z);
@@ -129,8 +129,8 @@ pub fn run(args: SnapArgs, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::err
 
     let map = MapState::new(
         MapStateOptions {
-            initial_lon: config.engine.map.lon,
-            initial_lat: config.engine.map.lat,
+            initial_lon: config.engine.map.lon.unwrap_or(0.0),
+            initial_lat: config.engine.map.lat.unwrap_or(0.0),
             initial_zoom: config.engine.map.zoom,
             zoom_step: config.engine.map.zoom_step,
             max_zoom: config.engine.map.max_zoom,

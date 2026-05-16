@@ -19,8 +19,13 @@ pub struct Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MapConfig {
-    pub lat: f64,
-    pub lon: f64,
+    /// Initial camera latitude. `None` = engine has no opinion;
+    /// the binary picks a fallback (see `ttymap-app` / `ttymap-cli`
+    /// for the resolution chain: CLI flag → init.lua → binary
+    /// default). If both this and `lon` reach engine as `None`,
+    /// the engine falls back to `(0.0, 0.0)`.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
     pub zoom: Option<f64>,
     pub max_zoom: f64,
     pub zoom_step: f64,
@@ -29,8 +34,8 @@ pub struct MapConfig {
 impl Default for MapConfig {
     fn default() -> Self {
         Self {
-            lat: 52.51298, // Berlin
-            lon: 13.42012,
+            lat: None,
+            lon: None,
             zoom: None,
             max_zoom: 18.0,
             zoom_step: 0.2,

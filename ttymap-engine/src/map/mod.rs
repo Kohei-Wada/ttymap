@@ -152,10 +152,15 @@ pub fn build(
     let render_handle = RenderHandle::spawn(pipeline, wake_rx, frame_sink);
     let render_client = render_handle.client();
 
+    // Engine has no built-in viewport opinion: if the binary
+    // didn't seed `config.map.lat/lon`, fall back to (0,0) so we
+    // still produce a frame. The binary is responsible for picking
+    // a meaningful starting view (CLI flag / init.lua / app
+    // default — see `ttymap-app` and `ttymap-cli`).
     let state = MapState::new(
         MapStateOptions {
-            initial_lon: config.map.lon,
-            initial_lat: config.map.lat,
+            initial_lon: config.map.lon.unwrap_or(0.0),
+            initial_lat: config.map.lat.unwrap_or(0.0),
             initial_zoom: config.map.zoom,
             zoom_step: config.map.zoom_step,
             max_zoom: config.map.max_zoom,
