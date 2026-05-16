@@ -237,23 +237,16 @@ fn resolve_color_arg(p: &MapApi<'_>, arg: Option<&mlua::Value>) -> u8 {
     match arg {
         Some(mlua::Value::Integer(n)) => (*n).clamp(0, 255) as u8,
         Some(mlua::Value::String(s)) => resolve_keyword(p, s),
-        _ => xterm_index(p.accent_color()),
+        _ => p.accent_color_xterm(),
     }
 }
 
 fn resolve_keyword(p: &MapApi<'_>, keyword: &mlua::String) -> u8 {
     match keyword.to_str().as_deref() {
         Ok("road") => p.road_color_xterm(),
-        Ok("accent_alt") => xterm_index(p.accent_alt_color()),
-        Ok("muted") => xterm_index(p.muted_color()),
-        _ => xterm_index(p.accent_color()),
-    }
-}
-
-fn xterm_index(color: ratatui::style::Color) -> u8 {
-    match color {
-        ratatui::style::Color::Indexed(i) => i,
-        _ => 7,
+        Ok("accent_alt") => p.accent_alt_color_xterm(),
+        Ok("muted") => p.muted_color_xterm(),
+        _ => p.accent_color_xterm(),
     }
 }
 

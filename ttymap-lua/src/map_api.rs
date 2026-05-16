@@ -110,25 +110,11 @@ impl<'a> MapApi<'a> {
     }
 
     // ── Theme accessors ──────────────────────────────────────────────
-
-    /// Primary accent colour — used by plugins to highlight features
-    /// (wiki markers, search pins, ...). Semantic accessor; the
-    /// underlying theme is hidden from plugins.
-    pub fn accent_color(&self) -> Color {
-        self.theme.accent
-    }
-
-    /// Secondary accent colour — typically used to distinguish the
-    /// selected / focused feature from the rest.
-    pub fn accent_alt_color(&self) -> Color {
-        self.theme.accent_alt
-    }
-
-    /// Muted foreground for chrome that should fade into the
-    /// background — attribution text, less-important readouts.
-    pub fn muted_color(&self) -> Color {
-        self.theme.muted_color
-    }
+    //
+    // All palette colours are surfaced uniformly as xterm-256 indices
+    // (`u8`) — the same shape `map:polyline` / `map:point` take. Lua
+    // plugins never see a `ratatui::Color`, so exposing only the
+    // `*_xterm` form keeps the surface single-typed.
 
     /// Active palette's "motorway" road colour as an xterm-256 index.
     /// Surfaced for the Lua bridge so plugins can request the same
@@ -143,26 +129,17 @@ impl<'a> MapApi<'a> {
     /// for plugins that want to feed the same colour into `map:polyline`
     /// or other APIs that take xterm indices.
     pub fn accent_color_xterm(&self) -> u8 {
-        match self.accent_color() {
-            ratatui::style::Color::Indexed(i) => i,
-            _ => 7,
-        }
+        color_to_xterm(self.theme.accent)
     }
 
     /// Active palette's `accent_alt` colour as an xterm-256 index.
     pub fn accent_alt_color_xterm(&self) -> u8 {
-        match self.accent_alt_color() {
-            ratatui::style::Color::Indexed(i) => i,
-            _ => 7,
-        }
+        color_to_xterm(self.theme.accent_alt)
     }
 
     /// Active palette's `muted` colour as an xterm-256 index.
     pub fn muted_color_xterm(&self) -> u8 {
-        match self.muted_color() {
-            ratatui::style::Color::Indexed(i) => i,
-            _ => 7,
-        }
+        color_to_xterm(self.theme.muted_color)
     }
 
     // ── Drawing primitives ──────────────────────────────────────────
@@ -314,6 +291,17 @@ impl<'a> MapApi<'a> {
             return None;
         }
         Some((self.map_area.x + col, self.map_area.y + row))
+    }
+}
+
+/// Unwrap an indexed terminal colour to its xterm-256 byte. The
+/// theme is authored against an indexed palette, so the non-Indexed
+/// arm is unreachable in practice — `7` (light grey) is the
+/// defensive fallback if a future theme ever surfaces an RGB colour.
+fn color_to_xterm(color: Color) -> u8 {
+    match color {
+        Color::Indexed(i) => i,
+        _ => 7,
     }
 }
 
