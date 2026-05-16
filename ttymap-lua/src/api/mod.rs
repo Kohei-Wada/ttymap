@@ -160,6 +160,7 @@ pub fn install(
     bus: std::rc::Rc<ttymap_core::event::EventBus>,
     ticks: std::rc::Rc<crate::tick::TickRegistry>,
     registry: crate::registrar::LuaRegistryHandle,
+    dirs: Option<&ttymap_config::AppDirs>,
 ) -> mlua::Result<LuaHostHandles> {
     // Fire-and-forget Lua intents (`map:jump`, `:zoom`, `:fly_to`,
     // `frame.export`) enqueue `Op::Command(UserCommand::...)` onto
@@ -184,6 +185,7 @@ pub fn install(
         "http",
         lua.create_userdata(http::HostHttp {
             http: HttpClient::new("lua").map_err(mlua::Error::external)?,
+            cache_root: dirs.map(|d| d.cache.clone()),
         })?,
     )?;
     ttymap.set(
@@ -199,7 +201,7 @@ pub fn install(
     )?;
     ttymap.set("help", lua.create_userdata(HostHelp::new(shared.clone()))?)?;
     ttymap.set("log", lua.create_userdata(HostLog::new("lua".to_string()))?)?;
-    if let Some(host_storage) = HostStorage::new() {
+    if let Some(host_storage) = HostStorage::new(dirs) {
         ttymap.set("storage", lua.create_userdata(host_storage)?)?;
     } else {
         // No per-user data dir resolved — `:open` would have nowhere
@@ -286,6 +288,11 @@ mod tests {
         let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = crate::new_lua_registry();
+        // Resolve real XDG dirs so `ttymap.storage` wires up (it
+        // gates on `AppDirs.data` and silently skips when None).
+        // Matches pre-#362 behavior where every test relied on a
+        // real `$HOME` being present.
+        let dirs = ttymap_config::AppDirs::resolve();
         let handles = install(
             &lua,
             LuaHostShared::empty(),
@@ -293,6 +300,7 @@ mod tests {
             bus,
             ticks,
             registry,
+            dirs.as_ref(),
         )
         .expect("install ttymap table");
         (lua, handles, ops)
@@ -429,6 +437,7 @@ mod tests {
             bus,
             ticks,
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap table");
 
@@ -468,6 +477,7 @@ mod tests {
             bus,
             ticks.clone(),
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap table");
         lua.load(
@@ -500,6 +510,7 @@ mod tests {
             bus.clone(),
             ticks.clone(),
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap table");
         lua.load(
@@ -535,6 +546,7 @@ mod tests {
             bus.clone(),
             ticks,
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap table");
         lua.load(
@@ -570,6 +582,7 @@ mod tests {
             bus,
             ticks,
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap table");
         let result: mlua::Result<()> = lua.load(r#"ttymap.on_event("", function() end)"#).exec();

@@ -8,6 +8,7 @@
 //!   3. Add the variant to [`Command`] and a match arm in [`Command::run`].
 
 use clap::Subcommand;
+use ttymap_config::AppDirs;
 
 pub mod snap;
 
@@ -25,9 +26,9 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(self, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Self::Snap(args) => snap::run(args),
+            Self::Snap(args) => snap::run(args, dirs),
             Self::EngineWorker => ttymap_engine::run_as_subprocess(),
         }
     }

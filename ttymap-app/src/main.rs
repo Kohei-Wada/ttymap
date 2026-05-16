@@ -2,7 +2,7 @@ use clap::Parser;
 use ttymap_app::app::App;
 use ttymap_app::app::frame_timer::FrameTimer;
 use ttymap_cli::Command as Subcommand;
-use ttymap_config::Config;
+use ttymap_config::{AppDirs, Config};
 use ttymap_tui::input::thread::InputHandle;
 
 #[derive(Parser)]
@@ -52,6 +52,21 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
+    // Engine-worker is the headless subprocess role. It owns tile
+    // cache + render thread + MapState; it doesn't load Lua and
+    // doesn't need XDG paths (cache_dir comes via the parent's Init
+    // message). Dispatch early so a missing / unresolvable runtime
+    // never blocks the worker from booting.
+    if matches!(cli.command, Some(Subcommand::EngineWorker)) {
+        ttymap_engine::run_as_subprocess();
+    }
+
+    // Resolve XDG dirs once for the program (#362). All subsequent
+    // consumers (logging, runtime path, lua http / storage, tile
+    // cache) read from this single source rather than each calling
+    // `ProjectDirs::from("", "", "ttymap")` independently.
+    let dirs = AppDirs::resolve();
+
     // Logging is opt-in via `--log [LEVEL]`. Without the flag no
     // logger is registered and the `log::*!` macros are no-ops.
     // When set, logs land in ~/.local/state/ttymap/ttymap.log
@@ -61,24 +76,16 @@ fn main() {
     // surfaced on stderr — the alternative was silent failure where
     // `--log` had no observable effect and no error to grep for.
     if let Some(level) = cli.log.as_deref()
-        && let Err(e) = ttymap_app::logging::init(level)
+        && let Err(e) = ttymap_app::logging::init(level, dirs.as_ref())
     {
         eprintln!("ttymap: --log requested but logging init failed: {e}");
-    }
-
-    // Engine-worker is the headless subprocess role. It owns tile
-    // cache + render thread + MapState; it doesn't load Lua and
-    // doesn't need the runtime path. Dispatch early so a missing /
-    // unresolvable runtime never blocks the worker from booting.
-    if matches!(cli.command, Some(Subcommand::EngineWorker)) {
-        ttymap_engine::run_as_subprocess();
     }
 
     // Resolve runtime path before any Lua state spins up. Both the
     // interactive app and the `snap` subcommand reach for it; doing
     // this once at the top means we fail fast with a single error
     // message rather than hitting the same wall in two places.
-    let runtime_path = match ttymap_lua::resolve_runtime_path() {
+    let runtime_path = match ttymap_lua::resolve_runtime_path(dirs.as_ref()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ttymap: {}", e);
@@ -90,14 +97,14 @@ fn main() {
     // Subcommands run a single task and exit without booting the full
     // interactive app.
     if let Some(cmd) = cli.command {
-        if let Err(e) = cmd.run() {
+        if let Err(e) = cmd.run(dirs) {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
         return;
     }
 
-    if let Err(e) = run_event_loop(cli) {
+    if let Err(e) = run_event_loop(cli, dirs) {
         eprintln!("Error: {e}");
     }
 }
@@ -106,7 +113,17 @@ fn main() {
 /// (map / Lua), spawns the off-thread input / frame-timer peers,
 /// then hands control to `App::run`. Every thread handle joins
 /// in its `Drop` impl, so teardown is just RAII at end of scope.
-fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::error::Error>> {
+    // Pre-stamp resolved XDG dirs on the seed Config so every
+    // subsystem (lua storage / http, engine cache, ...) that reads
+    // `config.dirs` during `build_subsystem` sees the same values.
+    // `read_back` clones `defaults` and overrides only `opt.*`
+    // fields, so dirs flows through transparently.
+    let defaults = Config {
+        dirs: dirs.clone(),
+        ..Default::default()
+    };
+
     // Lua bootstrap runs first — `build_subsystem` creates the VM,
     // installs the API, and runs the init.lua chain (which `require`s
     // every bundled plugin). The tile cache spins up next; its
@@ -114,7 +131,7 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // via `set_attribution` so `ttymap.tile:attribution()` returns
     // the live value.
     let (lua_subsystem, mut config, _keymap_overrides, keymap) =
-        ttymap_lua::build_subsystem(Config::default());
+        ttymap_lua::build_subsystem(defaults);
 
     if let Some(v) = cli.lat {
         config.engine.map.lat = v;
@@ -154,8 +171,18 @@ fn run_event_loop(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // streams MapFrames back onto the AppEvent channel via
     // EngineHandle's reader thread. `EngineHandle::Drop` does the
     // cooperative shutdown + child reap at end of scope.
+    //
+    // `cache_dir` flows in via the Init handshake (#362) — engine
+    // itself never resolves XDG paths. `cache.tiles == false` and
+    // a missing AppDirs both surface as None here.
+    let cache_dir = config
+        .dirs
+        .as_ref()
+        .filter(|_| config.engine.cache.tiles)
+        .map(|d| d.cache.clone());
     let map = ttymap_app::engine_handle::EngineHandle::spawn(
         &config.engine,
+        cache_dir,
         cols,
         rows,
         theme_id,

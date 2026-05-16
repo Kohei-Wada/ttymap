@@ -33,15 +33,29 @@ use ttymap_engine::shared::http::HttpClient;
 
 pub struct HostHttp {
     pub http: HttpClient,
+    /// Resolved cache root passed in from `ttymap-config::AppDirs`
+    /// (#362). The `lua-http/` subdir is appended at write time.
+    /// `None` disables on-disk caching for `fetch_cached`.
+    pub cache_root: Option<std::path::PathBuf>,
 }
 
 impl UserData for HostHttp {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("fetch", |_, this, url: String| {
-            Ok(LuaJob::spawn(&this.http, url, None))
+            Ok(LuaJob::spawn(
+                &this.http,
+                url,
+                None,
+                this.cache_root.clone(),
+            ))
         });
         methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
-            Ok(LuaJob::spawn(&this.http, url, Some(ttl_secs)))
+            Ok(LuaJob::spawn(
+                &this.http,
+                url,
+                Some(ttl_secs),
+                this.cache_root.clone(),
+            ))
         });
         methods.add_method("url_encode", |_, _this, s: String| {
             Ok(ttymap_engine::shared::http::url::urlencoded(&s))
@@ -73,12 +87,17 @@ impl LuaJob {
     /// error so a rate-limiting upstream doesn't strand callers on
     /// "no body, no error"). Cache miss / stale rolls into the
     /// network path automatically.
-    fn spawn(http: &HttpClient, url: String, cache_ttl: Option<u64>) -> Self {
+    fn spawn(
+        http: &HttpClient,
+        url: String,
+        cache_ttl: Option<u64>,
+        cache_root: Option<std::path::PathBuf>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancelled_for_worker = cancelled.clone();
         let http = http.clone();
-        let path = cache_ttl.and_then(|_| http_cache_path(&url));
+        let path = cache_ttl.and_then(|_| http_cache_path(cache_root.as_deref(), &url));
         thread::spawn(move || {
             // Fresh cache hit → return immediately, skip the network.
             if let (Some(ttl), Some(p)) = (cache_ttl, path.as_ref())
@@ -152,18 +171,17 @@ impl UserData for LuaJob {
 /// Where we stash an HTTP response for `fetch_cached`. FNV-1a 64-bit
 /// keeps the cache key deterministic across runs (Rust's default
 /// hasher is not), and small enough to fit on every filesystem.
-/// `None` means we couldn't resolve a per-user cache dir — the
-/// caller treats it as a permanent miss + no write.
-fn http_cache_path(url: &str) -> Option<std::path::PathBuf> {
+/// `cache_root` comes from `ttymap-config::AppDirs.cache` (#362);
+/// `None` means the caller couldn't resolve a per-user cache dir
+/// and treats every read as a permanent miss + no write.
+fn http_cache_path(cache_root: Option<&std::path::Path>, url: &str) -> Option<std::path::PathBuf> {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &b in url.as_bytes() {
         hash ^= b as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
     let key = format!("{:016x}", hash);
-    let dir = directories::ProjectDirs::from("", "", "ttymap")?
-        .cache_dir()
-        .join("lua-http");
+    let dir = cache_root?.join("lua-http");
     Some(dir.join(format!("{}.txt", key)))
 }
 

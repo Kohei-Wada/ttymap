@@ -15,6 +15,7 @@
 //! See `docs/architecture.md` and #348 for the multi-process design.
 
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use serde::de::DeserializeOwned;
@@ -34,8 +35,16 @@ use crate::theme::ThemeId;
 pub enum EngineCommand {
     /// One-shot boot. Builds the tile cache + render pipeline + render
     /// thread inside the child. Reply: [`EngineEvent::Ready`].
+    ///
+    /// `cache_dir` carries the parent-resolved tile-cache root (e.g.
+    /// `~/.cache/ttymap/`); engine itself never resolves XDG paths
+    /// (#362). `None` disables on-disk tile caching regardless of
+    /// `config.cache.tiles`. The parent forwards
+    /// `config.cache.tiles && AppDirs.cache` so the user-facing knob
+    /// still gates the directory's use.
     Init {
         config: Config,
+        cache_dir: Option<PathBuf>,
         cols: u16,
         rows: u16,
         theme: ThemeId,
@@ -196,13 +205,14 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
         Ok(c) => c,
         Err(_) => return 0, // EOF before any command — clean exit
     };
-    let (config, cols, rows, theme) = match cmd {
+    let (config, cache_dir, cols, rows, theme) = match cmd {
         EngineCommand::Init {
             config,
+            cache_dir,
             cols,
             rows,
             theme,
-        } => (config, cols, rows, theme),
+        } => (config, cache_dir, cols, rows, theme),
         EngineCommand::Shutdown => return 0,
         _ => {
             let _ = event_tx.send(EngineEvent::Error(
@@ -216,14 +226,14 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     let frame_tx = event_tx.clone();
     let frame_sink: crate::map::render::thread::FrameSink =
         Box::new(move |frame| frame_tx.send(EngineEvent::FrameReady(frame)).is_ok());
-    let (_render_handle, mut map) = match crate::map::build(&config, cols, rows, frame_sink, theme)
-    {
-        Ok(pair) => pair,
-        Err(e) => {
-            let _ = event_tx.send(EngineEvent::Error(format!("engine build failed: {e}")));
-            return 1;
-        }
-    };
+    let (_render_handle, mut map) =
+        match crate::map::build(&config, cache_dir.as_deref(), cols, rows, frame_sink, theme) {
+            Ok(pair) => pair,
+            Err(e) => {
+                let _ = event_tx.send(EngineEvent::Error(format!("engine build failed: {e}")));
+                return 1;
+            }
+        };
 
     if event_tx
         .send(EngineEvent::Ready {
@@ -299,6 +309,7 @@ mod tests {
     fn command_init_round_trips() {
         let cmd = EngineCommand::Init {
             config: Config::default(),
+            cache_dir: Some(PathBuf::from("/tmp/ttymap-test-cache")),
             cols: 240,
             rows: 80,
             theme: ThemeId::Dark,
@@ -309,11 +320,16 @@ mod tests {
                 rows,
                 theme,
                 config,
+                cache_dir,
             } => {
                 assert_eq!(cols, 240);
                 assert_eq!(rows, 80);
                 assert_eq!(theme, ThemeId::Dark);
                 assert_eq!(config.map.lat, Config::default().map.lat);
+                assert_eq!(
+                    cache_dir.as_deref(),
+                    Some(std::path::Path::new("/tmp/ttymap-test-cache"))
+                );
             }
             _ => panic!("expected Init"),
         });

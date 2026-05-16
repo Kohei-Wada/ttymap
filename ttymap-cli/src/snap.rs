@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use clap::Args;
 
-use ttymap_config as config;
+use ttymap_config::{self as config, AppDirs};
 use ttymap_engine::map::Viewport;
 use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::render::pipeline::RenderPipeline;
@@ -72,12 +72,16 @@ pub struct SnapArgs {
     pub timeout_ms: u64,
 }
 
-pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: SnapArgs, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::error::Error>> {
     // snap is headless and doesn't activate plugins, so we use the
     // config-only init.lua entry (no API install, no plugin requires).
     // `Config` carries every init.lua-tunable knob (cache / render);
     // plugins would just slow snap down.
-    let mut config = ttymap_lua::read_init_lua_config_only(config::Config::default());
+    let defaults = config::Config {
+        dirs: dirs.clone(),
+        ..Default::default()
+    };
+    let mut config = ttymap_lua::read_init_lua_config_only(defaults);
 
     if let Some(lat) = args.lat {
         config.engine.map.lat = lat;
@@ -110,7 +114,9 @@ pub fn run(args: SnapArgs) -> Result<(), Box<dyn std::error::Error>> {
     // tile::build spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the
     // pipeline synchronously and just poll for completed tiles.
-    let (tile_cache, _wake_rx) = ttymap_engine::map::tile::build(&config.engine)?;
+    let cache_dir = config.dirs.as_ref().map(|d| d.cache.clone());
+    let (tile_cache, _wake_rx) =
+        ttymap_engine::map::tile::build(&config.engine, cache_dir.as_deref())?;
     let theme_id = ThemeId::from_name(&config.engine.render.style);
     let styler = Arc::new(Styler::new(theme_id));
     let mut pipeline = RenderPipeline::new(

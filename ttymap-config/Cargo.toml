@@ -10,3 +10,4 @@ repository.workspace = true
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
 ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+directories = "6"

@@ -42,17 +42,15 @@ pub(super) struct HostStorage {
 }
 
 impl HostStorage {
-    /// Production constructor. Resolves the storage root via
-    /// `directories::ProjectDirs` (same convention as the lua HTTP
-    /// cache and the host log file).
+    /// Production constructor. `dirs` carries the resolved XDG dirs
+    /// via `ttymap-config::AppDirs` (#362); the storage root is
+    /// `data_dir().join("storage")`.
     ///
     /// Returns `None` when no per-user data dir is available — the
     /// caller (api/mod.rs) treats that as "skip wiring storage in";
     /// plugins that try to open will get a clear error message.
-    pub(super) fn new() -> Option<Self> {
-        let dir = directories::ProjectDirs::from("", "", "ttymap")?
-            .data_dir()
-            .join("storage");
+    pub(super) fn new(dirs: Option<&ttymap_config::AppDirs>) -> Option<Self> {
+        let dir = dirs?.data.join("storage");
         Some(Self { root: dir })
     }
 

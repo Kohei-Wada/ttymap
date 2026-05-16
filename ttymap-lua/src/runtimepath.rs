@@ -36,6 +36,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use ttymap_config::AppDirs;
+
 /// Set once at startup by [`crate::app`] after [`resolve_runtime_path`]
 /// returns at least one valid layer. [`crate::new_lua`] reads this
 /// to wire the disk-based lib-script searcher and to extend
@@ -65,7 +67,7 @@ impl std::fmt::Display for RuntimePathError {
 /// exists and has a `lua/` subdir. Order matches the module top
 /// (env > user > bundled > dev). On full miss, returns the candidate
 /// list back so the caller can render a "we tried these" failure.
-pub fn resolve_runtime_path() -> Result<Vec<PathBuf>, RuntimePathError> {
+pub fn resolve_runtime_path(dirs: Option<&AppDirs>) -> Result<Vec<PathBuf>, RuntimePathError> {
     let mut found: Vec<PathBuf> = Vec::new();
     let mut tried: Vec<PathBuf> = Vec::new();
 
@@ -83,11 +85,13 @@ pub fn resolve_runtime_path() -> Result<Vec<PathBuf>, RuntimePathError> {
     if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
         visit(PathBuf::from(manifest).join("runtime"));
     }
-    if let Some(p) = xdg_config_runtime() {
-        visit(p);
-    }
-    if let Some(p) = xdg_data_runtime() {
-        visit(p);
+    // The user tier (`$XDG_CONFIG_HOME/ttymap`) holds the user's
+    // overrides; the bundled tier (`$XDG_DATA_HOME/ttymap`) is what
+    // `make install` populates. Both come from the centralised
+    // `AppDirs` resolver in `ttymap-config` (#362).
+    if let Some(d) = dirs {
+        visit(d.config.clone());
+        visit(d.data.clone());
     }
 
     if found.is_empty() {
@@ -128,23 +132,6 @@ pub fn ensure_runtime_path_for_tests() {
 /// doesn't exist there.
 fn is_valid(dir: &Path) -> bool {
     dir.is_dir()
-}
-
-/// `$XDG_CONFIG_HOME/ttymap` (default `~/.config/ttymap`). Holds
-/// `init.lua` and any user override `lua/*.lua` scripts. `directories`
-/// resolves the platform-specific equivalent on macOS / Windows.
-fn xdg_config_runtime() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    Some(dirs.config_dir().to_path_buf())
-}
-
-/// `$XDG_DATA_HOME/ttymap` (default `~/.local/share/ttymap`). The
-/// bundled scripts dir placed by `make install`.
-fn xdg_data_runtime() -> Option<PathBuf> {
-    use directories::ProjectDirs;
-    let dirs = ProjectDirs::from("", "", "ttymap")?;
-    Some(dirs.data_dir().to_path_buf())
 }
 
 #[cfg(test)]

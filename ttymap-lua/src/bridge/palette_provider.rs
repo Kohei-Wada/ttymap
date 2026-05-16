@@ -250,6 +250,7 @@ mod tests {
             bus,
             ticks,
             crate::new_lua_registry(),
+            None,
         )
         .expect("install ttymap");
         let spec: Table = lua.load(script).eval().expect("eval spec");
