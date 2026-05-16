@@ -1,20 +1,18 @@
-//! `EngineHandle` — TUI-side handle to the `ttymap engine-worker`
-//! subprocess.
+//! `EngineHandle` — TUI-side IPC transport to the `ttymap
+//! engine-worker` subprocess.
 //!
-//! Replaces the in-process `MapHandle` for the long-lived TUI flow.
-//! Spawns the same binary as a child via `Command::new(current_exe)
-//! .arg("engine-worker")` (see [`crate::main`]), pipes a bincode-
+//! Pure transport: spawns the same binary as a child via
+//! `Command::new(current_exe).arg("engine-worker")`, pipes a bincode-
 //! framed [`EngineCommand`] / [`EngineEvent`] stream over
-//! stdin/stdout, and exposes the same surface as [`MapHandle`] so
-//! [`crate::app::App`] doesn't need to know the engine is now in
-//! another process.
+//! stdin/stdout, and exposes thin `send_*` methods that the App
+//! calls after mutating its own state.
 //!
-//! The viewport state ([`MapState`]) is mirrored UI-side and mutated
-//! synchronously on [`Self::apply_action`] / [`Self::handle_resize`].
-//! The child runs the exact same `MapState` transitions on its side
-//! so the two stay in lock-step without round-trip RPCs — Lua's
-//! synchronous getters (`ttymap.map:center()` etc.) read the mirror
-//! and never block on IPC.
+//! The UI-side mirror of [`MapState`] lives on `App` (see
+//! `ttymap-app/src/app/mod.rs`'s `map_state` field) — the App
+//! mutates it synchronously in `dispatch`, then forwards the same
+//! `MapAction` to the child here. Both sides run the identical
+//! transitions on the same inputs, so they stay coherent by
+//! construction without round-trip RPCs.
 //!
 //! `snap` keeps using `ttymap_engine::map::build` in-process; only
 //! the long-lived TUI takes the subprocess path. See #348 for the
@@ -29,9 +27,7 @@ use std::time::Duration;
 use ttymap_engine::Config as EngineConfig;
 use ttymap_engine::ipc::{EngineCommand, EngineEvent, read_message, write_message};
 use ttymap_engine::map::action::MapAction;
-use ttymap_engine::map::render::canvas_size;
 use ttymap_engine::map::render::overlay::UserPolyline;
-use ttymap_engine::map::state::{MapState, MapStateOptions};
 use ttymap_engine::theme::ThemeId;
 
 use crate::app::AppEvent;
@@ -69,12 +65,6 @@ impl std::fmt::Display for EngineHandleError {
 impl std::error::Error for EngineHandleError {}
 
 pub struct EngineHandle {
-    /// UI-side mirror of the engine's `MapState`. Updated synchronously
-    /// on every state-mutating method so Lua's same-tick getters see
-    /// the new value without waiting for IPC. The child runs the same
-    /// MapState transitions on its side; the two stay coherent by
-    /// construction (same code, same inputs).
-    state: MapState,
     /// Command stream. Cleared in [`Drop`] to signal the writer
     /// thread to exit (which closes child stdin → child exits).
     command_tx: Option<mpsc::Sender<EngineCommand>>,
@@ -153,19 +143,6 @@ impl EngineHandle {
             }
         };
 
-        let (width, height) = canvas_size(cols, rows);
-        let state = MapState::new(
-            MapStateOptions {
-                initial_lon: config.map.lon,
-                initial_lat: config.map.lat,
-                initial_zoom: config.map.zoom,
-                zoom_step: config.map.zoom_step,
-                max_zoom: config.map.max_zoom,
-            },
-            width,
-            height,
-        );
-
         let (command_tx, command_rx) = mpsc::channel::<EngineCommand>();
         let writer = thread::Builder::new()
             .name("ttymap-engine-writer".into())
@@ -178,7 +155,6 @@ impl EngineHandle {
             .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
 
         Ok(Self {
-            state,
             command_tx: Some(command_tx),
             attribution,
             child: Some(child),
@@ -187,31 +163,19 @@ impl EngineHandle {
         })
     }
 
-    // ── Queries ────────────────────────────────────────────────────────
+    // ── Wire-format senders ─────────────────────────────────────────────
+    //
+    // Each `send_*` is a thin shim around the underlying `send` —
+    // the App mutates its own `MapState` mirror first, then calls
+    // these to forward the same intent to the child. The two sides
+    // run identical transitions on identical inputs and stay
+    // coherent by construction.
 
-    pub fn center(&self) -> ttymap_engine::geo::LonLat {
-        self.state.center()
+    pub fn send_action(&self, action: &MapAction) {
+        self.send(EngineCommand::ApplyAction(action.clone()));
     }
 
-    pub fn zoom(&self) -> f64 {
-        self.state.zoom()
-    }
-
-    // ── Mutations ──────────────────────────────────────────────────────
-
-    /// Apply a [`MapAction`] to the UI-side mirror **and** forward it
-    /// to the engine. Returns `true` if the mirror changed (matches
-    /// the in-process [`MapHandle::apply_action`] contract).
-    pub fn apply_action(&mut self, action: &MapAction) -> bool {
-        let changed = self.state.process_action(action);
-        if changed {
-            self.send(EngineCommand::ApplyAction(action.clone()));
-        }
-        changed
-    }
-
-    pub fn handle_resize(&mut self, cols: u16, rows: u16) {
-        self.state.resize(cols, rows);
+    pub fn send_resize(&self, cols: u16, rows: u16) {
         self.send(EngineCommand::Resize { cols, rows });
     }
 

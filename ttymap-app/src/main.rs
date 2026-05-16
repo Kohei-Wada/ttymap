@@ -189,6 +189,23 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
         event_tx.clone(),
     )?;
 
+    // App owns its UI-side `MapState` mirror (see the field doc on
+    // `App::map_state`). Construct it with the same seed values the
+    // engine subprocess gets via `Init`, so the two sides start in
+    // lock-step.
+    let (width, height) = ttymap_engine::map::render::canvas_size(cols, rows);
+    let map_state = ttymap_engine::map::state::MapState::new(
+        ttymap_engine::map::state::MapStateOptions {
+            initial_lon: config.engine.map.lon,
+            initial_lat: config.engine.map.lat,
+            initial_zoom: config.engine.map.zoom,
+            zoom_step: config.engine.map.zoom_step,
+            max_zoom: config.engine.map.max_zoom,
+        },
+        width,
+        height,
+    );
+
     let lua = lua_subsystem;
     lua.handle.set_attribution(map.attribution.clone());
 
@@ -202,7 +219,15 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
         std::rc::Rc::new(ttymap_lua::LuaActivationIndex::new(lua.registry.clone()));
     ttymap_tui::palette::install(&keymap, &mut builtin_activations, palette_index);
 
-    let mut app = App::new(config, keymap, theme_id, map, builtin_activations, lua);
+    let mut app = App::new(
+        config,
+        keymap,
+        theme_id,
+        map_state,
+        map,
+        builtin_activations,
+        lua,
+    );
 
     let mut terminal = ratatui::init();
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
