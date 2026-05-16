@@ -14,11 +14,13 @@
 //!   table, mouse adapter, input thread.
 //! - [`app_event`] — `AppEvent` enum drained by the App main loop.
 //!
-//! Depends on `ttymap-engine` (renderer / theme palette / geo types)
-//! and `ttymap-core` (UserCommand vocabulary, EventBus, Config,
-//! KeyMap) — not on `ttymap-lua` or `ttymap-app`. The plugin runtime
-//! reaches the UI primitives through the trait surfaces exposed
-//! here (`ActivationIndex`, `PaletteIndex`, `Component`, …).
+//! Depends on `ttymap-engine` (renderer / theme palette / geo types),
+//! `ttymap-core` (UserCommand vocabulary, EventBus), and
+//! `ttymap-config` (KeybindingOverrides — the user-facing keymap
+//! settings shape `KeyMap::with_overrides` folds in) — not on
+//! `ttymap-lua` or `ttymap-app`. The plugin runtime reaches the UI
+//! primitives through the trait surfaces exposed here
+//! (`ActivationIndex`, `PaletteIndex`, `Component`, …).
 
 pub mod app_event;
 pub mod compositor;

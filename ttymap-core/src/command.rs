@@ -40,7 +40,6 @@
 //! off `UserCommand` means the focus state machine isn't coupled to
 //! the dispatch table.
 
-use crate::keymap::KeyMap;
 use ttymap_engine::map::MapAction;
 use ttymap_engine::theme::ThemeId;
 
@@ -114,22 +113,5 @@ impl UserCommand {
         out.push((UserCommand::Quit, "Quit"));
         out.push((UserCommand::ToggleSidebar, "Toggle sidebar"));
         out
-    }
-
-    /// Help-table entries: `(keys, label)` strings for every listed
-    /// command that has at least one key bound in `keymap`. Drives the
-    /// `ttymap.help:keymap_entries()` Lua surface.
-    pub fn keymap_help_entries(keymap: &KeyMap) -> Vec<(String, String)> {
-        Self::listed_with_labels()
-            .into_iter()
-            .filter_map(|(cmd, label)| {
-                let keys = keymap.keys_for(&cmd);
-                if keys.is_empty() {
-                    None
-                } else {
-                    Some((keys.join(", "), label.to_string()))
-                }
-            })
-            .collect()
     }
 }

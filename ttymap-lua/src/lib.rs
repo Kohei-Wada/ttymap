@@ -36,11 +36,9 @@ pub use vm::new_lua;
 
 use std::sync::Arc;
 
-use ttymap_config::Config;
-use ttymap_core::UserCommand;
+use ttymap_config::{Config, KeybindingOverrides};
 use ttymap_tui::compositor::op;
 use ttymap_tui::input::KeyMap;
-use ttymap_tui::input::keymap::KeybindingOverrides;
 
 /// Result of [`build_subsystem`].
 ///
@@ -201,7 +199,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
 
     // Populate the keymap-entries snapshot help reads at render time.
     // Live data — runtime keymap overrides surface here.
-    shared.set_keymap_entries(UserCommand::keymap_help_entries(&keymap));
+    shared.set_keymap_entries(keymap.help_entries());
 
     // Harvest BaseLayer's footer hints from the registry's palette
     // entries. Snapshot at startup — we don't refresh on runtime

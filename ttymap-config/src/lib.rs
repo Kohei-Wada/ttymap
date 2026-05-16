@@ -19,9 +19,25 @@
 
 pub mod dirs;
 
+use std::collections::HashMap;
+
 pub use dirs::AppDirs;
-pub use ttymap_core::keymap::KeybindingOverrides;
 pub use ttymap_engine::config::{CacheConfig, MapConfig, RenderConfig};
+
+/// Raw keybinding overrides built up from `ttymap.keymap.set(...)` /
+/// `ttymap.keymap.del(...)` calls in `init.lua`. Keys are
+/// `MapAction::config_name` strings (e.g. `"pan_left"`); values
+/// replace the default bindings for that action (wrapped as
+/// `UserCommand::Map` internally). Folded into a live
+/// `ttymap_tui::input::KeyMap` via `KeyMap::with_overrides`.
+///
+/// Lives in `ttymap-config` (not core or tui) because keybindings
+/// are user-supplied settings — same conceptual category as
+/// [`RuntimeConfig`] fields, just expressed as a name → keys map
+/// rather than struct fields. `ttymap-tui::input::KeyMap` accepts
+/// the raw `HashMap<String, Vec<String>>` shape directly so it
+/// doesn't have to depend on this crate.
+pub type KeybindingOverrides = HashMap<String, Vec<String>>;
 
 #[derive(Default, Clone)]
 pub struct Config {

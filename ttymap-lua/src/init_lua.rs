@@ -39,7 +39,7 @@ use std::rc::Rc;
 use mlua::{Lua, Table};
 
 use ttymap_config::Config;
-use ttymap_tui::input::keymap::KeybindingOverrides;
+use ttymap_config::KeybindingOverrides;
 
 /// Snapshot config from the user init.lua only — no system init.lua,
 /// no API surface, no plugin requires. Used by the `snap` subcommand

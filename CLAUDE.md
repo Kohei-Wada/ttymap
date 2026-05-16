@@ -33,23 +33,28 @@ plugin runtime + CLI + composition root):
   **No ratatui / crossterm / mlua dependency.** Depends on nothing
   internal.
 - `ttymap-core/` — cross-cutting vocabularies: `UserCommand` (the
-  Command vocabulary), `EventBus` / `Event` (Lua-agnostic pub/sub),
-  `KeyMap` / `KeybindingOverrides` (`key → UserCommand` resolution).
-  Depends only on `ttymap-engine`. No `Config` here — that lives
-  separately so `ttymap-tui` can stay config-free.
+  Command vocabulary) and `EventBus` / `Event` (Lua-agnostic
+  pub/sub). The live `KeyMap` that resolves a keypress to a
+  `UserCommand` lives in `ttymap-tui::input::keymap` (where the
+  crossterm dependency that backs `KeyCode` belongs); the
+  `KeybindingOverrides` settings map lives in `ttymap-config`
+  (where the rest of the user-facing config shape lives).
+  Depends only on `ttymap-engine`. ratatui / crossterm don't
+  enter here.
 - `ttymap-config/` — runtime `Config` / `RuntimeConfig` shape that
   wraps `ttymap_engine::Config` with binary-side knobs (poll
-  cadence, sidebar width, …). Mutated by Lua's `ttymap.opt.*` at
-  startup. Depends on `ttymap-engine` (for engine `Config`) +
-  `ttymap-core` (for `KeybindingOverrides`).
+  cadence, sidebar width, …), plus `KeybindingOverrides` — the
+  `name → keys` override map `ttymap.keymap.set/del` populates.
+  Mutated by Lua's `ttymap.opt.*` / `ttymap.keymap.*` at startup.
+  Depends on `ttymap-engine` (for engine `Config`) + `ttymap-core`.
 - `ttymap-tui/` — UI primitives: `compositor` (focus stack + Op +
   Component trait + ActivationIndex / PaletteIndex traits),
   `palette` (`:`-triggered picker + providers), `theme` (ratatui
-  adapter — `UiTheme` / `StyleKind`), `input` (keymap shim, mouse
-  adapter, input thread), `app_event` (`AppEvent` drained by
-  `App::run`). Depends on `ttymap-engine` + `ttymap-core` — NOT on
-  `ttymap-config`, which makes this crate trivially reusable in
-  config-free contexts.
+  adapter — `UiTheme` / `StyleKind`), `input` (KeyMap table + mouse
+  adapter + input thread), `app_event` (`AppEvent` drained by
+  `App::run`). Depends on `ttymap-engine` + `ttymap-core` +
+  `ttymap-config` (`KeyMap::with_overrides` consumes the
+  `KeybindingOverrides` settings shape).
 - `ttymap-lua/` — Lua plugin runtime (mlua VM, the `ttymap.*` Lua
   API surface, Component / PaletteProvider adapters, the per-frame
   TickRegistry). The bundled `runtime/` tree (`init.lua` +
@@ -73,20 +78,23 @@ time:
 ```
 ttymap-engine
   ↑
-  ├── ttymap-core
-  │     ↑
-  │     ├── ttymap-config
-  │     │     ↑
-  │     ├── ttymap-tui  (no ttymap-config edge)
-  │     │     ↑
-  │     │     └── ttymap-lua  ── depends on ttymap-config too
-  │     │           ↑
-  │     │           └── ttymap-cli  ── depends on ttymap-config too
-  │     │                 ↑
-  │     │                 └── ttymap-app
-  │     └─────────────────────┘
-  └───────────────────────────┘
+  └── ttymap-core
+        ↑
+        └── ttymap-config
+              ↑
+              └── ttymap-tui
+                    ↑
+                    └── ttymap-lua
+                          ↑
+                          └── ttymap-cli
+                                ↑
+                                └── ttymap-app
 ```
+
+Linear chain — every crate also depends transitively on all crates
+below, but the strict downward edges are what Cargo enforces. Cli /
+app reach into engine / core / config directly (rather than only
+through their immediate parent) where it makes sense.
 
 ## Design philosophy
 
@@ -123,20 +131,20 @@ ttymap-engine/                (ratatui-free; produces MapFrame)
   build.rs                    compiles MVT proto via protox
   benches/                    decode_tile / render_frame / tile_disk_hit
 
-ttymap-core/                  (above-engine vocabulary; no UI deps beyond key codes)
+ttymap-core/                  (above-engine vocabulary; ratatui / crossterm-free)
   src/
     command.rs                UserCommand vocabulary
     event/                    EventBus + Event payload (Notify)
-    keymap.rs                 KeyMap + KeybindingOverrides
 
 ttymap-config/                (wraps engine Config with binary-side knobs)
-  src/lib.rs                  Config / RuntimeConfig / AppDirs
+  src/lib.rs                  Config / RuntimeConfig / AppDirs /
+                              KeybindingOverrides override-map type alias
 
-ttymap-tui/                   (UI primitives; depends on engine + core only, NOT config)
+ttymap-tui/                   (UI primitives; depends on engine + core + config)
   src/
     app_event.rs              AppEvent (Command / FrameReady / Input / Wake / Bus)
     compositor/               focus stack + Component trait + Op + render
-    input/                    keymap shim + mouse adapter + input thread
+    input/                    KeyMap table + mouse adapter + input thread
     palette/                  `:`-triggered picker UI
     theme/                    ratatui adapter — UiTheme + StyleKind
                               (re-exports ColorPalette/ThemeId/DARK/BRIGHT from engine)
@@ -227,7 +235,7 @@ Key modules:
 - **`ttymap-tui/src/compositor/`**: Stack-based focus/modal system (helix-inspired). One primitive: a stack of `Component`s, where the top owns key focus. Components render side panels through `Component::render` and can emit ops via `Window` (`close` / `open` / `emit` / `ignore`); the compositor drains the queue after each hook and applies them via the single `Op` enum (`Push` / `Close` / `Command` — see `compositor/op.rs`). World-space overlays (markers etc.) are *not* a Component concern — every Lua plugin's per-frame map paint runs through `lua::tick::dispatch_tick` (called from `ui::draw`) which hands the plugin a `MapApi` it draws into directly. Render orchestration lives in `compositor/render.rs` (a free function `paint(...)`); the focus stack itself is ratatui-free. `Placement` has two variants: `Floating` (palette-only, drawn over the map) and `Sidebar` (left rail, equal-vertical-split among up to 3 visible cards). Lua plugins always land in `Sidebar`. **No framework-side dedup**: re-pressing an activation key stacks a fresh instance — toggle behavior is plugin-side policy.
 - **`ttymap-tui/src/palette/`**: `:`-triggered command palette as an ephemeral `Component` (state per-open, discarded on pop). Provider sub-modes (theme picker, forward-geocode search) swap in place via `PaletteAction::SwitchProvider` or are pushed pre-loaded by their key activation. Providers can be sync (`OnEachKey` filter — command, theme) or async (`Debounced` filter, `poll()` to drain results, `is_loading()` for the spinner — search).
 - **`ttymap-cli/src/`**: CLI subcommands (currently `snap`). Each subcommand is one file with a `run()` entry point. Named `cli/` (not `commands/`) so the GoF Command pattern's `Command` role — represented in this codebase by `UserCommand` (top-level `ttymap-core/src/command.rs`) — doesn't share a name with the CLI subcommand bucket.
-- **`ttymap-tui/src/input/`**: Input subsystem. `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input` onto the App bus; `keymap.rs` holds the `KeyMap` table + `KeybindingOverrides` (read from `[keymap]` config and Lua `keymap.set`); `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserCommand`. Multi-key sequences are owned by `BaseLayer` (today: `gg` for world view); the keymap itself is stateless. `:` opens the command palette, `/` opens the palette pre-loaded with the search provider. Lives in the binary because crossterm input is a binary-side concern; the engine itself stays IO-free.
+- **`ttymap-tui/src/input/`**: Input subsystem. `thread.rs` is the producer that blocks on `crossterm::event::read()` and pushes `AppEvent::Input` onto the App bus; `keymap.rs` holds the `KeyMap` table itself, plus `KeyMap::with_overrides` which folds the user-facing `KeybindingOverrides` settings map (defined in `ttymap-config` and populated from Lua `keymap.set/del`) into a live binding table; `mouse.rs` holds the `MouseAdapter` that translates raw mouse events to `UserCommand`. Multi-key sequences are owned by `BaseLayer` (today: `gg` for world view); the keymap itself is stateless. `:` opens the command palette, `/` opens the palette pre-loaded with the search provider. Lives in `ttymap-tui` because crossterm input is a UI-side concern; the engine itself stays IO-free.
 - **`ttymap-engine/src/geo.rs`**: Foundation: Web Mercator projection math — lon/lat ↔ tile coordinates, distance calculations.
 - **`ttymap-engine/src/map/render/label.rs`**: Collision-free label placement buffer.
 - **`ttymap-lua/src/`**: Lua scripted plugins (mlua + Lua 5.4 vendored). All in-tree plugins live here. **"Plugin" is purely a Lua-side concept** — a `.lua` file's worth of `register_palette_command` / `register_keybind` / `on_event` calls. The Rust host has no notion of plugin identity, no per-script slot, no attribution; it just exposes the API surface and lets each `register_*` call push directly into a live registry. nvim-style: a `.lua` file (or `<name>/init.lua`) under `<runtime>/lua/plugin/` is a require-able module reachable as `plugin.<name>` through standard `package.path` — there is no custom plugin searcher. Activation is explicit: `runtime/init.lua` requires every bundled plugin; `~/.config/ttymap/init.lua` may add or override. **No disk walker** — init.lua is the only entry point. Plugins join host loops by calling `ttymap.api.frame.on_tick(fn)` (sugar for `ttymap.on_event("tick", fn)`), `ttymap.on_event(name, fn)` for any host event (today: `notify`; future typed events get added here as needed), `register_palette_command`, or `register_keybind`. **Single shared Lua VM** for the whole subsystem — `build_subsystem(defaults)` is the merged bootstrap: install `ttymap.opt`/`ttymap.keymap`, install API surface (`register_*`, `on_event`, `http`, `map`, `api`, `notify`, plus the host primitive `runtime_path` (resolved layer list)), then run the bundled `runtime/init.lua` only — that file goes `system opts → require "plugin.<name>"` for every bundled plugin → `require("ttymap.user_config").load()` for user init.lua last. **Rust knows neither the `lua/plugin/` directory convention nor the user-config path** — both live entirely on the Lua side: `package.path` resolution + the `runtime/lua/ttymap/user_config.lua` lib respectively. `init.lua` can `require "ttymap.<name>"` and mutate a config holder lib at `runtime/lua/ttymap/<name>.lua`; the plugin reads the same cached table when its require fires (Neovim-style). Layout: `ttymap-lua/src/api/` extends the `ttymap` global with the runtime API (Rust→Lua API binding — file ↔ Lua-namespace 1:1: `http.rs` / `json.rs` / `sgp4.rs` / `map.rs` (`HostMap` userdata + `make_map_table` per-frame `on_tick` arg) / `config.rs` / `help.rs` / `log.rs` / `tile.rs` / `storage.rs`, plus `register.rs` for `register_*` / `on_event` (each call pushes directly into the live registry / bus and returns a Lua-facing handle) and `imperative.rs` for the `ttymap.api.*` runtime cluster); `ttymap-lua/src/bridge/` adapts Lua specs to Rust traits (`Component`, `PaletteProvider`); top-level `mod.rs` (`LuaSubsystem` + `build_subsystem(Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap)`) / `vm.rs` (`new_lua` + `install_builtin_searcher` for `<layer>/lua/<dot.path>.lua` resolution; `package.path` is also extended with each layer's `lua/` so any `plugin.<name>` or `ttymap.<name>` require Just Works — no custom plugin searcher) / `registrar.rs` (`LuaRegistry` — live registry behind `Rc<RefCell<...>>`) / `runtimepath.rs` / `init_lua.rs` (Rust runs only the bundled `<layer>/init.lua` via `run_system_init_lua`; that file pulls in user config itself via `require("ttymap.user_config").load()` — a Lua lib at `runtime/lua/ttymap/user_config.lua` that resolves the path via `XDG_CONFIG_HOME` / `HOME` and `dofile`s it. Rust never names `~/.config/ttymap/init.lua`. `read_init_lua_config_only` is the snap-only thin path; it reuses the same `ttymap.user_config` lib) / `handle.rs` / `map_api.rs` (host-side `MapApi` struct — per-frame draw surface) / `host.rs` (`LuaHostShared` + `LuaHostHandles` + `NotifyEntry` + `HelpEntry` — host-side Lua-runtime state, deliberately outside `api/` so that directory stays namespace-pure) own subsystem orchestration, VM setup, the event bus, runtime layer resolution, the config-DSL state, draw surface, host-side state, and channel plumbing. Handle-returning surfaces (`ttymap.api.card.open` / `ttymap.api.palette.open` / `ttymap.on_event` / `ttymap.api.frame.on_tick` / `ttymap.register_palette_command` / `ttymap.register_keybind`) all return a Lua-facing handle whose `:remove()` (`:close()` for the compositor-stack ones) drops the registration. The registry behind `register_palette_command` / `register_keybind` lives at `Rc<RefCell<LuaRegistry>>` (`registrar.rs`): `BaseLayer` borrows it on each keypress for activation dispatch, the `:` palette-installer borrows it on each open to snapshot a fresh `CommandSeed`, and Lua handles mutably borrow it from `:remove()` to drop entries by ID. See **[docs/lua-architecture.md](docs/lua-architecture.md)** for the full surface — every namespace, activation surfaces, runtime path resolution, config chain, bundled plugins.
