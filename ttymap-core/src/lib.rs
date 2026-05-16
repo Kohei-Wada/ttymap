@@ -11,21 +11,19 @@
 //! - [`event::EventBus`] / [`event::Event`] — Lua-agnostic pub/sub
 //!   primitive at the integration point between Rust core and Lua
 //!   plugin runtime.
-//! - [`keymap::KeyMap`] / [`keymap::KeybindingOverrides`] — the
-//!   `key → UserCommand` resolution table. Lives here because it
-//!   names both the Command vocabulary and the user-configurable
-//!   override shape.
 //!
 //! The runtime `Config` shape (wraps `ttymap_engine::Config` with
-//! binary-side knobs) lives in `ttymap-config`, depending on this
-//! crate for `KeybindingOverrides`.
+//! binary-side knobs) plus the user-facing `KeybindingOverrides`
+//! settings map live in `ttymap-config`. The live `KeyMap` that
+//! resolves a keypress to a `UserCommand` lives in
+//! `ttymap-tui::input::keymap` (where the crossterm dependency
+//! that backs `KeyCode` belongs).
 //!
 //! Engine dependency is one-way: this crate uses `ttymap-engine`
 //! types (`LonLat`, `ThemeId`, `MapAction`) but never the reverse.
-//! ratatui / crossterm beyond key codes don't enter here.
+//! ratatui / crossterm do not enter here.
 
 pub mod command;
 pub mod event;
-pub mod keymap;
 
 pub use command::UserCommand;

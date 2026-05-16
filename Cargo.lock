@@ -3046,7 +3046,6 @@ dependencies = [
 name = "ttymap-core"
 version = "0.1.0"
 dependencies = [
- "crossterm",
  "log",
  "ttymap-engine",
 ]
@@ -3100,6 +3099,7 @@ dependencies = [
  "crossterm",
  "log",
  "ratatui",
+ "ttymap-config",
  "ttymap-core",
  "ttymap-engine",
  "unicode-width 0.2.2",

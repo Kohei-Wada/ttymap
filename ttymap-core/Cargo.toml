@@ -9,5 +9,4 @@ repository.workspace = true
 
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
-crossterm = "0.29"
 log = { version = "0.4", features = ["std"] }
