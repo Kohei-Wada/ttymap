@@ -104,10 +104,18 @@ mod tests {
     #[test]
     fn timeout_returns_typed_error() {
         let mut w = EarcutWorker::new();
-        // Zero-duration timeout will fire before the worker can respond
-        // even on trivial input — easy way to exercise the timeout path.
-        let verts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
-        let result = w.triangulate(verts, vec![], Duration::from_millis(0));
+        // Large polygon + microsecond deadline: the worker can't possibly
+        // run earcut over 200k vertices in 1µs no matter how fast the
+        // thread schedules, so the timeout path fires deterministically.
+        // The previous version used 3 verts + 0ms — that raced with the
+        // worker on hot/fast runners (Ubuntu CI flake history).
+        let verts: Vec<[f64; 2]> = (0..200_000)
+            .map(|i| {
+                let t = i as f64 * 0.001;
+                [t.cos(), t.sin()]
+            })
+            .collect();
+        let result = w.triangulate(verts, vec![], Duration::from_micros(1));
         assert!(matches!(result, Err(TriangulateError::TimedOut)));
     }
 
