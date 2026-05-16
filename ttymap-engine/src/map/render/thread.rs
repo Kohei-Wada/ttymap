@@ -150,8 +150,15 @@ impl RenderHandle {
     pub fn client(&self) -> RenderClient {
         self.client.clone()
     }
+}
 
-    pub fn shutdown(&mut self) {
+impl Drop for RenderHandle {
+    /// Cooperative shutdown is the *only* way to wind a
+    /// `RenderHandle` down — no public `shutdown()` exists to call
+    /// manually. CLAUDE.md / docs/design.md state "Cleanup via
+    /// Drop, not manual"; making it the sole path enforces that at
+    /// the type level.
+    fn drop(&mut self) {
         self.should_quit.store(true, Ordering::Relaxed);
         let _ = self.client.task_tx.send(RenderTask::Shutdown);
         // `Option::take` alone only **drops** the JoinHandle — that's
@@ -160,12 +167,6 @@ impl RenderHandle {
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
-    }
-}
-
-impl Drop for RenderHandle {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }
 
@@ -321,7 +322,7 @@ mod tests {
 
     use super::*;
 
-    /// Regression for issue #107. `shutdown` previously did
+    /// Regression for issue #107. The cleanup code previously did
     /// `self.thread.take()` which only **drops** the `JoinHandle` —
     /// `Drop for JoinHandle` is detach, not join. So control returned
     /// to the caller while the render thread was still running,
@@ -329,10 +330,10 @@ mod tests {
     /// shutdown is handled by its Drop impl".
     ///
     /// Probe: a thread that does a brief wind-down sleep before
-    /// flipping a flag. After shutdown, the flag must be set —
-    /// otherwise the join didn't actually wait.
+    /// flipping a flag. After the handle drops, the flag must be set
+    /// — otherwise the join didn't actually wait.
     #[test]
-    fn shutdown_joins_the_render_thread() {
+    fn dropping_handle_joins_the_render_thread() {
         let exited = Arc::new(Mutex::new(false));
         let exited_clone = Arc::clone(&exited);
 
@@ -358,17 +359,17 @@ mod tests {
             *exited_clone.lock().unwrap() = true;
         });
 
-        let mut handle = RenderHandle {
+        let handle = RenderHandle {
             client: RenderClient { task_tx },
             should_quit,
             thread: Some(thread),
         };
 
-        handle.shutdown();
+        drop(handle);
 
         assert!(
             *exited.lock().unwrap(),
-            "shutdown must wait for the render thread to finish (join), \
+            "Drop must wait for the render thread to finish (join), \
              not detach (drop the JoinHandle)"
         );
     }
