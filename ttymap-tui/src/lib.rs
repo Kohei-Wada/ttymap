@@ -24,8 +24,11 @@
 
 pub mod app_event;
 pub mod compositor;
+pub mod frame_widget;
 pub mod input;
+pub mod overlay;
 pub mod palette;
+pub mod sidebar;
 pub mod theme;
 
 pub use app_event::AppEvent;

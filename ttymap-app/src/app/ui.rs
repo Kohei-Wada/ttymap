@@ -93,7 +93,10 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
     let map_inner = map_block.inner(map_area);
     f.render_widget(map_block, map_area);
     if let Some(map_frame) = map_frame {
-        f.render_widget(super::frame_widget::MapFrameWidget(map_frame), map_inner);
+        f.render_widget(
+            ttymap_tui::frame_widget::MapFrameWidget(map_frame),
+            map_inner,
+        );
 
         // World-space overlays + always-on chrome from components on
         // the compositor (wiki markers, info bar, scale, attribution).

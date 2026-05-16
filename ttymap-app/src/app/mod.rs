@@ -33,9 +33,6 @@
 pub use ttymap_tui::AppEvent;
 
 pub mod frame_timer;
-mod frame_widget;
-mod overlay;
-mod sidebar;
 pub mod ui;
 
 use std::io;
@@ -45,8 +42,6 @@ use std::time::Duration;
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use log::{debug, info};
 
-use self::overlay::OverlayThrottle;
-use self::sidebar::SidebarPolicy;
 use ttymap_config::Config;
 pub use ttymap_config::KeybindingOverrides;
 use ttymap_core::UserCommand;
@@ -57,6 +52,8 @@ use ttymap_lua::{LuaHandle, LuaSubsystem};
 use ttymap_tui::compositor::op::Op;
 use ttymap_tui::compositor::{BaseLayer, Compositor, Context};
 use ttymap_tui::input::{KeyMap, MouseAdapter};
+use ttymap_tui::overlay::OverlayThrottle;
+use ttymap_tui::sidebar::SidebarPolicy;
 use ttymap_tui::theme::{ThemeId, UiTheme};
 
 use crate::engine_handle::EngineHandle;

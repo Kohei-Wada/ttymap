@@ -5,19 +5,19 @@
 //! `open` is one method call instead of three field assignments
 //! scattered through `poll_compositor`.
 
-pub(super) struct SidebarPolicy {
+pub struct SidebarPolicy {
     /// Whether the sidebar is currently visible.
-    pub(super) open: bool,
+    pub open: bool,
     /// Width in terminal cells when visible. Sourced from
     /// `ttymap.opt.runtime.sidebar_width` at startup.
-    pub(super) width: u16,
+    pub width: u16,
     /// Component count observed at the previous poll. Drives the
     /// auto-open-on-increase rule.
     prev_count: usize,
 }
 
 impl SidebarPolicy {
-    pub(super) fn new(width: u16) -> Self {
+    pub fn new(width: u16) -> Self {
         Self {
             open: false,
             width,
@@ -28,7 +28,7 @@ impl SidebarPolicy {
     /// Flip visibility. The caller is responsible for the follow-up
     /// resize that adjusts the map canvas — the policy doesn't know
     /// about the render thread.
-    pub(super) fn toggle(&mut self) {
+    pub fn toggle(&mut self) {
         self.open = !self.open;
     }
 
@@ -50,7 +50,7 @@ impl SidebarPolicy {
     /// free. Steady-state `count == 0` with a manually-opened rail
     /// keeps the rail open until the next toggle. Mirrors VS Code's
     /// Explorer / Helix completion popup behaviour.
-    pub(super) fn observe_count(&mut self, count: usize) -> bool {
+    pub fn observe_count(&mut self, count: usize) -> bool {
         let should_open = count > self.prev_count && !self.open;
         let should_close = count == 0 && self.prev_count > 0 && self.open;
         if should_open {
@@ -66,7 +66,7 @@ impl SidebarPolicy {
     /// the sidebar when it's open. Very narrow terminals skip the
     /// sidebar entirely so the map keeps a usable width — mirrors
     /// the `ui::draw` layout fallback.
-    pub(super) fn effective_map_cols(&self, full_cols: u16) -> u16 {
+    pub fn effective_map_cols(&self, full_cols: u16) -> u16 {
         if self.open && full_cols > self.width + 4 {
             full_cols.saturating_sub(self.width)
         } else {
