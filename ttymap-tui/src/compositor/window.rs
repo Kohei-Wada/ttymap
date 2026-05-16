@@ -49,7 +49,7 @@ use crate::compositor::op::Op;
 use crate::compositor::{CardId, Component, Context};
 use crate::theme::StyleKind;
 use crate::theme::UiTheme;
-use ttymap_core::UserCommand;
+use ttymap_shared::UserCommand;
 
 /// Queue of [`Op`]s a [`Component`] hook recorded through [`Window`].
 /// Drained and applied by the compositor after the hook returns —

@@ -39,7 +39,7 @@ pub use component::{Component, Context, Placement};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::compositor::op::Op;
-use ttymap_core::UserCommand;
+use ttymap_shared::UserCommand;
 
 // ── Framework-reserved keys ────────────────────────────────────────
 

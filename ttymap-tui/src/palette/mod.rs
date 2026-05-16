@@ -243,7 +243,7 @@ mod tests {
     use super::provider::{PaletteItem, PaletteProvider};
     use super::*;
     use crate::theme::ThemeId;
-    use ttymap_core::UserCommand;
+    use ttymap_shared::UserCommand;
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
     const CTX: Context = Context {

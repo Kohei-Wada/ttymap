@@ -55,7 +55,7 @@ pub struct LuaSubsystem {
     /// callbacks) and with [`crate::app::App`], which drains its
     /// accumulated event buffer once per loop iteration onto this
     /// bus (#334, #336).
-    pub bus: std::rc::Rc<ttymap_core::event::EventBus>,
+    pub bus: std::rc::Rc<ttymap_shared::event::EventBus>,
     /// Per-frame `tick` subscriber registry. Distinct from `bus`
     /// because the tick payload is a borrowed `MapApi` (live
     /// ratatui buffer + cursor + frame) that can't fit `&Event`;
@@ -117,7 +117,7 @@ pub struct LuaSubsystem {
 pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
     let registry = new_lua_registry();
     let shared = Arc::new(LuaHostShared::new());
-    let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+    let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
     let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
     let ops = op::new_ops_buffer();
 
@@ -281,11 +281,11 @@ mod tests {
     ) -> (
         mlua::Lua,
         LuaRegistryHandle,
-        std::rc::Rc<ttymap_core::event::EventBus>,
+        std::rc::Rc<ttymap_shared::event::EventBus>,
         std::rc::Rc<crate::tick::TickRegistry>,
     ) {
         let lua = new_lua();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(
@@ -317,7 +317,7 @@ mod tests {
         mlua::Lua,
         LuaRegistryHandle,
         Arc<host::LuaHostShared>,
-        std::rc::Rc<ttymap_core::event::EventBus>,
+        std::rc::Rc<ttymap_shared::event::EventBus>,
         std::rc::Rc<crate::tick::TickRegistry>,
     ) {
         runtimepath::ensure_runtime_path_for_tests();
@@ -327,7 +327,7 @@ mod tests {
         // the temp dir before the global runtime layers.
         vm::prepend_package_path(&lua, &layer.join("lua"));
         let shared = host::LuaHostShared::empty();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = new_lua_registry();
         api::install(

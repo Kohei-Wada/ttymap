@@ -31,8 +31,8 @@
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use ttymap_core::UserCommand;
 use ttymap_engine::map::MapAction;
+use ttymap_shared::UserCommand;
 
 #[derive(Default)]
 pub struct MouseAdapter {

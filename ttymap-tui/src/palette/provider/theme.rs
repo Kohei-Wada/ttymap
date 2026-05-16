@@ -5,7 +5,7 @@
 
 use crate::compositor::Context;
 use crate::theme::ThemeId;
-use ttymap_core::UserCommand;
+use ttymap_shared::UserCommand;
 
 use super::{PaletteAction, PaletteItem, PaletteProvider};
 

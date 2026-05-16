@@ -3,11 +3,11 @@ name = "ttymap-config"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Runtime configuration shape for ttymap. Wraps `ttymap_engine::Config` with binary-side knobs (runtime cadence, sidebar width) and re-exports the keymap-override shape from `ttymap_core`. Lua's `ttymap.opt.*` mutates this struct at startup."
+description = "Runtime configuration shape for ttymap. Wraps `ttymap_engine::Config` with binary-side knobs (runtime cadence, sidebar width) and re-exports the keymap-override shape from `ttymap_shared`. Lua's `ttymap.opt.*` mutates this struct at startup."
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
 ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
-ttymap-core = { path = "../ttymap-core", version = "0.1.0" }
+ttymap-shared = { path = "../ttymap-shared", version = "0.1.0" }
 directories = "6"

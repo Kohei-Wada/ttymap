@@ -15,7 +15,7 @@
 //! - [`app_event`] — `AppEvent` enum drained by the App main loop.
 //!
 //! Depends on `ttymap-engine` (renderer / theme palette / geo types),
-//! `ttymap-core` (UserCommand vocabulary, EventBus), and
+//! `ttymap-shared` (UserCommand vocabulary, EventBus), and
 //! `ttymap-config` (KeybindingOverrides — the user-facing keymap
 //! settings shape `KeyMap::with_overrides` folds in) — not on
 //! `ttymap-lua` or `ttymap-app`. The plugin runtime reaches the UI

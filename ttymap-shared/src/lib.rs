@@ -1,9 +1,9 @@
-//! ttymap-core — shared types every other crate in the workspace
+//! ttymap-shared — leaf vocabulary every crate above the engine
 //! consumes.
 //!
-//! Holds the cross-cutting vocabularies and configuration shape that
-//! would otherwise force a circular dependency between UI (`ttymap-tui`),
-//! plugin runtime (`ttymap-lua`), and binary entry (`ttymap-app`):
+//! Holds the cross-cutting vocabularies that would otherwise force a
+//! circular dependency between UI (`ttymap-tui`), plugin runtime
+//! (`ttymap-lua`), and binary entry (`ttymap-app`):
 //!
 //! - [`command::UserCommand`] — the single Command vocabulary every
 //!   emission site (palette, plugin callbacks, mouse adapter, …)

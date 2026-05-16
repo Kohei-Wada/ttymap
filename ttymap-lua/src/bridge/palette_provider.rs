@@ -241,7 +241,7 @@ mod tests {
     /// receives a spec from a Lua callback at runtime.
     fn build_provider(script: &str) -> LuaPaletteProvider {
         let lua = Lua::new();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,

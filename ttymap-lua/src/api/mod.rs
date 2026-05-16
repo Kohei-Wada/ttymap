@@ -132,9 +132,9 @@ use std::sync::{Arc, Mutex};
 use mlua::{Lua, Table};
 
 use crate::host::{LuaHostHandles, LuaHostShared};
-use ttymap_core::event::{Event, Level};
 use ttymap_engine::geo::LonLat;
 use ttymap_engine::shared::http::HttpClient;
+use ttymap_shared::event::{Event, Level};
 use ttymap_tui::compositor::op::Op;
 
 // ── Install entry point ─────────────────────────────────────────────
@@ -157,7 +157,7 @@ pub fn install(
     lua: &Lua,
     shared: Arc<LuaHostShared>,
     ops: ttymap_tui::compositor::op::OpsBuffer,
-    bus: std::rc::Rc<ttymap_core::event::EventBus>,
+    bus: std::rc::Rc<ttymap_shared::event::EventBus>,
     ticks: std::rc::Rc<crate::tick::TickRegistry>,
     registry: crate::registrar::LuaRegistryHandle,
     dirs: Option<&ttymap_config::AppDirs>,
@@ -271,8 +271,8 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ttymap_core::UserCommand;
     use ttymap_engine::map::MapAction;
+    use ttymap_shared::UserCommand;
 
     /// Helper for tests: install the `ttymap` table into a fresh Lua
     /// and hand back the host handles + the shared op buffer. Mirrors
@@ -285,7 +285,7 @@ mod tests {
     ) {
         let lua = mlua::Lua::new();
         let ops = ttymap_tui::compositor::op::new_ops_buffer();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let registry = crate::new_lua_registry();
         // Resolve real XDG dirs so `ttymap.storage` wires up (it
@@ -428,7 +428,7 @@ mod tests {
 
         let lua = mlua::Lua::new();
         let shared = LuaHostShared::empty();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
@@ -468,7 +468,7 @@ mod tests {
         // typed-event bus — the tick payload is a borrowed
         // `MapApi` that can't ride `&Event`).
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
@@ -501,7 +501,7 @@ mod tests {
         // `"tick"` goes to the per-frame `TickRegistry`, everything
         // else subscribes against the typed-event bus.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
@@ -537,7 +537,7 @@ mod tests {
         // method; calling it must remove that exact subscriber from
         // the bus. Idempotent: a second call is a no-op.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,
@@ -573,7 +573,7 @@ mod tests {
         // unreachable from any sensible dispatch call — surface an
         // error at register time so the plugin author finds it.
         let lua = mlua::Lua::new();
-        let bus = std::rc::Rc::new(ttymap_core::event::EventBus::default());
+        let bus = std::rc::Rc::new(ttymap_shared::event::EventBus::default());
         let ticks = std::rc::Rc::new(crate::tick::TickRegistry::default());
         let _handles = install(
             &lua,

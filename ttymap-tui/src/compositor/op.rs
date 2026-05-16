@@ -22,8 +22,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::compositor::{CardId, Component};
-use ttymap_core::UserCommand;
-use ttymap_core::event::Event;
+use ttymap_shared::UserCommand;
+use ttymap_shared::event::Event;
 
 /// A same-thread request from a component (Rust or Lua-backed) to
 /// the host. Component hooks emit these via the

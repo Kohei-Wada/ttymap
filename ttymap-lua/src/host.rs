@@ -137,7 +137,7 @@ impl LuaHostShared {
 /// - **UserCommand sender** (not part of these handles) — every
 ///   fire-and-forget Lua intent (`ttymap.map:jump` / `:zoom(level)` /
 ///   `:fly_to` / `ttymap.api.frame.export`) is pre-built into an
-///   [`ttymap_core::UserCommand`] on the Lua side and pushed through a
+///   [`ttymap_shared::UserCommand`] on the Lua side and pushed through a
 ///   `Sender<UserCommand>` that every plugin clones from the **single**
 ///   App-level channel. The receiver lives directly on `App`; a single
 ///   drain per frame covers every plugin's intents.
