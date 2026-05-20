@@ -87,6 +87,14 @@ pub enum UserCommand {
     /// Plugin-driven — `ttymap.map:set_labels_visible(b)` is the
     /// canonical caller (e.g. geo_quiz hard mode hides hints).
     SetLabelsVisible(bool),
+    /// Show / hide every feature whose MVT `source_layer` matches
+    /// `layer` on the render thread. Geometry skipped at the
+    /// outermost per-tile loop, so hidden layers cost nothing per
+    /// feature. Plugin-driven — `ttymap.map:set_layer_visible(name, b)`
+    /// is the canonical caller (e.g. a roads-only or no-buildings
+    /// view mode). Unknown layer names are accepted silently so the
+    /// API stays forward-compatible with schemas added later.
+    SetLayerVisible { layer: String, visible: bool },
 }
 
 impl UserCommand {

@@ -131,6 +131,25 @@ impl UserData for HostMap {
                 .push(Op::Command(UserCommand::SetLabelsVisible(visible)));
             Ok(())
         });
+
+        // `ttymap.map:set_layer_visible(name, b)` — show / hide
+        // every feature whose MVT `source_layer` matches `name`
+        // (e.g. "water", "road", "building"). Skipped at the
+        // outermost per-tile loop on the render thread, so hidden
+        // layers cost nothing per feature. Orthogonal to
+        // `set_labels_visible`. The dispatcher pairs the command
+        // with `request_map_redraw`; unknown layer names are
+        // accepted silently for forward compatibility with
+        // schemas added later.
+        methods.add_method(
+            "set_layer_visible",
+            |_, this, (layer, visible): (String, bool)| {
+                this.ops
+                    .borrow_mut()
+                    .push(Op::Command(UserCommand::SetLayerVisible { layer, visible }));
+                Ok(())
+            },
+        );
     }
 }
 

@@ -56,6 +56,11 @@ pub enum EngineCommand {
     /// Toggle tile-rendered text labels. Caller is responsible for
     /// the follow-up [`EngineCommand::Redraw`].
     SetLabelsVisible(bool),
+    /// Show / hide one MVT source layer. Caller is responsible for
+    /// the follow-up [`EngineCommand::Redraw`]. Unknown layer names
+    /// are accepted silently so the API stays forward-compatible
+    /// with schemas added later.
+    SetLayerVisible { layer: String, visible: bool },
     /// Mutate engine state (pan / zoom / jump / reset / …).
     ApplyAction(MapAction),
     /// Trigger a fresh frame using the current viewport. `overlays` is
@@ -267,6 +272,9 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
             EngineCommand::SetLabelsVisible(visible) => {
                 map.set_labels_visible(visible);
             }
+            EngineCommand::SetLayerVisible { layer, visible } => {
+                map.set_layer_visible(&layer, visible);
+            }
             EngineCommand::ApplyAction(action) => {
                 let changed = map.apply_action(&action);
                 if changed {
@@ -365,6 +373,21 @@ mod tests {
         roundtrip(&EngineCommand::SetLabelsVisible(true), |d| match d {
             EngineCommand::SetLabelsVisible(v) => assert!(v),
             _ => panic!("expected SetLabelsVisible"),
+        });
+    }
+
+    #[test]
+    fn command_set_layer_visible_round_trips() {
+        let cmd = EngineCommand::SetLayerVisible {
+            layer: "water".to_string(),
+            visible: false,
+        };
+        roundtrip(&cmd, |d| match d {
+            EngineCommand::SetLayerVisible { layer, visible } => {
+                assert_eq!(layer, "water");
+                assert!(!visible);
+            }
+            _ => panic!("expected SetLayerVisible"),
         });
     }
 
