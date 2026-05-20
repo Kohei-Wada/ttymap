@@ -7,6 +7,7 @@
 //! than baking it into `Feature` at decode time) means the tile cache does not
 //! need to be flushed when the palette or style preset changes.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use log::debug;
@@ -89,6 +90,12 @@ pub struct Renderer {
     /// it through `RenderHandle::set_labels_visible`. Default
     /// `true`.
     labels_visible: bool,
+    /// Source-layer names suppressed during the per-feature loop.
+    /// Checked once per `LayerData` at the outermost per-tile loop
+    /// so the inner feature loop never runs for hidden layers.
+    /// Plugins flip entries through `RenderHandle::set_layer_visible`.
+    /// Default: empty (every layer renders).
+    hidden_layers: HashSet<String>,
 }
 
 /// A symbol feature that survived the first pass. Holds the resolved
@@ -112,6 +119,7 @@ impl Renderer {
             height,
             scratches: Scratches::new(),
             labels_visible: true,
+            hidden_layers: HashSet::new(),
         }
     }
 
@@ -135,6 +143,21 @@ impl Renderer {
     /// to suppress city-name hints.
     pub fn set_labels_visible(&mut self, visible: bool) {
         self.labels_visible = visible;
+    }
+
+    /// Show / hide every feature whose MVT `source_layer` matches
+    /// `layer`. Checked at the outermost per-tile loop so the
+    /// inner feature loop never runs for hidden layers. Drives
+    /// the `ttymap.map:set_layer_visible(name, b)` Lua API — used
+    /// to express view modes like roads-only or no-buildings.
+    /// Orthogonal to `set_labels_visible`: a layer can be hidden
+    /// independently of whether label rendering is on.
+    pub fn set_layer_visible(&mut self, layer: &str, visible: bool) {
+        if visible {
+            self.hidden_layers.remove(layer);
+        } else {
+            self.hidden_layers.insert(layer.to_string());
+        }
     }
 
     pub fn width(&self) -> usize {
@@ -185,6 +208,9 @@ impl Renderer {
         'outer: for td in tile_data {
             let tile_size = td.vis.size;
             for layer in &td.layers {
+                if self.hidden_layers.contains(&layer.name) {
+                    continue;
+                }
                 let extent = layer.extent as f64;
                 for feature in &layer.features {
                     if std::time::Instant::now() > deadline {
@@ -685,6 +711,129 @@ mod tests {
 
         assert_eq!(baseline, cells(2048));
         assert_eq!(baseline, cells(8192));
+    }
+
+    /// `set_layer_visible(name, false)` must drop every feature whose
+    /// MVT `source_layer` matches `name` from the rendered frame.
+    /// Re-enabling restores the original painted-cell count exactly —
+    /// the toggle owns nothing besides the hidden set, no side effects
+    /// on the styler or canvas. Mirrors `set_labels_visible` but at
+    /// per-layer granularity.
+    #[test]
+    fn hidden_layer_disappears_from_rendered_frame() {
+        use std::collections::HashMap;
+
+        use crate::geo::LonLat;
+        use crate::map::render::view::VisibleTile;
+        use crate::map::tile::decode::{Feature, TilePoint};
+
+        // A single CW square covering the whole tile, decoded as the
+        // `water` source layer. Renders as a saturated fill at
+        // zoom=14 with the `Dark` palette's water colour.
+        let cw_square = |x0: i32, y0: i32, x1: i32, y1: i32| {
+            vec![
+                TilePoint { x: x0, y: y0 },
+                TilePoint { x: x1, y: y0 },
+                TilePoint { x: x1, y: y1 },
+                TilePoint { x: x0, y: y1 },
+            ]
+        };
+        let feature = Feature {
+            layer_name: Arc::from("water"),
+            properties: Arc::new(HashMap::new()),
+            points: Arc::new(vec![cw_square(0, 0, 4096, 4096)]),
+            min_x: 0.0,
+            max_x: 0.0,
+            min_y: 0.0,
+            max_y: 0.0,
+        };
+        let tile = TileData {
+            vis: VisibleTile {
+                x: 0,
+                y: 0,
+                z: 14,
+                pos_x: 0.0,
+                pos_y: 0.0,
+                size: 256.0,
+            },
+            layers: vec![LayerData {
+                name: "water".to_string(),
+                extent: 4096,
+                features: vec![feature],
+            }],
+        };
+        let center = LonLat { lon: 0.0, lat: 0.0 };
+
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 320, 320);
+
+        const EMPTY: char = '⠀';
+        let painted = |r: &mut Renderer| -> usize {
+            let frame = r
+                .draw(std::slice::from_ref(&tile), 14.0, center, &[])
+                .expect("frame");
+            frame.cells.iter().filter(|c| c.ch != EMPTY).count()
+        };
+
+        // Sanity: with no hidden layers the water fill paints cells.
+        let baseline = painted(&mut renderer);
+        assert!(
+            baseline > 0,
+            "baseline must paint cells — otherwise the test geometry \
+             never reached the canvas and the hidden-case is vacuous"
+        );
+
+        // Hide water → zero painted cells.
+        renderer.set_layer_visible("water", false);
+        assert_eq!(
+            painted(&mut renderer),
+            0,
+            "hidden source layer must drop every feature it owns"
+        );
+
+        // Re-show → painted count returns to baseline exactly.
+        renderer.set_layer_visible("water", true);
+        assert_eq!(
+            painted(&mut renderer),
+            baseline,
+            "re-shown layer must restore the original painted-cell count"
+        );
+    }
+
+    /// `set_layer_visible(name, false)` on a layer that the rendered
+    /// tile doesn't contain must be a silent no-op — the rest of the
+    /// frame is unchanged. Forward-compatibility guarantee: future
+    /// schema additions won't break plugins that hide layers
+    /// optimistically (e.g. "hide every label layer regardless of
+    /// whether this schema has it").
+    #[test]
+    fn hiding_unknown_layer_is_a_silent_no_op() {
+        let styler = Arc::new(Styler::new(crate::theme::ThemeId::Dark));
+        let mut renderer = Renderer::new(styler, "en".to_string(), 80, 40);
+        let center = crate::geo::LonLat { lon: 0.0, lat: 0.0 };
+
+        let before = renderer
+            .draw(&[], 4.0, center, &[])
+            .expect("frame")
+            .cells
+            .iter()
+            .map(|c| c.ch)
+            .collect::<Vec<_>>();
+
+        renderer.set_layer_visible("totally_made_up_layer", false);
+
+        let after = renderer
+            .draw(&[], 4.0, center, &[])
+            .expect("frame")
+            .cells
+            .iter()
+            .map(|c| c.ch)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            before, after,
+            "hiding a non-existent layer must not change the rendered frame"
+        );
     }
 
     /// User overlay polylines must paint on the *same* BrailleBuffer as

@@ -101,6 +101,13 @@ impl MapHandle {
         self.render_client.set_labels_visible(visible);
     }
 
+    /// Show / hide one MVT source layer on the render thread.
+    /// Caller is responsible for the follow-up [`Self::request_redraw`]
+    /// — updating the hidden set alone won't redraw the visible frame.
+    pub fn set_layer_visible(&self, layer: &str, visible: bool) {
+        self.render_client.set_layer_visible(layer, visible);
+    }
+
     /// Queue a fresh `RenderTask::Draw` against the current
     /// viewport, carrying any per-frame overlays the caller has
     /// collected (e.g. Lua-pushed polylines drained from

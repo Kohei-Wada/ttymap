@@ -42,6 +42,15 @@ pub enum RenderTask {
     /// `SetLabelsVisible` issued *between* two Draws will only
     /// affect the second.
     SetLabelsVisible(bool),
+    /// Show / hide one MVT source layer. Same ordering rules as
+    /// `SetLabelsVisible`: a `SetLayerVisible` issued between two
+    /// Draws only affects the second. Per-call (not per-set) so
+    /// multiple layer toggles compose naturally through the
+    /// drain pass.
+    SetLayerVisible {
+        layer: String,
+        visible: bool,
+    },
     Shutdown,
 }
 
@@ -86,6 +95,19 @@ impl RenderClient {
     /// command alone only flips the flag.
     pub fn set_labels_visible(&self, visible: bool) {
         self.send(RenderTask::SetLabelsVisible(visible), "set_labels_visible");
+    }
+
+    /// Show / hide one MVT source layer on the render thread.
+    /// Caller must follow up with a `request_draw` to see the
+    /// change — this command alone only updates the hidden set.
+    pub fn set_layer_visible(&self, layer: &str, visible: bool) {
+        self.send(
+            RenderTask::SetLayerVisible {
+                layer: layer.to_string(),
+                visible,
+            },
+            "set_layer_visible",
+        );
     }
 }
 
@@ -198,6 +220,10 @@ fn apply_task(task: RenderTask, pipeline: &mut RenderPipeline) -> TaskOutcome {
         }
         RenderTask::SetLabelsVisible(visible) => {
             pipeline.set_labels_visible(visible);
+            TaskOutcome::Continue
+        }
+        RenderTask::SetLayerVisible { layer, visible } => {
+            pipeline.set_layer_visible(&layer, visible);
             TaskOutcome::Continue
         }
         RenderTask::Shutdown => TaskOutcome::Shutdown,

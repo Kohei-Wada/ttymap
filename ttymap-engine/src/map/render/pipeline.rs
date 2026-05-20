@@ -164,6 +164,13 @@ impl RenderPipeline {
         self.renderer.set_labels_visible(visible);
     }
 
+    /// Show / hide one MVT source layer. Forwards to the underlying
+    /// `Renderer`. No tile cache flush — hiding only short-circuits
+    /// the per-layer draw branch; decoded features stay in cache.
+    pub fn set_layer_visible(&mut self, layer: &str, visible: bool) {
+        self.renderer.set_layer_visible(layer, visible);
+    }
+
     // ── Private ──────────────────────────────────────────────────────────
 
     /// Compute the set of visible tiles for a viewport against the

@@ -406,6 +406,10 @@ impl App {
                 self.map.set_labels_visible(visible);
                 self.request_map_redraw();
             }
+            UserCommand::SetLayerVisible { layer, visible } => {
+                self.map.set_layer_visible(&layer, visible);
+                self.request_map_redraw();
+            }
         }
     }
 

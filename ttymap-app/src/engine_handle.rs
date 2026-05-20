@@ -187,6 +187,13 @@ impl EngineHandle {
         self.send(EngineCommand::SetLabelsVisible(visible));
     }
 
+    pub fn set_layer_visible(&self, layer: &str, visible: bool) {
+        self.send(EngineCommand::SetLayerVisible {
+            layer: layer.to_string(),
+            visible,
+        });
+    }
+
     pub fn request_redraw(&self, overlays: Vec<UserPolyline>) {
         self.send(EngineCommand::Redraw { overlays });
     }
