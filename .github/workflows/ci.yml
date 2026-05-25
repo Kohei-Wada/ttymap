@@ -54,7 +54,7 @@ jobs:
         run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-targets
 
   # Supply-chain checks. Linux-only — output is platform-independent,
   # so the matrix in `check` doesn't apply here.
