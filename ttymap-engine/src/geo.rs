@@ -151,6 +151,26 @@ pub fn shortest_modular_dx(raw: f64, grid: f64) -> f64 {
     }
 }
 
+/// Distance² from a tile center to the view center, in tile-grid space
+/// (for priority sorting).
+///
+/// X is modular: when the view straddles the antimeridian, a tile on
+/// the wrap side is geographically adjacent and must score that way
+/// (issue #106). `grid_size` is `1 << z` for the relevant zoom.
+/// Y is **not** modular — slippy maps have no polar wrap.
+pub fn tile_distance_sq(
+    tile_x: i32,
+    tile_y: i32,
+    center_x: f64,
+    center_y: f64,
+    grid_size: i32,
+) -> f64 {
+    let raw_dx = tile_x as f64 + 0.5 - center_x;
+    let dx = shortest_modular_dx(raw_dx, grid_size as f64);
+    let dy = tile_y as f64 + 0.5 - center_y;
+    dx * dx + dy * dy
+}
+
 /// Return the effective tile size (in screen pixels / units) at a fractional
 /// zoom level.  A tile is 256 units at every integer zoom; sub-tile zooming
 /// scales it up.
@@ -538,5 +558,57 @@ mod tests {
         // Both should produce valid labels
         assert!(label_eq.ends_with('m') || label_eq.ends_with("km"));
         assert!(label_hi.ends_with('m') || label_hi.ends_with("km"));
+    }
+
+    // --- tile_distance_sq ----------------------------------------------------
+
+    #[test]
+    fn test_tile_distance_sq() {
+        // Same hemisphere, centred on the tile.
+        let d = tile_distance_sq(5, 5, 5.5, 5.5, 1024);
+        assert!(d < 0.01);
+    }
+
+    /// Regression for issue #106. Near the antimeridian, a tile that
+    /// is geographically adjacent on the wrap side has a tiny
+    /// modular distance — but with a naked `tile_x - center_x`
+    /// subtract it scored as `~grid_size²` and the priority queue
+    /// dropped it. Distance must wrap on the x axis.
+    #[test]
+    fn tile_distance_sq_wraps_x_at_antimeridian() {
+        // grid_size = 8 (z=3). View centred on the right edge.
+        // center_x = 7.5 → on tile (7, _). Key (0, _) is the
+        // wrapped-around tile across the date line.
+        let d = tile_distance_sq(0, 5, 7.5, 5.5, 8);
+        assert!(d < 2.0, "wrap-side tile must score as ~adjacent (got {d})");
+    }
+
+    #[test]
+    fn tile_distance_sq_wraps_x_other_direction() {
+        // Mirror: center near left edge, key on the right edge.
+        // center_x=0.5, tile_x=7, grid_size=8 → wrapped distance is 1.
+        let d = tile_distance_sq(7, 5, 0.5, 5.5, 8);
+        assert!(d < 2.0, "wrap on the other side too (got {d})");
+    }
+
+    #[test]
+    fn tile_distance_sq_does_not_wrap_when_direct_path_is_shorter() {
+        // Center mid-grid, key at left edge — direct path (3.5) is
+        // shorter than wrap (4.5). No wrap.
+        // raw_dx = 0.5 - 4 = -3.5; |raw| = 3.5 <= grid/2 = 4 → keep.
+        let d = tile_distance_sq(0, 5, 4.0, 5.0, 8);
+        let expected = 3.5_f64.powi(2) + 0.5_f64.powi(2);
+        assert!((d - expected).abs() < 0.01, "expected {expected}, got {d}");
+    }
+
+    /// Y axis is **not** modular — no polar wrap exists for slippy-
+    /// map tiles, so a key with a wildly different y must keep its
+    /// large distance even if x is close.
+    #[test]
+    fn tile_distance_sq_does_not_wrap_y() {
+        // grid_size large enough to avoid any x wrap. Difference is
+        // pure y.
+        let d = tile_distance_sq(5, 0, 5.5, 7.5, 8);
+        assert!(d > 40.0, "y must not wrap (got {d})");
     }
 }
