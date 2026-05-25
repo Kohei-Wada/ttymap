@@ -13,9 +13,10 @@
 //! [`EventBus`](ttymap_shared::event::EventBus) and returns an
 //! [`EventHandle`].
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use mlua::{Lua, Table};
@@ -166,18 +167,20 @@ fn install_register_keybind(
 /// The interner ensures **one leak per distinct name** for the
 /// program lifetime; repeat calls reuse the existing static.
 ///
-/// Single-threaded in practice (Lua main thread only) but the
-/// `Mutex` keeps it `Sync` for free.
+/// The Lua VM runs only on the main thread, so the interner is
+/// `thread_local` — no lock needed.
 fn intern_event_name(name: &str) -> &'static str {
-    static INTERNED: LazyLock<Mutex<HashSet<&'static str>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-    let mut set = INTERNED.lock().expect("event-name interner poisoned");
-    if let Some(&existing) = set.get(name) {
-        return existing;
+    thread_local! {
+        static INTERNED: RefCell<HashSet<&'static str>> = RefCell::new(HashSet::new());
     }
-    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
-    set.insert(leaked);
-    leaked
+    INTERNED.with_borrow_mut(|set| {
+        if let Some(&existing) = set.get(name) {
+            return existing;
+        }
+        let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        set.insert(leaked);
+        leaked
+    })
 }
 
 /// `ttymap.on_event(name, fn) -> EventHandle` — generic pub/sub
