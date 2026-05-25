@@ -186,12 +186,7 @@ impl TileCache {
 /// Y is **not** modular — slippy maps have no polar wrap.
 fn tile_distance_sq(key: &TileKey, center_x: f64, center_y: f64, grid_size: i32) -> f64 {
     let raw_dx = key.x as f64 + 0.5 - center_x;
-    let g = grid_size as f64;
-    let dx = if g > 0.0 && raw_dx.abs() > g / 2.0 {
-        raw_dx - raw_dx.signum() * g
-    } else {
-        raw_dx
-    };
+    let dx = crate::geo::shortest_modular_dx(raw_dx, grid_size as f64);
     let dy = key.y as f64 + 0.5 - center_y;
     dx * dx + dy * dy
 }

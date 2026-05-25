@@ -97,12 +97,7 @@ impl MapProjection {
         // antimeridian so a feature on the wrap side lands next to the
         // centre instead of way off-screen (issue #96). y is not.
         let grid = (1u64 << self.z) as f64;
-        let raw_dx = pt.x - self.center_tile.x;
-        let dx = if grid > 0.0 && raw_dx.abs() > grid / 2.0 {
-            raw_dx - raw_dx.signum() * grid
-        } else {
-            raw_dx
-        };
+        let dx = shortest_modular_dx(pt.x - self.center_tile.x, grid);
         let px = self.canvas_w / 2.0 + dx * self.tile_size;
         let py = self.canvas_h / 2.0 + (pt.y - self.center_tile.y) * self.tile_size;
         if !px.is_finite() || !py.is_finite() || px < 0.0 || py < 0.0 {
@@ -142,6 +137,18 @@ pub fn base_zoom(zoom: f64) -> u32 {
 /// story.
 pub fn tile_grid_size(z: u32) -> i32 {
     1i32.checked_shl(z).unwrap_or(i32::MAX)
+}
+
+/// Shortest signed delta on a wrapping axis (longitude / tile-x).
+/// When `|raw| > grid/2` the antimeridian is the shorter path, so
+/// wrap by one grid width; otherwise keep `raw`. A non-positive
+/// `grid` disables wrapping. See issue #96.
+pub fn shortest_modular_dx(raw: f64, grid: f64) -> f64 {
+    if grid > 0.0 && raw.abs() > grid / 2.0 {
+        raw - raw.signum() * grid
+    } else {
+        raw
+    }
 }
 
 /// Return the effective tile size (in screen pixels / units) at a fractional

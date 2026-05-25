@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::geo::{LonLat, base_zoom, ll2tile, tile_size_at_zoom};
+use crate::geo::{LonLat, base_zoom, ll2tile, shortest_modular_dx, tile_size_at_zoom};
 
 /// One polyline submitted by a Lua plugin during a frame's `on_tick`
 /// pass. Re-pushed every frame ("ephemeral re-submit"); the App-side
@@ -56,12 +56,7 @@ pub fn ll_to_subpixel(
     // way off-screen. Mirrors the same fix in `MapProjection::ll_to_cell`
     // (issue #96).
     let grid = (1u64 << z) as f64;
-    let raw_dx = pt.x - center_t.x;
-    let dx = if grid > 0.0 && raw_dx.abs() > grid / 2.0 {
-        raw_dx - raw_dx.signum() * grid
-    } else {
-        raw_dx
-    };
+    let dx = shortest_modular_dx(pt.x - center_t.x, grid);
 
     let px = canvas_w as f64 / 2.0 + dx * tile_size;
     let py = canvas_h as f64 / 2.0 + (pt.y - center_t.y) * tile_size;
@@ -160,12 +155,7 @@ pub fn project_polyline_continuous(
     // First point: classic centre-aware shortest path.
     let first = coords[0];
     let pt0 = ll2tile(first.lon, first.lat, z);
-    let raw_dx0 = pt0.x - center_t.x;
-    let dx0 = if grid_tiles > 0.0 && raw_dx0.abs() > grid_tiles / 2.0 {
-        raw_dx0 - raw_dx0.signum() * grid_tiles
-    } else {
-        raw_dx0
-    };
+    let dx0 = shortest_modular_dx(pt0.x - center_t.x, grid_tiles);
     let mut prev_dx_pixels = dx0 * tile_size;
     let py0 = canvas_h_half + (pt0.y - center_t.y) * tile_size;
     out.push(((canvas_w_half + prev_dx_pixels) as i32, py0 as i32));
