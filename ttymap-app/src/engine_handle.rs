@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use ttymap_engine::Config as EngineConfig;
 use ttymap_engine::ipc::{EngineCommand, EngineEvent, read_message, write_message};
-use ttymap_engine::map::action::MapAction;
+use ttymap_engine::map::Viewport;
 use ttymap_engine::map::render::overlay::UserPolyline;
 use ttymap_engine::theme::ThemeId;
 
@@ -171,10 +171,6 @@ impl EngineHandle {
     // run identical transitions on identical inputs and stay
     // coherent by construction.
 
-    pub fn send_action(&self, action: &MapAction) {
-        self.send(EngineCommand::ApplyAction(action.clone()));
-    }
-
     pub fn send_resize(&self, cols: u16, rows: u16) {
         self.send(EngineCommand::Resize { cols, rows });
     }
@@ -194,8 +190,8 @@ impl EngineHandle {
         });
     }
 
-    pub fn request_redraw(&self, overlays: Vec<UserPolyline>) {
-        self.send(EngineCommand::Redraw { overlays });
+    pub fn request_redraw(&self, viewport: Viewport, overlays: Vec<UserPolyline>) {
+        self.send(EngineCommand::Draw { viewport, overlays });
     }
 
     fn send(&self, cmd: EngineCommand) {
@@ -268,12 +264,6 @@ fn reader_loop(mut stdout: BufReader<impl Read>, event_tx: mpsc::Sender<AppEvent
                 if event_tx.send(AppEvent::FrameReady(frame)).is_err() {
                     return; // App is gone
                 }
-            }
-            EngineEvent::ViewportChanged { .. } => {
-                // UI mirror is authoritative for synchronous reads
-                // (updated in apply_action); engine's confirmation is
-                // informational. Phase 3 may use this as a divergence
-                // detector for restart logic.
             }
             EngineEvent::Ready { .. } => {
                 // Spurious — already consumed during handshake.

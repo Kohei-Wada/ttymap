@@ -22,8 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::geo::LonLat;
-use crate::map::action::MapAction;
+use crate::map::Viewport;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;
 use crate::theme::ThemeId;
@@ -54,18 +53,21 @@ pub enum EngineCommand {
     /// Swap the active theme (rebuilds the styler on the render thread).
     SetTheme(ThemeId),
     /// Toggle tile-rendered text labels. Caller is responsible for
-    /// the follow-up [`EngineCommand::Redraw`].
+    /// the follow-up [`EngineCommand::Draw`].
     SetLabelsVisible(bool),
     /// Show / hide one MVT source layer. Caller is responsible for
-    /// the follow-up [`EngineCommand::Redraw`]. Unknown layer names
+    /// the follow-up [`EngineCommand::Draw`]. Unknown layer names
     /// are accepted silently so the API stays forward-compatible
     /// with schemas added later.
     SetLayerVisible { layer: String, visible: bool },
-    /// Mutate engine state (pan / zoom / jump / reset / …).
-    ApplyAction(MapAction),
-    /// Trigger a fresh frame using the current viewport. `overlays` is
-    /// the per-frame Lua-pushed polyline batch.
-    Redraw { overlays: Vec<UserPolyline> },
+    /// Render a fresh frame at the supplied viewport. `overlays` is
+    /// the per-frame batch of Lua-pushed polylines drained by the
+    /// App after each `ui::draw`. The App owns the camera; the engine
+    /// renders exactly the viewport it is handed.
+    Draw {
+        viewport: Viewport,
+        overlays: Vec<UserPolyline>,
+    },
     /// Cooperative shutdown. The child drops engine handles (which
     /// joins the render thread via `Drop`) and exits. EOF on stdin
     /// is treated the same way.
@@ -82,11 +84,6 @@ pub enum EngineEvent {
     Ready { attribution: Option<String> },
     /// A completed frame. ~430 KB at 240×80 (bincode-encoded).
     FrameReady(MapFrame),
-    /// State mirror update. Emitted after any [`EngineCommand`] that
-    /// may have changed the viewport (`Resize`, `ApplyAction`). The
-    /// parent's UI-side mirror feeds Lua's synchronous getters
-    /// (`ttymap.map:center()` etc.) without round-tripping IPC.
-    ViewportChanged { center: LonLat, zoom: f64 },
     /// Protocol or runtime error from the child. Best-effort; the
     /// child may exit immediately after emitting this.
     Error(String),
@@ -231,7 +228,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     let frame_tx = event_tx.clone();
     let frame_sink: crate::map::render::thread::FrameSink =
         Box::new(move |frame| frame_tx.send(EngineEvent::FrameReady(frame)).is_ok());
-    let (_render_handle, mut map) =
+    let (_render_handle, map) =
         match crate::map::build(&config, cache_dir.as_deref(), cols, rows, frame_sink, theme) {
             Ok(pair) => pair,
             Err(e) => {
@@ -248,11 +245,6 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     {
         return 1;
     }
-    // Emit the initial viewport so the parent's mirror starts in sync.
-    let _ = event_tx.send(EngineEvent::ViewportChanged {
-        center: map.center(),
-        zoom: map.zoom(),
-    });
 
     while let Ok(cmd) = read_message::<EngineCommand, _>(reader) {
         match cmd {
@@ -260,11 +252,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
                 // Re-init mid-session is out of scope; ignore.
             }
             EngineCommand::Resize { cols, rows } => {
-                map.handle_resize(cols, rows);
-                let _ = event_tx.send(EngineEvent::ViewportChanged {
-                    center: map.center(),
-                    zoom: map.zoom(),
-                });
+                map.resize(cols, rows);
             }
             EngineCommand::SetTheme(theme) => {
                 map.set_theme(theme);
@@ -275,17 +263,8 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
             EngineCommand::SetLayerVisible { layer, visible } => {
                 map.set_layer_visible(&layer, visible);
             }
-            EngineCommand::ApplyAction(action) => {
-                let changed = map.apply_action(&action);
-                if changed {
-                    let _ = event_tx.send(EngineEvent::ViewportChanged {
-                        center: map.center(),
-                        zoom: map.zoom(),
-                    });
-                }
-            }
-            EngineCommand::Redraw { overlays } => {
-                map.request_redraw(overlays);
+            EngineCommand::Draw { viewport, overlays } => {
+                map.request_draw(viewport, overlays);
             }
             EngineCommand::Shutdown => break,
         }
@@ -300,6 +279,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geo::LonLat;
 
     /// Encode `value`, decode it back, hand the decoded value to
     /// `check`. EngineCommand / EngineEvent don't impl PartialEq
@@ -392,40 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn command_apply_action_jump_round_trips() {
-        let cmd = EngineCommand::ApplyAction(MapAction::Jump(LonLat {
-            lon: 139.76,
-            lat: 35.68,
-        }));
-        roundtrip(&cmd, |d| match d {
-            EngineCommand::ApplyAction(MapAction::Jump(ll)) => {
-                assert_eq!(ll.lon, 139.76);
-                assert_eq!(ll.lat, 35.68);
-            }
-            _ => panic!("expected ApplyAction(Jump)"),
-        });
-    }
-
-    #[test]
-    fn command_apply_action_fly_to_round_trips() {
-        let cmd = EngineCommand::ApplyAction(MapAction::FlyTo {
-            center: LonLat {
-                lon: 13.42,
-                lat: 52.51,
-            },
-            zoom: 10.5,
-        });
-        roundtrip(&cmd, |d| match d {
-            EngineCommand::ApplyAction(MapAction::FlyTo { center, zoom }) => {
-                assert_eq!(center.lon, 13.42);
-                assert_eq!(zoom, 10.5);
-            }
-            _ => panic!("expected ApplyAction(FlyTo)"),
-        });
-    }
-
-    #[test]
-    fn command_redraw_round_trips() {
+    fn command_draw_round_trips() {
         let overlays = vec![UserPolyline {
             coords: vec![
                 LonLat { lon: 0.0, lat: 0.0 },
@@ -436,13 +383,23 @@ mod tests {
             ],
             color: 12,
         }];
-        roundtrip(&EngineCommand::Redraw { overlays }, |d| match d {
-            EngineCommand::Redraw { overlays } => {
+        let viewport = Viewport {
+            center: LonLat {
+                lon: 13.4,
+                lat: 52.5,
+            },
+            zoom: 6.5,
+            width: 160,
+            height: 92,
+        };
+        roundtrip(&EngineCommand::Draw { viewport, overlays }, |d| match d {
+            EngineCommand::Draw { viewport, overlays } => {
+                assert_eq!(viewport.zoom, 6.5);
+                assert_eq!(viewport.center.lon, 13.4);
                 assert_eq!(overlays.len(), 1);
-                assert_eq!(overlays[0].coords.len(), 2);
                 assert_eq!(overlays[0].color, 12);
             }
-            _ => panic!("expected Redraw"),
+            _ => panic!("expected Draw"),
         });
     }
 
@@ -470,29 +427,6 @@ mod tests {
                 assert_eq!(attribution.as_deref(), Some("© OpenStreetMap"));
             }
             _ => panic!("expected Ready"),
-        }
-    }
-
-    #[test]
-    fn event_viewport_changed_round_trips() {
-        let mut buf = Vec::new();
-        write_message(
-            &mut buf,
-            &EngineEvent::ViewportChanged {
-                center: LonLat { lon: 1.0, lat: 2.0 },
-                zoom: 7.5,
-            },
-        )
-        .unwrap();
-        let mut cursor = io::Cursor::new(buf);
-        let decoded: EngineEvent = read_message(&mut cursor).unwrap();
-        match decoded {
-            EngineEvent::ViewportChanged { center, zoom } => {
-                assert_eq!(center.lon, 1.0);
-                assert_eq!(center.lat, 2.0);
-                assert_eq!(zoom, 7.5);
-            }
-            other => panic!("expected ViewportChanged, got {other:?}"),
         }
     }
 

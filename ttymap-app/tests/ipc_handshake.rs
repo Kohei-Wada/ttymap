@@ -53,9 +53,9 @@ fn engine_worker_init_ready_shutdown_round_trip() {
     )
     .expect("write Init");
 
-    // Drain events until Ready. The engine also emits an initial
-    // ViewportChanged right after Ready; any frames are fine to
-    // see here as well.
+    // Drain events until Ready. Frames may arrive once the App sends
+    // its first Draw, but this test never sends one, so we just wait
+    // for Ready and drain the rest to EOF.
     let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
     let mut saw_ready = false;
     while !saw_ready && Instant::now() < deadline {

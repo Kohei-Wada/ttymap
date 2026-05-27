@@ -7,7 +7,7 @@ use crate::geo::{self, LonLat};
 /// where the camera is pointing (`center`, `zoom`) and the canvas
 /// dimensions that frame it. Produced by [`MapState::viewport`] and
 /// wrapped in `RenderTask::Draw` for the render thread to consume.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Viewport {
     pub center: LonLat,
     pub zoom: f64,
