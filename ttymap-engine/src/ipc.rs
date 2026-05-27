@@ -24,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::geo::LonLat;
 use crate::map::Viewport;
-use crate::map::action::MapAction;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;
 use crate::theme::ThemeId;
@@ -62,8 +61,6 @@ pub enum EngineCommand {
     /// are accepted silently so the API stays forward-compatible
     /// with schemas added later.
     SetLayerVisible { layer: String, visible: bool },
-    /// Mutate engine state (pan / zoom / jump / reset / …).
-    ApplyAction(MapAction),
     /// Render a fresh frame at the supplied viewport. `overlays` is
     /// the per-frame batch of Lua-pushed polylines drained by the
     /// App after each `ui::draw`. The App owns the camera; the engine
@@ -281,15 +278,6 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
             EngineCommand::SetLayerVisible { layer, visible } => {
                 map.set_layer_visible(&layer, visible);
             }
-            EngineCommand::ApplyAction(action) => {
-                let changed = map.apply_action(&action);
-                if changed {
-                    let _ = event_tx.send(EngineEvent::ViewportChanged {
-                        center: map.center(),
-                        zoom: map.zoom(),
-                    });
-                }
-            }
             EngineCommand::Draw { viewport, overlays } => {
                 map.request_draw(viewport, overlays);
             }
@@ -394,39 +382,6 @@ mod tests {
                 assert!(!visible);
             }
             _ => panic!("expected SetLayerVisible"),
-        });
-    }
-
-    #[test]
-    fn command_apply_action_jump_round_trips() {
-        let cmd = EngineCommand::ApplyAction(MapAction::Jump(LonLat {
-            lon: 139.76,
-            lat: 35.68,
-        }));
-        roundtrip(&cmd, |d| match d {
-            EngineCommand::ApplyAction(MapAction::Jump(ll)) => {
-                assert_eq!(ll.lon, 139.76);
-                assert_eq!(ll.lat, 35.68);
-            }
-            _ => panic!("expected ApplyAction(Jump)"),
-        });
-    }
-
-    #[test]
-    fn command_apply_action_fly_to_round_trips() {
-        let cmd = EngineCommand::ApplyAction(MapAction::FlyTo {
-            center: LonLat {
-                lon: 13.42,
-                lat: 52.51,
-            },
-            zoom: 10.5,
-        });
-        roundtrip(&cmd, |d| match d {
-            EngineCommand::ApplyAction(MapAction::FlyTo { center, zoom }) => {
-                assert_eq!(center.lon, 13.42);
-                assert_eq!(zoom, 10.5);
-            }
-            _ => panic!("expected ApplyAction(FlyTo)"),
         });
     }
 

@@ -27,7 +27,6 @@ use std::time::Duration;
 use ttymap_engine::Config as EngineConfig;
 use ttymap_engine::ipc::{EngineCommand, EngineEvent, read_message, write_message};
 use ttymap_engine::map::Viewport;
-use ttymap_engine::map::action::MapAction;
 use ttymap_engine::map::render::overlay::UserPolyline;
 use ttymap_engine::theme::ThemeId;
 
@@ -171,10 +170,6 @@ impl EngineHandle {
     // these to forward the same intent to the child. The two sides
     // run identical transitions on identical inputs and stay
     // coherent by construction.
-
-    pub fn send_action(&self, action: &MapAction) {
-        self.send(EngineCommand::ApplyAction(action.clone()));
-    }
 
     pub fn send_resize(&self, cols: u16, rows: u16) {
         self.send(EngineCommand::Resize { cols, rows });

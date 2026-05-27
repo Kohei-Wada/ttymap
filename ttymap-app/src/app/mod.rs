@@ -373,7 +373,6 @@ impl App {
         match msg {
             UserCommand::Map(action) => {
                 if self.map_state.process_action(&action) {
-                    self.map.send_action(&action);
                     self.request_map_redraw();
                 }
             }
