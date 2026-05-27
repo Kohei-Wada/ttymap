@@ -1,0 +1,3 @@
+# Keep free-form issues available alongside the templates — not every
+# report fits a template, and several existing issues predate them.
+blank_issues_enabled: true
