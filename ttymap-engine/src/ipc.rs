@@ -22,7 +22,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::geo::LonLat;
 use crate::map::Viewport;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;
@@ -85,11 +84,6 @@ pub enum EngineEvent {
     Ready { attribution: Option<String> },
     /// A completed frame. ~430 KB at 240×80 (bincode-encoded).
     FrameReady(MapFrame),
-    /// State mirror update. Emitted after any [`EngineCommand`] that
-    /// may have changed the viewport (`Resize`, `ApplyAction`). The
-    /// parent's UI-side mirror feeds Lua's synchronous getters
-    /// (`ttymap.map:center()` etc.) without round-tripping IPC.
-    ViewportChanged { center: LonLat, zoom: f64 },
     /// Protocol or runtime error from the child. Best-effort; the
     /// child may exit immediately after emitting this.
     Error(String),
@@ -234,7 +228,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     let frame_tx = event_tx.clone();
     let frame_sink: crate::map::render::thread::FrameSink =
         Box::new(move |frame| frame_tx.send(EngineEvent::FrameReady(frame)).is_ok());
-    let (_render_handle, mut map) =
+    let (_render_handle, map) =
         match crate::map::build(&config, cache_dir.as_deref(), cols, rows, frame_sink, theme) {
             Ok(pair) => pair,
             Err(e) => {
@@ -251,11 +245,6 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     {
         return 1;
     }
-    // Emit the initial viewport so the parent's mirror starts in sync.
-    let _ = event_tx.send(EngineEvent::ViewportChanged {
-        center: map.center(),
-        zoom: map.zoom(),
-    });
 
     while let Ok(cmd) = read_message::<EngineCommand, _>(reader) {
         match cmd {
@@ -263,11 +252,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
                 // Re-init mid-session is out of scope; ignore.
             }
             EngineCommand::Resize { cols, rows } => {
-                map.handle_resize(cols, rows);
-                let _ = event_tx.send(EngineEvent::ViewportChanged {
-                    center: map.center(),
-                    zoom: map.zoom(),
-                });
+                map.resize(cols, rows);
             }
             EngineCommand::SetTheme(theme) => {
                 map.set_theme(theme);
@@ -294,6 +279,7 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geo::LonLat;
 
     /// Encode `value`, decode it back, hand the decoded value to
     /// `check`. EngineCommand / EngineEvent don't impl PartialEq
@@ -441,29 +427,6 @@ mod tests {
                 assert_eq!(attribution.as_deref(), Some("© OpenStreetMap"));
             }
             _ => panic!("expected Ready"),
-        }
-    }
-
-    #[test]
-    fn event_viewport_changed_round_trips() {
-        let mut buf = Vec::new();
-        write_message(
-            &mut buf,
-            &EngineEvent::ViewportChanged {
-                center: LonLat { lon: 1.0, lat: 2.0 },
-                zoom: 7.5,
-            },
-        )
-        .unwrap();
-        let mut cursor = io::Cursor::new(buf);
-        let decoded: EngineEvent = read_message(&mut cursor).unwrap();
-        match decoded {
-            EngineEvent::ViewportChanged { center, zoom } => {
-                assert_eq!(center.lon, 1.0);
-                assert_eq!(center.lat, 2.0);
-                assert_eq!(zoom, 7.5);
-            }
-            other => panic!("expected ViewportChanged, got {other:?}"),
         }
     }
 

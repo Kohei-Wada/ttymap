@@ -265,12 +265,6 @@ fn reader_loop(mut stdout: BufReader<impl Read>, event_tx: mpsc::Sender<AppEvent
                     return; // App is gone
                 }
             }
-            EngineEvent::ViewportChanged { .. } => {
-                // UI mirror is authoritative for synchronous reads
-                // (updated in apply_action); engine's confirmation is
-                // informational. Phase 3 may use this as a divergence
-                // detector for restart logic.
-            }
             EngineEvent::Ready { .. } => {
                 // Spurious — already consumed during handshake.
             }

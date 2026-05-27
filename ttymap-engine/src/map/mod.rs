@@ -23,7 +23,6 @@ pub use state::{MapState, MapStateOptions, Viewport};
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::geo::LonLat;
 use crate::map::render::pipeline::RenderPipeline;
 use crate::map::render::thread::{FrameSink, RenderClient, RenderHandle};
 use crate::map::styler::Styler;
@@ -44,7 +43,6 @@ use crate::theme::ThemeId;
 /// it transiently to build a `Styler` when [`Self::set_theme`] is
 /// called.
 pub struct MapHandle {
-    state: MapState,
     render_client: RenderClient,
     /// Tile-source attribution string. The Lua subsystem reads this
     /// once at register time (passed to plugin shared state); main
@@ -53,36 +51,15 @@ pub struct MapHandle {
 }
 
 impl MapHandle {
-    // ── Queries ────────────────────────────────────────────────────────
-
-    /// Active centre in lon/lat — what every Lua plugin's
-    /// `ttymap.map:center()` mirror cell tracks.
-    pub fn center(&self) -> LonLat {
-        self.state.center()
-    }
-
-    /// Active zoom level.
-    pub fn zoom(&self) -> f64 {
-        self.state.zoom()
-    }
-
     // ── Mutations ──────────────────────────────────────────────────────
 
-    /// Apply a map-level [`MapAction`] (pan / zoom / jump / reset / …).
-    /// Returns `true` if the state changed in a way that warrants a
-    /// redraw.
-    pub fn apply_action(&mut self, action: &MapAction) -> bool {
-        self.state.process_action(action)
-    }
-
-    /// Resize the canvas — both the in-process [`MapState`] (so the
-    /// next viewport is computed for the new dimensions) and the
-    /// render thread's pipeline (so it allocates a new
-    /// canvas-sized buffer).
-    pub fn handle_resize(&mut self, cols: u16, rows: u16) {
-        self.state.resize(cols, rows);
-        self.render_client
-            .request_resize(self.state.width(), self.state.height());
+    /// Reallocate the render thread's canvas buffer for the new
+    /// terminal size. The post-resize viewport reaches the engine via
+    /// the following `request_draw` — `MapHandle` holds no camera
+    /// state, so it does not recompute a centre/zoom here.
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let (width, height) = render::canvas_size(cols, rows);
+        self.render_client.request_resize(width, height);
     }
 
     /// Switch the active theme on the render thread: build a fresh
@@ -159,27 +136,9 @@ pub fn build(
     let render_handle = RenderHandle::spawn(pipeline, wake_rx, frame_sink);
     let render_client = render_handle.client();
 
-    // Engine has no built-in viewport opinion: if the binary
-    // didn't seed `config.map.lat/lon`, fall back to (0,0) so we
-    // still produce a frame. The binary is responsible for picking
-    // a meaningful starting view (CLI flag / init.lua / app
-    // default — see `ttymap-app` and `ttymap-cli`).
-    let state = MapState::new(
-        MapStateOptions {
-            initial_lon: config.map.lon.unwrap_or(0.0),
-            initial_lat: config.map.lat.unwrap_or(0.0),
-            initial_zoom: config.map.zoom,
-            zoom_step: config.map.zoom_step,
-            max_zoom: config.map.max_zoom,
-        },
-        width,
-        height,
-    );
-
     Ok((
         render_handle,
         MapHandle {
-            state,
             render_client,
             attribution,
         },
