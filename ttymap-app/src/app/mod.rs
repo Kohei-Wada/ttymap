@@ -48,7 +48,7 @@ use ttymap_engine::map::render::frame::MapFrame;
 use ttymap_engine::map::state::MapState;
 use ttymap_lua::{LuaHandle, LuaSubsystem};
 use ttymap_shared::UserCommand;
-use ttymap_shared::event::{Event, EventBus};
+use ttymap_shared::event::{Event, EventBus, Level};
 use ttymap_tui::compositor::op::Op;
 use ttymap_tui::compositor::{BaseLayer, Compositor, Context};
 use ttymap_tui::input::{KeyMap, MouseAdapter};
@@ -408,6 +408,36 @@ impl App {
             UserCommand::SetLayerVisible { layer, visible } => {
                 self.map.set_layer_visible(&layer, visible);
                 self.request_map_redraw();
+            }
+            UserCommand::RestartEngine => self.restart_engine(),
+        }
+    }
+
+    /// Recycle the engine subprocess. The App keeps the camera
+    /// (`map_state`), so the view is preserved: after the child is
+    /// respawned at the current size/theme we resize the mirror to
+    /// match the fresh canvas and redraw, which ships the preserved
+    /// viewport. Label / layer-visibility toggles are engine-side
+    /// render settings the App doesn't mirror, so they reset to
+    /// default — acceptable for an explicit recovery action.
+    fn restart_engine(&mut self) {
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let map_cols = self.sidebar.effective_map_cols(cols);
+        match self.map.restart(map_cols, rows, self.theme_id) {
+            Ok(()) => {
+                self.map_state.resize(map_cols, rows);
+                self.request_map_redraw();
+                self.pending_events.push(Event::Notify {
+                    message: "Engine restarted".into(),
+                    level: Level::Info,
+                });
+            }
+            Err(e) => {
+                log::error!("engine restart failed: {e}");
+                self.pending_events.push(Event::Notify {
+                    message: format!("Engine restart failed: {e}"),
+                    level: Level::Error,
+                });
             }
         }
     }

@@ -176,6 +176,9 @@ Pathological MVT polygons can hang inside earcut. The render path
 guards against this with a 200 ms timeout that abandons the worker
 on miss (`ttymap-engine/src/map/render/earcut_worker.rs`). Abandoned
 threads cannot be cancelled in safe Rust, so each pathology leaks one
-zombie OS thread (#305). Accepted as a known issue against the
-multi-process engine work in #348 — Phase 3 makes the whole engine
-restartable, which cleans up accumulated zombies in one move.
+zombie OS thread (#305). The recovery is the `RestartEngine` command
+(`:` palette → "Restart engine", or the `restart_engine` keymap
+name): `EngineHandle::restart` recycles the engine subprocess, and
+killing the child frees every thread it leaked — reclaiming the
+accumulated zombies in one move. The App owns the camera `MapState`,
+so the view survives the restart.

@@ -95,6 +95,13 @@ pub enum UserCommand {
     /// view mode). Unknown layer names are accepted silently so the
     /// API stays forward-compatible with schemas added later.
     SetLayerVisible { layer: String, visible: bool },
+    /// Tear down and respawn the engine-worker subprocess. An
+    /// app-lifetime concern (peer to [`Self::Quit`]), not a map-data
+    /// one: the App's `MapState` survives, so the view is preserved;
+    /// only the child process is recycled. Reclaims any CPU/memory a
+    /// runaway engine has leaked (e.g. abandoned earcut workers,
+    /// #305) since killing the process frees all its threads.
+    RestartEngine,
 }
 
 impl UserCommand {
@@ -106,6 +113,7 @@ impl UserCommand {
         match name {
             "quit" => Some(UserCommand::Quit),
             "toggle_sidebar" => Some(UserCommand::ToggleSidebar),
+            "restart_engine" => Some(UserCommand::RestartEngine),
             _ => MapAction::from_config_name(name).map(UserCommand::Map),
         }
     }
@@ -120,6 +128,7 @@ impl UserCommand {
             .collect();
         out.push((UserCommand::Quit, "Quit"));
         out.push((UserCommand::ToggleSidebar, "Toggle sidebar"));
+        out.push((UserCommand::RestartEngine, "Restart engine"));
         out
     }
 }

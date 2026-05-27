@@ -65,6 +65,10 @@ enum Kind {
     PluginEntry(u64),
     /// "Theme" entry — swaps provider to [`ThemeProvider`].
     OpenThemeProvider(ThemeId),
+    /// "Restart engine" entry — runs [`UserCommand::RestartEngine`],
+    /// recycling the engine subprocess (reclaims a runaway engine's
+    /// leaked CPU/memory; the view is preserved).
+    RestartEngine,
 }
 
 #[derive(Clone)]
@@ -112,6 +116,12 @@ impl CommandProvider {
             label: "Theme".to_string(),
             hint: current_theme.name().to_string(),
             kind: Kind::OpenThemeProvider(current_theme),
+        });
+
+        all.push(Entry {
+            label: "Restart engine".to_string(),
+            hint: String::new(),
+            kind: Kind::RestartEngine,
         });
 
         let mut provider = Self {
@@ -187,6 +197,7 @@ impl PaletteProvider for CommandProvider {
             Kind::OpenThemeProvider(current) => {
                 PaletteAction::SwitchProvider(Box::new(ThemeProvider::new(*current)))
             }
+            Kind::RestartEngine => PaletteAction::Run(vec![UserCommand::RestartEngine]),
         }
     }
 }
