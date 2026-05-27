@@ -126,21 +126,23 @@ $ ps aux | grep ttymap
 ```
 
 The TUI parent owns input, ratatui draw, Lua runtime, compositor,
-palette, and the UI-side `MapState` mirror. The engine child owns
-the tile cache, fetch / decode pipeline, render thread, and
-authoritative `MapState`. They talk over the child's stdin/stdout
+palette, and the sole `MapState` (the camera). The engine child owns
+the tile cache, fetch / decode pipeline, and render thread — but no
+camera state; it renders whatever `Viewport` the parent hands it.
+They talk over the child's stdin/stdout
 with a bincode-framed `EngineCommand` / `EngineEvent` protocol
 (`ttymap-engine/src/ipc.rs`). The parent end lives in
 `ttymap-app/src/engine_handle.rs` (`EngineHandle::spawn`); the child
 entry is `ttymap_engine::run_as_subprocess`.
 
-Both sides keep their own `MapState`. The UI mirror is mutated
-synchronously on `EngineHandle::apply_action` / `handle_resize` so
-Lua's same-tick `ttymap.map:center()` getter never round-trips IPC.
-The engine runs the identical `MapState` transitions on its side,
-so the two stay coherent by construction (same code, same inputs).
-`EngineEvent::ViewportChanged` is informational today; Phase 3 will
-use it as a divergence detector for engine-restart logic.
+The parent owns the only `MapState`. On a `MapAction` the parent
+updates it and ships the resulting `Viewport` to the engine inside
+`EngineCommand::Draw { viewport, overlays }`; the engine renders
+exactly that viewport and holds no camera state. Lua's same-tick
+`ttymap.map:center()` getter reads the parent's `MapState` directly,
+never round-tripping IPC. The engine still owns the heavy async data
+state (tile cache + fetch / decode pipeline) — the parent holds the
+camera, the engine holds the tiles.
 
 `snap` is the exception: that subcommand is short-lived and uses
 `ttymap_engine::map::build` in-process, skipping the spawn overhead.
