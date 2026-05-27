@@ -21,7 +21,8 @@
 
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -74,6 +75,11 @@ struct Connection {
     child: Child,
     writer: JoinHandle<()>,
     reader: JoinHandle<()>,
+    /// Set by [`EngineHandle::teardown`] to tell the reader thread its
+    /// stream end is an intentional shutdown, not a crash. The reader
+    /// holds a clone; on stream end it emits [`AppEvent::EngineDied`]
+    /// only when this is still `false`.
+    shutting_down: Arc<AtomicBool>,
 }
 
 pub struct EngineHandle {
@@ -86,6 +92,10 @@ pub struct EngineHandle {
     child: Option<Child>,
     writer: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
+    /// Current connection's shutdown flag (see [`Connection`]). `teardown`
+    /// sets it before tearing the child down so the reader stays silent
+    /// on an intentional exit.
+    shutting_down: Option<Arc<AtomicBool>>,
     // ── Respawn inputs ──────────────────────────────────────────────
     // Kept so `restart` can build a fresh child without the caller
     // re-supplying what doesn't change across a restart. The view
@@ -121,6 +131,7 @@ impl EngineHandle {
             child: Some(conn.child),
             writer: Some(conn.writer),
             reader: Some(conn.reader),
+            shutting_down: Some(conn.shutting_down),
             config: config.clone(),
             cache_dir,
             event_tx,
@@ -154,6 +165,7 @@ impl EngineHandle {
         self.child = Some(conn.child);
         self.writer = Some(conn.writer);
         self.reader = Some(conn.reader);
+        self.shutting_down = Some(conn.shutting_down);
         Ok(())
     }
 
@@ -165,6 +177,12 @@ impl EngineHandle {
     /// the way out, so a second call is a no-op. Shared by `Drop` and
     /// `restart`.
     fn teardown(&mut self) {
+        // Mark this an intentional exit *before* the child can close
+        // its stream, so the reader thread stays silent instead of
+        // reporting `EngineDied`.
+        if let Some(flag) = self.shutting_down.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
         if let Some(tx) = self.command_tx.take() {
             let _ = tx.send(EngineCommand::Shutdown);
             drop(tx);
@@ -322,9 +340,11 @@ fn connect(
         .spawn(move || writer_loop(child_stdin, command_rx))
         .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
 
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let reader_flag = shutting_down.clone();
     let reader = thread::Builder::new()
         .name("ttymap-engine-reader".into())
-        .spawn(move || reader_loop(child_stdout, event_tx))
+        .spawn(move || reader_loop(child_stdout, event_tx, reader_flag))
         .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
 
     Ok(Connection {
@@ -333,6 +353,7 @@ fn connect(
         child,
         writer,
         reader,
+        shutting_down,
     })
 }
 
@@ -348,7 +369,11 @@ fn writer_loop(mut stdin: BufWriter<impl Write>, rx: mpsc::Receiver<EngineComman
     let _ = stdin.flush();
 }
 
-fn reader_loop(mut stdout: BufReader<impl Read>, event_tx: mpsc::Sender<AppEvent>) {
+fn reader_loop(
+    mut stdout: BufReader<impl Read>,
+    event_tx: mpsc::Sender<AppEvent>,
+    shutting_down: Arc<AtomicBool>,
+) {
     while let Ok(ev) = read_message::<EngineEvent, _>(&mut stdout) {
         match ev {
             EngineEvent::FrameReady(frame) => {
@@ -363,5 +388,12 @@ fn reader_loop(mut stdout: BufReader<impl Read>, event_tx: mpsc::Sender<AppEvent
                 log::error!("engine-worker error: {msg}");
             }
         }
+    }
+    // Stream ended: child stdout closed (child exited) or a read
+    // error. If we didn't initiate the teardown, the child died
+    // unexpectedly — surface it once so the App can notify the user.
+    if !shutting_down.load(Ordering::Relaxed) {
+        log::error!("engine-worker stream ended unexpectedly; engine died");
+        let _ = event_tx.send(AppEvent::EngineDied);
     }
 }
