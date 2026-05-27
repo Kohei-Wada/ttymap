@@ -258,6 +258,14 @@ impl App {
             // publish lands in the same accumulator dispatch-produced
             // events do — preserving the single-publish-site invariant.
             AppEvent::Bus(bus_event) => self.forward_external_event(bus_event),
+            // The engine subprocess died unexpectedly (panic / OOM /
+            // broken pipe). Frames have stopped; surface it so the user
+            // isn't staring at a silently frozen map. Recovery is the
+            // `RestartEngine` command.
+            AppEvent::EngineDied => self.pending_events.push(Event::Notify {
+                message: "Engine died — run \"Restart engine\" to recover".into(),
+                level: Level::Error,
+            }),
         }
     }
 

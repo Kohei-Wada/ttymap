@@ -73,6 +73,12 @@ pub enum AppEvent {
     /// instead of going through this variant — the queue round-trip
     /// would just add a one-iteration latency for no benefit.
     Bus(BusEvent),
+    /// The engine-worker subprocess exited unexpectedly (panic, OOM,
+    /// broken pipe) — *not* an intentional teardown. Emitted once by
+    /// the engine-reader thread when its stream ends without the
+    /// shutdown flag set. The main loop surfaces it to the user;
+    /// recovery is the `RestartEngine` command.
+    EngineDied,
 }
 
 impl From<UserCommand> for AppEvent {
