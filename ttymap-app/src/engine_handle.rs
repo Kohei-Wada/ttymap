@@ -7,12 +7,13 @@
 //! stdin/stdout, and exposes thin `send_*` methods that the App
 //! calls after mutating its own state.
 //!
-//! The UI-side mirror of [`MapState`] lives on `App` (see
-//! `ttymap-app/src/app/mod.rs`'s `map_state` field) — the App
-//! mutates it synchronously in `dispatch`, then forwards the same
-//! `MapAction` to the child here. Both sides run the identical
-//! transitions on the same inputs, so they stay coherent by
-//! construction without round-trip RPCs.
+//! The sole [`MapState`] (the camera) lives on `App` (see
+//! `ttymap-app/src/app/mod.rs`'s `map_state` field) — the App mutates
+//! it synchronously in `dispatch` and ships the resulting `Viewport`
+//! to the child inside `EngineCommand::Draw`. The engine holds no
+//! camera state of its own, so [`EngineHandle::restart`] can recycle
+//! the child without any state replay: the App's next redraw carries
+//! the preserved viewport.
 //!
 //! `snap` keeps using `ttymap_engine::map::build` in-process; only
 //! the long-lived TUI takes the subprocess path. See #348 for the
@@ -32,10 +33,10 @@ use ttymap_engine::theme::ThemeId;
 
 use crate::app::AppEvent;
 
-/// Errors surfaced from [`EngineHandle::spawn`]. Anything that
-/// happens after spawn (writer / reader thread failures, child
-/// exit) is logged and surfaces as a dead-engine state — Phase 3
-/// will add restart logic.
+/// Errors surfaced from [`EngineHandle::spawn`] / [`EngineHandle::restart`].
+/// Anything that happens after a successful connect (writer / reader
+/// thread failures, child exit) is logged and surfaces as a
+/// dead-engine state; [`EngineHandle::restart`] is the recovery path.
 #[derive(Debug)]
 pub enum EngineHandleError {
     /// Couldn't resolve the parent binary path to spawn the child.
@@ -64,15 +65,34 @@ impl std::fmt::Display for EngineHandleError {
 
 impl std::error::Error for EngineHandleError {}
 
+/// The live half of an [`EngineHandle`] — everything tied to one
+/// running child process. Produced by [`connect`] and swapped in
+/// wholesale on [`EngineHandle::restart`].
+struct Connection {
+    command_tx: mpsc::Sender<EngineCommand>,
+    attribution: Option<String>,
+    child: Child,
+    writer: JoinHandle<()>,
+    reader: JoinHandle<()>,
+}
+
 pub struct EngineHandle {
-    /// Command stream. Cleared in [`Drop`] to signal the writer
-    /// thread to exit (which closes child stdin → child exits).
+    /// Command stream. Cleared in [`Drop`] / [`Self::restart`] to
+    /// signal the writer thread to exit (which closes child stdin →
+    /// child exits).
     command_tx: Option<mpsc::Sender<EngineCommand>>,
     /// Tile-backend attribution string, captured from the Ready event.
     pub attribution: Option<String>,
     child: Option<Child>,
     writer: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
+    // ── Respawn inputs ──────────────────────────────────────────────
+    // Kept so `restart` can build a fresh child without the caller
+    // re-supplying what doesn't change across a restart. The view
+    // (cols / rows / theme) *does* change, so `restart` takes those.
+    config: EngineConfig,
+    cache_dir: Option<std::path::PathBuf>,
+    event_tx: mpsc::Sender<AppEvent>,
 }
 
 impl EngineHandle {
@@ -87,80 +107,95 @@ impl EngineHandle {
         theme: ThemeId,
         event_tx: mpsc::Sender<AppEvent>,
     ) -> Result<Self, EngineHandleError> {
-        let exe = std::env::current_exe().map_err(EngineHandleError::CurrentExe)?;
-        let mut child = Command::new(exe)
-            .arg("engine-worker")
-            // child stderr → parent stderr so engine-side panics or
-            // log messages are visible in the user's terminal session.
-            .stderr(Stdio::inherit())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(EngineHandleError::Spawn)?;
+        let conn = connect(
+            config,
+            cache_dir.clone(),
+            cols,
+            rows,
+            theme,
+            event_tx.clone(),
+        )?;
+        Ok(Self {
+            command_tx: Some(conn.command_tx),
+            attribution: conn.attribution,
+            child: Some(conn.child),
+            writer: Some(conn.writer),
+            reader: Some(conn.reader),
+            config: config.clone(),
+            cache_dir,
+            event_tx,
+        })
+    }
 
-        let mut child_stdin = BufWriter::new(
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| EngineHandleError::Spawn(io::Error::other("missing stdin")))?,
-        );
-        let mut child_stdout = BufReader::new(
-            child
-                .stdout
-                .take()
-                .ok_or_else(|| EngineHandleError::Spawn(io::Error::other("missing stdout")))?,
-        );
+    /// Recycle the engine subprocess: tear down the current child and
+    /// its IPC threads, then spawn a fresh one at the supplied view
+    /// (`cols` / `rows` are the *map area* size, `theme` the active
+    /// theme). The App owns the camera `MapState`, so the caller
+    /// follows up with a redraw to repaint the preserved view. On
+    /// error the handle is left with no live child — `send` degrades
+    /// to a logged no-op until the next successful (re)connect.
+    pub fn restart(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        theme: ThemeId,
+    ) -> Result<(), EngineHandleError> {
+        self.teardown();
+        let conn = connect(
+            &self.config,
+            self.cache_dir.clone(),
+            cols,
+            rows,
+            theme,
+            self.event_tx.clone(),
+        )?;
+        self.command_tx = Some(conn.command_tx);
+        self.attribution = conn.attribution;
+        self.child = Some(conn.child);
+        self.writer = Some(conn.writer);
+        self.reader = Some(conn.reader);
+        Ok(())
+    }
 
-        // Init handshake. Send Init synchronously, then drain events
-        // until Ready arrives. Anything before Ready is unexpected
-        // (the worker only emits Ready / Error / FrameReady — and
-        // FrameReady can't fire before render thread starts, which
-        // is after Ready).
-        write_message(
-            &mut child_stdin,
-            &EngineCommand::Init {
-                config: config.clone(),
-                cache_dir,
-                cols,
-                rows,
-                theme,
-            },
-        )
-        .and_then(|()| child_stdin.flush())
-        .map_err(EngineHandleError::Handshake)?;
-
-        let attribution = loop {
-            let ev: EngineEvent = read_message(&mut child_stdout).map_err(|e| match e.kind() {
-                io::ErrorKind::UnexpectedEof => EngineHandleError::UnexpectedEof,
-                _ => EngineHandleError::Handshake(e),
-            })?;
-            match ev {
-                EngineEvent::Ready { attribution } => break attribution,
-                EngineEvent::Error(msg) => return Err(EngineHandleError::Subprocess(msg)),
-                _ => {
-                    // Tolerate spurious events; loop back.
+    /// Cooperative teardown of the live connection: send Shutdown,
+    /// drop the command tx so the writer thread exits (closes child
+    /// stdin → child breaks its read loop → exits → stdout EOF →
+    /// reader returns), join both threads, reap the child with a
+    /// bounded wait. Idempotent — every field is an `Option` taken on
+    /// the way out, so a second call is a no-op. Shared by `Drop` and
+    /// `restart`.
+    fn teardown(&mut self) {
+        if let Some(tx) = self.command_tx.take() {
+            let _ = tx.send(EngineCommand::Shutdown);
+            drop(tx);
+        }
+        if let Some(w) = self.writer.take() {
+            let _ = w.join();
+        }
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+        if let Some(mut child) = self.child.take() {
+            // Bounded wait — if the child hangs we shouldn't block
+            // forever. 1 s is generous: cooperative exit should take
+            // milliseconds. A runaway engine (the reason to restart)
+            // still exits here because the command loop is responsive;
+            // process exit then frees every thread it leaked.
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        log::warn!("engine-worker did not exit within 1s; killing");
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    Ok(None) => thread::sleep(Duration::from_millis(20)),
+                    Err(_) => break,
                 }
             }
-        };
-
-        let (command_tx, command_rx) = mpsc::channel::<EngineCommand>();
-        let writer = thread::Builder::new()
-            .name("ttymap-engine-writer".into())
-            .spawn(move || writer_loop(child_stdin, command_rx))
-            .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
-
-        let reader = thread::Builder::new()
-            .name("ttymap-engine-reader".into())
-            .spawn(move || reader_loop(child_stdout, event_tx))
-            .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
-
-        Ok(Self {
-            command_tx: Some(command_tx),
-            attribution,
-            child: Some(child),
-            writer: Some(writer),
-            reader: Some(reader),
-        })
+        }
     }
 
     // ── Wire-format senders ─────────────────────────────────────────────
@@ -198,10 +233,10 @@ impl EngineHandle {
         if let Some(tx) = &self.command_tx
             && tx.send(cmd).is_err()
         {
-            // Writer thread is gone — engine has died. Phase 3 will
-            // notice this and respawn; today, just log and let the
-            // App keep running without redraws (frames stop arriving
-            // but the UI doesn't crash).
+            // Writer thread is gone — engine has died. We don't
+            // auto-respawn; just log and let the App keep running
+            // without redraws (frames stop arriving but the UI doesn't
+            // crash). The user can recover with `RestartEngine`.
             log::warn!("engine-worker writer is gone; command dropped");
         }
     }
@@ -209,40 +244,96 @@ impl EngineHandle {
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
-        // Cooperative teardown: send Shutdown, drop the command tx so
-        // the writer thread exits (which closes child stdin → child
-        // breaks its read loop → exits → stdout EOF → reader thread
-        // returns). Then join everything and reap the child.
-        if let Some(tx) = self.command_tx.take() {
-            let _ = tx.send(EngineCommand::Shutdown);
-            drop(tx);
-        }
-        if let Some(w) = self.writer.take() {
-            let _ = w.join();
-        }
-        if let Some(r) = self.reader.take() {
-            let _ = r.join();
-        }
-        if let Some(mut child) = self.child.take() {
-            // Bounded wait — if the child hangs we shouldn't block
-            // shutdown forever. 1 s is generous: cooperative exit
-            // should take milliseconds.
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if std::time::Instant::now() >= deadline => {
-                        log::warn!("engine-worker did not exit within 1s; killing");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    Ok(None) => thread::sleep(Duration::from_millis(20)),
-                    Err(_) => break,
-                }
+        self.teardown();
+    }
+}
+
+/// Spawn an engine-worker child, run the Init → Ready handshake
+/// synchronously (so the returned `attribution` is populated), and
+/// start the writer / reader IPC threads. Shared by
+/// [`EngineHandle::spawn`] and [`EngineHandle::restart`].
+fn connect(
+    config: &EngineConfig,
+    cache_dir: Option<std::path::PathBuf>,
+    cols: u16,
+    rows: u16,
+    theme: ThemeId,
+    event_tx: mpsc::Sender<AppEvent>,
+) -> Result<Connection, EngineHandleError> {
+    let exe = std::env::current_exe().map_err(EngineHandleError::CurrentExe)?;
+    let mut child = Command::new(exe)
+        .arg("engine-worker")
+        // child stderr → parent stderr so engine-side panics or
+        // log messages are visible in the user's terminal session.
+        .stderr(Stdio::inherit())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(EngineHandleError::Spawn)?;
+
+    let mut child_stdin = BufWriter::new(
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| EngineHandleError::Spawn(io::Error::other("missing stdin")))?,
+    );
+    let mut child_stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| EngineHandleError::Spawn(io::Error::other("missing stdout")))?,
+    );
+
+    // Init handshake. Send Init synchronously, then drain events
+    // until Ready arrives. Anything before Ready is unexpected
+    // (the worker only emits Ready / Error / FrameReady — and
+    // FrameReady can't fire before render thread starts, which
+    // is after Ready).
+    write_message(
+        &mut child_stdin,
+        &EngineCommand::Init {
+            config: config.clone(),
+            cache_dir,
+            cols,
+            rows,
+            theme,
+        },
+    )
+    .and_then(|()| child_stdin.flush())
+    .map_err(EngineHandleError::Handshake)?;
+
+    let attribution = loop {
+        let ev: EngineEvent = read_message(&mut child_stdout).map_err(|e| match e.kind() {
+            io::ErrorKind::UnexpectedEof => EngineHandleError::UnexpectedEof,
+            _ => EngineHandleError::Handshake(e),
+        })?;
+        match ev {
+            EngineEvent::Ready { attribution } => break attribution,
+            EngineEvent::Error(msg) => return Err(EngineHandleError::Subprocess(msg)),
+            _ => {
+                // Tolerate spurious events; loop back.
             }
         }
-    }
+    };
+
+    let (command_tx, command_rx) = mpsc::channel::<EngineCommand>();
+    let writer = thread::Builder::new()
+        .name("ttymap-engine-writer".into())
+        .spawn(move || writer_loop(child_stdin, command_rx))
+        .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
+
+    let reader = thread::Builder::new()
+        .name("ttymap-engine-reader".into())
+        .spawn(move || reader_loop(child_stdout, event_tx))
+        .map_err(|e| EngineHandleError::Spawn(io::Error::other(e.to_string())))?;
+
+    Ok(Connection {
+        command_tx,
+        attribution,
+        child,
+        writer,
+        reader,
+    })
 }
 
 fn writer_loop(mut stdin: BufWriter<impl Write>, rx: mpsc::Receiver<EngineCommand>) {
