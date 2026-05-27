@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use ttymap_engine::Config as EngineConfig;
 use ttymap_engine::ipc::{EngineCommand, EngineEvent, read_message, write_message};
+use ttymap_engine::map::Viewport;
 use ttymap_engine::map::action::MapAction;
 use ttymap_engine::map::render::overlay::UserPolyline;
 use ttymap_engine::theme::ThemeId;
@@ -194,8 +195,8 @@ impl EngineHandle {
         });
     }
 
-    pub fn request_redraw(&self, overlays: Vec<UserPolyline>) {
-        self.send(EngineCommand::Redraw { overlays });
+    pub fn request_redraw(&self, viewport: Viewport, overlays: Vec<UserPolyline>) {
+        self.send(EngineCommand::Draw { viewport, overlays });
     }
 
     fn send(&self, cmd: EngineCommand) {

@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::geo::LonLat;
+use crate::map::Viewport;
 use crate::map::action::MapAction;
 use crate::map::render::frame::MapFrame;
 use crate::map::render::overlay::UserPolyline;
@@ -54,18 +55,23 @@ pub enum EngineCommand {
     /// Swap the active theme (rebuilds the styler on the render thread).
     SetTheme(ThemeId),
     /// Toggle tile-rendered text labels. Caller is responsible for
-    /// the follow-up [`EngineCommand::Redraw`].
+    /// the follow-up [`EngineCommand::Draw`].
     SetLabelsVisible(bool),
     /// Show / hide one MVT source layer. Caller is responsible for
-    /// the follow-up [`EngineCommand::Redraw`]. Unknown layer names
+    /// the follow-up [`EngineCommand::Draw`]. Unknown layer names
     /// are accepted silently so the API stays forward-compatible
     /// with schemas added later.
     SetLayerVisible { layer: String, visible: bool },
     /// Mutate engine state (pan / zoom / jump / reset / …).
     ApplyAction(MapAction),
-    /// Trigger a fresh frame using the current viewport. `overlays` is
-    /// the per-frame Lua-pushed polyline batch.
-    Redraw { overlays: Vec<UserPolyline> },
+    /// Render a fresh frame at the supplied viewport. `overlays` is
+    /// the per-frame batch of Lua-pushed polylines drained by the
+    /// App after each `ui::draw`. The App owns the camera; the engine
+    /// renders exactly the viewport it is handed.
+    Draw {
+        viewport: Viewport,
+        overlays: Vec<UserPolyline>,
+    },
     /// Cooperative shutdown. The child drops engine handles (which
     /// joins the render thread via `Drop`) and exits. EOF on stdin
     /// is treated the same way.
@@ -284,8 +290,8 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
                     });
                 }
             }
-            EngineCommand::Redraw { overlays } => {
-                map.request_redraw(overlays);
+            EngineCommand::Draw { viewport, overlays } => {
+                map.request_draw(viewport, overlays);
             }
             EngineCommand::Shutdown => break,
         }
@@ -425,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn command_redraw_round_trips() {
+    fn command_draw_round_trips() {
         let overlays = vec![UserPolyline {
             coords: vec![
                 LonLat { lon: 0.0, lat: 0.0 },
@@ -436,13 +442,23 @@ mod tests {
             ],
             color: 12,
         }];
-        roundtrip(&EngineCommand::Redraw { overlays }, |d| match d {
-            EngineCommand::Redraw { overlays } => {
+        let viewport = Viewport {
+            center: LonLat {
+                lon: 13.4,
+                lat: 52.5,
+            },
+            zoom: 6.5,
+            width: 160,
+            height: 92,
+        };
+        roundtrip(&EngineCommand::Draw { viewport, overlays }, |d| match d {
+            EngineCommand::Draw { viewport, overlays } => {
+                assert_eq!(viewport.zoom, 6.5);
+                assert_eq!(viewport.center.lon, 13.4);
                 assert_eq!(overlays.len(), 1);
-                assert_eq!(overlays[0].coords.len(), 2);
                 assert_eq!(overlays[0].color, 12);
             }
-            _ => panic!("expected Redraw"),
+            _ => panic!("expected Draw"),
         });
     }
 

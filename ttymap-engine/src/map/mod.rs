@@ -108,13 +108,13 @@ impl MapHandle {
         self.render_client.set_layer_visible(layer, visible);
     }
 
-    /// Queue a fresh `RenderTask::Draw` against the current
-    /// viewport, carrying any per-frame overlays the caller has
-    /// collected (e.g. Lua-pushed polylines drained from
-    /// `overlay_sink`).
-    pub fn request_redraw(&self, overlays: Vec<render::overlay::UserPolyline>) {
-        self.render_client
-            .request_draw(self.state.viewport(), overlays);
+    /// Queue a fresh `RenderTask::Draw` at the supplied `viewport`,
+    /// carrying any per-frame overlays the caller collected (e.g.
+    /// Lua-pushed polylines drained from `overlay_sink`). The
+    /// viewport is computed by the App — the engine holds no camera
+    /// state of its own.
+    pub fn request_draw(&self, viewport: Viewport, overlays: Vec<render::overlay::UserPolyline>) {
+        self.render_client.request_draw(viewport, overlays);
     }
 }
 

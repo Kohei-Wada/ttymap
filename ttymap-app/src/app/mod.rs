@@ -428,7 +428,7 @@ impl App {
         self.lua
             .sync_view(self.map_state.center(), self.map_state.zoom());
         let overlays = self.overlay.drain();
-        self.map.request_redraw(overlays);
+        self.map.request_redraw(self.map_state.viewport(), overlays);
     }
 
     /// Build the [`Context`] snapshot read by component hooks.
