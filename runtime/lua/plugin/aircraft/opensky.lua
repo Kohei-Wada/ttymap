@@ -128,26 +128,29 @@ function M.fetch_states(lon, lat)
     return ttymap.http:fetch(M.url(lon, lat))
 end
 
--- Cap the list to the nearest `ttymap.aircraft.max_count` aircraft to
--- the map centre `(lon, lat)`. Pass-through when the cap is unset or
--- the list already fits. Ranking uses an equirectangular distance
--- (longitude scaled by cos(lat)) — exact ground distance is overkill
--- for ordering within a single ~10° fetch window.
+-- Build the display list: cap to the nearest `ttymap.aircraft.max_count`
+-- aircraft to the map centre `(lon, lat)` (equirectangular ranking,
+-- longitude scaled by cos(lat)), then sort by icao24 so the row order
+-- is *stable* across refreshes — the same plane keeps its row instead
+-- of the whole table reshuffling every fetch.
 function M.limit_to_center(list, lon, lat)
     local max = cfg.max_count
-    if not max or #list <= max then return list end
-    local cos_lat = math.cos(math.rad(lat))
-    local function d2(a)
-        local dlon = a.lon - lon
-        if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
-        dlon = dlon * cos_lat
-        local dlat = a.lat - lat
-        return dlon * dlon + dlat * dlat
+    if max and #list > max then
+        local cos_lat = math.cos(math.rad(lat))
+        local function d2(a)
+            local dlon = a.lon - lon
+            if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
+            dlon = dlon * cos_lat
+            local dlat = a.lat - lat
+            return dlon * dlon + dlat * dlat
+        end
+        table.sort(list, function(a, b) return d2(a) < d2(b) end)
+        local nearest = {}
+        for i = 1, max do nearest[i] = list[i] end
+        list = nearest
     end
-    table.sort(list, function(a, b) return d2(a) < d2(b) end)
-    local out = {}
-    for i = 1, max do out[i] = list[i] end
-    return out
+    table.sort(list, function(a, b) return (a.icao or "") < (b.icao or "") end)
+    return list
 end
 
 function M.parse(payload)
@@ -159,6 +162,7 @@ function M.parse(payload)
         local lon, lat = s[6], s[7]
         if type(lon) == "number" and type(lat) == "number" then
             table.insert(out, {
+                icao      = s[1],          -- icao24 hex id (stable key)
                 callsign  = trim(s[2]),
                 country   = trim(s[3]),
                 lon       = lon,

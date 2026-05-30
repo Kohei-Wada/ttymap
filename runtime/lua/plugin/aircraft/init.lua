@@ -16,6 +16,8 @@ local state = {
     job            = nil, -- pending fetch
     last_fetch_sec = 0,   -- wall-clock second of last fetch start
     initial_done   = false, -- whether the first fetch after open landed
+    selected_icao  = nil, -- icao24 of the selected plane (pins selection
+                          -- across refreshes; index alone points elsewhere)
     cur_col        = nil, -- last cursor cell (for hover-select movement gate)
     cur_row        = nil,
 }
@@ -45,7 +47,10 @@ end
 -- the list, wiki-plugin style.
 local function fly_to_selected()
     local a = state.aircraft[state.selected]
-    if a then anim.fly_to(a.lon, a.lat) end
+    if a then
+        state.selected_icao = a.icao
+        anim.fly_to(a.lon, a.lat)
+    end
 end
 
 -- Per-frame work: drain the in-flight fetch, schedule the next one,
@@ -74,6 +79,17 @@ local function on_tick(map)
             state.aircraft = opensky.limit_to_center(
                 opensky.parse(payload), clon, clat
             )
+            -- Re-pin the selection to the same physical plane (by
+            -- icao) in the refreshed list, so the highlight doesn't
+            -- jump to whatever now sits at the old index.
+            if state.selected_icao then
+                for i, a in ipairs(state.aircraft) do
+                    if a.icao == state.selected_icao then
+                        state.selected = i
+                        break
+                    end
+                end
+            end
             if state.selected > #state.aircraft then
                 state.selected = math.max(1, #state.aircraft)
             end
@@ -168,8 +184,7 @@ local function open()
                 return nil
             end
             if key.code == "Enter" then
-                local a = state.aircraft[state.selected]
-                if a then anim.fly_to(a.lon, a.lat) end
+                fly_to_selected()
                 return nil
             end
             if sidebar.is_close_key(key) then
