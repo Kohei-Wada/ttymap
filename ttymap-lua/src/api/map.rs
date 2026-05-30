@@ -178,6 +178,7 @@ where
         "polyline",
         scope.create_function(|_, args| polyline(cell, args))?,
     )?;
+    table.set("arc", scope.create_function(|_, args| arc(cell, args))?)?;
     table.set(
         "center",
         scope.create_function(|_, _: mlua::Table| {
@@ -356,6 +357,65 @@ fn polyline(
     Ok(())
 }
 
+// `map:arc({lon1, lat1}, {lon2, lat2}, color?)` — draw the
+// great-circle (shortest-path) arc between two coordinates. Unlike a
+// 2-point `polyline`, long-haul links bow toward the pole instead of
+// flattening into a wrong-looking straight Mercator line. Colour
+// resolution is identical to `polyline`; the arc lowers onto the same
+// `UserPolyline` overlay batch (1 polyline normally, 2 when the arc
+// crosses the antimeridian).
+fn arc(
+    cell: &RefCell<&mut MapApi<'_>>,
+    (_self, a_table, b_table, color_arg): (
+        mlua::Table,
+        mlua::Table,
+        mlua::Table,
+        Option<mlua::Value>,
+    ),
+) -> mlua::Result<()> {
+    let a = lonlat_from_pair(&a_table)?;
+    let b = lonlat_from_pair(&b_table)?;
+    let mut p = cell.borrow_mut();
+    let color = resolve_color_arg(&p, color_arg.as_ref());
+    for batch in arc_batches(a, b) {
+        p.push_polyline_overlay(batch, color);
+    }
+    Ok(())
+}
+
+fn lonlat_from_pair(pair: &mlua::Table) -> mlua::Result<LonLat> {
+    Ok(LonLat {
+        lon: pair.get(1)?,
+        lat: pair.get(2)?,
+    })
+}
+
+/// Great-circle samples between `a` and `b`, split into drawable
+/// polyline batches at the antimeridian. A normal arc is one batch;
+/// an arc whose samples jump >180° in longitude (the antimeridian
+/// seam) is split so neither polyline wraps the wrong way across the
+/// screen. Batches of fewer than 2 points are dropped — a lone point
+/// can't draw a line.
+fn arc_batches(a: LonLat, b: LonLat) -> Vec<Vec<LonLat>> {
+    let mut batches: Vec<Vec<LonLat>> = Vec::new();
+    let mut cur: Vec<LonLat> = Vec::new();
+    for p in ttymap_engine::geo::great_circle_samples(a, b) {
+        if let Some(prev) = cur.last()
+            && (p.lon - prev.lon).abs() > 180.0
+        {
+            if cur.len() >= 2 {
+                batches.push(std::mem::take(&mut cur));
+            }
+            cur.clear();
+        }
+        cur.push(p);
+    }
+    if cur.len() >= 2 {
+        batches.push(cur);
+    }
+    batches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +501,63 @@ mod tests {
             sink[0].color, road_idx,
             "the \"road\" keyword must resolve to palette.road_motorway"
         );
+    }
+
+    /// A short arc that stays clear of the antimeridian lowers to a
+    /// single polyline batch.
+    #[test]
+    fn arc_short_lowers_to_single_polyline() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:arc({0, 0}, {10, 5}, "accent")"#).exec()
+        })
+        .expect("scope");
+        assert_eq!(sink.len(), 1);
+        assert!(sink[0].coords.len() >= 2);
+    }
+
+    /// An arc crossing the antimeridian (Tokyo → Honolulu) splits into
+    /// two polyline batches so neither wraps the wrong way.
+    #[test]
+    fn arc_across_antimeridian_lowers_to_two_polylines() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:arc({139.69, 35.69}, {-157.86, 21.31}, "accent")"#)
+                .exec()
+        })
+        .expect("scope");
+        assert_eq!(sink.len(), 2);
+    }
+
+    /// `arc` resolves colour through the same path as `polyline`.
+    #[test]
+    fn arc_color_resolves_like_polyline() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let road_idx = DARK.road_motorway;
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        lua.scope(|scope| {
+            let map_table = make_map_table(&lua, scope, &cell)?;
+            lua.globals().set("map", map_table)?;
+            lua.load(r#"map:arc({0, 0}, {10, 5}, "road")"#).exec()
+        })
+        .expect("scope");
+        assert_eq!(sink.len(), 1);
+        assert_eq!(sink[0].color, road_idx);
     }
 
     /// Unknown colour keyword falls back to "accent" — same behaviour

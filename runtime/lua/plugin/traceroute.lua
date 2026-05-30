@@ -281,8 +281,8 @@ local function draw(map, s, chain)
         local from = chain[i]
         local to   = chain[i + 1]
         if from and to then
-            map:polyline({ { from.lon, from.lat }, { to.lon, to.lat } },
-                         color_for(to.num))
+            map:arc({ from.lon, from.lat }, { to.lon, to.lat },
+                    color_for(to.num))
         end
     end
 
@@ -294,8 +294,7 @@ local function draw(map, s, chain)
         local to   = chain[s.tip_idx + 1]
         local lon  = interp_lon(from.lon, to.lon, s.tip_progress)
         local lat  = from.lat + (to.lat - from.lat) * s.tip_progress
-        map:polyline({ { from.lon, from.lat }, { lon, lat } },
-                     color_for(to.num))
+        map:arc({ from.lon, from.lat }, { lon, lat }, color_for(to.num))
     end
 end
 

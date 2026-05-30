@@ -249,7 +249,8 @@ fires for any other subscriber).
 Bridged via a per-frame Lua table built inside `Lua::scope`
 (`make_map_table` in `ttymap-lua/src/api/map.rs`) over the host-side
 `MapApi` struct (`ttymap-lua/src/map_api.rs`). Methods: `point`, `label`, `text_anchored`,
-`polyline`, `center`, `zoom`, `area_width`, `cursor`. Each `on_tick`
+`polyline`, `arc` (great-circle line between two coords), `center`,
+`zoom`, `area_width`, `cursor`. Each `on_tick`
 callback receives this table. **All drawing for non-window plugins
 happens here.**
 
