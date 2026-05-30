@@ -11,12 +11,26 @@
 --   8 = baro_altitude, 9 = on_ground, 10 = velocity, 11 = true_track
 -- (Lua arrays are 1-indexed; OpenSky's docs are 0-indexed.)
 
+local cfg = require("ttymap.aircraft")
+
 local M = {}
 
 local BASE_URL       = "https://opensky-network.org/api/states/all"
+local TOKEN_URL      =
+    "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 local BBOX_HALF_DEG  = 5.0   -- half-side of the bbox sent per fetch
 
 M.INTERVAL_SEC = 12
+
+-- OAuth2 client-credentials state (see ttymap.aircraft). Anonymous
+-- when credentials are unset; otherwise we hold a Bearer token and
+-- refresh it ~1 min before its `expires_in` (≈30 min) lapses.
+local auth = {
+    token      = nil,
+    expires_at = 0,    -- os.time() past which `token` is treated as stale
+    job        = nil,  -- in-flight token POST
+    notified   = false,-- one-shot "authenticated" toast (per program run)
+}
 
 local function trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -40,6 +54,91 @@ function M.url(lon, lat)
         "%s?lamin=%f&lomin=%f&lamax=%f&lomax=%f",
         BASE_URL, lamin, lomin, lamax, lomax
     )
+end
+
+-- True when OAuth2 credentials are configured (read lazily so a
+-- value set in init.lua after this module loads still counts).
+local function configured()
+    return cfg.client_id ~= nil and cfg.client_secret ~= nil
+end
+
+-- Advance the token state machine. Call once per tick. No-op when
+-- unconfigured (anonymous). Drains an in-flight token POST, then kicks
+-- a refresh when the current token is missing/stale and none is in
+-- flight. On failure it backs off ~60s so bad credentials don't hammer
+-- the token endpoint every frame.
+function M.poll_auth()
+    if not configured() then return end
+
+    if auth.job then
+        local body = auth.job:try_take()
+        if body then
+            auth.job = nil
+            local payload = ttymap.json:parse(body)
+            if payload and payload.access_token then
+                auth.token = payload.access_token
+                local ttl = tonumber(payload.expires_in) or 1800
+                auth.expires_at = os.time() + ttl - 60
+                -- Tell the user which source is live, once per run.
+                if not auth.notified then
+                    auth.notified = true
+                    ttymap.notify("aircraft: reading via OpenSky API (authenticated)")
+                end
+            else
+                auth.token = nil
+                auth.expires_at = os.time() + 60
+                ttymap.notify(
+                    "aircraft: OpenSky token fetch failed (check credentials)",
+                    { level = "warn" }
+                )
+            end
+        end
+    end
+
+    if not auth.job and os.time() >= auth.expires_at then
+        auth.job = ttymap.http:fetch(TOKEN_URL, {
+            method = "POST",
+            form   = {
+                grant_type    = "client_credentials",
+                client_id     = cfg.client_id,
+                client_secret = cfg.client_secret,
+            },
+        })
+    end
+end
+
+-- Fetch state vectors around (lon, lat). Adds the Bearer header once a
+-- token is in hand; falls back to an anonymous GET while unconfigured
+-- or before the first token lands.
+function M.fetch_states(lon, lat)
+    if configured() and auth.token then
+        return ttymap.http:fetch(M.url(lon, lat), {
+            headers = { Authorization = "Bearer " .. auth.token },
+        })
+    end
+    return ttymap.http:fetch(M.url(lon, lat))
+end
+
+-- Cap the list to the nearest `ttymap.aircraft.max_count` aircraft to
+-- the map centre `(lon, lat)`. Pass-through when the cap is unset or
+-- the list already fits. Ranking uses an equirectangular distance
+-- (longitude scaled by cos(lat)) — exact ground distance is overkill
+-- for ordering within a single ~10° fetch window.
+function M.limit_to_center(list, lon, lat)
+    local max = cfg.max_count
+    if not max or #list <= max then return list end
+    local cos_lat = math.cos(math.rad(lat))
+    local function d2(a)
+        local dlon = a.lon - lon
+        if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
+        dlon = dlon * cos_lat
+        local dlat = a.lat - lat
+        return dlon * dlon + dlat * dlat
+    end
+    table.sort(list, function(a, b) return d2(a) < d2(b) end)
+    local out = {}
+    for i = 1, max do out[i] = list[i] end
+    return out
 end
 
 function M.parse(payload)

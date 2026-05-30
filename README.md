@@ -41,7 +41,7 @@ Tokyo zoomed in with the wiki panel open:
 
 | Plugin | What it does |
 | --- | --- |
-| `aircraft` | Live aircraft markers from the OpenSky public ADS-B feed; sidebar list with altitude / speed; Enter centers the map. |
+| `aircraft` | Live aircraft markers from the OpenSky ADS-B feed; sidebar list with altitude / speed; Enter centers the map. Anonymous by default; set OpenSky OAuth2 credentials via `require("ttymap.aircraft")` to lift the rate limit. |
 | `antipode` | `:` palette → fly to the diametrically opposite point on the sphere. "What's directly below me through Earth?" |
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
 | `autospin` | `:` palette → camera drifts eastward at a constant rate, looping at the antimeridian. The "this is a globe" demo. Manual pan yields the spin. |
