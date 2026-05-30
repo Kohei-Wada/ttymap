@@ -24,11 +24,22 @@ end
 -- the host. Secondary info (altitude, ground state) renders muted.
 function M.fmt(a)
     local cs = a.callsign ~= "" and a.callsign or "(no callsign)"
-    local secondary = ""
+    local secondary
     if a.on_ground then
         secondary = "  (ground)"
-    elseif type(a.alt) == "number" then
-        secondary = string.format("  %dm", math.floor(a.alt))
+    else
+        local parts = {}
+        if type(a.alt) == "number" then
+            parts[#parts + 1] = string.format("%dm", math.floor(a.alt))
+        end
+        if type(a.velocity) == "number" then
+            -- m/s → km/h.
+            parts[#parts + 1] = string.format("%dkm/h", math.floor(a.velocity * 3.6 + 0.5))
+        end
+        if type(a.vrate) == "number" and math.abs(a.vrate) > 0.5 then
+            parts[#parts + 1] = a.vrate > 0 and "↑" or "↓"
+        end
+        secondary = "  " .. table.concat(parts, " ")
     end
     return {
         { text = cs,        style = "accent" },

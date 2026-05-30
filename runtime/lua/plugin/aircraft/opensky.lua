@@ -20,8 +20,6 @@ local TOKEN_URL      =
     "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 local BBOX_HALF_DEG  = 5.0   -- half-side of the bbox sent per fetch
 
-M.INTERVAL_SEC = 12
-
 -- OAuth2 client-credentials state (see ttymap.aircraft). Anonymous
 -- when credentials are unset; otherwise we hold a Bearer token and
 -- refresh it ~1 min before its `expires_in` (≈30 min) lapses.
@@ -31,6 +29,17 @@ local auth = {
     job        = nil,  -- in-flight token POST
     notified   = false,-- one-shot "authenticated" toast (per program run)
 }
+
+-- Refresh cadence. OpenSky's state resolution is 5 s authenticated /
+-- 10 s anonymous, so polling faster just re-fetches identical data.
+-- Authenticated → 5 s, anonymous → 12 s; `ttymap.aircraft.interval_sec`
+-- overrides. (At ~2 credits/call, 5 s burns ~24/min, so the 4000/day
+-- authed budget lasts ~2.5 h of continuous viewing.)
+function M.interval_sec()
+    if cfg.interval_sec then return cfg.interval_sec end
+    if auth.token then return 5 end
+    return 12
+end
 
 local function trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -151,11 +160,15 @@ function M.parse(payload)
         if type(lon) == "number" and type(lat) == "number" then
             table.insert(out, {
                 callsign  = trim(s[2]),
+                country   = trim(s[3]),
                 lon       = lon,
                 lat       = lat,
                 on_ground = s[9] == true,
-                alt       = s[8],
-                heading   = s[11],
+                alt       = s[8],          -- baro_altitude (m)
+                velocity  = s[10],         -- ground speed (m/s)
+                heading   = s[11],         -- true_track (deg)
+                vrate     = s[12],         -- vertical_rate (m/s, +up)
+                squawk    = s[15],
             })
         end
     end

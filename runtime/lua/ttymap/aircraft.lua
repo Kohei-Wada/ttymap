@@ -23,10 +23,16 @@
 -- centre are kept (markers + sidebar). `nil` = no cap (show all).
 --
 --   require("ttymap.aircraft").max_count = 50
+--
+-- `interval_sec` overrides the refresh cadence. Default auto-picks by
+-- auth state — 5 s authenticated (OpenSky's 5 s resolution), 12 s
+-- anonymous. Lower burns credits faster; faster than the resolution
+-- just re-fetches identical data.
 local M = {
     client_id = nil,
     client_secret = nil,
     max_count = nil,
+    interval_sec = nil,
 }
 
 return M

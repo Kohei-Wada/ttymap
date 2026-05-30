@@ -11,11 +11,13 @@ local sidebar = require("ttymap.sidebar")
 local anim    = require("ttymap.animation")
 
 local state = {
-    aircraft       = {},  -- list of { callsign, lon, lat, on_ground, alt, heading }
+    aircraft       = {},  -- list of { callsign, lon, lat, on_ground, alt, ... }
     selected       = 1,   -- 1-based index
     job            = nil, -- pending fetch
     last_fetch_sec = 0,   -- wall-clock second of last fetch start
     initial_done   = false, -- whether the first fetch after open landed
+    cur_col        = nil, -- last cursor cell (for hover-select movement gate)
+    cur_row        = nil,
 }
 local w = nil       -- card handle while open; nil while closed
 local tick_handle = nil  -- on_tick subscription while open; nil while closed
@@ -24,8 +26,8 @@ local tick_handle = nil  -- on_tick subscription while open; nil while closed
 -- below returns an empty list (= no fetch result yet).
 local function build_lines()
     return {
-        { { text = "Loading...",           style = "muted" } },
-        { { text = "(OpenSky takes ~12s)", style = "muted" } },
+        { { text = "Loading...",          style = "muted" } },
+        { { text = "(fetching OpenSky…)", style = "muted" } },
     }
 end
 
@@ -36,6 +38,14 @@ local function build_items()
         table.insert(items, { display.fmt(a) })
     end
     return items
+end
+
+-- Centre the map on the currently selected aircraft. Called whenever
+-- the selection changes (keyboard nav or hover) so the view follows
+-- the list, wiki-plugin style.
+local function fly_to_selected()
+    local a = state.aircraft[state.selected]
+    if a then anim.fly_to(a.lon, a.lat) end
 end
 
 -- Per-frame work: drain the in-flight fetch, schedule the next one,
@@ -81,10 +91,34 @@ local function on_tick(map)
     end
     -- Schedule the next fetch when the interval has elapsed.
     local now = os.time()
-    if not state.job and (now - state.last_fetch_sec) >= opensky.INTERVAL_SEC then
+    if not state.job and (now - state.last_fetch_sec) >= opensky.interval_sec() then
         state.last_fetch_sec = now
         local lon, lat = map:center()
         state.job = opensky.fetch_states(lon, lat)
+    end
+    -- Hover-select: when the mouse moves onto (within ~2 cells of) a
+    -- marker, select that aircraft. Gated on cursor *movement* so
+    -- keyboard selection (C-n/C-p) still works while the mouse is
+    -- parked; leaves the selection untouched when the cursor is over
+    -- empty space.
+    local clon, clat = map:cursor()
+    if clon then
+        local ccol, crow = map:project(clon, clat)
+        if ccol and (ccol ~= state.cur_col or crow ~= state.cur_row) then
+            state.cur_col, state.cur_row = ccol, crow
+            local best, best_d = nil, 3   -- chebyshev distance < 3 ⇒ within 2 cells
+            for i, a in ipairs(state.aircraft) do
+                local acol, arow = map:project(a.lon, a.lat)
+                if acol then
+                    local d = math.max(math.abs(acol - ccol), math.abs(arow - crow))
+                    if d < best_d then best, best_d = i, d end
+                end
+            end
+            if best and best ~= state.selected then
+                state.selected = best
+                fly_to_selected()
+            end
+        end
     end
     -- Markers.
     for i, a in ipairs(state.aircraft) do
@@ -125,10 +159,12 @@ local function open()
             local n = #state.aircraft
             if sidebar.up_pressed(key) then
                 state.selected = sidebar.cycle(state.selected, n, -1)
+                fly_to_selected()
                 return nil
             end
             if sidebar.down_pressed(key) then
                 state.selected = sidebar.cycle(state.selected, n, 1)
+                fly_to_selected()
                 return nil
             end
             if key.code == "Enter" then

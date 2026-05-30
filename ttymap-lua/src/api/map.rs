@@ -206,6 +206,19 @@ where
             None => Ok((None, None)),
         })?,
     )?;
+    // `map:project(lon, lat) -> col, row | nil, nil` — the absolute
+    // terminal cell a world coordinate draws at (nil when off the
+    // visible map area). For screen-space hit-testing, e.g. matching
+    // `map:cursor()` against plugin markers.
+    table.set(
+        "project",
+        scope.create_function(|_, (_self, lon, lat): (mlua::Table, f64, f64)| {
+            match cell.borrow().project(LonLat { lon, lat }) {
+                Some((c, r)) => Ok((Some(c), Some(r))),
+                None => Ok((None, None)),
+            }
+        })?,
+    )?;
     // Palette colour accessors — return the active theme's colour as an
     // xterm-256 index so plugins can pass them back into `map:polyline`
     // or compare colours at runtime.
@@ -519,6 +532,31 @@ mod tests {
         .expect("scope");
         assert_eq!(sink.len(), 1);
         assert!(sink[0].coords.len() > 2);
+    }
+
+    /// `map:project(lon, lat)` returns the on-screen cell for a visible
+    /// point (here, the frame centre) and `nil` for an off-canvas one.
+    #[test]
+    fn project_maps_center_onscreen_and_far_point_off() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new(&mut buf, area, &frame, &theme, None, &mut sink);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        let (c1, r1, c2, _r2): (Option<u16>, Option<u16>, Option<u16>, Option<u16>) = lua
+            .scope(|scope| {
+                let map_table = make_map_table(&lua, scope, &cell)?;
+                lua.globals().set("map", map_table)?;
+                lua.load(
+                    r#"local c1, r1 = map:project(0, 0)
+                       local c2, r2 = map:project(179, 85)
+                       return c1, r1, c2, r2"#,
+                )
+                .eval()
+            })
+            .expect("scope");
+        assert!(c1.is_some() && r1.is_some(), "centre on-screen");
+        assert!(c2.is_none(), "far point off the small canvas");
     }
 
     /// `arc` resolves colour through the same path as `polyline`.
