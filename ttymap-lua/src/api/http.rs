@@ -70,8 +70,19 @@ fn parse_request_spec(opts: Option<mlua::Table>) -> mlua::Result<RequestSpec> {
     let Some(opts) = opts else {
         return Ok(RequestSpec::default());
     };
+    let method = opts
+        .get::<Option<String>>("method")?
+        .unwrap_or_else(|| "GET".to_string());
+    // `request_bytes` is GET-or-POST only; reject anything else at the
+    // Lua boundary so a typo (`"DELTE"`) errors instead of silently
+    // falling through to a GET.
+    if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("POST") {
+        return Err(mlua::Error::external(format!(
+            "ttymap.http:fetch: unsupported method {method:?} (expected \"GET\" or \"POST\")"
+        )));
+    }
     Ok(RequestSpec {
-        method: opts.get::<Option<String>>("method")?.unwrap_or_default(),
+        method,
         headers: table_to_pairs(opts.get::<Option<mlua::Table>>("headers")?),
         form: table_to_pairs(opts.get::<Option<mlua::Table>>("form")?),
     })
@@ -274,6 +285,16 @@ mod tests {
         assert_eq!(spec.method, "");
         assert!(spec.headers.is_empty());
         assert!(spec.form.is_empty());
+    }
+
+    #[test]
+    fn parse_request_spec_rejects_unknown_method() {
+        let lua = mlua::Lua::new();
+        let opts: mlua::Table = lua
+            .load(r#"return { method = "DELETE" }"#)
+            .eval()
+            .expect("eval opts");
+        assert!(parse_request_spec(Some(opts)).is_err());
     }
 
     #[test]
