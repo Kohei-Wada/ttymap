@@ -38,6 +38,54 @@ pub fn normalize(ll: LonLat) -> LonLat {
     }
 }
 
+/// Unit vector on the sphere for a geographic coordinate.
+fn unit_vec(ll: LonLat) -> (f64, f64, f64) {
+    let lat = ll.lat.to_radians();
+    let lon = ll.lon.to_radians();
+    let cos_lat = lat.cos();
+    (cos_lat * lon.cos(), cos_lat * lon.sin(), lat.sin())
+}
+
+/// Sample points along the great-circle (shortest-path) arc between
+/// `a` and `b`, inclusive of both endpoints, via spherical linear
+/// interpolation on the unit sphere. The sample count grows with the
+/// arc's central angle (~one vertex per 2°, capped) so short hops
+/// stay cheap and long-haul links stay smooth — the curve a 2-point
+/// `polyline` flattens into a wrong-looking straight Mercator line.
+///
+/// Returned longitudes are in (-180, 180]; an arc that crosses the
+/// antimeridian yields a step >180° between two consecutive samples,
+/// which the caller must split on before drawing (otherwise the
+/// polyline wraps the wrong way across the screen).
+pub fn great_circle_samples(a: LonLat, b: LonLat) -> Vec<LonLat> {
+    let (ax, ay, az) = unit_vec(a);
+    let (bx, by, bz) = unit_vec(b);
+    let omega = (ax * bx + ay * by + az * bz).clamp(-1.0, 1.0).acos();
+
+    // Degenerate / near-coincident endpoints: nothing meaningful to
+    // interpolate — hand back the two endpoints as a trivial segment.
+    if omega < 1e-9 {
+        return vec![normalize(a), normalize(b)];
+    }
+
+    let n = ((omega.to_degrees() / 2.0).ceil() as usize).clamp(1, 256);
+    let sin_omega = omega.sin();
+    (0..=n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            let s0 = ((1.0 - t) * omega).sin() / sin_omega;
+            let s1 = (t * omega).sin() / sin_omega;
+            let x = s0 * ax + s1 * bx;
+            let y = s0 * ay + s1 * by;
+            let z = s0 * az + s1 * bz;
+            LonLat {
+                lon: y.atan2(x).to_degrees(),
+                lat: z.atan2((x * x + y * y).sqrt()).to_degrees(),
+            }
+        })
+        .collect()
+}
+
 /// Convert a geographic coordinate to a (fractional) tile coordinate using the
 /// Web Mercator (EPSG:3857) projection.
 pub fn ll2tile(lon: f64, lat: f64, zoom: u32) -> TileCoord {
@@ -292,6 +340,76 @@ mod tests {
             lat: -90.0,
         });
         assert!((n2.lat + MAX_LAT).abs() < EPS);
+    }
+
+    // --- great_circle_samples ------------------------------------------------
+
+    #[test]
+    fn great_circle_endpoints_are_exact() {
+        let a = LonLat {
+            lon: 139.69,
+            lat: 35.69,
+        }; // Tokyo
+        let b = LonLat {
+            lon: -118.24,
+            lat: 34.05,
+        }; // Los Angeles
+        let s = great_circle_samples(a, b);
+        let first = s.first().unwrap();
+        let last = s.last().unwrap();
+        assert!((first.lon - a.lon).abs() < 1e-6 && (first.lat - a.lat).abs() < 1e-6);
+        assert!((last.lon - b.lon).abs() < 1e-6 && (last.lat - b.lat).abs() < 1e-6);
+    }
+
+    #[test]
+    fn great_circle_equator_arc_stays_on_equator() {
+        // Two points on the equator → the short arc is along the equator.
+        let s = great_circle_samples(
+            LonLat {
+                lon: -10.0,
+                lat: 0.0,
+            },
+            LonLat {
+                lon: 10.0,
+                lat: 0.0,
+            },
+        );
+        for p in &s {
+            assert!(p.lat.abs() < 1e-6, "off-equator sample: {:?}", p);
+        }
+    }
+
+    #[test]
+    fn great_circle_bows_toward_the_pole() {
+        // Tokyo → LA: both ~35°N, but the great circle bows north,
+        // so the midpoint sits well above the endpoint latitude —
+        // exactly the curvature a straight 2-point polyline misses.
+        let a = LonLat {
+            lon: 139.69,
+            lat: 35.69,
+        };
+        let b = LonLat {
+            lon: -118.24,
+            lat: 34.05,
+        };
+        let s = great_circle_samples(a, b);
+        let mid = s[s.len() / 2];
+        assert!(mid.lat > 45.0, "midpoint should bow north, got {:?}", mid);
+    }
+
+    #[test]
+    fn great_circle_sample_count_grows_with_distance() {
+        let short =
+            great_circle_samples(LonLat { lon: 0.0, lat: 0.0 }, LonLat { lon: 1.0, lat: 0.0 });
+        let long = great_circle_samples(
+            LonLat { lon: 0.0, lat: 0.0 },
+            LonLat {
+                lon: 150.0,
+                lat: 0.0,
+            },
+        );
+        assert!(short.len() < long.len());
+        assert!(short.len() >= 2);
     }
 
     // --- ll2tile / tile2ll round-trip ----------------------------------------
