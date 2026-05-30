@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Bump the workspace version. Updates the two Cargo.toml entries that
-# don't auto-resolve via `version.workspace = true` and refreshes
-# Cargo.lock. Stops short of commit / tag / push — those are deliberate.
+# Bump the workspace version. Updates the workspace `version` plus every
+# internal `ttymap-*` path-dependency version pin (each crate pins its
+# siblings so `cargo publish` succeeds) and refreshes Cargo.lock. Stops
+# short of commit / tag / push — those are deliberate.
 #
 # Usage: scripts/bump-version.sh 0.1.1
 
@@ -38,11 +39,14 @@ fi
 # Workspace source of truth.
 sed -i.bak -E "s/^version = \"$CUR\"$/version = \"$NEW\"/" Cargo.toml
 
-# `ttymap-engine` dep in the binary crate also pins by version (so
-# `cargo publish` succeeds); keep it in lock-step with the workspace.
-sed -i.bak -E "s/(ttymap-engine = \{ path = \"\.\.\/ttymap-engine\", version = )\"$CUR\"/\1\"$NEW\"/" ttymap-app/Cargo.toml
+# Every crate pins its sibling `ttymap-*` path deps by version (so
+# `cargo publish` succeeds); keep them all in lock-step with the
+# workspace.
+while IFS= read -r f; do
+    sed -i.bak -E "s/(path = \"\.\.\/ttymap-[a-z]+\", version = )\"$CUR\"/\1\"$NEW\"/g" "$f"
+done < <(git ls-files '*Cargo.toml')
 
-rm -f Cargo.toml.bak ttymap-app/Cargo.toml.bak
+git ls-files '*Cargo.toml' | sed 's/$/.bak/' | xargs -r rm -f
 
 # `cargo check` is enough to refresh Cargo.lock and prove the bump
 # compiles — full build wastes time pre-tag.
