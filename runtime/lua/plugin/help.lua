@@ -48,6 +48,8 @@ end
 
 local function build_lines()
     local lines = {
+        { { text = " ttymap v" .. ttymap.version, style = "accent" } },
+        blank_line(),
         text_line(" Terminal-native scriptable globe — Mapbox vector"),
         text_line(" tiles as Unicode Braille, with a Lua plugin"),
         text_line(" runtime for live data overlays and camera tours."),

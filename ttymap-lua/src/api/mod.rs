@@ -52,6 +52,7 @@
 //!                Lua libs at runtime/lua/ttymap/<name>.lua, not here)
 //! ttymap.help   :keymap_entries() -> list   built-in keymap rows for help
 //! ttymap.help   :palette_entries() -> list  per-plugin metadata for help
+//! ttymap.version                            workspace version string (e.g. "0.2.0")
 //! ttymap.log    :info(msg) / :warn(msg) / :error(msg)
 //!                                            forward to host log at
 //!                                            target `lua`
@@ -262,6 +263,12 @@ pub fn install(
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     ttymap.set("runtime_path", lua.create_sequence_from(layers)?)?;
+
+    // ── ttymap.version ───────────────────────────────────────────────
+    //
+    // The workspace version (`version.workspace = true`), so plugins —
+    // the bundled help popup today — can show it without a CLI round-trip.
+    ttymap.set("version", env!("CARGO_PKG_VERSION"))?;
 
     Ok(LuaHostHandles { center, zoom })
 }
