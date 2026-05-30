@@ -24,7 +24,6 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use ttymap_config::KeybindingOverrides;
-use ttymap_engine::map::MapAction;
 use ttymap_shared::UserCommand;
 
 /// A key binding: a key code + optional modifiers.
@@ -146,36 +145,14 @@ impl KeyMap {
 }
 
 impl Default for KeyMap {
+    /// An empty table. Default bindings are *not* seeded in Rust —
+    /// the bundled `runtime/init.lua` declares them with
+    /// `ttymap.keymap.set(...)`, folded in by [`Self::with_overrides`]
+    /// (nvim-style: defaults are ordinary, user-overridable config).
+    /// This empty table is the base the override map layers onto.
     fn default() -> Self {
-        use MapAction::*;
-        let map = |key: &str, action: MapAction| -> (KeyBinding, UserCommand) {
-            (parse_key_binding(key).unwrap(), UserCommand::Map(action))
-        };
-        let intent = |key: &str, intent: UserCommand| -> (KeyBinding, UserCommand) {
-            (parse_key_binding(key).unwrap(), intent)
-        };
         Self {
-            bindings: vec![
-                map("h", PanLeft),
-                map("Left", PanLeft),
-                map("l", PanRight),
-                map("Right", PanRight),
-                map("k", PanUp),
-                map("Up", PanUp),
-                map("j", PanDown),
-                map("Down", PanDown),
-                map("b", PanLeftFast),
-                map("w", PanRightFast),
-                map("C-u", PanUpHalf),
-                map("C-d", PanDownHalf),
-                map("a", ZoomBy(1)),
-                map("+", ZoomBy(1)),
-                map("z", ZoomBy(-1)),
-                map("-", ZoomBy(-1)),
-                map("0", ResetPosition),
-                intent("q", UserCommand::Quit),
-                intent("\\", UserCommand::ToggleSidebar),
-            ],
+            bindings: Vec::new(),
         }
     }
 }
@@ -224,9 +201,25 @@ fn parse_key_code(s: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ttymap_engine::map::MapAction;
 
     fn map(action: MapAction) -> UserCommand {
         UserCommand::Map(action)
+    }
+
+    /// Build a keymap from `(config_name, keys)` rows via the real
+    /// `with_overrides` path — the same mechanism the bundled
+    /// `init.lua` defaults flow through, but with explicit bindings so
+    /// the tests don't depend on the shipped default set.
+    fn km(rows: &[(&str, &[&str])]) -> KeyMap {
+        let mut o = KeybindingOverrides::new();
+        for (name, keys) in rows {
+            o.insert(
+                (*name).to_string(),
+                keys.iter().map(|s| (*s).to_string()).collect(),
+            );
+        }
+        KeyMap::with_overrides(&o)
     }
 
     #[test]
@@ -263,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_lookup() {
-        let km = KeyMap::default();
+        let km = km(&[("pan_left", &["h"]), ("pan_down_half", &["C-d"])]);
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
             Some(&map(MapAction::PanLeft))
@@ -298,21 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn with_overrides_keeps_unoverridden_defaults() {
-        let km = KeyMap::with_overrides(&KeybindingOverrides::new());
-        assert_eq!(
-            km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
-            Some(&map(MapAction::PanLeft))
-        );
-    }
-
-    #[test]
     fn with_overrides_skips_unknown_entries() {
         let mut overrides = KeybindingOverrides::new();
         overrides.insert("not_an_action".to_string(), vec!["x".to_string()]);
-        // Defaults survive an unknown entry — it must not poison the
-        // rest of the table.
+        overrides.insert("pan_left".to_string(), vec!["h".to_string()]);
+        // An unknown name is logged and skipped; it must not poison the
+        // known entries in the same map.
         let km = KeyMap::with_overrides(&overrides);
+        assert_eq!(km.lookup(KeyCode::Char('x'), KeyModifiers::NONE), None);
         assert_eq!(
             km.lookup(KeyCode::Char('h'), KeyModifiers::NONE),
             Some(&map(MapAction::PanLeft))
@@ -321,43 +307,41 @@ mod tests {
 
     const NONE: KeyModifiers = KeyModifiers::NONE;
 
+    /// Representative names across the vocabulary (pan, fast/half pan,
+    /// zoom, reset, the non-map `quit`) resolve to the right command
+    /// through `with_overrides` → `from_config_name`. Exercises the
+    /// config-name → command mapping the bundled defaults rely on,
+    /// without asserting the shipped keys themselves.
     #[test]
-    fn resolve_basic_movement() {
-        let km = KeyMap::default();
+    fn resolve_across_vocabulary() {
+        let km = km(&[
+            ("pan_left", &["h"]),
+            ("pan_right_fast", &["w"]),
+            ("pan_down_half", &["C-d"]),
+            ("zoom_in", &["a"]),
+            ("reset_position", &["0"]),
+            ("quit", &["q"]),
+        ]);
         assert_eq!(
             km.resolve(KeyCode::Char('h'), NONE),
             Some(map(MapAction::PanLeft))
         );
         assert_eq!(
-            km.resolve(KeyCode::Char('j'), NONE),
-            Some(map(MapAction::PanDown))
+            km.resolve(KeyCode::Char('w'), NONE),
+            Some(map(MapAction::PanRightFast))
         );
         assert_eq!(
-            km.resolve(KeyCode::Char('k'), NONE),
-            Some(map(MapAction::PanUp))
+            km.resolve(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            Some(map(MapAction::PanDownHalf))
         );
-        assert_eq!(
-            km.resolve(KeyCode::Char('l'), NONE),
-            Some(map(MapAction::PanRight))
-        );
-    }
-
-    #[test]
-    fn resolve_zoom() {
-        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('a'), NONE),
             Some(map(MapAction::ZoomBy(1)))
         );
         assert_eq!(
-            km.resolve(KeyCode::Char('z'), NONE),
-            Some(map(MapAction::ZoomBy(-1)))
+            km.resolve(KeyCode::Char('0'), NONE),
+            Some(map(MapAction::ResetPosition))
         );
-    }
-
-    #[test]
-    fn resolve_quit() {
-        let km = KeyMap::default();
         assert_eq!(
             km.resolve(KeyCode::Char('q'), NONE),
             Some(UserCommand::Quit)
@@ -365,42 +349,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_big_pan() {
-        let km = KeyMap::default();
+    fn resolve_unbound_key_is_none() {
+        let km = km(&[("pan_left", &["h"])]);
         assert_eq!(
-            km.resolve(KeyCode::Char('w'), NONE),
-            Some(map(MapAction::PanRightFast))
+            km.resolve(KeyCode::Char('h'), NONE),
+            Some(map(MapAction::PanLeft))
         );
-        assert_eq!(
-            km.resolve(KeyCode::Char('b'), NONE),
-            Some(map(MapAction::PanLeftFast))
-        );
-        assert_eq!(
-            km.resolve(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            Some(map(MapAction::PanDownHalf))
-        );
-        assert_eq!(
-            km.resolve(KeyCode::Char('u'), KeyModifiers::CONTROL),
-            Some(map(MapAction::PanUpHalf))
-        );
-    }
-
-    #[test]
-    fn resolve_reset_position() {
-        let km = KeyMap::default();
-        assert_eq!(
-            km.resolve(KeyCode::Char('0'), NONE),
-            Some(map(MapAction::ResetPosition))
-        );
-    }
-
-    #[test]
-    fn resolve_unknown_key_is_none() {
-        let km = KeyMap::default();
-        // `/`, `?`, `i` are widget activation triggers, not keymap
-        // entries — they fall through to `None`.
+        // An unbound key (e.g. a widget activation trigger) falls through.
         assert_eq!(km.resolve(KeyCode::Char('/'), NONE), None);
-        assert_eq!(km.resolve(KeyCode::Char('?'), NONE), None);
-        assert_eq!(km.resolve(KeyCode::Char('i'), NONE), None);
     }
 }

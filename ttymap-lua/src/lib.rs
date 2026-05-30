@@ -248,6 +248,30 @@ mod tests {
         assert_eq!(n, 4);
     }
 
+    /// The default keybindings live in the bundled `runtime/init.lua`
+    /// (`ttymap.keymap.set`), not in Rust. Boot the real subsystem and
+    /// confirm a representative map binding (`h` → pan_left) and the
+    /// non-map `quit` (`q`) land in the harvested `KeyMap`.
+    #[test]
+    fn bundled_init_lua_seeds_default_keymap() {
+        use ttymap_engine::map::MapAction;
+        use ttymap_shared::UserCommand;
+        runtimepath::ensure_runtime_path_for_tests();
+        let (_sub, _cfg, _ov, keymap) = build_subsystem(ttymap_config::Config::default());
+        assert!(
+            keymap
+                .keys_for(&UserCommand::Map(MapAction::PanLeft))
+                .contains(&"h".to_string()),
+            "bundled init.lua should bind h → pan_left"
+        );
+        assert!(
+            keymap
+                .keys_for(&UserCommand::Quit)
+                .contains(&"q".to_string()),
+            "bundled init.lua should bind q → quit"
+        );
+    }
+
     #[test]
     fn lua_can_call_a_rust_closure() {
         let lua = new_lua();

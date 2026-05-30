@@ -44,7 +44,31 @@ ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
 
 ------------------------------------------------------------
--- 2. Bundled libs — infrastructure consumed by every plugin's
+-- 2. Default keybindings. nvim-style: the defaults are ordinary
+-- `ttymap.keymap.set(name, keys)` calls, not hardcoded in Rust, so
+-- user init.lua can rebind or `ttymap.keymap.del(name)` any of them.
+-- Set before libs / plugins so a later require error can't strip the
+-- bindings (the keymap is harvested after this whole file runs).
+-- `name` is a UserCommand config name; the action behaviour (pan
+-- deltas, zoom step, …) lives in Rust — only the key↔name mapping is
+-- configured here.
+------------------------------------------------------------
+ttymap.keymap.set("pan_left", { "h", "Left" })
+ttymap.keymap.set("pan_right", { "l", "Right" })
+ttymap.keymap.set("pan_up", { "k", "Up" })
+ttymap.keymap.set("pan_down", { "j", "Down" })
+ttymap.keymap.set("pan_left_fast", { "b" })
+ttymap.keymap.set("pan_right_fast", { "w" })
+ttymap.keymap.set("pan_up_half", { "C-u" })
+ttymap.keymap.set("pan_down_half", { "C-d" })
+ttymap.keymap.set("zoom_in", { "a", "+" })
+ttymap.keymap.set("zoom_out", { "z", "-" })
+ttymap.keymap.set("reset_position", { "0" })
+ttymap.keymap.set("quit", { "q" })
+ttymap.keymap.set("toggle_sidebar", { "\\" })
+
+------------------------------------------------------------
+-- 3. Bundled libs — infrastructure consumed by every plugin's
 -- `ttymap.notify(msg)` calls. A lib (not plugin) so users can
 -- pass `setup({ ttl_s = …, ring_cap = …, max_text_width = … })`
 -- to tweak the renderer; skipping the call disables it entirely.
@@ -52,7 +76,7 @@ ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driv
 require("ttymap.notify").setup()
 
 ------------------------------------------------------------
--- 3. Bundled plugins — chrome first, then everything else
+-- 4. Bundled plugins — chrome first, then everything else
 -- (alphabetical). Adjust per file to taste. Each lives at
 -- `<layer>/lua/plugin/<name>.lua` (or `<name>/init.lua`) and is
 -- required as a standard Lua module via `package.path` — no
@@ -82,7 +106,7 @@ require "plugin.travel"
 require "plugin.wiki"
 
 ------------------------------------------------------------
--- 4. User init.lua — runs LAST so the user wins:
+-- 5. User init.lua — runs LAST so the user wins:
 --   * override any `ttymap.opt.*` set above
 --   * `ttymap.keymap.set/del`
 --   * `require` user plugins (their registrations stack on top of
