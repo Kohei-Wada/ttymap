@@ -386,6 +386,9 @@ fn reader_loop(
             }
             EngineEvent::Error(msg) => {
                 log::error!("engine-worker error: {msg}");
+                if event_tx.send(AppEvent::EngineError(msg)).is_err() {
+                    return; // App is gone
+                }
             }
         }
     }
