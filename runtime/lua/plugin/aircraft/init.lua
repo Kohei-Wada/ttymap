@@ -44,6 +44,8 @@ end
 -- callback is gone from the bus iteration entirely (no per-frame
 -- fetch / paint cost when aircraft is hidden).
 local function on_tick(map)
+    -- Advance the OpenSky OAuth token (no-op when unconfigured).
+    opensky.poll_auth()
     -- Drain any in-flight fetch.
     if state.job then
         local body = state.job:try_take()
@@ -79,7 +81,7 @@ local function on_tick(map)
     if not state.job and (now - state.last_fetch_sec) >= opensky.INTERVAL_SEC then
         state.last_fetch_sec = now
         local lon, lat = map:center()
-        state.job = ttymap.http:fetch(opensky.url(lon, lat))
+        state.job = opensky.fetch_states(lon, lat)
     end
     -- Markers.
     for i, a in ipairs(state.aircraft) do
