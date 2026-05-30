@@ -279,6 +279,14 @@ impl<'a> MapApi<'a> {
         self.proj.cell_to_ll(local_col, local_row)
     }
 
+    /// Project a world coordinate to the absolute terminal cell it
+    /// draws at, or `None` if it falls outside the visible map area.
+    /// Plugin-facing: lets a plugin hit-test the mouse cursor against
+    /// its own markers in screen space (e.g. hover-to-select).
+    pub fn project(&self, ll: LonLat) -> Option<(u16, u16)> {
+        self.cell_for(ll)
+    }
+
     // ── Internal: project + clip in one place ───────────────────────
 
     /// Project a world coordinate into terminal-cell space and clip

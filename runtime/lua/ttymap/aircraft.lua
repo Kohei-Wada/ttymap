@@ -23,10 +23,22 @@
 -- centre are kept (markers + sidebar). `nil` = no cap (show all).
 --
 --   require("ttymap.aircraft").max_count = 50
+--
+-- `interval_sec` overrides the refresh cadence. Default auto-picks by
+-- auth state — 5 s authenticated (OpenSky's 5 s resolution), 12 s
+-- anonymous. Lower burns credits faster; faster than the resolution
+-- just re-fetches identical data.
+-- `bbox_half_deg` is the half-side (degrees) of the box queried around
+-- the map centre — only aircraft inside it are returned, so this, not
+-- `max_count`, is what bounds how many you can see. Default 5 (a
+-- 10°×10° box). Bigger = more aircraft but more credits per call
+-- (≤25 sq°=1, ≤100=2, ≤400=3, else 4) and they're farther from view.
 local M = {
     client_id = nil,
     client_secret = nil,
     max_count = nil,
+    interval_sec = nil,
+    bbox_half_deg = nil,
 }
 
 return M

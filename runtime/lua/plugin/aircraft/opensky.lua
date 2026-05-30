@@ -20,8 +20,6 @@ local TOKEN_URL      =
     "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 local BBOX_HALF_DEG  = 5.0   -- half-side of the bbox sent per fetch
 
-M.INTERVAL_SEC = 12
-
 -- OAuth2 client-credentials state (see ttymap.aircraft). Anonymous
 -- when credentials are unset; otherwise we hold a Bearer token and
 -- refresh it ~1 min before its `expires_in` (≈30 min) lapses.
@@ -31,6 +29,17 @@ local auth = {
     job        = nil,  -- in-flight token POST
     notified   = false,-- one-shot "authenticated" toast (per program run)
 }
+
+-- Refresh cadence. OpenSky's state resolution is 5 s authenticated /
+-- 10 s anonymous, so polling faster just re-fetches identical data.
+-- Authenticated → 5 s, anonymous → 12 s; `ttymap.aircraft.interval_sec`
+-- overrides. (At ~2 credits/call, 5 s burns ~24/min, so the 4000/day
+-- authed budget lasts ~2.5 h of continuous viewing.)
+function M.interval_sec()
+    if cfg.interval_sec then return cfg.interval_sec end
+    if auth.token then return 5 end
+    return 12
+end
 
 local function trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -46,10 +55,11 @@ end
 -- longitude to [-180, 180]; OpenSky doesn't accept antimeridian-
 -- wrapping bboxes so this just stops at the edge.
 function M.url(lon, lat)
-    local lamin = clamp(lat - BBOX_HALF_DEG, -90.0, 90.0)
-    local lamax = clamp(lat + BBOX_HALF_DEG, -90.0, 90.0)
-    local lomin = clamp(lon - BBOX_HALF_DEG, -180.0, 180.0)
-    local lomax = clamp(lon + BBOX_HALF_DEG, -180.0, 180.0)
+    local half = cfg.bbox_half_deg or BBOX_HALF_DEG
+    local lamin = clamp(lat - half, -90.0, 90.0)
+    local lamax = clamp(lat + half, -90.0, 90.0)
+    local lomin = clamp(lon - half, -180.0, 180.0)
+    local lomax = clamp(lon + half, -180.0, 180.0)
     return string.format(
         "%s?lamin=%f&lomin=%f&lamax=%f&lomax=%f",
         BASE_URL, lamin, lomin, lamax, lomax
@@ -119,26 +129,29 @@ function M.fetch_states(lon, lat)
     return ttymap.http:fetch(M.url(lon, lat))
 end
 
--- Cap the list to the nearest `ttymap.aircraft.max_count` aircraft to
--- the map centre `(lon, lat)`. Pass-through when the cap is unset or
--- the list already fits. Ranking uses an equirectangular distance
--- (longitude scaled by cos(lat)) — exact ground distance is overkill
--- for ordering within a single ~10° fetch window.
+-- Build the display list: cap to the nearest `ttymap.aircraft.max_count`
+-- aircraft to the map centre `(lon, lat)` (equirectangular ranking,
+-- longitude scaled by cos(lat)), then sort by icao24 so the row order
+-- is *stable* across refreshes — the same plane keeps its row instead
+-- of the whole table reshuffling every fetch.
 function M.limit_to_center(list, lon, lat)
     local max = cfg.max_count
-    if not max or #list <= max then return list end
-    local cos_lat = math.cos(math.rad(lat))
-    local function d2(a)
-        local dlon = a.lon - lon
-        if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
-        dlon = dlon * cos_lat
-        local dlat = a.lat - lat
-        return dlon * dlon + dlat * dlat
+    if max and #list > max then
+        local cos_lat = math.cos(math.rad(lat))
+        local function d2(a)
+            local dlon = a.lon - lon
+            if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
+            dlon = dlon * cos_lat
+            local dlat = a.lat - lat
+            return dlon * dlon + dlat * dlat
+        end
+        table.sort(list, function(a, b) return d2(a) < d2(b) end)
+        local nearest = {}
+        for i = 1, max do nearest[i] = list[i] end
+        list = nearest
     end
-    table.sort(list, function(a, b) return d2(a) < d2(b) end)
-    local out = {}
-    for i = 1, max do out[i] = list[i] end
-    return out
+    table.sort(list, function(a, b) return (a.icao or "") < (b.icao or "") end)
+    return list
 end
 
 function M.parse(payload)
@@ -150,12 +163,17 @@ function M.parse(payload)
         local lon, lat = s[6], s[7]
         if type(lon) == "number" and type(lat) == "number" then
             table.insert(out, {
+                icao      = s[1],          -- icao24 hex id (stable key)
                 callsign  = trim(s[2]),
+                country   = trim(s[3]),
                 lon       = lon,
                 lat       = lat,
                 on_ground = s[9] == true,
-                alt       = s[8],
-                heading   = s[11],
+                alt       = s[8],          -- baro_altitude (m)
+                velocity  = s[10],         -- ground speed (m/s)
+                heading   = s[11],         -- true_track (deg)
+                vrate     = s[12],         -- vertical_rate (m/s, +up)
+                squawk    = s[15],
             })
         end
     end
