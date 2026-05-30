@@ -147,7 +147,7 @@ userdatas:
 
 | Namespace        | Methods                                                                                        |
 |------------------|------------------------------------------------------------------------------------------------|
-| `ttymap.http`    | `:fetch(url)`, `:fetch_cached(url, ttl_secs)`, `:url_encode(s)`                                |
+| `ttymap.http`    | `:fetch(url [, opts])` (opts: `method` / `headers` / `form` for POST + auth'd requests), `:fetch_cached(url, ttl_secs)`, `:url_encode(s)` |
 | `ttymap.map`     | `:jump(lon, lat)`, `:zoom(level)`, `:zoom()` getter, `:fly_to(lon, lat, zoom)`, `:center()`    |
 | `ttymap.json`    | `:parse(s)` → table or nil, `:stringify(value)` → string                                       |
 | `ttymap.sgp4`    | `:parse_tle`, `:parse_tles`, `:propagate`, `:propagate_batch`                                  |

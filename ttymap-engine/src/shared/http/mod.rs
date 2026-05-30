@@ -102,6 +102,46 @@ impl HttpClient {
             FetchError::Network(e.to_string())
         })
     }
+
+    /// General request → raw bytes. `method` is `"POST"` for a POST
+    /// (any other value is a GET); `headers` are extra request headers
+    /// (e.g. `Authorization`); a non-empty `form` is sent as an
+    /// `application/x-www-form-urlencoded` body. Backs the Lua
+    /// `ttymap.http:fetch(url, opts)` surface so plugins can do auth'd /
+    /// token-exchange requests (OAuth2 client-credentials, …) without
+    /// any endpoint-specific Rust.
+    pub fn request_bytes(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        form: &[(String, String)],
+    ) -> Result<Vec<u8>, FetchError> {
+        let mut req = if method.eq_ignore_ascii_case("POST") {
+            self.inner.post(url)
+        } else {
+            self.inner.get(url)
+        };
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        if !form.is_empty() {
+            req = req.form(form);
+        }
+        let response = req.send().map_err(|e| {
+            debug!("{}: {}: request error: {}", self.tag, url, e);
+            FetchError::Network(e.to_string())
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            debug!("{}: {}: status {}", self.tag, url, status);
+            return Err(FetchError::Http(status.as_u16()));
+        }
+        response.bytes().map(|b| b.to_vec()).map_err(|e| {
+            debug!("{}: {}: body error: {}", self.tag, url, e);
+            FetchError::Network(e.to_string())
+        })
+    }
 }
 
 fn builder() -> reqwest::blocking::ClientBuilder {
