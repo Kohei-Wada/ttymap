@@ -80,7 +80,7 @@ local function on_tick(map)
       local t   = i / out_steps
       local lon = interp_lon(ping.src[1], ping.dst[1], t)
       local lat = ping.src[2] + (ping.dst[2] - ping.src[2]) * t
-      map:arc(ping.src, { lon, lat }, ping.color)
+      map:polyline({ ping.src, { lon, lat } }, ping.color)
     elseif i <= out_steps + ret_steps then
       -- Return: a new line grows from dst; tip interpolates dst → src.
       -- (The previous outbound line is gone — overlays are ephemeral
@@ -88,7 +88,7 @@ local function on_tick(map)
       local t   = (i - out_steps) / ret_steps
       local lon = interp_lon(ping.dst[1], ping.src[1], t)
       local lat = ping.dst[2] + (ping.src[2] - ping.dst[2]) * t
-      map:arc(ping.dst, { lon, lat }, ping.color)
+      map:polyline({ ping.dst, { lon, lat } }, ping.color)
     end
     -- else: pause phase, draw nothing.
     ::continue::
