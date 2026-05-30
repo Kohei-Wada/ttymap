@@ -77,6 +77,34 @@ pub struct LuaSubsystem {
     pub footer_hints: Vec<(&'static str, &'static str)>,
 }
 
+/// Degraded-mode result for the two early returns in
+/// [`build_subsystem`] where Lua bootstrap fails before init.lua runs
+/// (`install_ttymap_global` / `api::install`): a live subsystem with
+/// no plugins and an empty keymap (default bindings come from
+/// init.lua, which never ran). Consumes the pieces built so far.
+fn degraded_subsystem(
+    ticks: std::rc::Rc<crate::tick::TickRegistry>,
+    ops: op::OpsBuffer,
+    shared: Arc<LuaHostShared>,
+    bus: std::rc::Rc<ttymap_shared::event::EventBus>,
+    registry: LuaRegistryHandle,
+    defaults: Config,
+) -> (LuaSubsystem, Config, KeybindingOverrides, KeyMap) {
+    let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
+    (
+        LuaSubsystem {
+            handle: LuaHandle::new(ticks.clone(), Vec::new(), ops, shared),
+            bus,
+            ticks,
+            registry,
+            footer_hints: Vec::new(),
+        },
+        defaults,
+        KeybindingOverrides::new(),
+        keymap,
+    )
+}
+
 /// Build the Lua plugin subsystem: create the shared VM, install
 /// the API surface, run the init.lua chain (which `require`s every
 /// bundled plugin as `plugin.<name>` via standard `package.path`,
@@ -130,19 +158,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         Ok(state) => state,
         Err(e) => {
             log::warn!("lua: install_ttymap_global failed: {} — using defaults", e);
-            let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
-            return (
-                LuaSubsystem {
-                    handle: LuaHandle::new(ticks.clone(), Vec::new(), ops, shared),
-                    bus,
-                    ticks,
-                    registry,
-                    footer_hints: Vec::new(),
-                },
-                defaults,
-                KeybindingOverrides::new(),
-                keymap,
-            );
+            return degraded_subsystem(ticks, ops, shared, bus, registry, defaults);
         }
     };
 
@@ -161,19 +177,7 @@ pub fn build_subsystem(defaults: Config) -> (LuaSubsystem, Config, KeybindingOve
         Ok(h) => h,
         Err(e) => {
             log::warn!("lua: api::install failed: {} — plugins disabled", e);
-            let keymap = KeyMap::with_overrides(&KeybindingOverrides::new());
-            return (
-                LuaSubsystem {
-                    handle: LuaHandle::new(ticks.clone(), Vec::new(), ops, shared),
-                    bus,
-                    ticks,
-                    registry,
-                    footer_hints: Vec::new(),
-                },
-                defaults,
-                KeybindingOverrides::new(),
-                keymap,
-            );
+            return degraded_subsystem(ticks, ops, shared, bus, registry, defaults);
         }
     };
 
