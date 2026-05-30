@@ -55,10 +55,11 @@ end
 -- longitude to [-180, 180]; OpenSky doesn't accept antimeridian-
 -- wrapping bboxes so this just stops at the edge.
 function M.url(lon, lat)
-    local lamin = clamp(lat - BBOX_HALF_DEG, -90.0, 90.0)
-    local lamax = clamp(lat + BBOX_HALF_DEG, -90.0, 90.0)
-    local lomin = clamp(lon - BBOX_HALF_DEG, -180.0, 180.0)
-    local lomax = clamp(lon + BBOX_HALF_DEG, -180.0, 180.0)
+    local half = cfg.bbox_half_deg or BBOX_HALF_DEG
+    local lamin = clamp(lat - half, -90.0, 90.0)
+    local lamax = clamp(lat + half, -90.0, 90.0)
+    local lomin = clamp(lon - half, -180.0, 180.0)
+    local lomax = clamp(lon + half, -180.0, 180.0)
     return string.format(
         "%s?lamin=%f&lomin=%f&lamax=%f&lomax=%f",
         BASE_URL, lamin, lomin, lamax, lomax
