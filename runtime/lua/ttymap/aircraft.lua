@@ -17,9 +17,16 @@
 -- nvim-style: the plugin reads these fields lazily at fetch time, so
 -- setting them in init.lua (which runs after the plugin is required)
 -- takes effect on the next refresh.
+--
+-- `max_count` caps how many aircraft are shown — dense airspace can
+-- return hundreds. When set, only the nearest `max_count` to the map
+-- centre are kept (markers + sidebar). `nil` = no cap (show all).
+--
+--   require("ttymap.aircraft").max_count = 50
 local M = {
     client_id = nil,
     client_secret = nil,
+    max_count = nil,
 }
 
 return M

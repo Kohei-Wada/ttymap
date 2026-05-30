@@ -29,6 +29,7 @@ local auth = {
     token      = nil,
     expires_at = 0,    -- os.time() past which `token` is treated as stale
     job        = nil,  -- in-flight token POST
+    notified   = false,-- one-shot "authenticated" toast (per program run)
 }
 
 local function trim(s)
@@ -78,6 +79,11 @@ function M.poll_auth()
                 auth.token = payload.access_token
                 local ttl = tonumber(payload.expires_in) or 1800
                 auth.expires_at = os.time() + ttl - 60
+                -- Tell the user which source is live, once per run.
+                if not auth.notified then
+                    auth.notified = true
+                    ttymap.notify("aircraft: reading via OpenSky API (authenticated)")
+                end
             else
                 auth.token = nil
                 auth.expires_at = os.time() + 60
@@ -111,6 +117,28 @@ function M.fetch_states(lon, lat)
         })
     end
     return ttymap.http:fetch(M.url(lon, lat))
+end
+
+-- Cap the list to the nearest `ttymap.aircraft.max_count` aircraft to
+-- the map centre `(lon, lat)`. Pass-through when the cap is unset or
+-- the list already fits. Ranking uses an equirectangular distance
+-- (longitude scaled by cos(lat)) — exact ground distance is overkill
+-- for ordering within a single ~10° fetch window.
+function M.limit_to_center(list, lon, lat)
+    local max = cfg.max_count
+    if not max or #list <= max then return list end
+    local cos_lat = math.cos(math.rad(lat))
+    local function d2(a)
+        local dlon = a.lon - lon
+        if dlon > 180 then dlon = dlon - 360 elseif dlon < -180 then dlon = dlon + 360 end
+        dlon = dlon * cos_lat
+        local dlat = a.lat - lat
+        return dlon * dlon + dlat * dlat
+    end
+    table.sort(list, function(a, b) return d2(a) < d2(b) end)
+    local out = {}
+    for i = 1, max do out[i] = list[i] end
+    return out
 end
 
 function M.parse(payload)

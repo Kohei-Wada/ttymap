@@ -60,7 +60,10 @@ local function on_tick(map)
                 state.job = nil
                 return
             end
-            state.aircraft = opensky.parse(payload)
+            local clon, clat = map:center()
+            state.aircraft = opensky.limit_to_center(
+                opensky.parse(payload), clon, clat
+            )
             if state.selected > #state.aircraft then
                 state.selected = math.max(1, #state.aircraft)
             end
