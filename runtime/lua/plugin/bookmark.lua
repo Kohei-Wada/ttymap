@@ -110,15 +110,21 @@ local function open_picker(opts)
     end
 
     local query = ""
+    -- Names of the rows `items()` last returned, in display order, so
+    -- `execute(idx)` indexes exactly what the user sees — no second
+    -- filter pass that could diverge from the rendered list.
+    local visible = {}
     ttymap.api.palette.open({
         prompt = opts.prompt,
         submit_mode = "on_each_key",
         filter = function(q) query = trim(q):lower() end,
         items = function()
+            visible = {}
             local out = {}
             for _, name in ipairs(ordered) do
                 if query == "" or name:lower():find(query, 1, true) then
                     local b = all[name]
+                    visible[#visible + 1] = name
                     out[#out + 1] = {
                         label = name,
                         hint = b.desc or string.format("%.3f, %.3f", b.lat, b.lon),
@@ -128,16 +134,8 @@ local function open_picker(opts)
             return out
         end,
         execute = function(idx)
-            -- Re-derive the visible (filtered) order so idx maps to
-            -- the row the user actually sees.
-            local visible = {}
-            for _, name in ipairs(ordered) do
-                if query == "" or name:lower():find(query, 1, true) then
-                    visible[#visible + 1] = name
-                end
-            end
             local name = visible[idx]
-            if name then opts.on_pick(name, all[name], all) end
+            if name and all[name] then opts.on_pick(name, all[name], all) end
         end,
     })
 end
