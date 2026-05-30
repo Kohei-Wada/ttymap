@@ -79,6 +79,12 @@ pub enum AppEvent {
     /// shutdown flag set. The main loop surfaces it to the user;
     /// recovery is the `RestartEngine` command.
     EngineDied,
+    /// The engine-worker reported a runtime error (`EngineEvent::Error`)
+    /// while the loop is running — the child is still alive, but an op
+    /// failed. Emitted by the engine-reader thread; the main loop
+    /// surfaces it as an error notify so the user gets feedback without
+    /// tailing the log. The carried `String` is the engine-side message.
+    EngineError(String),
 }
 
 impl From<UserCommand> for AppEvent {

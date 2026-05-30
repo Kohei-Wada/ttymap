@@ -266,6 +266,10 @@ impl App {
                 message: "Engine died — run \"Restart engine\" to recover".into(),
                 level: Level::Error,
             }),
+            // The engine reported a runtime error but is still alive.
+            // Surface it so the user gets feedback instead of a silent
+            // log line (#253).
+            AppEvent::EngineError(msg) => self.pending_events.push(engine_error_notify(msg)),
         }
     }
 
@@ -492,5 +496,27 @@ impl App {
         };
         terminal.draw(|f| ui::draw(f, inputs))?;
         Ok(())
+    }
+}
+
+/// Build the error notify surfaced when the engine reports a runtime
+/// error (`EngineEvent::Error`) while the loop is running (#253). Pure
+/// so it is unit-testable without standing up an `App`.
+fn engine_error_notify(msg: String) -> Event {
+    Event::Notify {
+        message: format!("Engine error: {msg}"),
+        level: Level::Error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_error_notify_formats_with_error_level() {
+        let Event::Notify { message, level } = engine_error_notify("tile fetch failed".into());
+        assert_eq!(message, "Engine error: tile fetch failed");
+        assert_eq!(level, Level::Error);
     }
 }
