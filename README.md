@@ -37,7 +37,7 @@ Tokyo zoomed in with the wiki panel open:
 
 ## Bundled plugins
 
-18 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
+19 plugins ship with the runtime. Each is a reference for one shape — toggleable overlay, palette one-shot, side panel, palette provider, and a quick game. The list is the answer to "what is ttymap actually for". Plus one bundled lib (`ttymap.notify`) that renders `ttymap.notify(...)` toasts top-left for every plugin.
 
 | Plugin | What it does |
 | --- | --- |
@@ -45,6 +45,7 @@ Tokyo zoomed in with the wiki panel open:
 | `antipode` | `:` palette → fly to the diametrically opposite point on the sphere. "What's directly below me through Earth?" |
 | `attribution` | Always-on © OpenStreetMap chrome (legal hygiene for a map renderer). |
 | `autospin` | `:` palette → camera drifts eastward at a constant rate, looping at the antimeridian. The "this is a globe" demo. Manual pan yields the spin. |
+| `bookmark` | `m` → save the current view under a name (`name :: description`, description optional); `:` palette → fly to or delete a saved view. Persists across sessions via `ttymap.storage`. Reference for runtime-saved state with zero new Rust. |
 | `center` | Crosshair at the map center — handy when fast-panning. |
 | `export` | `:` palette → dump current frame as ANSI to disk; pipe to `cat` or share as a snapshot. |
 | `geo_quiz` | "Find this city before time runs out" — a target pops up, you have ~30 s to pan / zoom so the map center lands as close as possible. Submit with Enter; the camera flies out to a view that frames both your guess and the real city with ◎ markers + a connecting line. Score is cumulative km error (golf-style, lower is better). Easy mode shows the country, hard mode doesn't. |
