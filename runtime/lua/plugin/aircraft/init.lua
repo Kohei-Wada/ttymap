@@ -130,9 +130,13 @@ local function on_tick(map)
                     if d < best_d then best, best_d = i, d end
                 end
             end
+            -- Hover only *highlights* (and pins the selection across
+            -- refreshes); it deliberately does NOT move the map —
+            -- flying on every mouse twitch is disorienting. Keyboard
+            -- nav / Enter still centre the view.
             if best and best ~= state.selected then
                 state.selected = best
-                fly_to_selected()
+                state.selected_icao = state.aircraft[best].icao
             end
         end
     end
