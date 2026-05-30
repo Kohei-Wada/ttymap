@@ -2,10 +2,15 @@
 //!
 //! Two methods:
 //!
-//! - `:fetch(url)` — background GET, returns a `LuaJob` userdata
-//!   the plugin polls with `:try_take()`. Body is decoded as
+//! - `:fetch(url [, opts])` — background request, returns a `LuaJob`
+//!   userdata the plugin polls with `:try_take()`. Body is decoded as
 //!   UTF-8; non-text or fetch errors surface as the Job never
-//!   producing a result.
+//!   producing a result. `opts` (a table) unlocks auth'd / non-GET
+//!   requests without endpoint-specific Rust:
+//!   - `method` — `"POST"` (default `"GET"`)
+//!   - `headers` — `{ ["Authorization"] = "Bearer …" }`
+//!   - `form` — `{ k = v }` sent as `x-www-form-urlencoded` (OAuth2
+//!     client-credentials token exchange, …)
 //! - `:fetch_cached(url, ttl_secs)` — read-through disk cache. On
 //!   fresh-enough hit (`age < ttl_secs`) emits the cached body
 //!   without touching the network. On miss, real fetch + write-
@@ -39,20 +44,70 @@ pub struct HostHttp {
     pub cache_root: Option<std::path::PathBuf>,
 }
 
+/// A Lua-specified request: method + extra headers + optional form
+/// body. `Default` is a plain GET, so the bare `fetch(url)` and the
+/// cached path build one without parsing any options.
+#[derive(Default)]
+struct RequestSpec {
+    method: String,
+    headers: Vec<(String, String)>,
+    form: Vec<(String, String)>,
+}
+
+/// Flatten a `{ name = value }` Lua table into ordered pairs. Missing
+/// table → empty; non-string entries are skipped silently.
+fn table_to_pairs(t: Option<mlua::Table>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(t) = t {
+        for entry in t.pairs::<String, String>().flatten() {
+            out.push(entry);
+        }
+    }
+    out
+}
+
+fn parse_request_spec(opts: Option<mlua::Table>) -> mlua::Result<RequestSpec> {
+    let Some(opts) = opts else {
+        return Ok(RequestSpec::default());
+    };
+    let method = opts
+        .get::<Option<String>>("method")?
+        .unwrap_or_else(|| "GET".to_string());
+    // `request_bytes` is GET-or-POST only; reject anything else at the
+    // Lua boundary so a typo (`"DELTE"`) errors instead of silently
+    // falling through to a GET.
+    if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("POST") {
+        return Err(mlua::Error::external(format!(
+            "ttymap.http:fetch: unsupported method {method:?} (expected \"GET\" or \"POST\")"
+        )));
+    }
+    Ok(RequestSpec {
+        method,
+        headers: table_to_pairs(opts.get::<Option<mlua::Table>>("headers")?),
+        form: table_to_pairs(opts.get::<Option<mlua::Table>>("form")?),
+    })
+}
+
 impl UserData for HostHttp {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("fetch", |_, this, url: String| {
-            Ok(LuaJob::spawn(
-                &this.http,
-                url,
-                None,
-                this.cache_root.clone(),
-            ))
-        });
+        methods.add_method(
+            "fetch",
+            |_, this, (url, opts): (String, Option<mlua::Table>)| {
+                let spec = parse_request_spec(opts)?;
+                Ok(LuaJob::spawn(
+                    &this.http,
+                    url,
+                    spec,
+                    None,
+                    this.cache_root.clone(),
+                ))
+            },
+        );
         methods.add_method("fetch_cached", |_, this, (url, ttl_secs): (String, u64)| {
             Ok(LuaJob::spawn(
                 &this.http,
                 url,
+                RequestSpec::default(),
                 Some(ttl_secs),
                 this.cache_root.clone(),
             ))
@@ -90,6 +145,7 @@ impl LuaJob {
     fn spawn(
         http: &HttpClient,
         url: String,
+        spec: RequestSpec,
         cache_ttl: Option<u64>,
         cache_root: Option<std::path::PathBuf>,
     ) -> Self {
@@ -114,7 +170,7 @@ impl LuaJob {
             }
 
             // Cache miss / stale → real fetch.
-            match http.get_bytes(&url) {
+            match http.request_bytes(&spec.method, &url, &spec.headers, &spec.form) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(body) => {
                         if let Some(p) = path.as_ref() {
@@ -196,6 +252,49 @@ mod tests {
             cancelled: Arc::new(AtomicBool::new(false)),
         };
         (tx, job)
+    }
+
+    #[test]
+    fn parse_request_spec_reads_method_headers_form() {
+        let lua = mlua::Lua::new();
+        let opts: mlua::Table = lua
+            .load(
+                r#"return {
+                    method  = "POST",
+                    headers = { Authorization = "Bearer tok" },
+                    form    = { grant_type = "client_credentials" },
+                }"#,
+            )
+            .eval()
+            .expect("eval opts");
+        let spec = parse_request_spec(Some(opts)).expect("parse");
+        assert_eq!(spec.method, "POST");
+        assert_eq!(
+            spec.headers,
+            vec![("Authorization".to_string(), "Bearer tok".to_string())]
+        );
+        assert_eq!(
+            spec.form,
+            vec![("grant_type".to_string(), "client_credentials".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_request_spec_none_is_plain_get() {
+        let spec = parse_request_spec(None).expect("parse");
+        assert_eq!(spec.method, "");
+        assert!(spec.headers.is_empty());
+        assert!(spec.form.is_empty());
+    }
+
+    #[test]
+    fn parse_request_spec_rejects_unknown_method() {
+        let lua = mlua::Lua::new();
+        let opts: mlua::Table = lua
+            .load(r#"return { method = "DELETE" }"#)
+            .eval()
+            .expect("eval opts");
+        assert!(parse_request_spec(Some(opts)).is_err());
     }
 
     #[test]
