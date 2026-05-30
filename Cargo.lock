@@ -3004,7 +3004,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ttymap-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cargo-husky",
  "chrono",
@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "ttymap-engine",
@@ -3044,7 +3044,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bincode",
  "criterion",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-lua"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "crossterm",
@@ -3086,7 +3086,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-shared"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "ttymap-engine",
@@ -3094,7 +3094,7 @@ dependencies = [
 
 [[package]]
 name = "ttymap-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossterm",
  "log",

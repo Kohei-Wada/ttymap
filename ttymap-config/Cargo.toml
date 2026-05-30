@@ -8,6 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-ttymap-engine = { path = "../ttymap-engine", version = "0.1.0" }
-ttymap-shared = { path = "../ttymap-shared", version = "0.1.0" }
+ttymap-engine = { path = "../ttymap-engine", version = "0.2.0" }
+ttymap-shared = { path = "../ttymap-shared", version = "0.2.0" }
 directories = "6"
