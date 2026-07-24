@@ -43,6 +43,27 @@ pub(super) fn install(
     Ok(())
 }
 
+/// Build a [`SpawnComponent`] that re-fetches `key` from the Lua
+/// registry on each activation and calls it. Errors are logged +
+/// swallowed so a buggy callback doesn't take the host down; `tag`
+/// names the registration kind in the log line.
+fn lua_callback_factory(lua: &Lua, key: mlua::RegistryKey, tag: &'static str) -> SpawnComponent {
+    let lua = lua.clone();
+    Rc::new(move |_ctx| {
+        let f: mlua::Function = match lua.registry_value(&key) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("lua: {} callback registry lookup failed: {}", tag, e);
+                return None;
+            }
+        };
+        if let Err(e) = f.call::<mlua::Value>(()) {
+            log::warn!("lua: {} callback failed: {}", tag, e);
+        }
+        None
+    })
+}
+
 fn install_register_palette_command(
     lua: &Lua,
     ttymap: &Table,
@@ -62,29 +83,9 @@ fn install_register_palette_command(
                         "ttymap.register_palette_command: spec.invoke (a function) is required",
                     )
                 })?;
-                let invoke_key = Rc::new(lua.create_registry_value(invoke)?);
+                let invoke_key = lua.create_registry_value(invoke)?;
                 let id = allocate_handle_id();
-
-                // Build the activation factory inline. On invoke,
-                // re-fetch the callback from the Lua registry and
-                // call it; errors are logged + swallowed so a buggy
-                // callback doesn't take the host down.
-                let lua_for_factory = lua.clone();
-                let invoke_for_factory = invoke_key.clone();
-                let factory: SpawnComponent = Rc::new(move |_ctx| {
-                    let f: mlua::Function =
-                        match lua_for_factory.registry_value(&invoke_for_factory) {
-                            Ok(f) => f,
-                            Err(e) => {
-                                log::warn!("lua: palette callback registry lookup failed: {}", e);
-                                return None;
-                            }
-                        };
-                    if let Err(e) = f.call::<mlua::Value>(()) {
-                        log::warn!("lua: palette callback failed: {}", e);
-                    }
-                    None
-                });
+                let factory = lua_callback_factory(lua, invoke_key, "palette");
 
                 // Surface to help cheatsheet IFF the entry has a
                 // hint (the keybind string). Palette-only entries
@@ -124,26 +125,9 @@ fn install_register_keybind(
                         "ttymap.register_keybind: key must be a non-empty string",
                     ));
                 };
-                let callback_key = Rc::new(lua.create_registry_value(callback)?);
+                let callback_key = lua.create_registry_value(callback)?;
                 let id = allocate_handle_id();
-
-                // Build the activation factory inline (same shape as
-                // palette command's).
-                let lua_for_factory = lua.clone();
-                let cb_for_factory = callback_key.clone();
-                let factory: SpawnComponent = Rc::new(move |_ctx| {
-                    let f: mlua::Function = match lua_for_factory.registry_value(&cb_for_factory) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            log::warn!("lua: keybind callback registry lookup failed: {}", e);
-                            return None;
-                        }
-                    };
-                    if let Err(e) = f.call::<mlua::Value>(()) {
-                        log::warn!("lua: keybind callback failed: {}", e);
-                    }
-                    None
-                });
+                let factory = lua_callback_factory(lua, callback_key, "keybind");
 
                 registry.borrow_mut().add_activation(
                     id,
