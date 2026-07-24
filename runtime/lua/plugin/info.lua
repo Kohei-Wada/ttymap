@@ -133,6 +133,8 @@ local function refresh(lat, lon)
 end
 
 ttymap.api.frame.on_tick(function(map)
+    if not map:show_ui() then return end
+
     -- Drain the in-flight reverse-geocode job, if any.
     if state.job then
         local body = state.job:try_take()

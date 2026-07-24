@@ -14,7 +14,8 @@
 //!   `Lua::scope` and handed to `on_tick` callbacks as the `map`
 //!   parameter. Drawing primitives (`point`, `label`, `text_anchored`,
 //!   `polyline`) plus read-only frame state (`center`, `zoom`,
-//!   `area_width`, `cursor`) plus theme accessors. `MapApi` carries a
+//!   `area_width`, `show_ui`, `cursor`) plus theme accessors.
+//!   `MapApi` carries a
 //!   non-`'static` lifetime so we can't use
 //!   `Scope::create_userdata_ref_mut`; instead the per-frame table
 //!   wraps `scope.create_function` closures over a `RefCell` of the
@@ -194,6 +195,10 @@ where
     table.set(
         "area_width",
         scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().area_width()))?,
+    )?;
+    table.set(
+        "show_ui",
+        scope.create_function(|_, _: mlua::Table| Ok(cell.borrow().show_ui()))?,
     )?;
     // `map:cursor() -> lon, lat | nil, nil` — returns two values so
     // a plugin can `local lon, lat = map:cursor() if lon then ... end`
@@ -557,6 +562,25 @@ mod tests {
             .expect("scope");
         assert!(c1.is_some() && r1.is_some(), "centre on-screen");
         assert!(c2.is_none(), "far point off the small canvas");
+    }
+
+    /// `map:show_ui()` reflects the host's active chrome visibility,
+    /// including CLI overrides such as `--no-ui`.
+    #[test]
+    fn show_ui_accessor_reflects_host_setting() {
+        let (mut buf, area, frame, theme) = fixture(40, 10);
+        let mut sink: Vec<UserPolyline> = Vec::new();
+        let mut api = MapApi::new_with_ui(&mut buf, area, &frame, &theme, None, &mut sink, false);
+        let lua = Lua::new();
+        let cell = std::cell::RefCell::new(&mut api);
+        let result: bool = lua
+            .scope(|scope| {
+                let map_table = make_map_table(&lua, scope, &cell)?;
+                lua.globals().set("map", map_table)?;
+                lua.load(r#"return map:show_ui()"#).eval::<bool>()
+            })
+            .expect("scope");
+        assert!(!result);
     }
 
     /// `arc` resolves colour through the same path as `polyline`.

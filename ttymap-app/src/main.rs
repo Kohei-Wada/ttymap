@@ -41,6 +41,10 @@ struct Cli {
     #[arg(long)]
     style: Option<String>,
 
+    /// Hide UI chrome: world border, footer, info readouts, scale bar, attribution
+    #[arg(long)]
+    no_ui: bool,
+
     /// Write debug logs to ~/.local/state/ttymap/ttymap.log. Optional
     /// level argument: `--log` alone is `debug`; `--log info` /
     /// `--log trace` etc. select an explicit level. Without the flag
@@ -150,6 +154,9 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
         // fallback at construction time; just hand the raw string in.
         config.engine.render.style = v;
     }
+    if cli.no_ui {
+        config.runtime.show_ui = false;
+    }
 
     log::info!(
         "starting ttymap: lat={:?}, lon={:?}",
@@ -183,11 +190,12 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
         .as_ref()
         .filter(|_| config.engine.cache.tiles)
         .map(|d| d.cache.clone());
+    let (width, height) = initial_canvas_size(cols, rows, config.runtime.show_ui);
     let map = ttymap_app::engine_handle::EngineHandle::spawn(
         &config.engine,
         cache_dir,
-        cols,
-        rows,
+        width,
+        height,
         theme_id,
         event_tx.clone(),
     )?;
@@ -196,7 +204,6 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
     // `App::map_state`). Construct it with the same seed values the
     // engine subprocess gets via `Init`, so the two sides start in
     // lock-step.
-    let (width, height) = ttymap_engine::map::render::canvas_size(cols, rows);
     // `unwrap_or(0.0)` mirrors the engine's neutral fallback for
     // the unseeded case — `Config::default()` already fills in
     // Berlin, so this only matters if a future code path leaves
@@ -275,4 +282,12 @@ fn run_event_loop(cli: Cli, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::er
     ratatui::restore();
     log::info!("terminal restored, exiting");
     run_result.map_err(Into::into)
+}
+
+fn initial_canvas_size(cols: u16, rows: u16, show_ui: bool) -> (usize, usize) {
+    if show_ui {
+        ttymap_engine::map::render::canvas_size(cols, rows)
+    } else {
+        ttymap_engine::map::render::borderless_canvas_size(cols, rows)
+    }
 }

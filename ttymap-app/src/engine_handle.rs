@@ -99,7 +99,7 @@ pub struct EngineHandle {
     // ── Respawn inputs ──────────────────────────────────────────────
     // Kept so `restart` can build a fresh child without the caller
     // re-supplying what doesn't change across a restart. The view
-    // (cols / rows / theme) *does* change, so `restart` takes those.
+    // (width / height / theme) *does* change, so `restart` takes those.
     config: EngineConfig,
     cache_dir: Option<std::path::PathBuf>,
     event_tx: mpsc::Sender<AppEvent>,
@@ -112,16 +112,16 @@ impl EngineHandle {
     pub fn spawn(
         config: &EngineConfig,
         cache_dir: Option<std::path::PathBuf>,
-        cols: u16,
-        rows: u16,
+        width: usize,
+        height: usize,
         theme: ThemeId,
         event_tx: mpsc::Sender<AppEvent>,
     ) -> Result<Self, EngineHandleError> {
         let conn = connect(
             config,
             cache_dir.clone(),
-            cols,
-            rows,
+            width,
+            height,
             theme,
             event_tx.clone(),
         )?;
@@ -139,24 +139,24 @@ impl EngineHandle {
     }
 
     /// Recycle the engine subprocess: tear down the current child and
-    /// its IPC threads, then spawn a fresh one at the supplied view
-    /// (`cols` / `rows` are the *map area* size, `theme` the active
+    /// its IPC threads, then spawn a fresh one at the supplied canvas
+    /// size (`width` / `height` are Braille pixels, `theme` the active
     /// theme). The App owns the camera `MapState`, so the caller
     /// follows up with a redraw to repaint the preserved view. On
     /// error the handle is left with no live child — `send` degrades
     /// to a logged no-op until the next successful (re)connect.
     pub fn restart(
         &mut self,
-        cols: u16,
-        rows: u16,
+        width: usize,
+        height: usize,
         theme: ThemeId,
     ) -> Result<(), EngineHandleError> {
         self.teardown();
         let conn = connect(
             &self.config,
             self.cache_dir.clone(),
-            cols,
-            rows,
+            width,
+            height,
             theme,
             self.event_tx.clone(),
         )?;
@@ -224,8 +224,8 @@ impl EngineHandle {
     // run identical transitions on identical inputs and stay
     // coherent by construction.
 
-    pub fn send_resize(&self, cols: u16, rows: u16) {
-        self.send(EngineCommand::Resize { cols, rows });
+    pub fn send_resize(&self, width: usize, height: usize) {
+        self.send(EngineCommand::Resize { width, height });
     }
 
     pub fn set_theme(&self, theme: ThemeId) {
@@ -273,8 +273,8 @@ impl Drop for EngineHandle {
 fn connect(
     config: &EngineConfig,
     cache_dir: Option<std::path::PathBuf>,
-    cols: u16,
-    rows: u16,
+    width: usize,
+    height: usize,
     theme: ThemeId,
     event_tx: mpsc::Sender<AppEvent>,
 ) -> Result<Connection, EngineHandleError> {
@@ -312,8 +312,8 @@ fn connect(
         &EngineCommand::Init {
             config: config.clone(),
             cache_dir,
-            cols,
-            rows,
+            width,
+            height,
             theme,
         },
     )

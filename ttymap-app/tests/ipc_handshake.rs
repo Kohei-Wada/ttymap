@@ -46,8 +46,8 @@ fn engine_worker_init_ready_shutdown_round_trip() {
             // `config.cache.tiles == false`, so a `None` cache_dir
             // is semantically correct — engine never touches disk.
             cache_dir: None,
-            cols: 80,
-            rows: 24,
+            width: 156,
+            height: 84,
             theme: ThemeId::Dark,
         },
     )

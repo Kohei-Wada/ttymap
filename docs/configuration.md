@@ -11,6 +11,7 @@ ttymap.opt.map.lon            = 139.7595
 ttymap.opt.map.zoom           = 10
 ttymap.opt.render.style       = "bright"   -- "dark" | "bright"
 ttymap.opt.render.language    = "ja"
+ttymap.opt.runtime.show_ui    = false      -- hide border/footer + bundled info/scale/attribution chrome
 
 -- Per-plugin endpoint overrides live in their own Lua libs, not on
 -- `ttymap.opt.*`. e.g. point the bundled `here` plugin at a private
@@ -57,7 +58,7 @@ Top-level namespaces:
 | `ttymap.opt.map` | initial lat/lon/zoom + zoom envelope |
 | `ttymap.opt.render` | style preset, label language |
 | `ttymap.opt.cache` | LRU size, on-disk persist toggle |
-| `ttymap.opt.runtime` | poll/redraw cadence, sidebar width |
+| `ttymap.opt.runtime` | poll/redraw cadence, sidebar width, UI chrome visibility |
 | `require("ttymap.<plugin>")` | per-plugin config holder libs (e.g. `ttymap.here.endpoint`) |
 | `ttymap.keymap.set(action, keys)` | rebind a built-in action |
 | `ttymap.keymap.del(action)` | drop a built-in binding |

@@ -44,12 +44,12 @@ pub enum EngineCommand {
     Init {
         config: Config,
         cache_dir: Option<PathBuf>,
-        cols: u16,
-        rows: u16,
+        width: usize,
+        height: usize,
         theme: ThemeId,
     },
     /// Terminal resize.
-    Resize { cols: u16, rows: u16 },
+    Resize { width: usize, height: usize },
     /// Swap the active theme (rebuilds the styler on the render thread).
     SetTheme(ThemeId),
     /// Toggle tile-rendered text labels. Caller is responsible for
@@ -207,14 +207,14 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
         Ok(c) => c,
         Err(_) => return 0, // EOF before any command — clean exit
     };
-    let (config, cache_dir, cols, rows, theme) = match cmd {
+    let (config, cache_dir, width, height, theme) = match cmd {
         EngineCommand::Init {
             config,
             cache_dir,
-            cols,
-            rows,
+            width,
+            height,
             theme,
-        } => (config, cache_dir, cols, rows, theme),
+        } => (config, cache_dir, width, height, theme),
         EngineCommand::Shutdown => return 0,
         _ => {
             let _ = event_tx.send(EngineEvent::Error(
@@ -228,14 +228,20 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
     let frame_tx = event_tx.clone();
     let frame_sink: crate::map::render::thread::FrameSink =
         Box::new(move |frame| frame_tx.send(EngineEvent::FrameReady(frame)).is_ok());
-    let (_render_handle, map) =
-        match crate::map::build(&config, cache_dir.as_deref(), cols, rows, frame_sink, theme) {
-            Ok(pair) => pair,
-            Err(e) => {
-                let _ = event_tx.send(EngineEvent::Error(format!("engine build failed: {e}")));
-                return 1;
-            }
-        };
+    let (_render_handle, map) = match crate::map::build(
+        &config,
+        cache_dir.as_deref(),
+        width,
+        height,
+        frame_sink,
+        theme,
+    ) {
+        Ok(pair) => pair,
+        Err(e) => {
+            let _ = event_tx.send(EngineEvent::Error(format!("engine build failed: {e}")));
+            return 1;
+        }
+    };
 
     if event_tx
         .send(EngineEvent::Ready {
@@ -251,8 +257,8 @@ fn command_loop<R: Read>(reader: &mut R, event_tx: mpsc::Sender<EngineEvent>) ->
             EngineCommand::Init { .. } => {
                 // Re-init mid-session is out of scope; ignore.
             }
-            EngineCommand::Resize { cols, rows } => {
-                map.resize(cols, rows);
+            EngineCommand::Resize { width, height } => {
+                map.resize(width, height);
             }
             EngineCommand::SetTheme(theme) => {
                 map.set_theme(theme);
@@ -298,20 +304,20 @@ mod tests {
         let cmd = EngineCommand::Init {
             config: Config::default(),
             cache_dir: Some(PathBuf::from("/tmp/ttymap-test-cache")),
-            cols: 240,
-            rows: 80,
+            width: 480,
+            height: 320,
             theme: ThemeId::Dark,
         };
         roundtrip(&cmd, |decoded| match decoded {
             EngineCommand::Init {
-                cols,
-                rows,
+                width,
+                height,
                 theme,
                 config,
                 cache_dir,
             } => {
-                assert_eq!(cols, 240);
-                assert_eq!(rows, 80);
+                assert_eq!(width, 480);
+                assert_eq!(height, 320);
                 assert_eq!(theme, ThemeId::Dark);
                 assert_eq!(config.map.lat, Config::default().map.lat);
                 assert_eq!(
@@ -327,13 +333,13 @@ mod tests {
     fn command_resize_round_trips() {
         roundtrip(
             &EngineCommand::Resize {
-                cols: 100,
-                rows: 50,
+                width: 200,
+                height: 200,
             },
             |d| match d {
-                EngineCommand::Resize { cols, rows } => {
-                    assert_eq!(cols, 100);
-                    assert_eq!(rows, 50);
+                EngineCommand::Resize { width, height } => {
+                    assert_eq!(width, 200);
+                    assert_eq!(height, 200);
                 }
                 _ => panic!("expected Resize"),
             },

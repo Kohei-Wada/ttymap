@@ -46,6 +46,8 @@ local function clamp(v, lo, hi)
 end
 
 ttymap.api.frame.on_tick(function(map)
+    if not map:show_ui() then return end
+
     local _, lat = map:center()
     local zoom = map:zoom()
     local width = map:area_width()

@@ -10,6 +10,7 @@
 //!   anchored to a corner of the visible map area; useful for chrome
 //!   overlays (info bar, scale, attribution) that don't track world
 //!   coordinates.
+//! - **Chrome visibility** (`show_ui`) — lets bundled UI plugins honor `--no-ui`.
 //!
 //! Internally world primitives route through [`Self::cell_for`]
 //! which does projection + bounds-clip in one shot, so adding more
@@ -56,6 +57,9 @@ pub struct MapApi<'a> {
     /// `on_tick` callbacks can reach it without the plugin stashing
     /// a copy in its own state.
     cursor: Option<(u16, u16)>,
+    /// Whether always-on UI chrome should be painted this frame.
+    /// User data overlays remain available when this is false.
+    show_ui: bool,
     /// Polylines pushed by Lua plugins / components this frame.
     /// Drained by `App` after `ui::draw` returns and bundled into the
     /// next `RenderTask::Draw`.
@@ -71,6 +75,19 @@ impl<'a> MapApi<'a> {
         cursor: Option<(u16, u16)>,
         overlay_sink: &'a mut Vec<UserPolyline>,
     ) -> Self {
+        Self::new_with_ui(buf, map_area, frame, theme, cursor, overlay_sink, true)
+    }
+
+    /// Build a per-frame map API with explicit always-on chrome visibility.
+    pub fn new_with_ui(
+        buf: &'a mut Buffer,
+        map_area: Rect,
+        frame: &MapFrame,
+        theme: &'a UiTheme,
+        cursor: Option<(u16, u16)>,
+        overlay_sink: &'a mut Vec<UserPolyline>,
+        show_ui: bool,
+    ) -> Self {
         let proj = MapProjection::new(frame.center, frame.zoom, frame.cols, frame.rows);
         Self {
             buf,
@@ -80,6 +97,7 @@ impl<'a> MapApi<'a> {
             frame_center: frame.center,
             frame_zoom: frame.zoom,
             cursor,
+            show_ui,
             overlay_sink,
         }
     }
@@ -107,6 +125,11 @@ impl<'a> MapApi<'a> {
     /// chrome that scales with the canvas (e.g. the scale bar).
     pub fn area_width(&self) -> u16 {
         self.map_area.width
+    }
+
+    /// Whether bundled always-on UI chrome should paint this frame.
+    pub fn show_ui(&self) -> bool {
+        self.show_ui
     }
 
     // ── Theme accessors ──────────────────────────────────────────────
