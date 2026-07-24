@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
 
 use log::debug;
@@ -25,6 +25,19 @@ struct SharedState {
     condvar: Condvar,
     in_flight: Mutex<HashSet<TileKey>>,
     shutdown: AtomicBool,
+}
+
+impl SharedState {
+    // Poison = a worker panicked mid-update; crash rather than risk
+    // serving corrupted queue state ("Mutex poison = process death"
+    // in docs/design.md).
+    fn lock_queue(&self) -> MutexGuard<'_, PriorityQueue<TileKey, TilePriority>> {
+        self.queue.lock().expect("tile worker mutex poisoned")
+    }
+
+    fn lock_in_flight(&self) -> MutexGuard<'_, HashSet<TileKey>> {
+        self.in_flight.lock().expect("tile worker mutex poisoned")
+    }
 }
 
 pub struct FetchLane<F: TileFetcher> {
@@ -68,20 +81,12 @@ impl<F: TileFetcher + 'static> FetchLane<F> {
 impl<F: TileFetcher + 'static> TileFetchLane for FetchLane<F> {
     fn enqueue(&self, key: &TileKey, priority: TilePriority) {
         {
-            let in_flight = self
-                .shared
-                .in_flight
-                .lock()
-                .expect("tile worker mutex poisoned");
+            let in_flight = self.shared.lock_in_flight();
             if in_flight.contains(key) {
                 return;
             }
         }
-        let mut queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
+        let mut queue = self.shared.lock_queue();
         queue.push(key.clone(), priority);
         drop(queue);
         self.shared.condvar.notify_one();
@@ -91,11 +96,7 @@ impl<F: TileFetcher + 'static> TileFetchLane for FetchLane<F> {
     /// `zoom_diff` sinks the entry to the back, where overflow drop
     /// will evict it as new work arrives.
     fn update_view(&self, priority_fn: &dyn PriorityFn<TileKey, TilePriority>) {
-        let mut queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
+        let mut queue = self.shared.lock_queue();
         queue.reprioritize(priority_fn);
     }
 
@@ -104,16 +105,8 @@ impl<F: TileFetcher + 'static> TileFetchLane for FetchLane<F> {
     }
 
     fn is_idle(&self) -> bool {
-        let queue = self
-            .shared
-            .queue
-            .lock()
-            .expect("tile worker mutex poisoned");
-        let in_flight = self
-            .shared
-            .in_flight
-            .lock()
-            .expect("tile worker mutex poisoned");
+        let queue = self.shared.lock_queue();
+        let in_flight = self.shared.lock_in_flight();
         queue.is_empty() && in_flight.is_empty()
     }
 }
@@ -134,14 +127,13 @@ fn worker_loop<F: TileFetcher + ?Sized>(
 ) {
     loop {
         let key = {
-            let mut queue = shared.queue.lock().expect("tile worker mutex poisoned");
+            let mut queue = shared.lock_queue();
             loop {
                 if shared.shutdown.load(Ordering::Relaxed) {
                     return;
                 }
                 if let Some(key) = queue.pop() {
-                    let mut in_flight =
-                        shared.in_flight.lock().expect("tile worker mutex poisoned");
+                    let mut in_flight = shared.lock_in_flight();
                     if in_flight.contains(&key) {
                         drop(in_flight);
                         continue;
@@ -167,11 +159,7 @@ fn worker_loop<F: TileFetcher + ?Sized>(
 
         // Remove from in-flight before sending so a re-enqueue racing
         // with `tx.send` doesn't dedup-skip on a stale entry.
-        shared
-            .in_flight
-            .lock()
-            .expect("tile worker mutex poisoned")
-            .remove(&key);
+        shared.lock_in_flight().remove(&key);
 
         debug!("worker: fetched {} ({} bytes)", key, bytes.len());
         if tx.send((key, bytes)).is_err() {
@@ -252,15 +240,11 @@ mod tests {
         );
         let key = TileKey::new(0, 0, 0);
 
-        lane.shared
-            .in_flight
-            .lock()
-            .expect("mutex poisoned")
-            .insert(key.clone());
+        lane.shared.lock_in_flight().insert(key.clone());
 
         lane.enqueue(&key, p());
 
-        let queued = lane.shared.queue.lock().expect("mutex poisoned").len();
+        let queued = lane.shared.lock_queue().len();
         assert_eq!(queued, 0, "in-flight key must not be re-enqueued");
     }
 
@@ -301,11 +285,7 @@ mod tests {
         let lane = FetchLane::new(FailingFetcher, 0, tx);
         assert!(<FetchLane<FailingFetcher> as TileFetchLane>::is_idle(&lane));
 
-        lane.shared
-            .queue
-            .lock()
-            .expect("mutex poisoned")
-            .push(TileKey::new(0, 0, 0), p());
+        lane.shared.lock_queue().push(TileKey::new(0, 0, 0), p());
         assert!(!<FetchLane<FailingFetcher> as TileFetchLane>::is_idle(
             &lane
         ));

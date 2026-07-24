@@ -285,9 +285,8 @@ The cut, in concrete terms:
   replacement for the public-boundary `Result` rule — they
   exist because we cannot afford to tear down the whole
   pipeline for one bad tile.
-- **Mutex poisoning** (`fetch/lane.rs`) currently panics on
-  poison. This is out of scope here — issue #86 owns the
-  mutex-poison policy.
+- **Mutex poisoning** panics on poison by design — see
+  [Mutex poison = process death](#mutex-poison--process-death).
 
 When adding a new engine public API: if the operation can fail
 in a way the caller might want to recover from (config / disk /
@@ -297,3 +296,31 @@ violation, `unwrap`/`expect` is fine — but consider whether the
 call site really belongs on the public boundary or should be
 hidden behind a constructor that already absorbed the
 invariant.
+
+## Mutex poison = process death
+
+If an *internal worker* mutex is ever poisoned, crash the process
+(`.expect("… mutex poisoned")`) rather than attempt recovery.
+
+**Rationale**: a poisoned mutex means another thread panicked
+while holding the lock, i.e. the shared state may be
+half-updated. Continuing from that point risks silently serving
+corrupted data — wrong tiles in the queue, a stale in-flight set
+that dedups real work away, frames built from torn view state.
+A crash is loud, reproducible, and cheap to restart; corruption
+is none of those.
+
+**Scope**: internal worker mutexes — the tile fetch lane's queue
+/ in-flight set (`ttymap-engine/src/map/tile/fetch/lane.rs`, via
+the `lock_queue` / `lock_in_flight` helpers) and the Lua view
+mirrors (`ttymap-lua/src/api/map.rs`). The policy does **not**
+apply where losing the protected data is strictly better than
+dying: `ttymap-lua/src/host.rs` skips a poisoned help-entry
+mutex because dropping a cheatsheet line is harmless. When
+adding such an exception, document at the site *why* the data
+is loss-tolerable.
+
+**Convention**: keep the message format `"<tag> mutex poisoned"`
+so sites stay grep-able (`rg "mutex poisoned"`), and prefer a
+small `lock_*` helper per mutex over repeating `.lock().expect`
+at every call site.
