@@ -40,10 +40,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::Style;
-use ratatui::widgets::{
-    Clear, List, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState,
-};
+use ratatui::widgets::{Clear, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::compositor::op::Op;
 use crate::compositor::{CardId, Component, Context};
@@ -258,28 +255,15 @@ impl<'a, 'b> RenderWindow<'a, 'b> {
         inner
     }
 
-    /// Draw a `ratatui::widgets::Paragraph` into `rect` (clamped to
-    /// the component's area).
-    pub fn paragraph(&mut self, p: Paragraph<'static>, rect: Rect) {
-        let clamped = clamp(rect, self.area);
-        self.frame.render_widget(p, clamped);
-    }
-
-    /// Draw a `ratatui::widgets::Table` into `rect`, using `state`
-    /// as the selection state.
-    pub fn table(&mut self, t: Table<'static>, rect: Rect, state: &mut TableState) {
-        let clamped = clamp(rect, self.area);
-        self.frame.render_stateful_widget(t, clamped, state);
-    }
-
-    /// Draw a `ratatui::widgets::List` into `rect`, using `state`
-    /// as the selection / scroll state. ratatui auto-scrolls
-    /// `state.offset` to keep the selected item in view across
-    /// frames, so callers persist the same `ListState` and just
-    /// update its `selected()` each frame.
-    pub fn list(&mut self, l: List<'static>, rect: Rect, state: &mut ListState) {
-        let clamped = clamp(rect, self.area);
-        self.frame.render_stateful_widget(l, clamped, state);
+    /// The underlying ratatui [`Frame`], for rendering plain ratatui
+    /// widgets (`Paragraph`, `Table`, `List`, …) directly. Callers
+    /// draw into rects derived from [`Self::panel`] / [`Self::area`],
+    /// which are already clamped to the component's area — the
+    /// semantic helpers (`panel`, `scrollbar`, `style`) stay on
+    /// `RenderWindow` because they encode theme / layout policy,
+    /// but 1-line widget passthroughs don't earn a wrapper.
+    pub fn frame(&mut self) -> &mut Frame<'b> {
+        self.frame
     }
 
     /// Draw a vertical scrollbar on the right edge of `rect`. Pass
