@@ -94,6 +94,10 @@ pub struct RuntimeConfig {
     /// the same as their floating-panel counterparts. Configurable
     /// from Lua: `ttymap.opt.runtime.sidebar_width = 60`.
     pub sidebar_width: u16,
+    /// Show the always-on interactive chrome: the world border and
+    /// footer. Disable with `--no-ui` or
+    /// `ttymap.opt.runtime.show_ui = false` for a borderless map.
+    pub show_ui: bool,
 }
 
 impl Default for RuntimeConfig {
@@ -102,6 +106,7 @@ impl Default for RuntimeConfig {
             poll_timeout_ms: 50,
             overlay_redraw_ms: 100,
             sidebar_width: 56,
+            show_ui: true,
         }
     }
 }
@@ -119,6 +124,7 @@ mod tests {
         assert_eq!(cfg.runtime.poll_timeout_ms, 50);
         assert_eq!(cfg.runtime.overlay_redraw_ms, 100);
         assert_eq!(cfg.runtime.sidebar_width, 56);
+        assert!(cfg.runtime.show_ui);
     }
 
     #[test]

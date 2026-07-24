@@ -7,6 +7,8 @@
 -- nothing is painted.
 
 ttymap.api.frame.on_tick(function(map)
+    if not map:show_ui() then return end
+
     local text = ttymap.tile:attribution()
     if text and #text > 0 then
         map:text_anchored("bottom-left", 0, text, "muted")

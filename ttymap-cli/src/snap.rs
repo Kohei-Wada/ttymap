@@ -108,8 +108,7 @@ pub fn run(args: SnapArgs, dirs: Option<AppDirs>) -> Result<(), Box<dyn std::err
 
     // Snap wants the whole output to be the map — no border / footer
     // subtracted. 1 cell = 2×4 Braille sub-pixels.
-    let width = cols as usize * 2;
-    let height = rows as usize * 4;
+    let (width, height) = ttymap_engine::map::render::borderless_canvas_size(cols, rows);
 
     // tile::build spawns 6 worker threads fetching tiles in
     // parallel — they run independently of us, so we can drive the

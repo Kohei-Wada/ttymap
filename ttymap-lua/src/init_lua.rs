@@ -193,6 +193,7 @@ fn build_opt_table(lua: &Lua, d: &Config) -> mlua::Result<Table> {
     runtime.set("poll_timeout_ms", d.runtime.poll_timeout_ms)?;
     runtime.set("overlay_redraw_ms", d.runtime.overlay_redraw_ms)?;
     runtime.set("sidebar_width", d.runtime.sidebar_width)?;
+    runtime.set("show_ui", d.runtime.show_ui)?;
     opt.set("runtime", runtime)?;
 
     Ok(opt)
@@ -294,6 +295,9 @@ pub(crate) fn read_back(lua: &Lua, defaults: &Config) -> mlua::Result<Config> {
         }
         if let Ok(v) = t.get::<u16>("sidebar_width") {
             cfg.runtime.sidebar_width = v;
+        }
+        if let Ok(v) = t.get::<bool>("show_ui") {
+            cfg.runtime.show_ui = v;
         }
     }
 
@@ -408,5 +412,11 @@ mod tests {
     fn opt_runtime_overlay_redraw_overrides_default() {
         let (cfg, _) = run(r#"ttymap.opt.runtime.overlay_redraw_ms = 200"#);
         assert_eq!(cfg.runtime.overlay_redraw_ms, 200);
+    }
+
+    #[test]
+    fn opt_runtime_show_ui_overrides_default() {
+        let (cfg, _) = run(r#"ttymap.opt.runtime.show_ui = false"#);
+        assert!(!cfg.runtime.show_ui);
     }
 }

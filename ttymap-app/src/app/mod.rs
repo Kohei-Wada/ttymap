@@ -80,6 +80,7 @@ pub struct App {
     cursor: Option<(u16, u16)>,
     overlay: OverlayThrottle,
     mouse: MouseAdapter,
+    show_ui: bool,
     /// Latest rendered map snapshot drained from the render thread.
     /// `None` until the first frame arrives. Updated by
     /// [`Self::accept_frame`] on every `AppEvent::FrameReady`.
@@ -159,6 +160,7 @@ impl App {
             cursor: None,
             overlay: OverlayThrottle::new(Duration::from_millis(config.runtime.overlay_redraw_ms)),
             mouse: MouseAdapter::default(),
+            show_ui: config.runtime.show_ui,
             map_frame: None,
             pending_events: Vec::new(),
             bus,
@@ -434,10 +436,10 @@ impl App {
     /// default — acceptable for an explicit recovery action.
     fn restart_engine(&mut self) {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let map_cols = self.sidebar.effective_map_cols(cols);
-        match self.map.restart(map_cols, rows, self.theme_id) {
+        let (width, height) = self.current_canvas_size(cols, rows);
+        match self.map.restart(width, height, self.theme_id) {
             Ok(()) => {
-                self.map_state.resize(map_cols, rows);
+                self.map_state.resize_canvas(width, height);
                 self.request_map_redraw();
                 self.pending_events.push(Event::Notify {
                     message: "Engine restarted".into(),
@@ -455,10 +457,19 @@ impl App {
     }
 
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        let map_cols = self.sidebar.effective_map_cols(cols);
-        self.map_state.resize(map_cols, rows);
-        self.map.send_resize(map_cols, rows);
+        let (width, height) = self.current_canvas_size(cols, rows);
+        self.map_state.resize_canvas(width, height);
+        self.map.send_resize(width, height);
         self.request_map_redraw();
+    }
+
+    fn current_canvas_size(&self, cols: u16, rows: u16) -> (usize, usize) {
+        let map_cols = self.sidebar.effective_map_cols(cols);
+        if self.show_ui {
+            ttymap_engine::map::render::canvas_size(map_cols, rows)
+        } else {
+            ttymap_engine::map::render::borderless_canvas_size(map_cols, rows)
+        }
     }
 
     fn request_map_redraw(&mut self) {
@@ -493,6 +504,7 @@ impl App {
             overlay_sink: self.overlay.sink_mut(),
             sidebar_open: self.sidebar.open,
             sidebar_width: self.sidebar.width,
+            show_ui: self.show_ui,
         };
         terminal.draw(|f| ui::draw(f, inputs))?;
         Ok(())

@@ -36,6 +36,7 @@ pub struct DrawInputs<'a> {
     pub overlay_sink: &'a mut Vec<UserPolyline>,
     pub sidebar_open: bool,
     pub sidebar_width: u16,
+    pub show_ui: bool,
 }
 
 pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
@@ -48,11 +49,15 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         overlay_sink,
         sidebar_open,
         sidebar_width,
+        show_ui,
     } = inputs;
-    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
-
-    let main_area = chunks[0];
-    let footer_area = chunks[1];
+    let area = f.area();
+    let (main_area, footer_area) = if show_ui {
+        let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
 
     // Left sidebar (when toggled on) takes a fixed width; remaining
     // columns go to the world block. When closed, the world fills
@@ -77,38 +82,43 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         (main_area, None)
     };
 
-    // World frame highlights when focus is on the map (= no
-    // modal / sidebar component is currently active). The
-    // colour rule mirrors the per-panel border in
-    // `UiTheme::panel`: focused -> accent, otherwise muted.
-    let map_border = if compositor.is_base_focused() {
-        theme.accent
+    let map_inner = if show_ui {
+        // World frame highlights when focus is on the map (= no
+        // modal / sidebar component is currently active). The
+        // colour rule mirrors the per-panel border in
+        // `UiTheme::panel`: focused -> accent, otherwise muted.
+        let map_border = if compositor.is_base_focused() {
+            theme.accent
+        } else {
+            theme.muted_color
+        };
+        let map_block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(map_border))
+            .title(" world ");
+        let inner = map_block.inner(map_area);
+        f.render_widget(map_block, map_area);
+        inner
     } else {
-        theme.muted_color
+        map_area
     };
-    let map_block = Block::new()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(map_border))
-        .title(" world ");
-    let map_inner = map_block.inner(map_area);
-    f.render_widget(map_block, map_area);
+
     if let Some(map_frame) = map_frame {
         f.render_widget(
             ttymap_tui::frame_widget::MapFrameWidget(map_frame),
             map_inner,
         );
 
-        // World-space overlays + always-on chrome from components on
-        // the compositor (wiki markers, info bar, scale, attribution).
-        // Focus-gated: closing a panel drops the component which drops
-        // its paint hook.
-        let mut api = MapApi::new(
+        // Lua per-frame overlays. Bundled chrome reads `show_ui`;
+        // user/plugin map overlays can still paint in borderless mode.
+        let mut api = MapApi::new_with_ui(
             f.buffer_mut(),
             map_inner,
             map_frame,
             theme,
             ctx.cursor,
             overlay_sink,
+            show_ui,
         );
         // Fire the per-frame `"tick"` event on the Lua subsystem
         // against the live MapApi. This is the only per-frame
@@ -132,6 +142,10 @@ pub fn draw(f: &mut Frame, inputs: DrawInputs<'_>) {
         )));
         f.render_widget(placeholder, side_inner);
     }
+
+    let Some(footer_area) = footer_area else {
+        return;
+    };
 
     let hints = build_hints(compositor);
     let sep = Span::styled("  ", Style::default().fg(theme.muted_color));

@@ -152,6 +152,12 @@ impl MapState {
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let (w, h) = crate::map::render::canvas_size(cols, rows);
+        self.resize_canvas(w, h);
+    }
+
+    pub fn resize_canvas(&mut self, width: usize, height: usize) {
+        let w = width.max(4);
+        let h = height.max(4);
         self.width = w;
         self.height = h;
         self.min_zoom = Self::calculate_min_zoom(self.width);

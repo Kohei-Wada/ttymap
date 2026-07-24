@@ -114,6 +114,7 @@ Installs `~/.cargo/bin/ttymap` + `~/.local/share/ttymap/` (bundled runtime). Sin
 ttymap                                       # default position
 ttymap --lat 35.68 --lon 139.76 --zoom 10    # Tokyo
 ttymap --style bright                        # bright theme
+ttymap --no-ui                               # borderless map without always-on UI chrome
 ```
 
 For "jump to my current location" use the bundled `here` plugin from the `:` palette — it does an IP-geolocation lookup on demand and flies the camera over.

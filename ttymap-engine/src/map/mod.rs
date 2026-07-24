@@ -57,8 +57,7 @@ impl MapHandle {
     /// terminal size. The post-resize viewport reaches the engine via
     /// the following `request_draw` — `MapHandle` holds no camera
     /// state, so it does not recompute a centre/zoom here.
-    pub fn resize(&self, cols: u16, rows: u16) {
-        let (width, height) = render::canvas_size(cols, rows);
+    pub fn resize(&self, width: usize, height: usize) {
         self.render_client.request_resize(width, height);
     }
 
@@ -106,20 +105,12 @@ impl MapHandle {
 pub fn build(
     config: &Config,
     cache_dir: Option<&std::path::Path>,
-    cols: u16,
-    rows: u16,
+    width: usize,
+    height: usize,
     frame_sink: FrameSink,
     theme_id: ThemeId,
 ) -> Result<(RenderHandle, MapHandle), crate::EngineError> {
-    let (width, height) = render::canvas_size(cols, rows);
-
-    log::info!(
-        "terminal size: {}x{}, canvas: {}x{}",
-        cols,
-        rows,
-        width,
-        height
-    );
+    log::info!("canvas size: {}x{}", width, height);
 
     let (tile_cache, wake_rx) = tile::build(config, cache_dir)?;
     let attribution = tile_cache.attribution();

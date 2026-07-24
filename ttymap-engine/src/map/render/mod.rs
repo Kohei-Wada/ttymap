@@ -18,6 +18,14 @@ pub mod view;
 /// Padding (in pixels) around the viewport for clipping and point filtering.
 pub const VIEWPORT_PADDING: i32 = 64;
 
+/// Calculate canvas pixel dimensions for a terminal area that is all map.
+/// Each terminal cell = 2 pixels wide × 4 pixels tall (Braille).
+pub fn borderless_canvas_size(cols: u16, rows: u16) -> (usize, usize) {
+    let width = cols as usize * 2;
+    let height = rows as usize * 4;
+    (width.max(4), height.max(4))
+}
+
 /// Calculate canvas pixel dimensions from terminal character dimensions.
 /// Each terminal cell = 2 pixels wide × 4 pixels tall (Braille).
 /// Accounts for map border (2 cols, 2 rows) and footer (1 row).
@@ -27,4 +35,19 @@ pub fn canvas_size(cols: u16, rows: u16) -> (usize, usize) {
     let width = (inner_cols / 2) * 4;
     let height = inner_rows * 4;
     (width.max(4), height.max(4))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn borderless_canvas_uses_entire_terminal_area() {
+        assert_eq!(borderless_canvas_size(80, 24), (160, 96));
+    }
+
+    #[test]
+    fn framed_canvas_reserves_border_and_footer() {
+        assert_eq!(canvas_size(80, 24), (156, 84));
+    }
 }

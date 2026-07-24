@@ -42,6 +42,7 @@ ttymap.opt.cache.memory_tiles = 512   -- Decoded-tile LRU capacity. ~22 tiles pe
 ------------------------------------------------------------
 ttymap.opt.runtime.poll_timeout_ms   = 50   -- Main loop wake interval (20 Hz).
 ttymap.opt.runtime.overlay_redraw_ms = 100  -- Min interval between overlay-driven redraws (10 Hz).
+ttymap.opt.runtime.show_ui           = true -- Show border/footer + bundled info/scale/attribution chrome.
 
 ------------------------------------------------------------
 -- 2. Default keybindings. nvim-style: the defaults are ordinary
