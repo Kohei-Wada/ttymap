@@ -67,7 +67,7 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
         body,
     )))
     .style(body);
-    win.paragraph(input_text, chunks[0]);
+    win.frame().render_widget(input_text, chunks[0]);
 
     let mut table_rows: Vec<Row<'static>> = items
         .iter()
@@ -107,7 +107,8 @@ pub fn render_panel(widget: &PaletteComponent, win: &mut RenderWindow) {
         .row_highlight_style(selected)
         .column_spacing(1);
 
-    win.table(table, chunks[2], &mut state);
+    win.frame()
+        .render_stateful_widget(table, chunks[2], &mut state);
 
     // Match the rail to the table chunk (not the full popup) so it
     // doesn't bleed alongside the prompt/blank rows above. The helper

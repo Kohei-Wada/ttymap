@@ -283,7 +283,7 @@ impl LuaCardComponent {
             .style(body)
             .scroll((offset, 0))
             .wrap(Wrap { trim: false });
-        win.paragraph(paragraph, inner);
+        win.frame().render_widget(paragraph, inner);
         win.scrollbar(outer, total_lines, offset, inner.height);
     }
 
@@ -346,7 +346,7 @@ impl LuaCardComponent {
         let list = List::new(list_items)
             .style(body)
             .highlight_style(highlight_style);
-        win.list(list, inner, &mut state);
+        win.frame().render_stateful_widget(list, inner, &mut state);
 
         // Scrollbar driven by ratatui's own scroll bookkeeping.
         // Approximate: rail length = inner.height (one row per
