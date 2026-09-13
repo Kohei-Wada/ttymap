@@ -162,7 +162,7 @@ ttymap-lua/                   (Lua plugin runtime; mlua + Lua 5.4 vendored)
     bridge/                   Lua spec → Rust trait adapters (Component, PaletteProvider)
     vm.rs                     mlua VM + builtin searcher
     registrar.rs              LuaRegistry behind Rc<RefCell<…>>
-    runtimepath.rs            layered runtime resolution (env > workspace > XDG)
+    runtimepath.rs            layered runtime resolution (env > workspace > XDG > system)
     init_lua.rs               bundled init.lua loader
     host.rs / handle.rs       host-side shared state + channel plumbing
     map_api.rs                per-frame draw surface handed to plugins
@@ -185,6 +185,9 @@ ttymap-app/                   (composition root + binary; ratatui + crossterm sh
 
 runtime/                      bundled Lua plugins + init.lua (workspace root,
                               shared by ttymap-lua and ttymap-cli's snap path)
+
+packaging/                    reference PKGBUILD for the AUR (the published
+                              copy lives in aur.archlinux.org/ttymap.git)
 ```
 
 The single layering rule: **the engine crate does not depend on

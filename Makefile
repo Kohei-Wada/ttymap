@@ -7,9 +7,19 @@
 #                                             live here, resolved via
 #                                             standard `package.path`)
 #
-# Single-user, no root. `/etc/ttymap` and `/usr/local/share/ttymap`
-# layouts are intentionally unsupported — ttymap is a per-user TUI,
-# system-wide installs aren't worth the path-juggling.
+# Single-user, no root: `make install` never needs sudo and never
+# writes outside `$HOME`. Do not run it as root to get a system-wide
+# install — use the packager path below instead.
+#
+# Packagers (AUR, …) build a system layout with:
+#
+#   make install-system DESTDIR="$pkgdir" PREFIX=/usr
+#
+# which stages `$DESTDIR$PREFIX/{bin/ttymap,share/ttymap/}` as an
+# unprivileged user; the package manager does the privileged part.
+# The binary resolves `/usr/local/share/ttymap` and `/usr/share/ttymap`
+# as its lowest-priority runtime tiers, so a per-user `make install`
+# always shadows a packaged copy.
 #
 # `cargo install` alone places only the binary; the binary fails
 # fast when it can't find any runtime layer (no `lua/` on disk).
@@ -17,7 +27,16 @@
 XDG_DATA_HOME ?= $(HOME)/.local/share
 DATA_DIR      := $(XDG_DATA_HOME)/ttymap
 
-.PHONY: help install install-bin install-runtime uninstall clean
+# Packager-only knobs. Unset by default, so every target above
+# behaves exactly as it did before these existed.
+PREFIX        ?= /usr/local
+DESTDIR       ?=
+SYS_BIN_DIR   := $(DESTDIR)$(PREFIX)/bin
+SYS_DATA_DIR  := $(DESTDIR)$(PREFIX)/share/ttymap
+
+.PHONY: help install install-bin install-runtime \
+        install-system install-system-bin install-system-runtime \
+        uninstall clean
 
 # `make` with no target lists what's available. Mirrors the "first
 # target is the default" make convention while making the default
@@ -33,8 +52,13 @@ help:
 	@echo '  clean            cargo clean'
 	@echo '  help             show this message'
 	@echo ''
+	@echo 'Packaging (not for interactive use):'
+	@echo '  install-system   stage $$DESTDIR$$PREFIX/{bin,share/ttymap} for a distro package'
+	@echo ''
 	@echo 'Variables:'
 	@echo '  XDG_DATA_HOME    install root (default: $$HOME/.local/share)'
+	@echo '  PREFIX           packaging prefix (default: /usr/local)'
+	@echo '  DESTDIR          packaging staging root (default: empty)'
 
 install: install-bin install-runtime
 
@@ -58,6 +82,25 @@ install-runtime:
 	mkdir -p $(DATA_DIR)/lua
 	cp -r runtime/lua/. $(DATA_DIR)/lua/
 	cp runtime/init.lua $(DATA_DIR)/init.lua
+
+# ── Packaging ───────────────────────────────────────────────────────
+#
+# Never invoked by a normal install. Writes only under $(DESTDIR),
+# so makepkg / dpkg-buildpackage stage it unprivileged.
+
+install-system: install-system-bin install-system-runtime
+
+install-system-bin:
+	cargo build --release --locked
+	install -Dm755 target/release/ttymap $(SYS_BIN_DIR)/ttymap
+
+install-system-runtime:
+	# Same tree as the per-user install, rooted at the packaging
+	# prefix. No rm -rf here: the staging dir belongs to the
+	# package manager, which owns file removal on upgrade.
+	install -d $(SYS_DATA_DIR)/lua
+	cp -r runtime/lua/. $(SYS_DATA_DIR)/lua/
+	install -Dm644 runtime/init.lua $(SYS_DATA_DIR)/init.lua
 
 uninstall:
 	# Try both the current name and previous names so an upgrade

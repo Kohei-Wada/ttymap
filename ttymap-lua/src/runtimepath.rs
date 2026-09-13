@@ -25,6 +25,11 @@
 //!    for app config.
 //! 4. `$XDG_DATA_HOME/ttymap` (default `~/.local/share/ttymap`) —
 //!    bundled scripts placed by `make install`.
+//! 5. `/usr/local/share/ttymap`, then `/usr/share/ttymap` — the
+//!    system tiers a distro package (AUR, …) writes into. Last in
+//!    priority so a per-user `make install` always shadows a
+//!    packaged copy, and absent on a machine that has never
+//!    installed one.
 //!
 //! The Vec model is the foundation; `register_builtin_plugins` /
 //! `install_builtin_searcher` walk it in order. PR1 wires the search
@@ -70,25 +75,37 @@ impl std::fmt::Display for RuntimePathError {
 /// (env > user > bundled > dev). On full miss, returns the candidate
 /// list back so the caller can render a "we tried these" failure.
 pub fn resolve_runtime_path(dirs: Option<&AppDirs>) -> Result<Vec<PathBuf>, RuntimePathError> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    let mut tried: Vec<PathBuf> = Vec::new();
+    let (found, tried): (Vec<PathBuf>, Vec<PathBuf>) = candidate_layers(dirs)
+        .into_iter()
+        .partition(|p| is_valid(p));
 
-    let mut visit = |p: PathBuf| {
-        if is_valid(&p) {
-            found.push(p);
-        } else {
-            tried.push(p);
-        }
-    };
+    if found.is_empty() {
+        Err(RuntimePathError { candidates: tried })
+    } else {
+        Ok(found)
+    }
+}
+
+/// System-wide tiers, highest priority first. A distro package
+/// (AUR, …) installs under one of these; `make install` never
+/// writes here, so on a machine without a packaged ttymap they
+/// simply don't exist and drop out of the resolved list.
+const SYSTEM_LAYERS: [&str; 2] = ["/usr/local/share/ttymap", "/usr/share/ttymap"];
+
+/// Every layer we would consider, in priority order, before checking
+/// whether any of them exists. Split out from [`resolve_runtime_path`]
+/// so the ordering itself is testable without staging directories.
+fn candidate_layers(dirs: Option<&AppDirs>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
 
     if let Ok(p) = std::env::var("TTYMAP_RUNTIME") {
-        visit(PathBuf::from(p));
+        out.push(PathBuf::from(p));
     }
     if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
         // ttymap-lua/ lives under the workspace root; runtime/ sits
         // at that root, one level up from this crate's manifest.
         if let Some(workspace) = PathBuf::from(manifest).parent() {
-            visit(workspace.join("runtime"));
+            out.push(workspace.join("runtime"));
         }
     }
     // The user tier (`$XDG_CONFIG_HOME/ttymap`) holds the user's
@@ -96,15 +113,12 @@ pub fn resolve_runtime_path(dirs: Option<&AppDirs>) -> Result<Vec<PathBuf>, Runt
     // `make install` populates. Both come from the centralised
     // `AppDirs` resolver in `ttymap-config` (#362).
     if let Some(d) = dirs {
-        visit(d.config.clone());
-        visit(d.data.clone());
+        out.push(d.config.clone());
+        out.push(d.data.clone());
     }
+    out.extend(SYSTEM_LAYERS.iter().map(PathBuf::from));
 
-    if found.is_empty() {
-        Err(RuntimePathError { candidates: tried })
-    } else {
-        Ok(found)
-    }
+    out
 }
 
 /// Cache the resolved runtime path. Idempotent — first caller wins.
@@ -177,6 +191,39 @@ mod tests {
             is_valid(&dev),
             "in-repo runtime/ must satisfy the validator"
         );
+    }
+
+    #[test]
+    fn system_layers_rank_below_the_per_user_tiers() {
+        // Order is the whole contract: a per-user `make install`
+        // under $XDG_DATA_HOME must shadow a distro-packaged copy
+        // under /usr/share, never the other way round.
+        let dirs = AppDirs {
+            config: PathBuf::from("/tmp/ttymap-test-config"),
+            data: PathBuf::from("/tmp/ttymap-test-data"),
+            cache: PathBuf::from("/tmp/ttymap-test-cache"),
+            state: PathBuf::from("/tmp/ttymap-test-state"),
+        };
+        let layers = candidate_layers(Some(&dirs));
+
+        let pos = |p: &str| {
+            layers
+                .iter()
+                .position(|l| l == &PathBuf::from(p))
+                .unwrap_or_else(|| panic!("{p} missing from candidates: {layers:?}"))
+        };
+
+        assert!(pos("/tmp/ttymap-test-config") < pos("/tmp/ttymap-test-data"));
+        assert!(pos("/tmp/ttymap-test-data") < pos("/usr/local/share/ttymap"));
+        assert!(pos("/usr/local/share/ttymap") < pos("/usr/share/ttymap"));
+    }
+
+    #[test]
+    fn system_layers_are_offered_even_without_xdg_dirs() {
+        // `AppDirs::resolve()` can come back None (no HOME). A
+        // packaged install must still be reachable in that case.
+        let layers = candidate_layers(None);
+        assert!(layers.contains(&PathBuf::from("/usr/share/ttymap")));
     }
 
     #[test]
