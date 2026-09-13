@@ -44,7 +44,7 @@ ttymap-lua/src/
                    no custom plugin searcher
   tick.rs          dispatch_tick(bus, map) — per-frame fan-out of
                    the "tick" bucket on the host EventBus
-  runtimepath.rs   runtime path resolution (env / manifest / xdg)
+  runtimepath.rs   runtime path resolution (env / manifest / xdg / system)
   init_lua.rs      run_init_lua_chain (system → user init.lua in
                    the shared VM); read_init_lua_config_only is
                    the snap-only thin path
@@ -368,10 +368,14 @@ Neovim-style ordered list (`runtimepath.rs`). Every layer with a
 2. `<workspace-root>/runtime` (dev — wins over stale install)
 3. `$XDG_CONFIG_HOME/ttymap` (user)
 4. `$XDG_DATA_HOME/ttymap` (bundled — `~/.local/share/ttymap`)
+5. `/usr/local/share/ttymap`, then `/usr/share/ttymap` (distro
+   package — `make install-system`)
 
 Layer 2 path is the maintainer's home dir baked at compile time; on a
 user machine it doesn't exist and is filtered out, so user > bundled
-in production.
+in production. Layer 5 ranks last so a per-user `make install` always
+shadows a packaged copy; on a machine with no distro package those
+paths simply don't exist.
 
 Plugins resolve as **plain Lua modules** under
 `<layer>/lua/plugin/<name>.lua` (or

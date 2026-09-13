@@ -106,6 +106,16 @@ make install
 
 Installs `~/.cargo/bin/ttymap` + `~/.local/share/ttymap/` (bundled runtime). Single-user, no root. `cargo install` alone fails fast with a "did you `make install`?" message because the runtime needs to be placed.
 
+### Packaging
+
+Distro packagers stage a system layout without root:
+
+```bash
+make install-system DESTDIR="$pkgdir" PREFIX=/usr
+```
+
+That writes `$DESTDIR$PREFIX/bin/ttymap` and `$DESTDIR$PREFIX/share/ttymap/`; the package manager does the privileged part. `/usr/local/share/ttymap` and `/usr/share/ttymap` are the binary's lowest-priority runtime tiers, so a per-user `make install` always shadows a packaged copy. A reference `PKGBUILD` lives in [`packaging/`](packaging/).
+
 ## Usage
 
 **Interactive:**
