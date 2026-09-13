@@ -8,9 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-ttymap-engine = { path = "../ttymap-engine", version = "0.3.0" }
-ttymap-shared = { path = "../ttymap-shared", version = "0.3.0" }
-ttymap-config = { path = "../ttymap-config", version = "0.3.0" }
-ttymap-lua = { path = "../ttymap-lua", version = "0.3.0" }
+ttymap-engine = { path = "../ttymap-engine", version = "0.3.1" }
+ttymap-shared = { path = "../ttymap-shared", version = "0.3.1" }
+ttymap-config = { path = "../ttymap-config", version = "0.3.1" }
+ttymap-lua = { path = "../ttymap-lua", version = "0.3.1" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
