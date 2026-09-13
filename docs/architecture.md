@@ -130,7 +130,7 @@ palette, and the sole `MapState` (the camera). The engine child owns
 the tile cache, fetch / decode pipeline, and render thread — but no
 camera state; it renders whatever `Viewport` the parent hands it.
 They talk over the child's stdin/stdout
-with a bincode-framed `EngineCommand` / `EngineEvent` protocol
+with a postcard-framed `EngineCommand` / `EngineEvent` protocol
 (`ttymap-engine/src/ipc.rs`). The parent end lives in
 `ttymap-app/src/engine_handle.rs` (`EngineHandle::spawn`); the child
 entry is `ttymap_engine::run_as_subprocess`.

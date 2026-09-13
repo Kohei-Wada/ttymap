@@ -6,7 +6,7 @@
 //! engine that talks to its parent over stdin/stdout.
 //!
 //! Wire format: each message is a u32 little-endian length followed by
-//! a bincode-encoded payload. Parent → child carries [`EngineCommand`];
+//! a postcard-encoded payload. Parent → child carries [`EngineCommand`];
 //! child → parent carries [`EngineEvent`]. Both directions are
 //! independent — the parent need not block on a reply after sending a
 //! command, and the child emits frames / state events whenever the
@@ -82,7 +82,7 @@ pub enum EngineEvent {
     /// doesn't need an extra round-trip to read it (TileCache builds
     /// it during `crate::map::build`, IPC has no reason to lose it).
     Ready { attribution: Option<String> },
-    /// A completed frame. ~430 KB at 240×80 (bincode-encoded).
+    /// A completed frame. ~115 KB at 240×80 (postcard-encoded).
     FrameReady(MapFrame),
     /// Protocol or runtime error from the child. Best-effort; the
     /// child may exit immediately after emitting this.
@@ -99,11 +99,11 @@ pub enum EngineEvent {
 /// or hostile peer flooding us with a multi-gigabyte length prefix.
 const MAX_MESSAGE_BYTES: u32 = 16 * 1024 * 1024;
 
-/// Write a length-prefixed bincode message. Caller is responsible for
+/// Write a length-prefixed postcard message. Caller is responsible for
 /// flushing the writer when latency matters.
 pub fn write_message<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
-    let bytes = bincode::serde::encode_to_vec(msg, bincode::config::standard())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        postcard::to_stdvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let len = u32::try_from(bytes.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "message exceeds u32 length"))?;
     if len > MAX_MESSAGE_BYTES {
@@ -117,7 +117,7 @@ pub fn write_message<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<(
     Ok(())
 }
 
-/// Read one length-prefixed bincode message. Returns `Err` with
+/// Read one length-prefixed postcard message. Returns `Err` with
 /// `UnexpectedEof` kind when the peer closes the pipe — callers
 /// should treat that as a graceful shutdown signal.
 pub fn read_message<T: DeserializeOwned, R: Read>(r: &mut R) -> io::Result<T> {
@@ -132,9 +132,7 @@ pub fn read_message<T: DeserializeOwned, R: Read>(r: &mut R) -> io::Result<T> {
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf)?;
-    let (msg, _consumed) = bincode::serde::decode_from_slice(&buf[..], bincode::config::standard())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(msg)
+    postcard::from_bytes(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 // ---------------------------------------------------------------------------

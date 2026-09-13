@@ -20,7 +20,7 @@ pub enum Command {
 
     /// Run as the headless engine subprocess. Spawned by the TUI
     /// parent over a stdin/stdout IPC pipe; rarely useful from a
-    /// shell directly (the worker expects bincode-framed
+    /// shell directly (the worker expects postcard-framed
     /// `EngineCommand`s on stdin). See #348.
     EngineWorker,
 }
