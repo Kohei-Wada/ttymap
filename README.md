@@ -1,6 +1,7 @@
 # ttymap
 
 [![CI](https://github.com/Kohei-Wada/ttymap/actions/workflows/ci.yml/badge.svg)](https://github.com/Kohei-Wada/ttymap/actions/workflows/ci.yml)
+[![AUR version](https://img.shields.io/aur/version/ttymap)](https://aur.archlinux.org/packages/ttymap)
 
 **Terminal-native scriptable globe.** Mapbox Vector Tiles rendered as Unicode Braille with ANSI 256-color, on top of a first-class Lua plugin runtime — real-time data overlays, animated camera tours, scientific computations, and a small "scriptable scenes" engine (animation + coroutine scheduler) that turns ttymap into a programmable canvas for spatial data.
 
@@ -98,6 +99,16 @@ See [`docs/lua-architecture.md`](docs/lua-architecture.md) for the full plugin a
 
 ## Install
 
+### Arch Linux (AUR)
+
+```bash
+yay -S ttymap
+```
+
+Or any other AUR helper / plain `makepkg` against [`aur.archlinux.org/ttymap.git`](https://aur.archlinux.org/packages/ttymap). Installs `/usr/bin/ttymap` + `/usr/share/ttymap/` (bundled runtime).
+
+### From source
+
 ```bash
 git clone https://github.com/Kohei-Wada/ttymap
 cd ttymap
@@ -169,7 +180,7 @@ Principles:
 
 - **Core stays lean.** A map viewer + plugin runtime, not a GIS platform. Tile rendering, projection, navigation, plugin host. Anything domain-specific is a Lua plugin.
 - **Plugin-first.** Every built-in is a Lua script — the bridge dogfoods itself.
-- **Boring where it matters.** Stable protocols (MVT, OSM), predictable resource use, `cargo install` ships a single binary.
+- **Boring where it matters.** Stable protocols (MVT, OSM), predictable resource use, one binary plus a runtime directory.
 
 Short-term work + plugin candidates are tracked in [GitHub issues](https://github.com/Kohei-Wada/ttymap/issues). Notable in-flight: alternate tile backends ([#30](https://github.com/Kohei-Wada/ttymap/issues/30) MBTiles, [#31](https://github.com/Kohei-Wada/ttymap/issues/31) PMTiles), persistent plugin storage ([#194](https://github.com/Kohei-Wada/ttymap/issues/194)), declarative plugin SDK ([#217](https://github.com/Kohei-Wada/ttymap/issues/217)).
 
