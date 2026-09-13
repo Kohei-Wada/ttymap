@@ -17,6 +17,16 @@ ignore = [
     # (postcard 2.x, wincode, …) becomes drop-in without pulling its
     # own unmaintained tail.
     "RUSTSEC-2025-0141",
+
+    # RUSTSEC-2026-0253 — "lru: use-after-free due to lack of panic safety
+    # in LruCache::pop()". Not reachable here: it needs a key type whose
+    # Drop panics, and our only LruCache (TileCache's memory cache) is
+    # keyed by TileKey — a Copy struct of u32/i32 with no Drop impl at
+    # all. A bump doesn't clear the check either: ratatui-core 0.1.0
+    # depends on lru 0.16, so 0.16.4 stays in the tree even with
+    # ttymap-engine moved to 0.18. Drop this entry once ratatui ships a
+    # lru >= 0.18.2 bump.
+    "RUSTSEC-2026-0253",
 ]
 
 [licenses]
