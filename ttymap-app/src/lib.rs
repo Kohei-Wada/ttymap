@@ -18,7 +18,7 @@
 pub mod app;
 
 /// `EngineHandle` — TUI-side handle to the `ttymap engine-worker`
-/// subprocess. Wraps the parent end of the bincode-framed IPC
+/// subprocess. Wraps the parent end of the postcard-framed IPC
 /// stream and presents the same surface as the in-process
 /// `MapHandle` so [`app::App`] stays oblivious to the subprocess
 /// split.

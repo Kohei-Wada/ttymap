@@ -1,7 +1,8 @@
 //! End-to-end smoke test for the `ttymap engine-worker` IPC role.
 //!
 //! Spawns the actual binary as a child and drives it through the
-//! Init → Ready → Shutdown handshake. Disk tile cache is disabled
+//! Init → Ready → Draw → FrameReady → Shutdown round-trip, so both
+//! directions of the codec see real payloads. Disk tile cache is disabled
 //! (`CacheConfig.tiles = false`) so the test never touches `~/.cache/`
 //! or the network — engine build resolves entirely in memory.
 
@@ -11,7 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ttymap_engine::Config;
+use ttymap_engine::geo::LonLat;
 use ttymap_engine::ipc::{EngineCommand, EngineEvent, read_message, write_message};
+use ttymap_engine::map::Viewport;
 use ttymap_engine::theme::ThemeId;
 
 /// Hard deadline for the whole handshake. Generous — engine build
@@ -53,9 +56,7 @@ fn engine_worker_init_ready_shutdown_round_trip() {
     )
     .expect("write Init");
 
-    // Drain events until Ready. Frames may arrive once the App sends
-    // its first Draw, but this test never sends one, so we just wait
-    // for Ready and drain the rest to EOF.
+    // Drain events until Ready.
     let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
     let mut saw_ready = false;
     while !saw_ready && Instant::now() < deadline {
@@ -65,6 +66,46 @@ fn engine_worker_init_ready_shutdown_round_trip() {
         }
     }
     assert!(saw_ready, "engine never emitted Ready within timeout");
+
+    // One Draw, so a real `MapFrame` — the only large, deeply nested
+    // payload in the protocol — makes the child → parent trip. With
+    // tiles disabled the frame is blank, but its shape still has to
+    // survive encode / decode.
+    //
+    // `Init` / `Viewport` dimensions are Braille *pixels*; the frame
+    // comes back in terminal cells, 2 px wide by 4 px tall each.
+    write_message(
+        &mut stdin,
+        &EngineCommand::Draw {
+            viewport: Viewport {
+                center: LonLat {
+                    lon: 13.404954,
+                    lat: 52.520008,
+                },
+                zoom: 4.0,
+                width: 156,
+                height: 84,
+            },
+            overlays: Vec::new(),
+        },
+    )
+    .expect("write Draw");
+
+    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+    let mut frame = None;
+    while frame.is_none() && Instant::now() < deadline {
+        match read_message(&mut stdout).expect("read EngineEvent") {
+            EngineEvent::FrameReady(f) => frame = Some(f),
+            EngineEvent::Error(e) => panic!("engine reported error: {e}"),
+            EngineEvent::Ready { .. } => {}
+        }
+    }
+    let frame = frame.expect("engine never emitted FrameReady within timeout");
+    assert_eq!(frame.cols, 156 / 2);
+    assert_eq!(frame.rows, 84 / 4);
+    assert_eq!(frame.cells.len(), (156 / 2) * (84 / 4));
+    assert!((frame.zoom - 4.0).abs() < 1e-9);
+    assert!((frame.center.lon - 13.404954).abs() < 1e-9);
 
     // Cooperative shutdown.
     write_message(&mut stdin, &EngineCommand::Shutdown).expect("write Shutdown");

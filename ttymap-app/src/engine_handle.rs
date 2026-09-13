@@ -2,7 +2,7 @@
 //! engine-worker` subprocess.
 //!
 //! Pure transport: spawns the same binary as a child via
-//! `Command::new(current_exe).arg("engine-worker")`, pipes a bincode-
+//! `Command::new(current_exe).arg("engine-worker")`, pipes a postcard-
 //! framed [`EngineCommand`] / [`EngineEvent`] stream over
 //! stdin/stdout, and exposes thin `send_*` methods that the App
 //! calls after mutating its own state.
