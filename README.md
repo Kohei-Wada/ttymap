@@ -168,6 +168,12 @@ Rust 2024 edition. The build uses `protox` so no system `protoc` is needed.
 - **[docs/lua-architecture.md](docs/lua-architecture.md)** — plugin authoring guide: `ttymap.api.*` surface, shared libraries (`ttymap.fmt` / `.sidebar` / `.animation` / `.director` / `.location` / `.geo`), plugin shapes, dispatcher semantics.
 - **[docs/design.md](docs/design.md)** — load-bearing design decisions (UserCommand vs direct call, controller split, Drop-based cleanup).
 
+## Write-ups
+
+- **[Spinning a Globe in the Terminal](https://wada-dev.com/en/blog/ttymap-terminal-scriptable-globe/)** — what the bundled plugins actually look like in use: planes, earthquakes, the ISS.
+- **[Dropping OpenSky to Receive It Myself](https://wada-dev.com/en/blog/rtlsdr-adsb-ttymap-journey/)** — feeding RTL-SDR ADS-B from your own antenna into the map.
+- **[You Can't Kill a Thread, So Make It a Process](https://wada-dev.com/en/blog/ttymap-engine-restart-journey/)** — why the engine restarts as a process; relevant if you touch the concurrency model.
+
 ## Origin
 
 ttymap started as a Rust port of [mapscii](https://github.com/rastapasta/mapscii) — same Braille rendering, same MVT pipeline, same vim-style nav. The Lua plugin runtime and the scriptable-scenes layer (animation + director) grew on top once the engine was solid; the result is a different category of tool now, but mapscii is the seed and deserves the credit.
